@@ -4,3 +4,6 @@ __pycache__/
 *.py[cod]
 backend/data/*.db
 *.egg-info/
+node_modules/
+dist/
+*.tsbuildinfo
