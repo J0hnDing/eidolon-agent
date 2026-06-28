@@ -29,7 +29,14 @@ def validate_manifest_json(raw_json: str) -> SkillManifest:
 
 
 def validate_manifest_file(path: Path) -> SkillManifest:
-    return validate_manifest_json(path.read_text(encoding="utf-8"))
+    manifest = validate_manifest_json(path.read_text(encoding="utf-8"))
+    validate_manifest_package(path.parent, manifest)
+    return manifest
+
+
+def validate_manifest_package(skill_dir: Path, manifest: SkillManifest) -> None:
+    if manifest.skill_type in {"automation", "hybrid"} and not (skill_dir / "tests").is_dir():
+        raise ManifestValidationError(f"{manifest.skill_type} skills require tests/")
 
 
 __all__ = [
@@ -39,4 +46,5 @@ __all__ = [
     "validate_manifest",
     "validate_manifest_file",
     "validate_manifest_json",
+    "validate_manifest_package",
 ]

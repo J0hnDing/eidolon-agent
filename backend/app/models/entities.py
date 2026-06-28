@@ -47,9 +47,11 @@ class Skill(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    skill_type: Mapped[str] = mapped_column(String(16), default="automation", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="proposed", nullable=False, index=True)
     risk_level: Mapped[str] = mapped_column(String(16), default="low", nullable=False)
     manifest_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    instructions_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     installed_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

@@ -1,17 +1,20 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { RiskLevel, Skill, SkillInput, SkillStatus, api } from "../api/client";
+import { RiskLevel, Skill, SkillInput, SkillStatus, SkillType, api } from "../api/client";
 
 const skillStatuses: SkillStatus[] = ["proposed", "installed", "disabled", "failed", "deleted"];
 const riskLevels: RiskLevel[] = ["low", "medium", "high"];
+const skillTypes: SkillType[] = ["instruction", "automation", "hybrid"];
 
 const emptySkillForm: SkillInput = {
   name: "",
   description: "",
+  skill_type: "automation",
   status: "proposed",
   risk_level: "low",
   manifest_path: "",
+  instructions_path: null,
   installed_path: null,
   enabled: false,
 };
@@ -47,6 +50,7 @@ export default function SkillsPage() {
         manifest_path:
           form.manifest_path.trim() || `skills/proposed/${form.name}/manifest.json`,
         installed_path: form.installed_path?.trim() || null,
+        instructions_path: form.instructions_path?.trim() || null,
       });
       setForm(emptySkillForm);
       await loadSkills();
@@ -82,6 +86,19 @@ export default function SkillsPage() {
               required
               pattern="^[a-z][a-z0-9_]*$"
             />
+          </label>
+          <label>
+            Skill Type
+            <select
+              value={form.skill_type}
+              onChange={(event) => setForm({ ...form, skill_type: event.target.value as SkillType })}
+            >
+              {skillTypes.map((skillType) => (
+                <option key={skillType} value={skillType}>
+                  {skillType}
+                </option>
+              ))}
+            </select>
           </label>
           <label>
             Status
@@ -137,6 +154,15 @@ export default function SkillsPage() {
             />
           </label>
           <label>
+            Instructions Path
+            <input
+              value={form.instructions_path ?? ""}
+              onChange={(event) =>
+                setForm({ ...form, instructions_path: event.target.value || null })
+              }
+            />
+          </label>
+          <label>
             Installed Path
             <input
               value={form.installed_path ?? ""}
@@ -159,6 +185,7 @@ export default function SkillsPage() {
               <tr>
                 <th>Name</th>
                 <th>Status</th>
+                <th>Type</th>
                 <th>Risk</th>
                 <th>Enabled</th>
                 <th>Detail</th>
@@ -175,6 +202,9 @@ export default function SkillsPage() {
                     <span className="badge">{skill.status}</span>
                   </td>
                   <td>
+                    <span className="badge">{skill.skill_type}</span>
+                  </td>
+                  <td>
                     <span className={`badge risk-${skill.risk_level}`}>{skill.risk_level}</span>
                   </td>
                   <td>{skill.enabled ? "enabled" : "disabled"}</td>
@@ -185,7 +215,7 @@ export default function SkillsPage() {
               ))}
               {skills.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="muted">
+                  <td colSpan={6} className="muted">
                     No skill records yet.
                   </td>
                 </tr>

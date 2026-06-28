@@ -1,13 +1,22 @@
 import pytest
 
-from app.services.manifest_validator import ManifestValidationError, validate_manifest
+import json
+from pathlib import Path
+
+from app.services.manifest_validator import (
+    ManifestValidationError,
+    validate_manifest,
+    validate_manifest_file,
+)
 
 
 def valid_manifest() -> dict:
     return {
         "name": "ai_news_digest",
         "description": "Summarizes AI infrastructure news from approved public sources.",
+        "skill_type": "automation",
         "entrypoint": "skill.py",
+        "instructions_path": None,
         "risk_level": "low",
         "permissions": {
             "network": ["reuters.com", "apnews.com"],
@@ -26,6 +35,7 @@ def test_valid_low_risk_manifest_passes() -> None:
     manifest = validate_manifest(valid_manifest())
 
     assert manifest.name == "ai_news_digest"
+    assert manifest.skill_type == "automation"
     assert manifest.permissions.network == ["reuters.com", "apnews.com"]
 
 
@@ -85,3 +95,111 @@ def test_manifest_accepts_declared_medium_risk_for_filesystem_read() -> None:
     manifest = validate_manifest(data)
 
     assert manifest.risk_level == "medium"
+
+
+def test_instruction_manifest_requires_instructions_path() -> None:
+    data = valid_manifest()
+    data["skill_type"] = "instruction"
+    data["entrypoint"] = None
+    data["permissions"] = no_permissions()
+
+    with pytest.raises(ManifestValidationError, match="instructions_path"):
+        validate_manifest(data)
+
+
+def test_instruction_manifest_rejects_entrypoint() -> None:
+    data = valid_manifest()
+    data["skill_type"] = "instruction"
+    data["instructions_path"] = "README.md"
+    data["permissions"] = no_permissions()
+
+    with pytest.raises(ManifestValidationError, match="cannot declare entrypoint"):
+        validate_manifest(data)
+
+
+def test_instruction_manifest_requires_no_permissions() -> None:
+    data = valid_manifest()
+    data["skill_type"] = "instruction"
+    data["entrypoint"] = None
+    data["instructions_path"] = "README.md"
+    data["permissions"] = {
+        "network": [],
+        "filesystem_read": [],
+        "filesystem_write": ["./cache"],
+        "secrets": [],
+        "shell": False,
+    }
+
+    with pytest.raises(ManifestValidationError, match="must request no permissions"):
+        validate_manifest(data)
+
+
+def test_valid_instruction_manifest_passes() -> None:
+    data = valid_manifest()
+    data["skill_type"] = "instruction"
+    data["entrypoint"] = None
+    data["instructions_path"] = "README.md"
+    data["permissions"] = no_permissions()
+
+    manifest = validate_manifest(data)
+
+    assert manifest.skill_type == "instruction"
+    assert manifest.entrypoint is None
+    assert manifest.instructions_path == "README.md"
+
+
+def test_automation_manifest_requires_entrypoint() -> None:
+    data = valid_manifest()
+    data["entrypoint"] = None
+
+    with pytest.raises(ManifestValidationError, match="automation skills require entrypoint"):
+        validate_manifest(data)
+
+
+def test_automation_manifest_file_requires_tests_directory(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "automation_without_tests"
+    skill_dir.mkdir()
+    (skill_dir / "manifest.json").write_text(json.dumps(valid_manifest()), encoding="utf-8")
+
+    with pytest.raises(ManifestValidationError, match="automation skills require tests"):
+        validate_manifest_file(skill_dir / "manifest.json")
+
+
+def test_hybrid_manifest_requires_instructions_path() -> None:
+    data = valid_manifest()
+    data["skill_type"] = "hybrid"
+
+    with pytest.raises(ManifestValidationError, match="hybrid skills require instructions_path"):
+        validate_manifest(data)
+
+
+def test_hybrid_manifest_requires_entrypoint() -> None:
+    data = valid_manifest()
+    data["skill_type"] = "hybrid"
+    data["entrypoint"] = None
+    data["instructions_path"] = "README.md"
+
+    with pytest.raises(ManifestValidationError, match="hybrid skills require entrypoint"):
+        validate_manifest(data)
+
+
+def test_hybrid_manifest_file_requires_tests_directory(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "hybrid_without_tests"
+    skill_dir.mkdir()
+    data = valid_manifest()
+    data["skill_type"] = "hybrid"
+    data["instructions_path"] = "README.md"
+    (skill_dir / "manifest.json").write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ManifestValidationError, match="hybrid skills require tests"):
+        validate_manifest_file(skill_dir / "manifest.json")
+
+
+def no_permissions() -> dict:
+    return {
+        "network": [],
+        "filesystem_read": [],
+        "filesystem_write": [],
+        "secrets": [],
+        "shell": False,
+    }

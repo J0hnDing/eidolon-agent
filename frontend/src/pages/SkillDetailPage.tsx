@@ -82,6 +82,10 @@ export default function SkillDetailPage() {
         <p>{skill.description}</p>
         <dl className="detail-grid">
           <div>
+            <dt>Skill Type</dt>
+            <dd>{skill.skill_type}</dd>
+          </div>
+          <div>
             <dt>Status</dt>
             <dd>{skill.status}</dd>
           </div>
@@ -96,6 +100,10 @@ export default function SkillDetailPage() {
           <div>
             <dt>Manifest Path</dt>
             <dd>{skill.manifest_path}</dd>
+          </div>
+          <div>
+            <dt>Instructions Path</dt>
+            <dd>{skill.instructions_path ?? "none"}</dd>
           </div>
           <div>
             <dt>Installed Path</dt>

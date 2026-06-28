@@ -1,7 +1,9 @@
 {
   "name": "personal_news_digest",
   "description": "Offline demo skill that filters local sample articles into a personalized news digest.",
+  "skill_type": "automation",
   "entrypoint": "skill.py",
+  "instructions_path": null,
   "risk_level": "low",
   "permissions": {
     "network": [],

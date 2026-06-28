@@ -6,7 +6,13 @@ Local-First Self-Extending Personal AI Assistant
 
 ## Project Goal
 
-Build a local-first AI assistant that can understand a user's interests, goals, preferences, and repeated needs, then create reusable "skills" to help the user. A skill is a small, inspectable, testable automation that can be installed, run, disabled, edited, or deleted by the user.
+Build a local-first AI assistant that can understand a user's interests, goals, preferences, and repeated needs, then create reusable "skills" to help the user. A skill is a reusable capability package that can be installed, inspected, enabled, disabled, edited, or deleted by the user.
+
+A skill can be:
+
+1. `instruction` - reusable instructions only, with no executable automation code.
+2. `automation` - executable automation code.
+3. `hybrid` - both reusable instructions and executable automation code.
 
 The assistant should eventually be able to:
 
@@ -21,7 +27,7 @@ The assistant should eventually be able to:
 9. Let the user delete, disable, or edit skills.
 10. Run approved skills manually or on a schedule.
 
-This is not just a chatbot. The core product is a controlled platform where AI converts repeated user needs into safe, reusable automations.
+This is not just a chatbot. The core product is a controlled platform where AI converts repeated user needs into safe, reusable capability packages.
 
 ---
 
@@ -210,7 +216,15 @@ risk_tolerance
 
 ### Skill
 
-A skill is a reusable automation.
+A skill is a reusable capability package.
+
+Skill types:
+
+```text
+instruction - reusable instructions only, no executable code
+automation - executable automation code
+hybrid - instructions plus executable automation code
+```
 
 A skill folder should look like:
 
@@ -238,10 +252,17 @@ Every skill must have:
 
 ```text
 manifest.json
-skill.py
 README.md
+```
+
+Automation and hybrid skills must also have:
+
+```text
+skill.py
 tests/
 ```
+
+Instruction and hybrid skills must declare an `instructions_path` in `manifest.json`.
 
 ### Skill Manifest
 
@@ -253,7 +274,9 @@ Example:
 {
   "name": "ai_news_digest",
   "description": "Summarizes AI infrastructure news relevant to the user.",
+  "skill_type": "automation",
   "entrypoint": "skill.py",
+  "instructions_path": null,
   "risk_level": "low",
   "permissions": {
     "network": ["reuters.com", "apnews.com", "nvidia.com", "amd.com"],
@@ -348,9 +371,11 @@ user_editable
 id
 name
 description
+skill_type
 status
 risk_level
 manifest_path
+instructions_path
 installed_path
 created_at
 updated_at
@@ -810,7 +835,7 @@ These help Codex work better inside this repository.
 
 ### Application skills
 
-These are user-facing automations created, installed, and run by the personal assistant.
+These are user-facing reusable capability packages created, installed, and managed by the personal assistant.
 
 Do not confuse them.
 

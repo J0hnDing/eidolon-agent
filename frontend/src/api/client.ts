@@ -11,6 +11,7 @@ export type MemoryCategory =
   | "risk_tolerance";
 
 export type RiskLevel = "low" | "medium" | "high";
+export type SkillType = "instruction" | "automation" | "hybrid";
 export type SkillStatus = "proposed" | "installed" | "disabled" | "failed" | "deleted";
 
 export interface MemoryFact {
@@ -32,9 +33,11 @@ export interface Skill {
   id: number;
   name: string;
   description: string;
+  skill_type: SkillType;
   status: SkillStatus;
   risk_level: RiskLevel;
   manifest_path: string;
+  instructions_path: string | null;
   installed_path: string | null;
   enabled: boolean;
   created_at: string;

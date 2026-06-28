@@ -66,6 +66,8 @@ class SkillRunner:
         skill_dir = skill_dir.resolve()
         try:
             manifest = self._load_manifest(skill_dir)
+            if manifest.skill_type == "instruction":
+                raise UnsupportedSkillPermissionError("instruction skills cannot be executed")
             validate_supported_permissions(manifest)
             entrypoint = self._resolve_entrypoint(skill_dir, manifest.entrypoint)
             self._run_tests(skill_dir, run)
@@ -96,7 +98,9 @@ class SkillRunner:
             raise FileNotFoundError(f"Manifest not found at {manifest_path}")
         return validate_manifest_file(manifest_path)
 
-    def _resolve_entrypoint(self, skill_dir: Path, entrypoint: str) -> Path:
+    def _resolve_entrypoint(self, skill_dir: Path, entrypoint: str | None) -> Path:
+        if entrypoint is None:
+            raise FileNotFoundError("Executable skills require an entrypoint")
         resolved = (skill_dir / entrypoint).resolve()
         if not resolved.is_relative_to(skill_dir):
             raise FileNotFoundError("Skill entrypoint must stay inside the skill directory")
