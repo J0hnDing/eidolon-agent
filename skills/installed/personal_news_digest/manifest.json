@@ -1,0 +1,16 @@
+{
+  "name": "personal_news_digest",
+  "description": "Offline demo skill that filters local sample articles into a personalized news digest.",
+  "entrypoint": "skill.py",
+  "risk_level": "low",
+  "permissions": {
+    "network": [],
+    "filesystem_read": [],
+    "filesystem_write": ["./cache"],
+    "secrets": [],
+    "shell": false
+  },
+  "schedule": null,
+  "created_by": "codex",
+  "enabled": true
+}
