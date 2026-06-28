@@ -62,6 +62,22 @@ export interface SkillRun {
   error_message: string | null;
 }
 
+export interface SkillFile {
+  path: string;
+  content: string;
+}
+
+export interface ProposedSkillValidation {
+  ok: boolean;
+  skill_type: SkillType | null;
+  manifest_valid: boolean;
+  tests_run: boolean;
+  tests_passed: boolean | null;
+  stdout: string;
+  stderr: string;
+  error_message: string | null;
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
@@ -100,12 +116,31 @@ export const api = {
       method: "DELETE",
     }),
   listSkills: () => request<Skill[]>("/skills"),
+  listProposedSkills: () => request<Skill[]>("/skills/proposed"),
+  createSampleProposedSkill: (payload: { name: string; skill_type: SkillType }) =>
+    request<Skill>("/skills/proposed/sample", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   createSkill: (payload: SkillInput) =>
     request<Skill>("/skills", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
   getSkill: (id: number) => request<Skill>(`/skills/${id}`),
+  listSkillFiles: (id: number) => request<SkillFile[]>(`/skills/${id}/files`),
+  validateSkill: (id: number) =>
+    request<ProposedSkillValidation>(`/skills/${id}/validate`, {
+      method: "POST",
+    }),
+  installSkill: (id: number) =>
+    request<Skill>(`/skills/${id}/install`, {
+      method: "POST",
+    }),
+  rejectSkill: (id: number) =>
+    request<Skill>(`/skills/${id}/reject`, {
+      method: "POST",
+    }),
   runSkill: (id: number, input: Record<string, unknown> = {}) =>
     request<SkillRun>(`/skills/${id}/run`, {
       method: "POST",

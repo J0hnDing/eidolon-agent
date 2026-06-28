@@ -43,7 +43,7 @@ class ManifestPermissions(BaseModel):
 class SkillManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
+    name: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
     description: str = Field(min_length=1)
     skill_type: SkillType = "automation"
     entrypoint: str | None = Field(default=None, min_length=1)

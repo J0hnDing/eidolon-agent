@@ -302,6 +302,27 @@ textarea {
   color: #8a5a00;
 }
 
+.status-proposed {
+  background: #e8f0ff;
+  color: #2458a6;
+}
+
+.status-installed {
+  background: #e8f5ee;
+  color: #24724f;
+}
+
+.status-disabled,
+.status-deleted {
+  background: #eef2f7;
+  color: #667085;
+}
+
+.status-failed {
+  background: #ffe8e4;
+  color: #9f332b;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -406,6 +427,17 @@ th {
 .run-detail {
   display: grid;
   gap: 14px;
+}
+
+.file-list {
+  display: grid;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.file-list h3 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
 }
 
 .run-detail h3 {

@@ -6,7 +6,7 @@ from app.schemas.common import RiskLevel, SkillStatus, SkillType
 
 
 class SkillBase(BaseModel):
-    name: str = Field(min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
+    name: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
     description: str = Field(min_length=1)
     skill_type: SkillType = "automation"
     status: SkillStatus = "proposed"
@@ -22,7 +22,7 @@ class SkillCreate(SkillBase):
 
 
 class SkillUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
+    name: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
     description: str | None = Field(default=None, min_length=1)
     skill_type: SkillType | None = None
     status: SkillStatus | None = None

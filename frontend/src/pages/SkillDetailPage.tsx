@@ -1,21 +1,18 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { Skill, SkillRun, api } from "../api/client";
-
-const placeholderSections = [
-  "Manifest",
-  "Permissions",
-  "Test Results",
-  "Actions",
-];
+import { ProposedSkillValidation, Skill, SkillFile, SkillRun, api } from "../api/client";
 
 export default function SkillDetailPage() {
   const { skillId } = useParams();
   const [skill, setSkill] = useState<Skill | null>(null);
   const [runs, setRuns] = useState<SkillRun[]>([]);
+  const [files, setFiles] = useState<SkillFile[]>([]);
+  const [validation, setValidation] = useState<ProposedSkillValidation | null>(null);
+  const [runInput, setRunInput] = useState("{}");
   const [isLoading, setIsLoading] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
+  const [isWorking, setIsWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const latestRun = runs[0] ?? null;
 
@@ -26,12 +23,14 @@ export default function SkillDetailPage() {
       setError(null);
       try {
         const id = Number(skillId);
-        const [loadedSkill, loadedRuns] = await Promise.all([
+        const [loadedSkill, loadedRuns, loadedFiles] = await Promise.all([
           api.getSkill(id),
           api.listSkillRuns(id),
+          api.listSkillFiles(id),
         ]);
         setSkill(loadedSkill);
         setRuns(loadedRuns);
+        setFiles(loadedFiles);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not load skill");
       } finally {
@@ -46,12 +45,74 @@ export default function SkillDetailPage() {
     setIsRunning(true);
     setError(null);
     try {
-      const run = await api.runSkill(skill.id, {});
+      const parsedInput = JSON.parse(runInput);
+      if (parsedInput === null || Array.isArray(parsedInput) || typeof parsedInput !== "object") {
+        throw new Error("Run input must be a JSON object");
+      }
+      const run = await api.runSkill(skill.id, parsedInput as Record<string, unknown>);
       setRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not run skill");
     } finally {
       setIsRunning(false);
+    }
+  }
+
+  async function handleValidate() {
+    if (!skill) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      setValidation(await api.validateSkill(skill.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not validate skill");
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function handleInstall() {
+    if (!skill) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      const installed = await api.installSkill(skill.id);
+      setSkill(installed);
+      setValidation(null);
+      setFiles(await api.listSkillFiles(installed.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not install skill");
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function handleReject() {
+    if (!skill) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      const rejected = await api.rejectSkill(skill.id);
+      setSkill(rejected);
+      setFiles([]);
+      setValidation(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not reject skill");
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function handleToggleEnabled() {
+    if (!skill) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      setSkill(await api.updateSkill(skill.id, { enabled: !skill.enabled }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update skill");
+    } finally {
+      setIsWorking(false);
     }
   }
 
@@ -67,6 +128,11 @@ export default function SkillDetailPage() {
       </section>
     );
   }
+
+  const isExecutable = skill.skill_type === "automation" || skill.skill_type === "hybrid";
+  const isInstalledExecutable = skill.status === "installed" && isExecutable;
+  const canRun = isInstalledExecutable && skill.enabled;
+  const isProposed = skill.status === "proposed";
 
   return (
     <section className="page stack">
@@ -112,62 +178,146 @@ export default function SkillDetailPage() {
         </dl>
       </section>
 
-      <div className="button-row">
-        <button type="button" onClick={handleRun} disabled={isRunning}>
-          {isRunning ? "Running..." : "Run"}
-        </button>
-        <button type="button" disabled>
-          Disable
-        </button>
-        <button type="button" className="danger" disabled>
-          Delete
-        </button>
-        <button type="button" disabled>
-          View Code
-        </button>
-        <button type="button" disabled>
-          View Logs
-        </button>
-      </div>
+      {isProposed ? (
+        <div className="button-row">
+          <button type="button" onClick={handleValidate} disabled={isWorking}>
+            Validate/Test
+          </button>
+          <button type="button" onClick={handleInstall} disabled={isWorking}>
+            Install
+          </button>
+          <button type="button" className="danger" onClick={handleReject} disabled={isWorking}>
+            Reject/Delete
+          </button>
+        </div>
+      ) : (
+        <div className="button-row">
+          {canRun && (
+            <button type="button" onClick={handleRun} disabled={isRunning}>
+              {isRunning ? "Running..." : "Run"}
+            </button>
+          )}
+          {isInstalledExecutable && !skill.enabled && (
+            <button type="button" disabled>
+              Run Disabled
+            </button>
+          )}
+          <button type="button" onClick={handleToggleEnabled} disabled={isWorking}>
+            {skill.enabled ? "Disable" : "Enable"}
+          </button>
+          <button type="button" className="danger" disabled>
+            Delete
+          </button>
+        </div>
+      )}
 
       {error && <p className="error-text">{error}</p>}
 
-      <section className="detail-panel">
-        <h2>Latest Run</h2>
-        {latestRun ? (
-          <RunDetail run={latestRun} />
-        ) : (
-          <p className="muted">No runs recorded yet.</p>
-        )}
-      </section>
+      {validation && <ValidationResult validation={validation} />}
 
       <section className="detail-panel">
-        <h2>Run History</h2>
-        {runs.length > 0 ? (
-          <div className="run-list">
-            {runs.map((run) => (
-              <article key={run.id} className="run-row">
-                <div>
-                  <strong>Run #{run.id}</strong>
-                  <span>{run.started_at ? new Date(run.started_at).toLocaleString() : "not started"}</span>
-                </div>
-                <span className={`badge run-${run.status}`}>{run.status}</span>
+        <h2>Skill Files</h2>
+        {files.length > 0 ? (
+          <div className="file-list">
+            {files.map((file) => (
+              <article key={file.path}>
+                <h3>{file.path}</h3>
+                <pre>{file.content}</pre>
               </article>
             ))}
           </div>
         ) : (
-          <p className="muted">No run history yet.</p>
+          <p className="muted">No readable skill files found.</p>
         )}
       </section>
 
-      <div className="section-grid">
-        {placeholderSections.map((section) => (
-          <section key={section} className="placeholder-section">
-            <h2>{section}</h2>
-            <p>This area will be connected in a later milestone.</p>
+      {isInstalledExecutable && (
+        <section className="detail-panel">
+          <h2>Run Input</h2>
+          <textarea
+            value={runInput}
+            onChange={(event) => setRunInput(event.target.value)}
+            rows={8}
+            aria-label="Run input JSON"
+          />
+        </section>
+      )}
+
+      {isInstalledExecutable && (
+        <>
+          <section className="detail-panel">
+            <h2>Latest Run</h2>
+            {latestRun ? (
+              <RunDetail run={latestRun} />
+            ) : (
+              <p className="muted">No runs recorded yet.</p>
+            )}
           </section>
-        ))}
-      </div>
+
+          <section className="detail-panel">
+            <h2>Run History</h2>
+            {runs.length > 0 ? (
+              <div className="run-list">
+                {runs.map((run) => (
+                  <article key={run.id} className="run-row">
+                    <div>
+                      <strong>Run #{run.id}</strong>
+                      <span>
+                        {run.started_at ? new Date(run.started_at).toLocaleString() : "not started"}
+                      </span>
+                    </div>
+                    <span className={`badge run-${run.status}`}>{run.status}</span>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="muted">No run history yet.</p>
+            )}
+          </section>
+        </>
+      )}
+    </section>
+  );
+}
+
+function ValidationResult({ validation }: { validation: ProposedSkillValidation }) {
+  return (
+    <section className="detail-panel">
+      <h2>Validation Result</h2>
+      <dl className="detail-grid">
+        <div>
+          <dt>Status</dt>
+          <dd>{validation.ok ? "passed" : "failed"}</dd>
+        </div>
+        <div>
+          <dt>Manifest</dt>
+          <dd>{validation.manifest_valid ? "valid" : "invalid"}</dd>
+        </div>
+        <div>
+          <dt>Tests</dt>
+          <dd>
+            {validation.tests_run
+              ? validation.tests_passed
+                ? "passed"
+                : "failed"
+              : "not run"}
+          </dd>
+        </div>
+      </dl>
+      {validation.error_message && (
+        <div className="run-detail">
+          <h3>Error</h3>
+          <pre>{validation.error_message}</pre>
+        </div>
+      )}
+      {(validation.stdout || validation.stderr) && (
+        <div className="run-detail">
+          <h3>Test Output</h3>
+          <pre>{validation.stdout || "No stdout captured."}</pre>
+          <h3>Test Errors</h3>
+          <pre>{validation.stderr || "No stderr captured."}</pre>
+        </div>
+      )}
     </section>
   );
 }
