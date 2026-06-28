@@ -1,0 +1,20 @@
+[project]
+name = "personal-agent-backend"
+version = "0.1.0"
+description = "Local-first personal assistant backend foundation."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "pydantic>=2.8.0",
+    "sqlalchemy>=2.0.30",
+    "uvicorn[standard]>=0.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
