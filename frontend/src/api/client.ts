@@ -43,6 +43,22 @@ export interface Skill {
 
 export type SkillInput = Omit<Skill, "id" | "created_at" | "updated_at">;
 
+export type SkillRunStatus = "pending" | "running" | "succeeded" | "failed" | "blocked";
+
+export interface SkillRun {
+  id: number;
+  skill_id: number;
+  status: SkillRunStatus;
+  input_json: Record<string, unknown> | null;
+  output_json: Record<string, unknown> | null;
+  stdout: string | null;
+  stderr: string | null;
+  exit_code: number | null;
+  started_at: string | null;
+  ended_at: string | null;
+  error_message: string | null;
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
@@ -87,6 +103,12 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   getSkill: (id: number) => request<Skill>(`/skills/${id}`),
+  runSkill: (id: number, input: Record<string, unknown> = {}) =>
+    request<SkillRun>(`/skills/${id}/run`, {
+      method: "POST",
+      body: JSON.stringify({ input }),
+    }),
+  listSkillRuns: (id: number) => request<SkillRun[]>(`/skills/${id}/runs`),
   updateSkill: (id: number, payload: Partial<SkillInput>) =>
     request<Skill>(`/skills/${id}`, {
       method: "PATCH",

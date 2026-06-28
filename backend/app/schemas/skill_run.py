@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.common import SkillRunStatus
 
@@ -21,6 +21,10 @@ class SkillRunBase(BaseModel):
 
 class SkillRunCreate(SkillRunBase):
     pass
+
+
+class SkillRunRequest(BaseModel):
+    input: dict[str, Any] = Field(default_factory=dict)
 
 
 class SkillRunRead(SkillRunBase):
