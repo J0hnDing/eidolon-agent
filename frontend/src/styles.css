@@ -327,6 +327,11 @@ textarea {
   overflow-x: auto;
 }
 
+.skill-section {
+  display: grid;
+  gap: 10px;
+}
+
 table {
   border-collapse: collapse;
   width: 100%;

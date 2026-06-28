@@ -1,0 +1,20 @@
+{
+  "name": "sample_echo_skill",
+  "description": "Sample automation skill for the proposed skill workflow.",
+  "skill_type": "automation",
+  "entrypoint": "skill.py",
+  "instructions_path": null,
+  "risk_level": "low",
+  "permissions": {
+    "network": [],
+    "filesystem_read": [],
+    "filesystem_write": [
+      "./cache"
+    ],
+    "secrets": [],
+    "shell": false
+  },
+  "schedule": null,
+  "created_by": "manual_sample",
+  "enabled": false
+}
