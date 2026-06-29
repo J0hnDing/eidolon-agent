@@ -557,6 +557,65 @@ pre {
   gap: 14px;
 }
 
+.permission-modal {
+  gap: 18px;
+}
+
+.permission-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.permission-summary section,
+.permission-limits,
+.permission-warning {
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 14px;
+}
+
+.permission-summary h3,
+.permission-limits h3,
+.permission-warning h3 {
+  margin: 0 0 10px;
+  font-size: 0.92rem;
+}
+
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.permission-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border: 1px solid #cfd8e3;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #344054;
+  font-size: 0.86rem;
+  font-weight: 650;
+  padding: 4px 10px;
+}
+
+.permission-warning {
+  border-color: #efb5ae;
+  background: #fff7f5;
+}
+
+.permission-warning p,
+.permission-limits p {
+  margin: 0;
+}
+
+.permission-warning p + p {
+  margin-top: 6px;
+}
+
 @media (max-width: 800px) {
   .app-shell {
     grid-template-columns: 1fr;

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -39,7 +39,14 @@ def create_skill(payload: SkillCreate, db: Session = Depends(get_db)) -> Skill:
 
 @router.get("", response_model=list[SkillRead])
 def list_skills(db: Session = Depends(get_db)) -> list[Skill]:
-    return list(db.scalars(select(Skill).order_by(Skill.created_at.desc())).all())
+    ProposedSkillService(db).sync_installed_from_filesystem()
+    return list(
+        db.scalars(
+            select(Skill)
+            .where(Skill.status != "deleted")
+            .order_by(Skill.created_at.desc())
+        ).all()
+    )
 
 
 @router.post("/proposed/sample", response_model=SkillRead, status_code=status.HTTP_201_CREATED)
@@ -175,15 +182,16 @@ def install_skill(skill_id: int, db: Session = Depends(get_db)) -> Skill:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
-@router.post("/{skill_id}/reject", response_model=SkillRead)
-def reject_skill(skill_id: int, db: Session = Depends(get_db)) -> Skill:
+@router.post("/{skill_id}/reject", status_code=status.HTTP_204_NO_CONTENT)
+def reject_skill(skill_id: int, db: Session = Depends(get_db)) -> Response:
     skill = db.get(Skill, skill_id)
     if skill is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
     try:
-        return ProposedSkillService(db).reject_proposed_skill(skill)
+        ProposedSkillService(db).reject_proposed_skill(skill)
     except ProposedSkillError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.patch("/{skill_id}", response_model=SkillRead)
@@ -224,14 +232,14 @@ def resolve_skill_dir(skill: Skill) -> Path:
     return path
 
 
-@router.delete("/{skill_id}", response_model=SkillRead)
-def delete_skill(skill_id: int, db: Session = Depends(get_db)) -> Skill:
+@router.delete("/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_skill(skill_id: int, db: Session = Depends(get_db)) -> Response:
     skill = db.get(Skill, skill_id)
     if skill is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
 
-    skill.status = "deleted"
-    skill.enabled = False
-    db.commit()
-    db.refresh(skill)
-    return skill
+    try:
+        ProposedSkillService(db).delete_skill(skill)
+    except ProposedSkillError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -9,7 +9,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Skill
+from app.models import ApprovalRequest, Skill, SkillGenerationRequest, SkillRun, SkillVersion
 from app.schemas.common import SkillType
 from app.schemas.proposed_skill import ProposedSkillValidationRead, SkillFileRead
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
@@ -77,6 +77,39 @@ class ProposedSkillService:
                 select(Skill).where(Skill.status == "proposed").order_by(Skill.created_at.desc())
             ).all()
         )
+
+    def sync_installed_from_filesystem(self) -> None:
+        if not self.installed_root.exists():
+            return
+        changed = False
+        for skill_dir in self.installed_root.iterdir():
+            if not skill_dir.is_dir():
+                continue
+            manifest_path = skill_dir / "manifest.json"
+            if not manifest_path.is_file():
+                continue
+            try:
+                manifest = validate_manifest_file(manifest_path)
+            except ManifestValidationError:
+                continue
+            skill = self.db.scalar(select(Skill).where(Skill.name == manifest.name))
+            if skill is not None:
+                continue
+            skill = Skill(
+                name=manifest.name,
+                description=manifest.description,
+                skill_type=manifest.skill_type,
+                status="installed",
+                risk_level=manifest.risk_level,
+                manifest_path=self._relative_path(manifest_path),
+                instructions_path=manifest.instructions_path,
+                installed_path=self._relative_path(skill_dir),
+                enabled=manifest.enabled,
+            )
+            self.db.add(skill)
+            changed = True
+        if changed:
+            self.db.commit()
 
     def read_skill_files(self, skill: Skill) -> list[SkillFileRead]:
         skill_dir = self.skill_dir_for_record(skill)
@@ -175,16 +208,25 @@ class ProposedSkillService:
         self.db.refresh(skill)
         return skill
 
-    def reject_proposed_skill(self, skill: Skill) -> Skill:
-        if skill.status == "proposed":
-            skill_dir = self.skill_dir_for_record(skill)
-            if skill_dir.exists():
-                shutil.rmtree(skill_dir)
-        skill.status = "deleted"
-        skill.enabled = False
+    def reject_proposed_skill(self, skill: Skill) -> None:
+        if skill.status != "proposed":
+            raise ProposedSkillError("Only proposed skills can be rejected")
+        self.delete_skill(skill)
+
+    def delete_skill(self, skill: Skill) -> None:
+        skill_dir = self.skill_dir_for_record(skill)
+        if skill_dir.exists():
+            shutil.rmtree(skill_dir)
+        self.db.query(ApprovalRequest).filter(ApprovalRequest.skill_id == skill.id).delete(synchronize_session=False)
+        self.db.query(SkillRun).filter(SkillRun.skill_id == skill.id).delete(synchronize_session=False)
+        self.db.query(SkillVersion).filter(SkillVersion.skill_id == skill.id).delete(synchronize_session=False)
+        generation_requests = self.db.scalars(
+            select(SkillGenerationRequest).where(SkillGenerationRequest.proposed_skill_id == skill.id)
+        ).all()
+        for generation_request in generation_requests:
+            generation_request.proposed_skill_id = None
+        self.db.delete(skill)
         self.db.commit()
-        self.db.refresh(skill)
-        return skill
 
     def validate_skill_name(self, name: str) -> str:
         if not SAFE_SKILL_NAME.fullmatch(name):

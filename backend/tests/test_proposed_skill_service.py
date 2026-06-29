@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -184,9 +185,59 @@ def test_refuses_to_run_instruction_only_skills(db_session: Session, service: Pr
 
 def test_rejects_and_deletes_proposed_skill(service: ProposedSkillService) -> None:
     skill = service.create_sample("reject_me", "automation")
+    skill_id = skill.id
 
-    rejected = service.reject_proposed_skill(skill)
+    service.reject_proposed_skill(skill)
 
-    assert rejected.status == "deleted"
-    assert rejected.enabled is False
+    assert service.db.get(Skill, skill_id) is None
     assert not service.proposed_dir("reject_me").exists()
+
+
+def test_delete_removes_installed_skill_record_and_folder(
+    db_session: Session,
+    service: ProposedSkillService,
+) -> None:
+    skill = service.create_sample("delete_installed", "automation")
+    installed = service.install_proposed_skill(skill)
+    installed_id = installed.id
+
+    service.delete_skill(installed)
+
+    assert db_session.get(Skill, installed_id) is None
+    assert not service.installed_dir("delete_installed").exists()
+
+
+def test_sync_installed_from_filesystem_registers_hidden_installed_skill(
+    service: ProposedSkillService,
+) -> None:
+    skill_dir = service.installed_dir("hidden_installed")
+    skill_dir.mkdir(parents=True)
+    manifest = {
+        "name": "hidden_installed",
+        "description": "Installed on disk but missing from the database.",
+        "skill_type": "automation",
+        "entrypoint": "skill.py",
+        "instructions_path": None,
+        "risk_level": "low",
+        "permissions": {
+            "network": [],
+            "filesystem_read": [],
+            "filesystem_write": ["./cache"],
+            "secrets": [],
+            "shell": False,
+        },
+        "schedule": None,
+        "created_by": "test",
+        "enabled": False,
+    }
+    (skill_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (skill_dir / "skill.py").write_text("print('{}')\n", encoding="utf-8")
+    (skill_dir / "tests").mkdir()
+    (skill_dir / "tests" / "test_skill.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+    service.sync_installed_from_filesystem()
+
+    skill = service.db.scalar(select(Skill).where(Skill.name == "hidden_installed"))
+    assert skill is not None
+    assert skill.status == "installed"
+    assert skill.installed_path == "skills/installed/hidden_installed"

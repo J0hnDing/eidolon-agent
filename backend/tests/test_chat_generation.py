@@ -4,11 +4,13 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+from pydantic import TypeAdapter
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
 from app.models import SkillGenerationRequest
+from app.schemas.skill_generation import ChatResponse
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.codex_service import CodexService
 from app.services.permission_service import PermissionService
@@ -133,6 +135,19 @@ def test_project_mode_creates_skill_proposal(db_session: Session) -> None:
     assert generation_request.plan_json["skill_name"] == "ai_infra_news_digest"
     assert permission_request.request_scope == "build_time"
     assert permission_request.status == "pending"
+
+
+def test_chat_response_model_serializes_generation_request_fields(db_session: Session) -> None:
+    response = ChatOrchestrator(db_session).handle_message(
+        "Create a reusable skill that summarizes AI chip news from Nvidia and AMD.",
+        mode="project",
+    )
+    data = TypeAdapter(ChatResponse).validate_python(response).model_dump(mode="json")
+
+    assert data["type"] == "skill_generation_plan"
+    assert isinstance(data["generation_request"]["id"], int)
+    assert data["generation_request"]["proposed_display_name"] == "Ai Infra News Digest"
+    assert isinstance(data["permission_request"]["id"], int)
 
 
 def test_project_mode_uses_plausibility_review_before_plan(db_session: Session) -> None:

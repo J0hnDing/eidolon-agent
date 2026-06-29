@@ -257,7 +257,7 @@ export const api = {
       method: "POST",
     }),
   rejectSkill: (id: number) =>
-    request<Skill>(`/skills/${id}/reject`, {
+    request<void>(`/skills/${id}/reject`, {
       method: "POST",
     }),
   runSkill: (id: number, input: Record<string, unknown> = {}) =>
@@ -272,7 +272,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   deleteSkill: (id: number) =>
-    request<Skill>(`/skills/${id}`, {
+    request<void>(`/skills/${id}`, {
       method: "DELETE",
     }),
 };

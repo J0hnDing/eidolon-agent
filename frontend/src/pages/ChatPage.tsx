@@ -62,15 +62,21 @@ export default function ChatPage() {
           },
         ]);
       } else {
-        setPendingRequest(response.generation_request);
+        const generationRequest = response.generation_request;
+        if (!generationRequest || typeof generationRequest.id !== "number") {
+          throw new Error("The backend returned an invalid skill generation plan. Please refresh and try again.");
+        }
+        setPendingRequest(generationRequest);
         setPendingPermissionRequest(response.permission_request);
         setApprovalResult(null);
+        const displayName =
+          generationRequest.proposed_display_name || generationRequest.proposed_skill_name || "this skill";
         setMessages((current) => [
           ...current,
           {
             id: nextId + 1,
             role: "assistant",
-            content: `I prepared a proposed skill generation plan for ${response.generation_request.proposed_display_name}.`,
+            content: `I prepared a proposed skill generation plan for ${displayName}.`,
           },
         ]);
       }
@@ -83,13 +89,18 @@ export default function ChatPage() {
 
   async function handleApprove() {
     if (!pendingRequest) return;
+    const requestId = pendingRequest.id;
+    if (typeof requestId !== "number") {
+      setError("This generation request is missing an id. Please send the project request again.");
+      return;
+    }
+    setPendingRequest(null);
+    setPendingPermissionRequest(null);
     setIsGenerating(true);
     setError(null);
     try {
-      const result = await api.approveSkillGeneration(pendingRequest.id);
+      const result = await api.approveSkillGeneration(requestId);
       setApprovalResult(result);
-      setPendingRequest(null);
-      setPendingPermissionRequest(null);
       setMessages((current) => [
         ...current,
         {
@@ -109,9 +120,16 @@ export default function ChatPage() {
 
   async function handleDeny() {
     if (!pendingRequest) return;
+    const requestId = pendingRequest.id;
+    if (typeof requestId !== "number") {
+      setError("This generation request is missing an id. Please send the project request again.");
+      return;
+    }
+    setPendingRequest(null);
+    setPendingPermissionRequest(null);
     setError(null);
     try {
-      await api.denySkillGeneration(pendingRequest.id);
+      await api.denySkillGeneration(requestId);
       setMessages((current) => [
         ...current,
         {
@@ -120,8 +138,6 @@ export default function ChatPage() {
           content: "Cancelled skill generation. No files were generated.",
         },
       ]);
-      setPendingRequest(null);
-      setPendingPermissionRequest(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not deny generation");
     }

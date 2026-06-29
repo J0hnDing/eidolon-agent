@@ -1,18 +1,19 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import PermissionRequestModal from "../components/PermissionRequestModal";
 import { ApprovalRequest, ProposedSkillValidation, Skill, SkillFile, SkillRun, api } from "../api/client";
 
 export default function SkillDetailPage() {
   const { skillId } = useParams();
+  const navigate = useNavigate();
   const [skill, setSkill] = useState<Skill | null>(null);
   const [runs, setRuns] = useState<SkillRun[]>([]);
   const [files, setFiles] = useState<SkillFile[]>([]);
   const [validation, setValidation] = useState<ProposedSkillValidation | null>(null);
   const [runtimePermission, setRuntimePermission] = useState<ApprovalRequest | null>(null);
   const [showRuntimeModal, setShowRuntimeModal] = useState(false);
-  const [runInput, setRunInput] = useState("{}");
+  const [runInput, setRunInput] = useState('{\n  "hello": "world"\n}');
   const [isLoading, setIsLoading] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
@@ -54,7 +55,7 @@ export default function SkillDetailPage() {
     setIsRunning(true);
     setError(null);
     try {
-      const parsedInput = JSON.parse(runInput);
+      const parsedInput = parseRunInput(runInput);
       if (parsedInput === null || Array.isArray(parsedInput) || typeof parsedInput !== "object") {
         throw new Error("Run input must be a JSON object");
       }
@@ -105,12 +106,24 @@ export default function SkillDetailPage() {
     setIsWorking(true);
     setError(null);
     try {
-      const rejected = await api.rejectSkill(skill.id);
-      setSkill(rejected);
-      setFiles([]);
-      setValidation(null);
+      await api.rejectSkill(skill.id);
+      navigate("/skills");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not reject skill");
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!skill) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      await api.deleteSkill(skill.id);
+      navigate("/skills");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete skill");
     } finally {
       setIsWorking(false);
     }
@@ -293,7 +306,7 @@ export default function SkillDetailPage() {
           <button type="button" onClick={handleToggleEnabled} disabled={isWorking}>
             {skill.enabled ? "Disable" : "Enable"}
           </button>
-          <button type="button" className="danger" disabled>
+          <button type="button" className="danger" onClick={handleDelete} disabled={isWorking}>
             Delete
           </button>
         </div>
@@ -334,7 +347,19 @@ export default function SkillDetailPage() {
 
       {isInstalledExecutable && (
         <section className="detail-panel">
-          <h2>Run Input</h2>
+          <header className="page-header">
+            <div>
+              <h2>Run Input</h2>
+              <p className="muted">Use valid JSON with double-quoted property names.</p>
+            </div>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setRunInput('{\n  "hello": "world"\n}')}
+            >
+              Reset Example
+            </button>
+          </header>
           <textarea
             value={runInput}
             onChange={(event) => setRunInput(event.target.value)}
@@ -379,6 +404,23 @@ export default function SkillDetailPage() {
       )}
     </section>
   );
+}
+
+function parseRunInput(value: string): Record<string, unknown> {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return {};
+  }
+  try {
+    return JSON.parse(trimmed) as Record<string, unknown>;
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      throw new Error(
+        'Run input must be valid JSON. Use double quotes around property names, like { "hello": "world" }.'
+      );
+    }
+    throw err;
+  }
 }
 
 function ValidationResult({ validation }: { validation: ProposedSkillValidation }) {

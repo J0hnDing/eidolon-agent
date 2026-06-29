@@ -31,6 +31,24 @@ This is not just a chatbot. The core product is a controlled platform where AI c
 
 ---
 
+## Current MVP Decisions
+
+These decisions supersede older milestone wording when there is a conflict:
+
+1. Chat has explicit modes:
+   - `chat` mode is normal conversation and must not create skills.
+   - `project` mode is the only mode that may propose or generate application skills.
+2. Do not use keyword heuristics to decide whether normal chat should become a skill. The user chooses project mode explicitly.
+3. In project mode, the backend must evaluate whether the requested project is plausible before creating a skill generation plan. If it is not plausible, explain why and suggest safer or better-scoped project ideas.
+4. Skill generation requires build-time permission approval before Codex writes files.
+5. Installing or running a generated skill requires runtime permission review based on the actual generated `manifest.json`, not only the initial plan.
+6. Approval to generate does not approve installation. Approval to install does not approve automatic execution. Skills never run automatically in the MVP.
+7. Runtime network domains may be approved as declared design intent, but the current local runner cannot enforce domain-level network sandboxing. Networked skills must remain blocked from execution until sandboxing exists.
+8. Skill deletion is a hard delete in the local MVP: remove the controlled skill folder and remove the skill database record. Do not leave deleted skills visible in the normal Skills list.
+9. Installed skill folders found on disk under `skills/installed/<skill_name>/` may be registered into the local database if their manifest is valid. This keeps filesystem state and the UI list from drifting apart.
+
+---
+
 ## Non-Negotiable Design Principles
 
 ### 1. Local-first
@@ -180,7 +198,7 @@ REQUEST_APPROVAL
 UNSAFE_OR_UNSUPPORTED
 ```
 
-The router may be simple at first. It can use keyword/heuristic rules in the MVP. Later it can use an LLM.
+In the current MVP, the user explicitly chooses `chat` or `project` mode in the UI. Only `project` mode can create a skill proposal. Project mode must run a plausibility review before creating a generation plan. Later, the router can become more capable, but it must not silently turn ordinary chat into skill generation.
 
 ### Memory
 
@@ -434,14 +452,23 @@ blocked
 
 ```text
 id
-skill_id
+skill_id nullable
+generation_request_id nullable
+request_scope
 request_type
 risk_level
 requested_permissions_json
+requested_dependencies_json
+requested_network_domains_json
+requested_filesystem_json
+reason_json
 reason
+user_explanation
 status
 created_at
 resolved_at
+resolved_by
+decision_notes
 ```
 
 Status values:
@@ -451,6 +478,20 @@ pending
 approved
 denied
 expired
+superseded
+```
+
+Request scopes:
+
+```text
+build_time
+runtime
+```
+
+Risk levels may also include:
+
+```text
+blocked
 ```
 
 ---
@@ -578,13 +619,13 @@ personal_news_digest
 It should:
 
 1. Accept topics and sources as JSON input.
-2. Use RSS feeds or simple public URLs.
+2. Use local/offline sample article data in the current MVP.
 3. Deduplicate items.
 4. Return JSON summaries.
 5. Include tests.
 6. Use only low-risk permissions.
 
-Do not use arbitrary web scraping or browser automation yet.
+Do not use live RSS fetching, arbitrary web scraping, or browser automation yet. Networked news fetching comes after sandbox/network enforcement.
 
 ### Milestone 5: Proposed Skill Workflow
 
@@ -616,6 +657,26 @@ User asks for reusable automation
 → user approves or rejects
 ```
 
+Current implementation update:
+
+```text
+User switches to project mode
+-> user asks for a reusable capability package
+-> backend evaluates project plausibility
+-> backend creates a generation plan
+-> backend creates a build-time permission request
+-> user approves or declines generation
+-> backend creates proposed skill directory
+-> backend writes prompt to a file
+-> backend calls codex exec in a restricted workspace, or a fake/dev adapter
+-> Codex generates manifest.json, README.md, and required skill files/tests
+-> backend validates manifest
+-> backend runs tests for automation/hybrid skills
+-> backend analyzes runtime permissions from the generated manifest
+-> UI shows proposed skill
+-> user inspects, validates, installs, or rejects
+```
+
 Rules:
 
 1. Codex must only write inside the proposed skill directory.
@@ -623,6 +684,8 @@ Rules:
 3. Codex must generate a manifest.
 4. Codex must not create high-risk permissions silently.
 5. Codex must not access application secrets.
+6. Codex generation must not install or run the generated skill.
+7. Build-time approval allows generation only; runtime permissions are reviewed separately.
 
 ### Milestone 7: Approval System
 
@@ -648,6 +711,17 @@ Risk level
 Reason
 Approve / Deny / Edit
 ```
+
+The implemented approval model distinguishes:
+
+```text
+build_time - approval for Codex to generate proposed files
+runtime - approval for permissions declared in the generated manifest
+```
+
+Runtime approval must be based on the generated manifest. Permission expansion from the build-time plan must be shown clearly. Blocked permissions, including shell access, secrets, broad filesystem access, and unrestricted network access, must not be approved in the MVP.
+
+Runtime network domains can be approved as an intent recorded in the manifest, but execution must remain blocked until sandboxing can enforce network access.
 
 ### Milestone 8: Sandbox Execution
 
@@ -714,16 +788,20 @@ I want to follow AI infrastructure news: Nvidia, AMD, Broadcom, optical networki
 Expected behavior:
 
 1. Assistant stores relevant interests as editable memory.
-2. Assistant proposes creating a news digest skill.
-3. Codex generates the skill in `skills/proposed/ai_infra_news_digest/`.
-4. Skill includes manifest, code, README, and tests.
-5. Backend validates the manifest.
-6. Backend runs tests.
-7. UI shows requested permissions.
-8. User approves installation.
-9. Skill runs manually.
-10. UI shows digest output, logs, and sources.
-11. User can disable or delete the skill.
+2. User switches to project mode.
+3. Assistant evaluates whether the request is a plausible reusable skill.
+4. Assistant proposes creating a news digest skill.
+5. UI shows build-time permissions and generation limits.
+6. User approves generation.
+7. Codex generates the skill in `skills/proposed/ai_infra_news_digest/`.
+8. Skill includes manifest, code, README, and tests.
+9. Backend validates the manifest.
+10. Backend runs tests.
+11. UI shows runtime permissions from the generated manifest.
+12. User approves runtime permissions and installation if supported.
+13. Skill runs manually only if runtime permissions are approved and supported.
+14. UI shows digest output, logs, and sources.
+15. User can disable or hard-delete the skill.
 
 ---
 
@@ -733,8 +811,8 @@ When working in this repository:
 
 1. Prefer small, testable commits.
 2. Do not implement everything at once.
-3. Do not introduce high-risk features before the approval system exists.
-4. Do not add browser automation before RSS/public-fetching works.
+3. Do not introduce high-risk features unless they go through the approval system and remain blocked when unsupported.
+4. Do not add browser automation or live network fetching before sandbox/network enforcement exists.
 5. Do not add email/calendar/finance actions in the MVP.
 6. Keep generated-skill code isolated from application code.
 7. Use clear interfaces between backend, runner, and UI.
