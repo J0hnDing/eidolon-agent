@@ -138,7 +138,7 @@ def test_unsupported_permissions_block_run(tmp_path: Path, db_session: Session) 
     run = run_skill(db_session, skill_dir)
 
     assert run.status == "blocked"
-    assert run.error_message == "network permissions are not supported in Milestone 3"
+    assert run.error_message == "network permissions are not supported by the current runner"
     assert run.exit_code is None
 
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import PermissionRequestModal from "../components/PermissionRequestModal";
-import { ApprovalRequest, ProposedSkillValidation, Skill, SkillFile, SkillRun, api } from "../api/client";
+import { ApprovalRequest, ProposedSkillValidation, RunnerStatus, Skill, SkillFile, SkillRun, api } from "../api/client";
 
 export default function SkillDetailPage() {
   const { skillId } = useParams();
@@ -12,6 +12,7 @@ export default function SkillDetailPage() {
   const [files, setFiles] = useState<SkillFile[]>([]);
   const [validation, setValidation] = useState<ProposedSkillValidation | null>(null);
   const [runtimePermission, setRuntimePermission] = useState<ApprovalRequest | null>(null);
+  const [runnerStatus, setRunnerStatus] = useState<RunnerStatus | null>(null);
   const [showRuntimeModal, setShowRuntimeModal] = useState(false);
   const [runInput, setRunInput] = useState('{\n  "hello": "world"\n}');
   const [isLoading, setIsLoading] = useState(true);
@@ -27,16 +28,18 @@ export default function SkillDetailPage() {
       setError(null);
       try {
         const id = Number(skillId);
-        const [loadedSkill, loadedRuns, loadedFiles, permissionRequests] = await Promise.all([
+        const [loadedSkill, loadedRuns, loadedFiles, permissionRequests, loadedRunnerStatus] = await Promise.all([
           api.getSkill(id),
           api.listSkillRuns(id),
           api.listSkillFiles(id),
           api.listPermissionRequests({ skill_id: id, request_scope: "runtime" }),
+          api.getRunnerStatus(),
         ]);
         setSkill(loadedSkill);
         setRuns(loadedRuns);
         setFiles(loadedFiles);
         setRuntimePermission(permissionRequests[0] ?? null);
+        setRunnerStatus(loadedRunnerStatus);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not load skill");
       } finally {
@@ -274,6 +277,65 @@ export default function SkillDetailPage() {
         </div>
       </section>
 
+      <section className="detail-panel">
+        <header className="page-header">
+          <div>
+            <h2>Runner / Sandbox</h2>
+            <p className="muted">
+              {runnerStatus?.detail ?? "Runner status is not available."}
+            </p>
+          </div>
+          <span className={`badge ${runnerStatus?.available ? "run-succeeded" : "run-blocked"}`}>
+            {runnerStatus?.available ? "available" : "blocked"}
+          </span>
+        </header>
+        <dl className="detail-grid">
+          <div>
+            <dt>Configured Mode</dt>
+            <dd>{runnerStatus?.mode ?? "unknown"}</dd>
+          </div>
+          <div>
+            <dt>Selected Runner</dt>
+            <dd>{runnerStatus?.selected_mode ?? "unknown"}</dd>
+          </div>
+          <div>
+            <dt>Docker</dt>
+            <dd>{runnerStatus?.docker_available ? "available" : "unavailable"}</dd>
+          </div>
+          <div>
+            <dt>Image</dt>
+            <dd>{runnerStatus?.image ?? "not applicable"}</dd>
+          </div>
+          <div>
+            <dt>Image Status</dt>
+            <dd>{runnerStatus?.image_status ?? "unknown"}</dd>
+          </div>
+          <div>
+            <dt>Sandbox Status</dt>
+            <dd>
+              {runnerStatus?.selected_mode === "docker" && runnerStatus.available
+                ? "Docker sandbox active"
+                : runnerStatus?.selected_mode === "local"
+                  ? "Local dev runner"
+                  : "Docker sandbox unavailable"}
+            </dd>
+          </div>
+        </dl>
+        {runnerStatus?.image_detail && <p className="muted">{runnerStatus.image_detail}</p>}
+        {runnerStatus?.image_error && (
+          <div className="run-detail">
+            <h3>Image Build Error</h3>
+            <pre>{runnerStatus.image_error}</pre>
+          </div>
+        )}
+        {runnerStatus?.image_build_log && (
+          <details className="run-detail">
+            <summary>Image Build Log</summary>
+            <pre>{runnerStatus.image_build_log}</pre>
+          </details>
+        )}
+      </section>
+
       {isProposed ? (
         <div className="button-row">
           <button type="button" onClick={handleValidate} disabled={isWorking}>
@@ -389,7 +451,7 @@ export default function SkillDetailPage() {
                     <div>
                       <strong>Run #{run.id}</strong>
                       <span>
-                        {run.started_at ? new Date(run.started_at).toLocaleString() : "not started"}
+                        {formatTimestamp(run.started_at, "not started")}
                       </span>
                     </div>
                     <span className={`badge run-${run.status}`}>{run.status}</span>
@@ -421,6 +483,13 @@ function parseRunInput(value: string): Record<string, unknown> {
     }
     throw err;
   }
+}
+
+function formatTimestamp(value: string | null, fallback: string): string {
+  if (!value) return fallback;
+  const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(value);
+  const normalized = hasTimezone ? value : `${value}Z`;
+  return new Date(normalized).toLocaleString();
 }
 
 function ValidationResult({ validation }: { validation: ProposedSkillValidation }) {
@@ -485,11 +554,11 @@ function RunDetail({ run }: { run: SkillRun }) {
         </div>
         <div>
           <dt>Started</dt>
-          <dd>{run.started_at ? new Date(run.started_at).toLocaleString() : "not started"}</dd>
+          <dd>{formatTimestamp(run.started_at, "not started")}</dd>
         </div>
         <div>
           <dt>Ended</dt>
-          <dd>{run.ended_at ? new Date(run.ended_at).toLocaleString() : "not ended"}</dd>
+          <dd>{formatTimestamp(run.ended_at, "not ended")}</dd>
         </div>
       </dl>
 

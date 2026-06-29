@@ -516,7 +516,7 @@ def test_network_requesting_generated_skill_is_not_runnable_under_current_runner
     )
 
     assert run.status == "blocked"
-    assert run.error_message == "network permissions are not supported in Milestone 3"
+    assert run.error_message == "network permissions are not supported by the current runner"
 
 
 def test_generated_instruction_skill_does_not_require_tests_and_cannot_run(

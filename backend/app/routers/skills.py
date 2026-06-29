@@ -13,11 +13,12 @@ from app.schemas.proposed_skill import (
     ProposedSkillValidationRead,
     SkillFileRead,
 )
+from app.schemas.runner import RunnerStatusRead
 from app.schemas.skill import SkillCreate, SkillRead, SkillUpdate
 from app.schemas.skill_run import SkillRunRead, SkillRunRequest
 from app.services.permission_service import PermissionError, PermissionService
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
-from app.services.skill_runner import SkillRunner
+from app.services.skill_runner import get_runner_status, get_skill_runner
 
 
 router = APIRouter(prefix="/skills", tags=["skills"])
@@ -65,6 +66,11 @@ def list_proposed_skills(db: Session = Depends(get_db)) -> list[Skill]:
     return ProposedSkillService(db).list_proposed()
 
 
+@router.get("/runner-status", response_model=RunnerStatusRead)
+def read_runner_status() -> RunnerStatusRead:
+    return RunnerStatusRead(**get_runner_status().__dict__)
+
+
 @router.get("/{skill_id}", response_model=SkillRead)
 def get_skill(skill_id: int, db: Session = Depends(get_db)) -> Skill:
     skill = db.get(Skill, skill_id)
@@ -94,7 +100,7 @@ def run_skill(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=permission_decision.reason)
 
     skill_dir = resolve_skill_dir(skill)
-    return SkillRunner(db).run(skill_id=skill.id, skill_dir=skill_dir, input_json=payload.input)
+    return get_skill_runner(db).run(skill_id=skill.id, skill_dir=skill_dir, input_json=payload.input)
 
 
 @router.get("/{skill_id}/runs", response_model=list[SkillRunRead])

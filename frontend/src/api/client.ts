@@ -65,6 +65,19 @@ export interface SkillRun {
   error_message: string | null;
 }
 
+export interface RunnerStatus {
+  mode: string;
+  selected_mode: string;
+  docker_available: boolean;
+  available: boolean;
+  detail: string;
+  image: string | null;
+  image_status: string | null;
+  image_detail: string | null;
+  image_build_log: string | null;
+  image_error: string | null;
+}
+
 export interface SkillFile {
   path: string;
   content: string;
@@ -234,6 +247,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  getRunnerStatus: () => request<RunnerStatus>("/skills/runner-status"),
   getSkill: (id: number) => request<Skill>(`/skills/${id}`),
   listSkillFiles: (id: number) => request<SkillFile[]>(`/skills/${id}/files`),
   validateSkill: (id: number) =>

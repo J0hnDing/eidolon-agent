@@ -1,0 +1,365 @@
+import json
+import subprocess
+from collections.abc import Callable, Generator
+from pathlib import Path
+from typing import Any
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.db import Base
+from app.models import Skill
+from app.services.docker_image_manager import DockerImageBuildError, DockerImageStatus
+from app.services.skill_runner import DockerSkillRunner, RunnerConfig, get_runner_status
+
+
+@pytest.fixture
+def db_session() -> Generator[Session, None, None]:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(bind=engine)
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    session = session_factory()
+    try:
+        yield session
+    finally:
+        session.close()
+        Base.metadata.drop_all(bind=engine)
+
+
+def create_skill_record(db: Session, skill_dir: Path, status: str = "installed", enabled: bool = True) -> Skill:
+    skill = Skill(
+        name=f"docker_skill_{len(list(skill_dir.parent.iterdir()))}",
+        description="Docker runner test skill",
+        status=status,
+        risk_level="low",
+        manifest_path=str(skill_dir / "manifest.json"),
+        installed_path=str(skill_dir),
+        enabled=enabled,
+    )
+    db.add(skill)
+    db.commit()
+    db.refresh(skill)
+    return skill
+
+
+def write_skill(
+    skill_dir: Path,
+    manifest_overrides: dict[str, Any] | None = None,
+    test_source: str = "def test_skill_passes():\n    assert True\n",
+) -> None:
+    skill_dir.mkdir()
+    (skill_dir / "tests").mkdir()
+    manifest = {
+        "name": "docker_demo_skill",
+        "description": "A trusted local demo skill.",
+        "skill_type": "automation",
+        "entrypoint": "skill.py",
+        "instructions_path": None,
+        "risk_level": "low",
+        "permissions": {
+            "network": [],
+            "filesystem_read": [],
+            "filesystem_write": ["./cache"],
+            "secrets": [],
+            "shell": False,
+        },
+        "schedule": None,
+        "created_by": "codex",
+        "enabled": False,
+    }
+    if manifest_overrides:
+        manifest.update(manifest_overrides)
+
+    (skill_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (skill_dir / "skill.py").write_text(
+        "import json, sys\n"
+        "payload = json.loads(sys.stdin.read() or '{}')\n"
+        "print(json.dumps({'ok': True, 'input': payload}))\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "tests" / "test_skill.py").write_text(test_source, encoding="utf-8")
+
+
+def config(tmp_path: Path) -> RunnerConfig:
+    return RunnerConfig(
+        mode="docker",
+        docker_image="test-skill-runner:latest",
+        timeout_seconds=3,
+        memory_limit="128m",
+        cpu_limit="0.5",
+        runtime_root=tmp_path / "runtime",
+    )
+
+
+def completed(stdout: str = "", stderr: str = "", returncode: int = 0) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(args=["docker"], returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+def make_runner(
+    db: Session,
+    tmp_path: Path,
+    docker_runner: Callable[..., subprocess.CompletedProcess[str]],
+    available: bool = True,
+    image_manager: Any | None = None,
+) -> DockerSkillRunner:
+    return DockerSkillRunner(
+        db,
+        config=config(tmp_path),
+        docker_runner=docker_runner,
+        docker_available_checker=lambda: available,
+        image_manager=image_manager or FakeBuiltImageManager(),
+    )
+
+
+class FakeBuiltImageManager:
+    def ensure_image(self) -> DockerImageStatus:
+        return DockerImageStatus(
+            image="test-skill-runner:latest",
+            status="built",
+            dockerfile_hash="hash",
+            last_successful_hash="hash",
+            detail="Image already built.",
+        )
+
+
+class FakeFailingImageManager:
+    def ensure_image(self) -> DockerImageStatus:
+        raise DockerImageBuildError("Trusted Docker runner image build failed.\nmissing package")
+
+
+def test_docker_runner_builds_restricted_commands(tmp_path: Path, db_session: Session) -> None:
+    skill_dir = tmp_path / "command_skill"
+    write_skill(skill_dir)
+    skill = create_skill_record(db_session, skill_dir)
+    commands: list[list[str]] = []
+
+    def fake_runner(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if "/skill/tests" in command:
+            return completed(stdout="tests passed")
+        return completed(stdout='{"ok": true}')
+
+    run = make_runner(db_session, tmp_path, fake_runner).run(skill.id, skill_dir, {"topic": "sandbox"})
+
+    assert run.status == "succeeded"
+    assert len(commands) == 2
+    entrypoint_command = commands[1]
+    assert entrypoint_command[:3] == ["docker", "run", "--rm"]
+    assert "--network" in entrypoint_command
+    assert entrypoint_command[entrypoint_command.index("--network") + 1] == "none"
+    assert "--memory" in entrypoint_command
+    assert entrypoint_command[entrypoint_command.index("--memory") + 1] == "128m"
+    assert "--cpus" in entrypoint_command
+    assert entrypoint_command[entrypoint_command.index("--cpus") + 1] == "0.5"
+    assert f"{skill_dir.resolve()}:/skill:ro" in entrypoint_command
+    assert f"{(tmp_path / 'runtime' / f'skill_{skill.id}' / 'cache').resolve()}:/skill/cache:rw" in entrypoint_command
+    assert "test-skill-runner:latest" in entrypoint_command
+    assert (skill_dir / "cache").is_dir()
+
+
+def test_docker_runner_blocks_network_permissions(tmp_path: Path, db_session: Session) -> None:
+    skill_dir = tmp_path / "network_skill"
+    write_skill(
+        skill_dir,
+        {
+            "permissions": {
+                "network": ["example.com"],
+                "filesystem_read": [],
+                "filesystem_write": ["./cache"],
+                "secrets": [],
+                "shell": False,
+            }
+        },
+    )
+    skill = create_skill_record(db_session, skill_dir)
+    commands: list[list[str]] = []
+
+    run = make_runner(db_session, tmp_path, lambda command, **_: commands.append(command) or completed()).run(
+        skill.id, skill_dir, {}
+    )
+
+    assert run.status == "blocked"
+    assert run.error_message == "network permissions are not supported by the current runner"
+    assert commands == []
+
+
+def test_docker_runner_blocks_filesystem_read(tmp_path: Path, db_session: Session) -> None:
+    skill_dir = tmp_path / "read_skill"
+    write_skill(
+        skill_dir,
+        {
+            "risk_level": "high",
+            "permissions": {
+                "network": [],
+                "filesystem_read": ["./data"],
+                "filesystem_write": ["./cache"],
+                "secrets": [],
+                "shell": False,
+            }
+        },
+    )
+    skill = create_skill_record(db_session, skill_dir)
+
+    run = make_runner(db_session, tmp_path, lambda command, **_: completed()).run(skill.id, skill_dir, {})
+
+    assert run.status == "blocked"
+    assert run.error_message == "filesystem read permissions are not supported by the current runner"
+
+
+def test_docker_runner_blocks_shell_true(tmp_path: Path, db_session: Session) -> None:
+    skill_dir = tmp_path / "shell_skill"
+    write_skill(
+        skill_dir,
+        {
+            "risk_level": "high",
+            "permissions": {
+                "network": [],
+                "filesystem_read": [],
+                "filesystem_write": ["./cache"],
+                "secrets": [],
+                "shell": True,
+            }
+        },
+    )
+    skill = create_skill_record(db_session, skill_dir)
+
+    run = make_runner(db_session, tmp_path, lambda command, **_: completed()).run(skill.id, skill_dir, {})
+
+    assert run.status == "blocked"
+    assert run.error_message == "shell permissions are not supported by the current runner"
+
+
+def test_docker_runner_allows_cache_write_permission(tmp_path: Path, db_session: Session) -> None:
+    skill_dir = tmp_path / "cache_skill"
+    write_skill(skill_dir)
+    skill = create_skill_record(db_session, skill_dir)
+
+    def fake_runner(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        if "/skill/tests" in command:
+            return completed(stdout="tests passed")
+        return completed(stdout='{"ok": true, "cache": "allowed"}')
+
+    run = make_runner(db_session, tmp_path, fake_runner).run(skill.id, skill_dir, {})
+
+    assert run.status == "succeeded"
+    assert run.output_json == {"ok": True, "cache": "allowed"}
+
+
+def test_docker_runner_blocks_unsafe_cache_mountpoint(tmp_path: Path, db_session: Session) -> None:
+    skill_dir = tmp_path / "bad_cache_skill"
+    write_skill(skill_dir)
+    (skill_dir / "cache").write_text("not a directory", encoding="utf-8")
+    skill = create_skill_record(db_session, skill_dir)
+
+    run = make_runner(db_session, tmp_path, lambda command, **_: completed()).run(skill.id, skill_dir, {})
+
+    assert run.status == "blocked"
+    assert run.error_message == "Skill cache mountpoint must be a regular directory"
+
+
+def test_docker_runner_blocks_instruction_skills(tmp_path: Path, db_session: Session) -> None:
+    skill_dir = tmp_path / "instruction_skill"
+    write_skill(
+        skill_dir,
+        {
+            "skill_type": "instruction",
+            "entrypoint": None,
+            "instructions_path": "SKILL.md",
+            "permissions": {
+                "network": [],
+                "filesystem_read": [],
+                "filesystem_write": [],
+                "secrets": [],
+                "shell": False,
+            },
+        },
+    )
+    (skill_dir / "SKILL.md").write_text("Instruction text.", encoding="utf-8")
+    skill = create_skill_record(db_session, skill_dir)
+
+    run = make_runner(db_session, tmp_path, lambda command, **_: completed()).run(skill.id, skill_dir, {})
+
+    assert run.status == "blocked"
+    assert run.error_message == "instruction skills cannot be executed"
+
+
+def test_docker_runner_stores_failed_invalid_json_run(tmp_path: Path, db_session: Session) -> None:
+    skill_dir = tmp_path / "invalid_json_skill"
+    write_skill(skill_dir)
+    skill = create_skill_record(db_session, skill_dir)
+
+    def fake_runner(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        if "/skill/tests" in command:
+            return completed(stdout="tests passed")
+        return completed(stdout="not json")
+
+    run = make_runner(db_session, tmp_path, fake_runner).run(skill.id, skill_dir, {})
+
+    assert run.status == "failed"
+    assert "not valid JSON" in (run.error_message or "")
+    assert db_session.get(type(run), run.id) is not None
+
+
+def test_docker_runner_handles_timeout(tmp_path: Path, db_session: Session) -> None:
+    skill_dir = tmp_path / "timeout_skill"
+    write_skill(skill_dir)
+    skill = create_skill_record(db_session, skill_dir)
+
+    def fake_runner(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        if "/skill/tests" in command:
+            return completed(stdout="tests passed")
+        raise subprocess.TimeoutExpired(cmd=command, timeout=3, output="partial", stderr="late")
+
+    run = make_runner(db_session, tmp_path, fake_runner).run(skill.id, skill_dir, {})
+
+    assert run.status == "failed"
+    assert run.stdout == "partial"
+    assert run.stderr == "late"
+    assert run.error_message == "Skill timed out after 3 seconds"
+
+
+def test_docker_runner_blocks_when_docker_unavailable(tmp_path: Path, db_session: Session) -> None:
+    skill_dir = tmp_path / "unavailable_skill"
+    write_skill(skill_dir)
+    skill = create_skill_record(db_session, skill_dir)
+    commands: list[list[str]] = []
+
+    run = make_runner(
+        db_session,
+        tmp_path,
+        lambda command, **_: commands.append(command) or completed(),
+        available=False,
+    ).run(skill.id, skill_dir, {})
+
+    assert run.status == "blocked"
+    assert "Docker sandbox runner is selected, but Docker is unavailable" in (run.error_message or "")
+    assert commands == []
+
+
+def test_docker_runner_blocks_when_image_build_fails(tmp_path: Path, db_session: Session) -> None:
+    skill_dir = tmp_path / "build_fail_skill"
+    write_skill(skill_dir)
+    skill = create_skill_record(db_session, skill_dir)
+    commands: list[list[str]] = []
+
+    run = make_runner(
+        db_session,
+        tmp_path,
+        lambda command, **_: commands.append(command) or completed(),
+        image_manager=FakeFailingImageManager(),
+    ).run(skill.id, skill_dir, {})
+
+    assert run.status == "blocked"
+    assert "Trusted Docker runner image build failed" in (run.error_message or "")
+    assert commands == []
+
+
+def test_runner_status_requires_explicit_local_fallback() -> None:
+    auto_status = get_runner_status(config=RunnerConfig(mode="auto"), docker_available_checker=lambda: False)
+    local_status = get_runner_status(config=RunnerConfig(mode="local"), docker_available_checker=lambda: False)
+
+    assert auto_status.selected_mode == "docker"
+    assert auto_status.available is False
+    assert local_status.selected_mode == "local"
+    assert local_status.available is True
