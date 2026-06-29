@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Skill, SkillRun
+from app.schemas.approval_request import ApprovalRequestRead
 from app.schemas.proposed_skill import (
     ProposedSampleCreate,
     ProposedSkillValidationRead,
@@ -14,6 +15,7 @@ from app.schemas.proposed_skill import (
 )
 from app.schemas.skill import SkillCreate, SkillRead, SkillUpdate
 from app.schemas.skill_run import SkillRunRead, SkillRunRequest
+from app.services.permission_service import PermissionError, PermissionService
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
 from app.services.skill_runner import SkillRunner
 
@@ -80,6 +82,9 @@ def run_skill(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Skill is disabled")
     if skill.skill_type == "instruction":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Instruction skills cannot be run")
+    permission_decision = PermissionService(db).can_run(skill)
+    if not permission_decision.allowed:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=permission_decision.reason)
 
     skill_dir = resolve_skill_dir(skill)
     return SkillRunner(db).run(skill_id=skill.id, skill_dir=skill_dir, input_json=payload.input)
@@ -119,11 +124,51 @@ def validate_skill(skill_id: int, db: Session = Depends(get_db)) -> ProposedSkil
     return ProposedSkillService(db).validate_proposed_skill(skill)
 
 
+@router.post("/{skill_id}/runtime-permissions/analyze", response_model=ApprovalRequestRead)
+def analyze_runtime_permissions(skill_id: int, db: Session = Depends(get_db)):
+    skill = db.get(Skill, skill_id)
+    if skill is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+    try:
+        return PermissionService(db).create_runtime_request(skill)
+    except (PermissionError, ProposedSkillError, FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/{skill_id}/runtime-permissions/approve", response_model=ApprovalRequestRead)
+def approve_runtime_permissions(skill_id: int, db: Session = Depends(get_db)):
+    skill = db.get(Skill, skill_id)
+    if skill is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+    permission_service = PermissionService(db)
+    request = permission_service.create_runtime_request(skill)
+    try:
+        return permission_service.approve_request(request)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/{skill_id}/runtime-permissions/deny", response_model=ApprovalRequestRead)
+def deny_runtime_permissions(skill_id: int, db: Session = Depends(get_db)):
+    skill = db.get(Skill, skill_id)
+    if skill is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+    permission_service = PermissionService(db)
+    request = permission_service.create_runtime_request(skill)
+    try:
+        return permission_service.deny_request(request)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
 @router.post("/{skill_id}/install", response_model=SkillRead)
 def install_skill(skill_id: int, db: Session = Depends(get_db)) -> Skill:
     skill = db.get(Skill, skill_id)
     if skill is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+    permission_decision = PermissionService(db).can_install(skill)
+    if not permission_decision.allowed:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=permission_decision.reason)
     try:
         return ProposedSkillService(db).install_proposed_skill(skill)
     except ProposedSkillError as exc:

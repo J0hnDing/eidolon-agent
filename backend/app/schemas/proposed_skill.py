@@ -24,6 +24,7 @@ class ProposedSkillValidationRead(BaseModel):
     stdout: str = ""
     stderr: str = ""
     error_message: str | None = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 ValidationStage = Literal["manifest", "files", "tests", "install"]

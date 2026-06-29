@@ -65,6 +65,7 @@ class Skill(Base):
     versions: Mapped[list["SkillVersion"]] = relationship(back_populates="skill")
     runs: Mapped[list["SkillRun"]] = relationship(back_populates="skill")
     approval_requests: Mapped[list["ApprovalRequest"]] = relationship(back_populates="skill")
+    generation_requests: Mapped[list["SkillGenerationRequest"]] = relationship(back_populates="proposed_skill")
 
 
 class SkillVersion(Base):
@@ -103,13 +104,55 @@ class ApprovalRequest(Base):
     __tablename__ = "approval_requests"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id"), nullable=False, index=True)
+    skill_id: Mapped[int | None] = mapped_column(ForeignKey("skills.id"), nullable=True, index=True)
+    generation_request_id: Mapped[int | None] = mapped_column(
+        ForeignKey("skill_generation_requests.id"),
+        nullable=True,
+        index=True,
+    )
+    request_scope: Mapped[str] = mapped_column(String(32), default="runtime", nullable=False, index=True)
     request_type: Mapped[str] = mapped_column(String(64), nullable=False)
     risk_level: Mapped[str] = mapped_column(String(16), nullable=False)
     requested_permissions_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    requested_dependencies_json: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    requested_network_domains_json: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    requested_filesystem_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    reason_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
+    user_explanation: Mapped[str] = mapped_column(Text, default="", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    decision_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     skill: Mapped["Skill"] = relationship(back_populates="approval_requests")
+    generation_request: Mapped["SkillGenerationRequest"] = relationship(back_populates="approval_requests")
+
+
+class SkillGenerationRequest(Base):
+    __tablename__ = "skill_generation_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_message: Mapped[str] = mapped_column(Text, nullable=False)
+    proposed_skill_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    proposed_display_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    proposed_skill_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    plan_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    requested_permissions_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    requested_dependencies_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    requested_network_domains_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    risk_level: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="planned", nullable=False, index=True)
+    proposed_skill_id: Mapped[int | None] = mapped_column(ForeignKey("skills.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    proposed_skill: Mapped["Skill"] = relationship(back_populates="generation_requests")
+    approval_requests: Mapped[list["ApprovalRequest"]] = relationship(back_populates="generation_request")

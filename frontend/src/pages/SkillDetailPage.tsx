@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { ProposedSkillValidation, Skill, SkillFile, SkillRun, api } from "../api/client";
+import PermissionRequestModal from "../components/PermissionRequestModal";
+import { ApprovalRequest, ProposedSkillValidation, Skill, SkillFile, SkillRun, api } from "../api/client";
 
 export default function SkillDetailPage() {
   const { skillId } = useParams();
@@ -9,6 +10,8 @@ export default function SkillDetailPage() {
   const [runs, setRuns] = useState<SkillRun[]>([]);
   const [files, setFiles] = useState<SkillFile[]>([]);
   const [validation, setValidation] = useState<ProposedSkillValidation | null>(null);
+  const [runtimePermission, setRuntimePermission] = useState<ApprovalRequest | null>(null);
+  const [showRuntimeModal, setShowRuntimeModal] = useState(false);
   const [runInput, setRunInput] = useState("{}");
   const [isLoading, setIsLoading] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
@@ -23,14 +26,16 @@ export default function SkillDetailPage() {
       setError(null);
       try {
         const id = Number(skillId);
-        const [loadedSkill, loadedRuns, loadedFiles] = await Promise.all([
+        const [loadedSkill, loadedRuns, loadedFiles, permissionRequests] = await Promise.all([
           api.getSkill(id),
           api.listSkillRuns(id),
           api.listSkillFiles(id),
+          api.listPermissionRequests({ skill_id: id, request_scope: "runtime" }),
         ]);
         setSkill(loadedSkill);
         setRuns(loadedRuns);
         setFiles(loadedFiles);
+        setRuntimePermission(permissionRequests[0] ?? null);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not load skill");
       } finally {
@@ -42,6 +47,10 @@ export default function SkillDetailPage() {
 
   async function handleRun() {
     if (!skill) return;
+    if (runtimePermission?.status !== "approved") {
+      await handleReviewRuntimePermissions(true);
+      return;
+    }
     setIsRunning(true);
     setError(null);
     try {
@@ -73,6 +82,10 @@ export default function SkillDetailPage() {
 
   async function handleInstall() {
     if (!skill) return;
+    if (runtimePermission?.status !== "approved") {
+      await handleReviewRuntimePermissions(true);
+      return;
+    }
     setIsWorking(true);
     setError(null);
     try {
@@ -98,6 +111,51 @@ export default function SkillDetailPage() {
       setValidation(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not reject skill");
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function handleReviewRuntimePermissions(openModal = true) {
+    if (!skill) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      const request = await api.analyzeRuntimePermissions(skill.id);
+      setRuntimePermission(request);
+      setShowRuntimeModal(openModal);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not analyze runtime permissions");
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function handleApproveRuntimePermissions() {
+    if (!skill) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      const request = await api.approveRuntimePermissions(skill.id);
+      setRuntimePermission(request);
+      setShowRuntimeModal(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not approve runtime permissions");
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function handleDenyRuntimePermissions() {
+    if (!skill) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      const request = await api.denyRuntimePermissions(skill.id);
+      setRuntimePermission(request);
+      setShowRuntimeModal(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not deny runtime permissions");
     } finally {
       setIsWorking(false);
     }
@@ -131,7 +189,8 @@ export default function SkillDetailPage() {
 
   const isExecutable = skill.skill_type === "automation" || skill.skill_type === "hybrid";
   const isInstalledExecutable = skill.status === "installed" && isExecutable;
-  const canRun = isInstalledExecutable && skill.enabled;
+  const runtimeApproved = runtimePermission?.status === "approved";
+  const canRun = isInstalledExecutable && skill.enabled && runtimeApproved;
   const isProposed = skill.status === "proposed";
 
   return (
@@ -178,6 +237,30 @@ export default function SkillDetailPage() {
         </dl>
       </section>
 
+      <section className="detail-panel">
+        <header className="page-header">
+          <div>
+            <h2>Runtime Permissions</h2>
+            <p className="muted">
+              {runtimePermission
+                ? runtimePermission.user_explanation || runtimePermission.reason
+                : "Runtime permissions have not been analyzed yet."}
+            </p>
+          </div>
+          <span className={`badge ${runtimePermission ? `risk-${runtimePermission.risk_level}` : ""}`}>
+            {runtimePermission ? runtimePermission.status : "not analyzed"}
+          </span>
+        </header>
+        {Boolean(runtimePermission?.reason_json?.permission_expansion) && (
+          <p className="error-text">Permission expansion detected. Review the generated manifest before approving.</p>
+        )}
+        <div className="button-row">
+          <button type="button" className="secondary" onClick={() => handleReviewRuntimePermissions(true)} disabled={isWorking}>
+            Review Runtime Permissions
+          </button>
+        </div>
+      </section>
+
       {isProposed ? (
         <div className="button-row">
           <button type="button" onClick={handleValidate} disabled={isWorking}>
@@ -197,6 +280,11 @@ export default function SkillDetailPage() {
               {isRunning ? "Running..." : "Run"}
             </button>
           )}
+          {isInstalledExecutable && skill.enabled && !runtimeApproved && (
+            <button type="button" onClick={() => handleReviewRuntimePermissions(true)} disabled={isWorking}>
+              Review Before Run
+            </button>
+          )}
           {isInstalledExecutable && !skill.enabled && (
             <button type="button" disabled>
               Run Disabled
@@ -212,6 +300,19 @@ export default function SkillDetailPage() {
       )}
 
       {error && <p className="error-text">{error}</p>}
+
+      {runtimePermission && showRuntimeModal && (
+        <PermissionRequestModal
+          request={runtimePermission}
+          title={`${skill.name} runtime permissions`}
+          subject="Approve these manifest permissions before installing or running this skill."
+          isWorking={isWorking}
+          approveLabel="Approve Runtime Permissions"
+          denyLabel="Deny"
+          onApprove={handleApproveRuntimePermissions}
+          onDeny={handleDenyRuntimePermissions}
+        />
+      )}
 
       {validation && <ValidationResult validation={validation} />}
 
@@ -308,6 +409,12 @@ function ValidationResult({ validation }: { validation: ProposedSkillValidation 
         <div className="run-detail">
           <h3>Error</h3>
           <pre>{validation.error_message}</pre>
+        </div>
+      )}
+      {validation.warnings.length > 0 && (
+        <div className="run-detail">
+          <h3>Warnings</h3>
+          <pre>{validation.warnings.join("\n")}</pre>
         </div>
       )}
       {(validation.stdout || validation.stderr) && (

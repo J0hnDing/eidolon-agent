@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import create_db_and_tables
-from app.routers import memory_facts, skills
+from app.routers import chat, memory_facts, permission_requests, skill_generation_requests, skills
 
 
 @asynccontextmanager
@@ -33,6 +33,9 @@ app.add_middleware(
 
 app.include_router(memory_facts.router)
 app.include_router(skills.router)
+app.include_router(chat.router)
+app.include_router(skill_generation_requests.router)
+app.include_router(permission_requests.router)
 
 
 @app.get("/health")

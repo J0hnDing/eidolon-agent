@@ -110,16 +110,23 @@ class ProposedSkillService:
                 manifest_valid=False,
                 error_message=str(exc),
             )
+        warnings = []
+        if manifest.permissions.network:
+            warnings.append(
+                "This skill requests network access, but the current runner does not support networked execution yet."
+            )
 
         if manifest.skill_type == "instruction":
             tests_result = self._run_optional_instruction_tests(skill_dir)
             if tests_result is not None:
+                tests_result.warnings = warnings
                 return tests_result
             return ProposedSkillValidationRead(
                 ok=True,
                 skill_type=manifest.skill_type,
                 manifest_valid=True,
                 tests_run=False,
+                warnings=warnings,
             )
 
         result = self._run_tests(skill_dir)
@@ -132,6 +139,7 @@ class ProposedSkillService:
             stdout=result.stdout,
             stderr=result.stderr,
             error_message=None if result.returncode == 0 else "Skill tests failed",
+            warnings=warnings,
         )
 
     def install_proposed_skill(self, skill: Skill) -> Skill:

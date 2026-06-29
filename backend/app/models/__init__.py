@@ -3,6 +3,7 @@ from app.models.entities import (
     MemoryFact,
     Message,
     Skill,
+    SkillGenerationRequest,
     SkillRun,
     SkillVersion,
 )
@@ -12,6 +13,7 @@ __all__ = [
     "MemoryFact",
     "Message",
     "Skill",
+    "SkillGenerationRequest",
     "SkillRun",
     "SkillVersion",
 ]
