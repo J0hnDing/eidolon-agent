@@ -4,9 +4,11 @@ version = "0.1.0"
 description = "Local-first personal assistant backend foundation."
 requires-python = ">=3.12"
 dependencies = [
+    "apscheduler>=3.10.4",
     "fastapi>=0.115.0",
     "pydantic>=2.8.0",
     "sqlalchemy>=2.0.30",
+    "tzdata>=2025.2",
     "uvicorn[standard]>=0.30.0",
 ]
 

@@ -16,6 +16,8 @@ export type SkillStatus = "proposed" | "installed" | "disabled" | "failed" | "de
 export type ChatMode = "chat" | "project";
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired" | "superseded";
 export type PermissionRequestScope = "build_time" | "runtime";
+export type ScheduleStatus = "pending" | "active" | "paused" | "denied" | "deleted";
+export type ScheduleType = "daily" | "weekly" | "interval";
 
 export interface MemoryFact {
   id: number;
@@ -81,6 +83,39 @@ export interface RunnerStatus {
 export interface SkillFile {
   path: string;
   content: string;
+}
+
+export interface SchedulePayload {
+  type: ScheduleType;
+  timezone: string;
+  input: Record<string, unknown>;
+  time?: string | null;
+  day?: string | null;
+  every?: number | null;
+  unit?: "minutes" | "hours" | "days" | null;
+}
+
+export interface SkillSchedule {
+  id: number;
+  skill_id: number;
+  skill_name: string | null;
+  skill_type: SkillType | null;
+  name: string;
+  status: ScheduleStatus;
+  schedule_type: ScheduleType;
+  schedule_json: SchedulePayload;
+  input_json: Record<string, unknown>;
+  timezone: string;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_run_status: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScheduleCreateResponse {
+  schedule: SkillSchedule;
+  approval_request_id: number | null;
 }
 
 export interface ProposedSkillValidation {
@@ -249,6 +284,41 @@ export const api = {
     }),
   getRunnerStatus: () => request<RunnerStatus>("/skills/runner-status"),
   getSkill: (id: number) => request<Skill>(`/skills/${id}`),
+  listSchedules: (skillId?: number) =>
+    request<SkillSchedule[]>(`/schedules${skillId ? `?skill_id=${skillId}` : ""}`),
+  createSchedule: (skillId: number, payload: { name: string; schedule: SchedulePayload }) =>
+    request<ScheduleCreateResponse>(`/skills/${skillId}/schedules`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  createManifestSchedule: (skillId: number) =>
+    request<ScheduleCreateResponse>(`/skills/${skillId}/schedules/from-manifest`, {
+      method: "POST",
+    }),
+  approveSchedule: (id: number) =>
+    request<SkillSchedule>(`/schedules/${id}/approve`, {
+      method: "POST",
+    }),
+  denySchedule: (id: number) =>
+    request<SkillSchedule>(`/schedules/${id}/deny`, {
+      method: "POST",
+    }),
+  pauseSchedule: (id: number) =>
+    request<SkillSchedule>(`/schedules/${id}/pause`, {
+      method: "POST",
+    }),
+  resumeSchedule: (id: number) =>
+    request<SkillSchedule>(`/schedules/${id}/resume`, {
+      method: "POST",
+    }),
+  deleteSchedule: (id: number) =>
+    request<void>(`/schedules/${id}`, {
+      method: "DELETE",
+    }),
+  runScheduleNow: (id: number) =>
+    request<SkillRun>(`/schedules/${id}/run-now`, {
+      method: "POST",
+    }),
   listSkillFiles: (id: number) => request<SkillFile[]>(`/skills/${id}/files`),
   validateSkill: (id: number) =>
     request<ProposedSkillValidation>(`/skills/${id}/validate`, {

@@ -295,10 +295,26 @@ class ProposedSkillService:
         }
 
     def _sample_readme(self, name: str, skill_type: SkillType) -> str:
-        return (
+        readme = (
             f"# {name}\n\n"
             f"Sample `{skill_type}` skill created by the local proposed skill workflow.\n"
         )
+        if skill_type in {"automation", "hybrid"}:
+            readme += (
+                "\n## Input\n\n"
+                "Send a JSON object. The friendliest input is:\n\n"
+                "```json\n"
+                "{\n"
+                '  "message": "Hello, assistant",\n'
+                '  "label": "Manual test"\n'
+                "}\n"
+                "```\n\n"
+                "`message` is echoed back. `label` is optional and is used in the summary.\n\n"
+                "## Output\n\n"
+                "The skill returns readable JSON with `title`, `summary`, `echoed_message`, "
+                "`received_input`, `suggested_next_input`, and `warnings`.\n"
+            )
+        return readme
 
     def _sample_instructions(self, name: str) -> str:
         return (
@@ -311,9 +327,42 @@ class ProposedSkillService:
         return (
             "import json\n"
             "import sys\n\n"
+            "DEFAULT_MESSAGE = 'Hello from the sample echo skill.'\n\n\n"
+            "def build_response(payload):\n"
+            "    if not isinstance(payload, dict):\n"
+            "        return {\n"
+            "            'title': 'Sample Echo Skill',\n"
+            "            'summary': 'I can echo JSON objects. Please send an object with a message field.',\n"
+            "            'echoed_message': '',\n"
+            "            'received_input': payload,\n"
+            "            'suggested_next_input': {'message': 'Hello, assistant'},\n"
+            "            'warnings': ['Input was not a JSON object.'],\n"
+            "        }\n\n"
+            "    message = payload.get('message') or payload.get('text') or DEFAULT_MESSAGE\n"
+            "    label = payload.get('label') or 'Echo response'\n"
+            "    return {\n"
+            "        'title': 'Sample Echo Skill',\n"
+            "        'summary': f'{label}: {message}',\n"
+            "        'echoed_message': message,\n"
+            "        'received_input': payload,\n"
+            "        'suggested_next_input': {'message': 'Try editing this message and running again.'},\n"
+            "        'warnings': [],\n"
+            "    }\n\n\n"
             "def main():\n"
-            "    payload = json.loads(sys.stdin.read() or '{}')\n"
-            "    print(json.dumps({'title': 'Sample Echo Skill', 'input': payload, 'warnings': []}))\n\n"
+            "    raw_input = sys.stdin.read()\n"
+            "    try:\n"
+            "        payload = json.loads(raw_input or '{}')\n"
+            "        response = build_response(payload)\n"
+            "    except json.JSONDecodeError as exc:\n"
+            "        response = {\n"
+            "            'title': 'Sample Echo Skill',\n"
+            "            'summary': 'The input was not valid JSON.',\n"
+            "            'echoed_message': '',\n"
+            "            'received_input': raw_input,\n"
+            "            'suggested_next_input': {'message': 'Hello, assistant'},\n"
+            "            'warnings': [f'Invalid JSON input: {exc.msg}'],\n"
+            "        }\n"
+            "    print(json.dumps(response))\n\n"
             "if __name__ == '__main__':\n"
             "    main()\n"
         )
@@ -328,14 +377,33 @@ class ProposedSkillService:
             "    skill_path = Path(__file__).resolve().parents[1] / 'skill.py'\n"
             "    result = subprocess.run(\n"
             "        [sys.executable, str(skill_path)],\n"
-            "        input=json.dumps({'hello': 'world'}),\n"
+            "        input=json.dumps({'message': 'Hello from the UI', 'label': 'Test run'}),\n"
             "        capture_output=True,\n"
             "        text=True,\n"
             "        timeout=5,\n"
             "        shell=False,\n"
             "    )\n"
             "    assert result.returncode == 0\n"
-            "    assert json.loads(result.stdout)['input'] == {'hello': 'world'}\n"
+            "    output = json.loads(result.stdout)\n"
+            "    assert output['title'] == 'Sample Echo Skill'\n"
+            "    assert output['summary'] == 'Test run: Hello from the UI'\n"
+            "    assert output['echoed_message'] == 'Hello from the UI'\n"
+            "    assert output['received_input'] == {'message': 'Hello from the UI', 'label': 'Test run'}\n"
+            "    assert output['warnings'] == []\n\n\n"
+            "def test_sample_skill_reports_invalid_json_as_json():\n"
+            "    skill_path = Path(__file__).resolve().parents[1] / 'skill.py'\n"
+            "    result = subprocess.run(\n"
+            "        [sys.executable, str(skill_path)],\n"
+            "        input='{not valid json}',\n"
+            "        capture_output=True,\n"
+            "        text=True,\n"
+            "        timeout=5,\n"
+            "        shell=False,\n"
+            "    )\n"
+            "    assert result.returncode == 0\n"
+            "    output = json.loads(result.stdout)\n"
+            "    assert output['summary'] == 'The input was not valid JSON.'\n"
+            "    assert output['warnings']\n"
         )
 
     def _validate_declared_files(

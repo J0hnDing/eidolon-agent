@@ -1,8 +1,18 @@
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import PermissionRequestModal from "../components/PermissionRequestModal";
-import { ApprovalRequest, ProposedSkillValidation, RunnerStatus, Skill, SkillFile, SkillRun, api } from "../api/client";
+import {
+  ApprovalRequest,
+  ProposedSkillValidation,
+  RunnerStatus,
+  ScheduleType,
+  Skill,
+  SkillFile,
+  SkillRun,
+  SkillSchedule,
+  api,
+} from "../api/client";
 
 export default function SkillDetailPage() {
   const { skillId } = useParams();
@@ -13,8 +23,17 @@ export default function SkillDetailPage() {
   const [validation, setValidation] = useState<ProposedSkillValidation | null>(null);
   const [runtimePermission, setRuntimePermission] = useState<ApprovalRequest | null>(null);
   const [runnerStatus, setRunnerStatus] = useState<RunnerStatus | null>(null);
+  const [schedules, setSchedules] = useState<SkillSchedule[]>([]);
   const [showRuntimeModal, setShowRuntimeModal] = useState(false);
   const [runInput, setRunInput] = useState('{\n  "hello": "world"\n}');
+  const [scheduleName, setScheduleName] = useState("Daily run");
+  const [scheduleType, setScheduleType] = useState<ScheduleType>("daily");
+  const [scheduleTime, setScheduleTime] = useState("08:00");
+  const [scheduleDay, setScheduleDay] = useState("monday");
+  const [scheduleEvery, setScheduleEvery] = useState(60);
+  const [scheduleUnit, setScheduleUnit] = useState<"minutes" | "hours" | "days">("minutes");
+  const [scheduleTimezone, setScheduleTimezone] = useState("America/Toronto");
+  const [scheduleInput, setScheduleInput] = useState("{}");
   const [isLoading, setIsLoading] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
@@ -28,18 +47,20 @@ export default function SkillDetailPage() {
       setError(null);
       try {
         const id = Number(skillId);
-        const [loadedSkill, loadedRuns, loadedFiles, permissionRequests, loadedRunnerStatus] = await Promise.all([
+        const [loadedSkill, loadedRuns, loadedFiles, permissionRequests, loadedRunnerStatus, loadedSchedules] = await Promise.all([
           api.getSkill(id),
           api.listSkillRuns(id),
           api.listSkillFiles(id),
           api.listPermissionRequests({ skill_id: id, request_scope: "runtime" }),
           api.getRunnerStatus(),
+          api.listSchedules(id),
         ]);
         setSkill(loadedSkill);
         setRuns(loadedRuns);
         setFiles(loadedFiles);
         setRuntimePermission(permissionRequests[0] ?? null);
         setRunnerStatus(loadedRunnerStatus);
+        setSchedules(loadedSchedules);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not load skill");
       } finally {
@@ -185,6 +206,62 @@ export default function SkillDetailPage() {
       setSkill(await api.updateSkill(skill.id, { enabled: !skill.enabled }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not update skill");
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function refreshSchedules() {
+    if (!skill) return;
+    setSchedules(await api.listSchedules(skill.id));
+  }
+
+  async function handleCreateSchedule(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!skill) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      const input = parseRunInput(scheduleInput);
+      const schedule = {
+        type: scheduleType,
+        timezone: scheduleTimezone,
+        input,
+        ...(scheduleType === "daily" ? { time: scheduleTime } : {}),
+        ...(scheduleType === "weekly" ? { day: scheduleDay, time: scheduleTime } : {}),
+        ...(scheduleType === "interval" ? { every: scheduleEvery, unit: scheduleUnit } : {}),
+      };
+      await api.createSchedule(skill.id, { name: scheduleName, schedule });
+      await refreshSchedules();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create schedule");
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function handleCreateManifestSchedule() {
+    if (!skill) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      await api.createManifestSchedule(skill.id);
+      await refreshSchedules();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create schedule from manifest");
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function handleScheduleAction(action: () => Promise<unknown>) {
+    setIsWorking(true);
+    setError(null);
+    try {
+      await action();
+      await refreshSchedules();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Schedule action failed");
     } finally {
       setIsWorking(false);
     }
@@ -392,6 +469,93 @@ export default function SkillDetailPage() {
       {validation && <ValidationResult validation={validation} />}
 
       <section className="detail-panel">
+        <header className="page-header">
+          <div>
+            <h2>Schedules</h2>
+            <p className="muted">Schedules require approval and still use the same runtime permission checks as manual runs.</p>
+          </div>
+          <Link to="/schedules">All schedules</Link>
+        </header>
+        <ScheduleList
+          schedules={schedules}
+          isWorking={isWorking}
+          onApprove={(id) => handleScheduleAction(() => api.approveSchedule(id))}
+          onDeny={(id) => handleScheduleAction(() => api.denySchedule(id))}
+          onPause={(id) => handleScheduleAction(() => api.pauseSchedule(id))}
+          onResume={(id) => handleScheduleAction(() => api.resumeSchedule(id))}
+          onDelete={(id) => handleScheduleAction(() => api.deleteSchedule(id))}
+          onRunNow={(id) => handleScheduleAction(() => api.runScheduleNow(id))}
+        />
+        {isInstalledExecutable ? (
+          <form className="form-panel" onSubmit={handleCreateSchedule}>
+            <h3>Create Schedule Request</h3>
+            <div className="form-grid">
+              <label>
+                Name
+                <input value={scheduleName} onChange={(event) => setScheduleName(event.target.value)} required />
+              </label>
+              <label>
+                Type
+                <select value={scheduleType} onChange={(event) => setScheduleType(event.target.value as ScheduleType)}>
+                  <option value="daily">daily</option>
+                  <option value="weekly">weekly</option>
+                  <option value="interval">interval</option>
+                </select>
+              </label>
+              {(scheduleType === "daily" || scheduleType === "weekly") && (
+                <label>
+                  Time
+                  <input type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} />
+                </label>
+              )}
+              {scheduleType === "weekly" && (
+                <label>
+                  Day
+                  <select value={scheduleDay} onChange={(event) => setScheduleDay(event.target.value)}>
+                    {["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].map((day) => (
+                      <option key={day} value={day}>{day}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {scheduleType === "interval" && (
+                <>
+                  <label>
+                    Every
+                    <input type="number" min="1" value={scheduleEvery} onChange={(event) => setScheduleEvery(Number(event.target.value))} />
+                  </label>
+                  <label>
+                    Unit
+                    <select value={scheduleUnit} onChange={(event) => setScheduleUnit(event.target.value as "minutes" | "hours" | "days")}>
+                      <option value="minutes">minutes</option>
+                      <option value="hours">hours</option>
+                      <option value="days">days</option>
+                    </select>
+                  </label>
+                </>
+              )}
+              <label>
+                Timezone
+                <input value={scheduleTimezone} onChange={(event) => setScheduleTimezone(event.target.value)} />
+              </label>
+            </div>
+            <label>
+              Input JSON
+              <textarea value={scheduleInput} onChange={(event) => setScheduleInput(event.target.value)} rows={6} />
+            </label>
+            <div className="button-row">
+              <button type="submit" disabled={isWorking}>Create Schedule Request</button>
+              <button type="button" className="secondary" onClick={handleCreateManifestSchedule} disabled={isWorking}>
+                Use Manifest Schedule
+              </button>
+            </div>
+          </form>
+        ) : (
+          <p className="muted">Only installed automation or hybrid skills can request schedules.</p>
+        )}
+      </section>
+
+      <section className="detail-panel">
         <h2>Skill Files</h2>
         {files.length > 0 ? (
           <div className="file-list">
@@ -483,6 +647,73 @@ function parseRunInput(value: string): Record<string, unknown> {
     }
     throw err;
   }
+}
+
+function ScheduleList({
+  schedules,
+  isWorking,
+  onApprove,
+  onDeny,
+  onPause,
+  onResume,
+  onDelete,
+  onRunNow,
+}: {
+  schedules: SkillSchedule[];
+  isWorking: boolean;
+  onApprove: (id: number) => void;
+  onDeny: (id: number) => void;
+  onPause: (id: number) => void;
+  onResume: (id: number) => void;
+  onDelete: (id: number) => void;
+  onRunNow: (id: number) => void;
+}) {
+  if (schedules.length === 0) {
+    return <p className="muted">No schedules for this skill yet.</p>;
+  }
+  return (
+    <div className="run-list">
+      {schedules.map((schedule) => (
+        <article key={schedule.id} className="run-row">
+          <div>
+            <strong>{schedule.name}</strong>
+            <span>{humanSchedule(schedule)}</span>
+            <span>
+              Last: {formatTimestamp(schedule.last_run_at, "never")}
+              {schedule.last_run_status ? ` (${schedule.last_run_status})` : ""}
+            </span>
+          </div>
+          <div className="button-row">
+            <span className={`badge status-${schedule.status}`}>{schedule.status}</span>
+            {schedule.status === "pending" && (
+              <>
+                <button type="button" onClick={() => onApprove(schedule.id)} disabled={isWorking}>Approve</button>
+                <button type="button" className="secondary" onClick={() => onDeny(schedule.id)} disabled={isWorking}>Deny</button>
+              </>
+            )}
+            {schedule.status === "active" && (
+              <button type="button" className="secondary" onClick={() => onPause(schedule.id)} disabled={isWorking}>Pause</button>
+            )}
+            {schedule.status === "paused" && (
+              <button type="button" onClick={() => onResume(schedule.id)} disabled={isWorking}>Resume</button>
+            )}
+            <button type="button" className="secondary" onClick={() => onRunNow(schedule.id)} disabled={isWorking || schedule.status === "paused"}>
+              Run Now
+            </button>
+            <button type="button" className="danger" onClick={() => onDelete(schedule.id)} disabled={isWorking}>Delete</button>
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function humanSchedule(schedule: SkillSchedule): string {
+  const data = schedule.schedule_json;
+  if (schedule.schedule_type === "daily") return `Daily at ${data.time} ${schedule.timezone}`;
+  if (schedule.schedule_type === "weekly") return `Weekly on ${data.day} at ${data.time} ${schedule.timezone}`;
+  if (schedule.schedule_type === "interval") return `Every ${data.every} ${data.unit}`;
+  return schedule.schedule_type;
 }
 
 function formatTimestamp(value: string | null, fallback: string): string {

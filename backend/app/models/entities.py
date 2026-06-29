@@ -66,6 +66,7 @@ class Skill(Base):
     runs: Mapped[list["SkillRun"]] = relationship(back_populates="skill")
     approval_requests: Mapped[list["ApprovalRequest"]] = relationship(back_populates="skill")
     generation_requests: Mapped[list["SkillGenerationRequest"]] = relationship(back_populates="proposed_skill")
+    schedules: Mapped[list["SkillSchedule"]] = relationship(back_populates="skill")
 
 
 class SkillVersion(Base):
@@ -100,6 +101,32 @@ class SkillRun(Base):
     skill: Mapped["Skill"] = relationship(back_populates="runs")
 
 
+class SkillSchedule(Base):
+    __tablename__ = "skill_schedules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
+    schedule_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    schedule_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    input_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    timezone: Mapped[str] = mapped_column(String(128), default="America/Toronto", nullable=False)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_run_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+    skill: Mapped["Skill"] = relationship(back_populates="schedules")
+    approval_requests: Mapped[list["ApprovalRequest"]] = relationship(back_populates="schedule")
+
+
 class ApprovalRequest(Base):
     __tablename__ = "approval_requests"
 
@@ -110,6 +137,7 @@ class ApprovalRequest(Base):
         nullable=True,
         index=True,
     )
+    schedule_id: Mapped[int | None] = mapped_column(ForeignKey("skill_schedules.id"), nullable=True, index=True)
     request_scope: Mapped[str] = mapped_column(String(32), default="runtime", nullable=False, index=True)
     request_type: Mapped[str] = mapped_column(String(64), nullable=False)
     risk_level: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -128,6 +156,7 @@ class ApprovalRequest(Base):
 
     skill: Mapped["Skill"] = relationship(back_populates="approval_requests")
     generation_request: Mapped["SkillGenerationRequest"] = relationship(back_populates="approval_requests")
+    schedule: Mapped["SkillSchedule"] = relationship(back_populates="approval_requests")
 
 
 class SkillGenerationRequest(Base):

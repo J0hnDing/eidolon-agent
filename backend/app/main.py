@@ -4,14 +4,23 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.db import create_db_and_tables
-from app.routers import chat, memory_facts, permission_requests, skill_generation_requests, skills
+from app.db import SessionLocal, create_db_and_tables
+from app.routers import chat, memory_facts, permission_requests, schedules, skill_generation_requests, skills
+from app.services.scheduler_service import SchedulerService
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     create_db_and_tables()
-    yield
+    scheduler_db = SessionLocal()
+    scheduler_service = SchedulerService(scheduler_db)
+    scheduler_service.start()
+    app.state.scheduler_service = scheduler_service
+    try:
+        yield
+    finally:
+        scheduler_service.shutdown()
+        scheduler_db.close()
 
 
 app = FastAPI(
@@ -36,6 +45,7 @@ app.include_router(skills.router)
 app.include_router(chat.router)
 app.include_router(skill_generation_requests.router)
 app.include_router(permission_requests.router)
+app.include_router(schedules.router)
 
 
 @app.get("/health")

@@ -1,10 +1,22 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 RiskLevel = Literal["low", "medium", "high"]
 SkillType = Literal["instruction", "automation", "hybrid"]
+ScheduleType = Literal["daily", "weekly", "interval"]
+IntervalUnit = Literal["minutes", "hours", "days"]
+Weekday = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+KNOWN_TIMEZONES = {
+    "UTC",
+    "America/Toronto",
+    "America/New_York",
+    "America/Chicago",
+    "America/Denver",
+    "America/Los_Angeles",
+    "Europe/London",
+}
 
 
 class ManifestPermissions(BaseModel):
@@ -40,6 +52,59 @@ class ManifestPermissions(BaseModel):
         return paths
 
 
+class ManifestSchedule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: ScheduleType
+    timezone: str = "America/Toronto"
+    input: dict[str, Any] = Field(default_factory=dict)
+    time: str | None = None
+    day: Weekday | None = None
+    every: int | None = None
+    unit: IntervalUnit | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, timezone: str) -> str:
+        if timezone not in KNOWN_TIMEZONES:
+            raise ValueError("schedule timezone must be a supported IANA timezone")
+        return timezone
+
+    @field_validator("time")
+    @classmethod
+    def validate_time(cls, time: str | None) -> str | None:
+        if time is None:
+            return None
+        parts = time.split(":")
+        if len(parts) != 2:
+            raise ValueError("schedule time must use HH:MM")
+        hour, minute = (int(part) for part in parts)
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+            raise ValueError("schedule time must use HH:MM")
+        return time
+
+    @model_validator(mode="after")
+    def validate_schedule_contract(self) -> "ManifestSchedule":
+        if self.type == "daily":
+            if not self.time:
+                raise ValueError("daily schedules require time")
+            if self.day is not None or self.every is not None or self.unit is not None:
+                raise ValueError("daily schedules only support time, timezone, and input")
+        if self.type == "weekly":
+            if not self.time or not self.day:
+                raise ValueError("weekly schedules require day and time")
+            if self.every is not None or self.unit is not None:
+                raise ValueError("weekly schedules only support day, time, timezone, and input")
+        if self.type == "interval":
+            if self.every is None or self.unit is None:
+                raise ValueError("interval schedules require every and unit")
+            if self.every < 1:
+                raise ValueError("interval every must be at least 1")
+            if self.time is not None or self.day is not None:
+                raise ValueError("interval schedules only support every, unit, timezone, and input")
+        return self
+
+
 class SkillManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -50,7 +115,7 @@ class SkillManifest(BaseModel):
     instructions_path: str | None = Field(default=None, min_length=1)
     risk_level: RiskLevel
     permissions: ManifestPermissions
-    schedule: None = None
+    schedule: ManifestSchedule | None = None
     created_by: str = Field(min_length=1)
     enabled: bool
 
@@ -75,6 +140,8 @@ class SkillManifest(BaseModel):
                 raise ValueError("instruction skills cannot declare entrypoint")
             if not has_no_permissions(self.permissions):
                 raise ValueError("instruction skills must request no permissions")
+            if self.schedule is not None:
+                raise ValueError("instruction skills cannot declare executable schedules")
             return self
 
         if self.skill_type == "automation":

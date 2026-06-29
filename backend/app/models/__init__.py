@@ -5,6 +5,7 @@ from app.models.entities import (
     Skill,
     SkillGenerationRequest,
     SkillRun,
+    SkillSchedule,
     SkillVersion,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "Skill",
     "SkillGenerationRequest",
     "SkillRun",
+    "SkillSchedule",
     "SkillVersion",
 ]

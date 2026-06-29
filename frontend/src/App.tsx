@@ -5,11 +5,13 @@ import ChatPage from "./pages/ChatPage";
 import MemoryPage from "./pages/MemoryPage";
 import SkillDetailPage from "./pages/SkillDetailPage";
 import SkillsPage from "./pages/SkillsPage";
+import SchedulesPage from "./pages/SchedulesPage";
 
 const navItems = [
   { to: "/chat", label: "Chat" },
   { to: "/memory", label: "Memory" },
   { to: "/skills", label: "Skills" },
+  { to: "/schedules", label: "Schedules" },
   { to: "/approval-requests", label: "Approvals" },
 ];
 
@@ -44,6 +46,7 @@ export default function App() {
           <Route path="/memory" element={<MemoryPage />} />
           <Route path="/skills" element={<SkillsPage />} />
           <Route path="/skills/:skillId" element={<SkillDetailPage />} />
+          <Route path="/schedules" element={<SchedulesPage />} />
           <Route path="/approval-requests" element={<ApprovalRequestsPage />} />
         </Routes>
       </main>

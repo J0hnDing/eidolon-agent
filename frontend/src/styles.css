@@ -312,6 +312,26 @@ textarea {
   color: #24724f;
 }
 
+.status-active {
+  background: #e8f5ee;
+  color: #24724f;
+}
+
+.status-pending {
+  background: #fff4dd;
+  color: #8a5a00;
+}
+
+.status-paused {
+  background: #eef2f7;
+  color: #667085;
+}
+
+.status-denied {
+  background: #ffe8e4;
+  color: #9f332b;
+}
+
 .status-disabled,
 .status-deleted {
   background: #eef2f7;
@@ -627,7 +647,7 @@ pre {
   }
 
   .nav-list {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
   .nav-link {

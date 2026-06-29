@@ -17,6 +17,8 @@ SkillStatus = Literal["proposed", "installed", "disabled", "failed", "deleted"]
 SkillRunStatus = Literal["pending", "running", "succeeded", "failed", "blocked"]
 ApprovalStatus = Literal["pending", "approved", "denied", "expired", "superseded"]
 PermissionRequestScope = Literal["build_time", "runtime"]
+ScheduleStatus = Literal["pending", "active", "paused", "denied", "deleted"]
+ScheduleType = Literal["daily", "weekly", "interval"]
 ChatIntent = Literal[
     "DIRECT_ANSWER",
     "CREATE_SKILL_PROPOSAL",

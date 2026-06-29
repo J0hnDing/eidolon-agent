@@ -86,7 +86,7 @@ class PermissionService:
         return request
 
     def create_runtime_request(self, skill: Skill) -> ApprovalRequest:
-        existing = self._latest_request(skill_id=skill.id, scope="runtime")
+        existing = self._latest_request(skill_id=skill.id, scope="runtime", request_type="install")
         if existing and existing.status in {"pending", "approved", "denied"}:
             return existing
 
@@ -179,7 +179,7 @@ class PermissionService:
         return PermissionDecision(True, "Build-time permissions are approved")
 
     def can_install(self, skill: Skill) -> PermissionDecision:
-        request = self._latest_request(skill_id=skill.id, scope="runtime")
+        request = self._latest_request(skill_id=skill.id, scope="runtime", request_type="install")
         if request is None:
             return PermissionDecision(False, "Runtime permissions have not been reviewed")
         if request.risk_level == "blocked":
@@ -192,7 +192,7 @@ class PermissionService:
         install_decision = self.can_install(skill)
         if not install_decision.allowed:
             return install_decision
-        request = self._latest_request(skill_id=skill.id, scope="runtime")
+        request = self._latest_request(skill_id=skill.id, scope="runtime", request_type="install")
         unsupported = self.unsupported_runtime_reasons(request.requested_permissions_json if request else {})
         if unsupported:
             return PermissionDecision(False, "; ".join(unsupported))
@@ -221,8 +221,11 @@ class PermissionService:
         skill_id: int | None = None,
         generation_request_id: int | None = None,
         scope: str,
+        request_type: str | None = None,
     ) -> ApprovalRequest | None:
         query = select(ApprovalRequest).where(ApprovalRequest.request_scope == scope)
+        if request_type is not None:
+            query = query.where(ApprovalRequest.request_type == request_type)
         if skill_id is not None:
             query = query.where(ApprovalRequest.skill_id == skill_id)
         if generation_request_id is not None:

@@ -9,6 +9,7 @@ from app.schemas.common import ApprovalStatus, PermissionRequestScope, RiskLevel
 class ApprovalRequestBase(BaseModel):
     skill_id: int | None = None
     generation_request_id: int | None = None
+    schedule_id: int | None = None
     request_scope: PermissionRequestScope
     request_type: str = Field(min_length=1, max_length=64)
     risk_level: RiskLevel

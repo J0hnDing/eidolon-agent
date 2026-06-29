@@ -14,11 +14,13 @@ from app.schemas.proposed_skill import (
     SkillFileRead,
 )
 from app.schemas.runner import RunnerStatusRead
+from app.schemas.schedule import ScheduleCreate, ScheduleWithApproval
 from app.schemas.skill import SkillCreate, SkillRead, SkillUpdate
 from app.schemas.skill_run import SkillRunRead, SkillRunRequest
 from app.services.permission_service import PermissionError, PermissionService
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
 from app.services.skill_runner import get_runner_status, get_skill_runner
+from app.routers.schedules import create_manifest_schedule, create_skill_schedule
 
 
 router = APIRouter(prefix="/skills", tags=["skills"])
@@ -116,6 +118,23 @@ def list_skill_runs(skill_id: int, db: Session = Depends(get_db)) -> list[SkillR
             .order_by(SkillRun.started_at.desc(), SkillRun.id.desc())
         ).all()
     )
+
+
+@router.post("/{skill_id}/schedules", response_model=ScheduleWithApproval, status_code=status.HTTP_201_CREATED)
+def create_schedule_for_skill(
+    skill_id: int,
+    payload: ScheduleCreate,
+    db: Session = Depends(get_db),
+) -> ScheduleWithApproval:
+    return create_skill_schedule(skill_id, payload, db)
+
+
+@router.post("/{skill_id}/schedules/from-manifest", response_model=ScheduleWithApproval, status_code=status.HTTP_201_CREATED)
+def create_manifest_schedule_for_skill(
+    skill_id: int,
+    db: Session = Depends(get_db),
+) -> ScheduleWithApproval:
+    return create_manifest_schedule(skill_id, db)
 
 
 @router.get("/{skill_id}/files", response_model=list[SkillFileRead])
