@@ -12,6 +12,7 @@ export type MemoryCategory =
 
 export type RiskLevel = "low" | "medium" | "high" | "blocked";
 export type SkillType = "instruction" | "automation" | "hybrid";
+export type InterfaceType = "chat" | "tool" | "hidden";
 export type SkillStatus = "proposed" | "installed" | "disabled" | "failed" | "deleted";
 export type ChatMode = "chat" | "project";
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired" | "superseded";
@@ -39,10 +40,14 @@ export interface Skill {
   name: string;
   description: string;
   skill_type: SkillType;
+  interface_type: InterfaceType;
   status: SkillStatus;
   risk_level: RiskLevel;
   manifest_path: string;
   instructions_path: string | null;
+  input_schema_json: Record<string, unknown> | null;
+  output_schema_json: Record<string, unknown> | null;
+  tool_ui_schema_json: Record<string, unknown> | null;
   installed_path: string | null;
   enabled: boolean;
   created_at: string;
@@ -65,6 +70,17 @@ export interface SkillRun {
   started_at: string | null;
   ended_at: string | null;
   error_message: string | null;
+}
+
+export interface Tool {
+  skill: Skill;
+  runtime_permission_status: string;
+  runtime_blocked_reason: string | null;
+}
+
+export interface ToolRunResponse {
+  skill: Skill;
+  run: SkillRun;
 }
 
 export interface RunnerStatus {
@@ -271,6 +287,13 @@ export const api = {
       method: "DELETE",
     }),
   listSkills: () => request<Skill[]>("/skills"),
+  listTools: () => request<Tool[]>("/tools"),
+  getTool: (id: number) => request<Tool>(`/tools/${id}`),
+  runTool: (id: number, input: Record<string, unknown> = {}) =>
+    request<ToolRunResponse>(`/tools/${id}/run`, {
+      method: "POST",
+      body: JSON.stringify({ input }),
+    }),
   listProposedSkills: () => request<Skill[]>("/skills/proposed"),
   createSampleProposedSkill: (payload: { name: string; skill_type: SkillType }) =>
     request<Skill>("/skills/proposed/sample", {

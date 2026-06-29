@@ -1,18 +1,23 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.common import RiskLevel, SkillStatus, SkillType
+from app.schemas.common import InterfaceType, RiskLevel, SkillStatus, SkillType
 
 
 class SkillBase(BaseModel):
     name: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
     description: str = Field(min_length=1)
     skill_type: SkillType = "automation"
+    interface_type: InterfaceType = "chat"
     status: SkillStatus = "proposed"
     risk_level: RiskLevel = "low"
     manifest_path: str = Field(min_length=1, max_length=512)
     instructions_path: str | None = Field(default=None, max_length=512)
+    input_schema_json: dict[str, Any] | None = None
+    output_schema_json: dict[str, Any] | None = None
+    tool_ui_schema_json: dict[str, Any] | None = None
     installed_path: str | None = Field(default=None, max_length=512)
     enabled: bool = False
 
@@ -25,10 +30,14 @@ class SkillUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
     description: str | None = Field(default=None, min_length=1)
     skill_type: SkillType | None = None
+    interface_type: InterfaceType | None = None
     status: SkillStatus | None = None
     risk_level: RiskLevel | None = None
     manifest_path: str | None = Field(default=None, min_length=1, max_length=512)
     instructions_path: str | None = Field(default=None, max_length=512)
+    input_schema_json: dict[str, Any] | None = None
+    output_schema_json: dict[str, Any] | None = None
+    tool_ui_schema_json: dict[str, Any] | None = None
     installed_path: str | None = Field(default=None, max_length=512)
     enabled: bool | None = None
 

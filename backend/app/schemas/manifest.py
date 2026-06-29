@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 RiskLevel = Literal["low", "medium", "high"]
 SkillType = Literal["instruction", "automation", "hybrid"]
+InterfaceType = Literal["chat", "tool", "hidden"]
 ScheduleType = Literal["daily", "weekly", "interval"]
 IntervalUnit = Literal["minutes", "hours", "days"]
 Weekday = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -111,8 +112,12 @@ class SkillManifest(BaseModel):
     name: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
     description: str = Field(min_length=1)
     skill_type: SkillType = "automation"
+    interface_type: InterfaceType = "chat"
     entrypoint: str | None = Field(default=None, min_length=1)
     instructions_path: str | None = Field(default=None, min_length=1)
+    input_schema: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = None
+    tool_ui_schema: dict[str, Any] | None = None
     risk_level: RiskLevel
     permissions: ManifestPermissions
     schedule: ManifestSchedule | None = None

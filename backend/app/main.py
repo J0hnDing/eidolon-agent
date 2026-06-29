@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import SessionLocal, create_db_and_tables
-from app.routers import chat, memory_facts, permission_requests, schedules, skill_generation_requests, skills
+from app.routers import chat, memory_facts, permission_requests, schedules, skill_generation_requests, skills, tools
 from app.services.scheduler_service import SchedulerService
 
 
@@ -42,6 +42,7 @@ app.add_middleware(
 
 app.include_router(memory_facts.router)
 app.include_router(skills.router)
+app.include_router(tools.router)
 app.include_router(chat.router)
 app.include_router(skill_generation_requests.router)
 app.include_router(permission_requests.router)

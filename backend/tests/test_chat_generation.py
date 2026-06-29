@@ -12,10 +12,18 @@ from app.db import Base
 from app.models import SkillGenerationRequest
 from app.schemas.skill_generation import ChatResponse
 from app.services.chat_orchestrator import ChatOrchestrator
-from app.services.codex_service import CodexService
+from app.services.codex_service import CodexService, FakeCodexAdapter, RealCodexAdapter, default_codex_adapter
+from app.services.direct_chat_service import DirectChatService, RealDirectChatAdapter
 from app.services.permission_service import PermissionService
-from app.services.project_plausibility import ProjectPlausibilityResult, ProjectPlausibilityService
+from app.services.project_plausibility import (
+    FakeProjectPlausibilityAdapter,
+    ProjectPlausibilityResult,
+    ProjectPlausibilityService,
+    RealProjectPlausibilityAdapter,
+    default_project_plausibility_adapter,
+)
 from app.services.proposed_skill_service import ProposedSkillService
+from app.services.skill_plan_service import RealSkillPlanAdapter, SkillPlanService
 
 
 @pytest.fixture
@@ -47,6 +55,14 @@ class RecordingCodexAdapter:
         self.called = True
         skill_type = self.skill_type
         permissions = dict(plan["requested_permissions"])
+        if skill_type == "instruction":
+            permissions = {
+                "network": [],
+                "filesystem_read": [],
+                "filesystem_write": [],
+                "secrets": [],
+                "shell": False,
+            }
         if self.network is not None:
             permissions["network"] = self.network
         if self.shell:
@@ -89,6 +105,34 @@ class FixedPlausibilityAdapter:
         return self.result
 
 
+class FixedSkillPlanAdapter:
+    def __init__(self, plan: dict | None = None) -> None:
+        self.plan = plan or skill_plan()
+        self.called = False
+        self.prompt = ""
+        self.message = ""
+
+    def build_plan(self, prompt: str, message: str) -> dict:
+        self.called = True
+        self.prompt = prompt
+        self.message = message
+        return dict(self.plan)
+
+
+class RecordingDirectChatAdapter:
+    def __init__(self, answer_text: str = "Codex direct answer.") -> None:
+        self.called = False
+        self.prompt = ""
+        self.message = ""
+        self.answer_text = answer_text
+
+    def answer(self, prompt: str, message: str) -> str:
+        self.called = True
+        self.prompt = prompt
+        self.message = message
+        return self.answer_text
+
+
 def approve_build_time_permissions(db_session: Session, generation_request: SkillGenerationRequest) -> None:
     permission_service = PermissionService(db_session)
     request = permission_service.create_build_time_request(generation_request)
@@ -97,32 +141,102 @@ def approve_build_time_permissions(db_session: Session, generation_request: Skil
     db_session.commit()
 
 
+def skill_plan(**overrides) -> dict:
+    plan = {
+        "goal": "Create a reusable local workflow skill.",
+        "skill_name": "generated_skill",
+        "display_name": "Generated Skill",
+        "skill_type": "automation",
+        "interface_type": "chat",
+        "files_to_generate": ["manifest.json", "README.md", "skill.py", "tests/test_skill.py"],
+        "expected_input": {"input": "object"},
+        "expected_output": {"title": "string", "items": [], "warnings": []},
+        "input_schema": None,
+        "output_schema": None,
+        "tool_ui_schema": None,
+        "requested_permissions": {
+            "network": [],
+            "filesystem_read": [],
+            "filesystem_write": ["./cache"],
+            "secrets": [],
+            "shell": False,
+        },
+        "requested_network_domains": [],
+        "requested_dependencies": [],
+        "tests_required": True,
+        "validation_steps": [
+            "validate manifest.json",
+            "inspect generated files",
+            "run tests for automation or hybrid skills",
+        ],
+        "risk_level": "low",
+        "automatic_actions_blocked": [
+            "installing the skill",
+            "running the skill",
+            "installing packages without approval",
+        ],
+    }
+    plan.update(overrides)
+    return plan
+
+
 def test_chat_mode_returns_direct_answer(db_session: Session) -> None:
-    response = ChatOrchestrator(db_session).handle_message("What is inflation?", mode="chat")
+    adapter = RecordingDirectChatAdapter("Inflation is a broad rise in prices.")
+    response = ChatOrchestrator(
+        db_session,
+        direct_chat_service=DirectChatService(adapter=adapter),
+    ).handle_message("What is inflation?", mode="chat")
 
     assert response["type"] == "direct_answer"
+    assert response["message"] == "Inflation is a broad rise in prices."
+    assert adapter.called is True
+    assert adapter.message == "What is inflation?"
+    assert "Chat mode" in adapter.prompt
 
 
 def test_chat_mode_does_not_create_skill_proposal_from_reusable_request(db_session: Session) -> None:
-    response = ChatOrchestrator(db_session).handle_message(
+    adapter = RecordingDirectChatAdapter("Switch to Project mode if you want a reusable skill.")
+    response = ChatOrchestrator(
+        db_session,
+        direct_chat_service=DirectChatService(adapter=adapter),
+    ).handle_message(
         "Create a reusable skill that summarizes AI chip news from Nvidia and AMD.",
         mode="chat",
     )
 
     assert response["type"] == "direct_answer"
+    assert adapter.called is True
+    assert db_session.query(SkillGenerationRequest).count() == 0
 
 
 def test_project_mode_creates_skill_proposal(db_session: Session) -> None:
-    adapter = FixedPlausibilityAdapter(
+    plausibility_adapter = FixedPlausibilityAdapter(
         ProjectPlausibilityResult(
             plausible=True,
             reason="This is reusable and bounded.",
             optional_projects=[],
         )
     )
+    plan_adapter = FixedSkillPlanAdapter(
+        skill_plan(
+            skill_name="ai_infra_news_digest",
+            display_name="Ai Infra News Digest",
+            requested_permissions={
+                "network": ["nvidia.com", "amd.com"],
+                "filesystem_read": [],
+                "filesystem_write": ["./cache"],
+                "secrets": [],
+                "shell": False,
+            },
+            requested_network_domains=["nvidia.com", "amd.com"],
+            requested_dependencies=["requests"],
+            risk_level="medium",
+        )
+    )
     response = ChatOrchestrator(
         db_session,
-        plausibility_service=ProjectPlausibilityService(adapter=adapter),
+        plausibility_service=ProjectPlausibilityService(adapter=plausibility_adapter),
+        skill_plan_service=SkillPlanService(adapter=plan_adapter),
     ).handle_message(
         "Create a reusable skill that summarizes AI chip news from Nvidia and AMD.",
         mode="project",
@@ -133,12 +247,22 @@ def test_project_mode_creates_skill_proposal(db_session: Session) -> None:
     permission_request = response["permission_request"]
     assert generation_request.status == "awaiting_approval"
     assert generation_request.plan_json["skill_name"] == "ai_infra_news_digest"
+    assert generation_request.plan_json["skill_type"] == "automation"
+    assert generation_request.plan_json["interface_type"] == "chat"
+    assert plan_adapter.called is True
     assert permission_request.request_scope == "build_time"
     assert permission_request.status == "pending"
 
 
 def test_chat_response_model_serializes_generation_request_fields(db_session: Session) -> None:
-    response = ChatOrchestrator(db_session).handle_message(
+    response = ChatOrchestrator(
+        db_session,
+        skill_plan_service=SkillPlanService(
+            adapter=FixedSkillPlanAdapter(
+                skill_plan(skill_name="ai_infra_news_digest", display_name="Ai Infra News Digest")
+            )
+        ),
+    ).handle_message(
         "Create a reusable skill that summarizes AI chip news from Nvidia and AMD.",
         mode="project",
     )
@@ -151,23 +275,26 @@ def test_chat_response_model_serializes_generation_request_fields(db_session: Se
 
 
 def test_project_mode_uses_plausibility_review_before_plan(db_session: Session) -> None:
-    adapter = FixedPlausibilityAdapter(
+    plausibility_adapter = FixedPlausibilityAdapter(
         ProjectPlausibilityResult(
             plausible=True,
             reason="This is plausible as a reusable skill.",
             optional_projects=[],
         )
     )
+    plan_adapter = FixedSkillPlanAdapter()
     response = ChatOrchestrator(
         db_session,
-        plausibility_service=ProjectPlausibilityService(adapter=adapter),
+        plausibility_service=ProjectPlausibilityService(adapter=plausibility_adapter),
+        skill_plan_service=SkillPlanService(adapter=plan_adapter),
     ).handle_message(
         "Create a reusable skill that summarizes AI chip news from Nvidia and AMD.",
         mode="project",
     )
 
     generation_request = response["generation_request"]
-    assert adapter.called is True
+    assert plausibility_adapter.called is True
+    assert plan_adapter.called is True
     assert generation_request.plan_json["plausibility_review"]["reason"] == "This is plausible as a reusable skill."
 
 
@@ -203,7 +330,25 @@ def test_unsafe_chat_request_is_rejected(db_session: Session) -> None:
 
 
 def test_generation_request_contains_plan_permissions_and_dependencies(db_session: Session) -> None:
-    generation_request = ChatOrchestrator(db_session).create_generation_request(
+    generation_request = ChatOrchestrator(
+        db_session,
+        skill_plan_service=SkillPlanService(
+            adapter=FixedSkillPlanAdapter(
+                skill_plan(
+                    requested_permissions={
+                        "network": ["nvidia.com", "amd.com"],
+                        "filesystem_read": [],
+                        "filesystem_write": ["./cache"],
+                        "secrets": [],
+                        "shell": False,
+                    },
+                    requested_network_domains=["nvidia.com", "amd.com"],
+                    requested_dependencies=["requests"],
+                    risk_level="medium",
+                )
+            )
+        ),
+    ).create_generation_request(
         "Create an automation for tracking Nvidia and AMD news."
     )
 
@@ -211,6 +356,42 @@ def test_generation_request_contains_plan_permissions_and_dependencies(db_sessio
     assert generation_request.requested_permissions_json["network"]
     assert "requests" in generation_request.requested_dependencies_json
     assert generation_request.risk_level == "medium"
+
+
+def test_skill_plan_service_uses_adapter_decided_skill_and_interface_type() -> None:
+    adapter = FixedSkillPlanAdapter(
+        skill_plan(
+            skill_name="calculator_tool",
+            display_name="Calculator Tool",
+            interface_type="tool",
+            input_schema={
+                "type": "object",
+                "properties": {"expression": {"type": "string"}},
+                "required": ["expression"],
+            },
+            output_schema={
+                "type": "object",
+                "properties": {"result": {"type": "number"}},
+                "required": ["result"],
+            },
+            tool_ui_schema={
+                "title": "Calculator",
+                "description": "Evaluate basic arithmetic.",
+                "submit_label": "Calculate",
+                "fields": [{"name": "expression", "label": "Expression", "type": "text"}],
+                "result_template": {"primary_field": "result", "primary_label": "Result"},
+            },
+        )
+    )
+
+    plan = SkillPlanService(adapter=adapter).build_generation_plan("Build a calculator tool.")
+
+    assert adapter.called is True
+    assert plan["skill_type"] == "automation"
+    assert plan["interface_type"] == "tool"
+    assert plan["skill_name"] == "calculator_tool"
+    assert plan["input_schema"]["properties"]["expression"]["type"] == "string"
+    assert plan["tool_ui_schema"]["fields"][0]["name"] == "expression"
 
 
 def test_denying_generation_request_does_not_create_files(tmp_path: Path, db_session: Session) -> None:
@@ -550,3 +731,170 @@ def test_generated_instruction_skill_does_not_require_tests_and_cannot_run(
 
     assert run.status == "blocked"
     assert run.error_message == "instruction skills cannot be executed"
+
+
+def test_real_codex_adapter_uses_restricted_exec_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("app.services.codex_service.subprocess.run", fake_run)
+
+    output_dir = tmp_path / "skills" / "proposed" / "example_skill"
+    adapter = RealCodexAdapter(command="codex", timeout_seconds=10, enable_search="false")
+    adapter.generate(
+        "Generate only this proposed skill.",
+        output_dir,
+        {"requested_network_domains": ["example.com"], "requested_dependencies": ["requests"]},
+    )
+
+    command = captured["command"]
+    assert command[0] == "codex"
+    assert command.index("--ask-for-approval") < command.index("exec")
+    assert command[command.index("-C") + 1] == str(output_dir)
+    assert command[command.index("--sandbox") + 1] == "workspace-write"
+    assert command[command.index("--ask-for-approval") + 1] == "never"
+    assert "--skip-git-repo-check" in command
+    assert "--ephemeral" in command
+    assert "--search" not in command
+    assert command[-1] == "-"
+    assert captured["kwargs"]["cwd"] == output_dir
+    assert captured["kwargs"]["input"] == "Generate only this proposed skill."
+    assert captured["kwargs"]["encoding"] == "utf-8"
+    assert (output_dir / "codex_prompt.txt").is_file()
+
+
+def test_real_codex_adapter_auto_enables_search_for_network_plans(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("app.services.codex_service.subprocess.run", fake_run)
+
+    RealCodexAdapter(command="codex", timeout_seconds=10, enable_search="auto").generate(
+        "Generate a proposed skill.",
+        tmp_path / "generated",
+        {"requested_network_domains": ["example.com"], "requested_dependencies": []},
+    )
+
+    command = captured["command"]
+    assert "--search" in command
+    assert command.index("--search") < command.index("exec")
+
+
+def test_real_project_plausibility_adapter_uses_read_only_codex_exec(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=json.dumps({"plausible": True, "reason": "Reusable and bounded.", "optional_projects": []}),
+            stderr="",
+        )
+
+    monkeypatch.setattr("app.services.project_plausibility.subprocess.run", fake_run)
+
+    adapter = RealProjectPlausibilityAdapter(command="codex", timeout_seconds=10, workdir=tmp_path)
+    result = adapter.evaluate("Return JSON only.", "Create a reusable reporting skill.")
+
+    command = captured["command"]
+    assert result.plausible is True
+    assert command[0] == "codex"
+    assert command.index("--ask-for-approval") < command.index("exec")
+    assert command[command.index("-C") + 1] == str(tmp_path)
+    assert command[command.index("--sandbox") + 1] == "read-only"
+    assert command[command.index("--ask-for-approval") + 1] == "never"
+    assert "--search" not in command
+    assert command[-1] == "-"
+    assert captured["kwargs"]["cwd"] == tmp_path
+    assert captured["kwargs"]["input"] == "Return JSON only."
+    assert captured["kwargs"]["encoding"] == "utf-8"
+
+
+def test_real_direct_chat_adapter_uses_read_only_codex_exec(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout="Direct Codex answer.", stderr="")
+
+    monkeypatch.setattr("app.services.direct_chat_service.subprocess.run", fake_run)
+
+    adapter = RealDirectChatAdapter(command="codex", timeout_seconds=10, workdir=tmp_path)
+    answer = adapter.answer("Answer normally.", "What is inflation?")
+
+    command = captured["command"]
+    assert answer == "Direct Codex answer."
+    assert command[0] == "codex"
+    assert command.index("--ask-for-approval") < command.index("exec")
+    assert command[command.index("-C") + 1] == str(tmp_path)
+    assert command[command.index("--sandbox") + 1] == "read-only"
+    assert command[command.index("--ask-for-approval") + 1] == "never"
+    assert command[-1] == "-"
+    assert captured["kwargs"]["cwd"] == tmp_path
+    assert captured["kwargs"]["input"] == "Answer normally."
+    assert captured["kwargs"]["encoding"] == "utf-8"
+
+
+def test_real_skill_plan_adapter_uses_read_only_codex_exec(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout=json.dumps(skill_plan()), stderr="")
+
+    monkeypatch.setattr("app.services.skill_plan_service.subprocess.run", fake_run)
+
+    adapter = RealSkillPlanAdapter(command="codex", timeout_seconds=10, workdir=tmp_path)
+    plan = adapter.build_plan("Return a plan.", "Build a skill.")
+
+    command = captured["command"]
+    assert plan["skill_type"] == "automation"
+    assert command[0] == "codex"
+    assert command.index("--ask-for-approval") < command.index("exec")
+    assert command[command.index("-C") + 1] == str(tmp_path)
+    assert command[command.index("--sandbox") + 1] == "read-only"
+    assert command[-1] == "-"
+    assert captured["kwargs"]["input"] == "Return a plan."
+    assert captured["kwargs"]["encoding"] == "utf-8"
+
+
+def test_default_codex_mode_uses_real_when_cli_is_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PERSONAL_AGENT_CODEX_MODE", raising=False)
+    monkeypatch.setenv("PERSONAL_AGENT_CODEX_COMMAND", "codex")
+    monkeypatch.setattr("app.services.codex_service.shutil.which", lambda command: "C:/Tools/codex.exe")
+    monkeypatch.setattr("app.services.project_plausibility.shutil.which", lambda command: "C:/Tools/codex.exe")
+
+    assert isinstance(default_codex_adapter(), RealCodexAdapter)
+    assert isinstance(default_project_plausibility_adapter(), RealProjectPlausibilityAdapter)
+
+
+def test_default_codex_mode_can_be_forced_fake(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PERSONAL_AGENT_CODEX_MODE", "fake")
+    monkeypatch.setattr("app.services.codex_service.shutil.which", lambda command: "C:/Tools/codex.exe")
+    monkeypatch.setattr("app.services.project_plausibility.shutil.which", lambda command: "C:/Tools/codex.exe")
+
+    assert isinstance(default_codex_adapter(), FakeCodexAdapter)
+    assert isinstance(default_project_plausibility_adapter(), FakeProjectPlausibilityAdapter)

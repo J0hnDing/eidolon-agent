@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Skill, SkillGenerationRequest
+from app.services.manifest_validator import validate_manifest_file
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
 
@@ -23,23 +24,79 @@ class CodexAdapter(Protocol):
         pass
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 class RealCodexAdapter:
-    def __init__(self, command: str | None = None, timeout_seconds: int = 120) -> None:
+    def __init__(
+        self,
+        command: str | None = None,
+        timeout_seconds: int | None = None,
+        sandbox_mode: str | None = None,
+        approval_policy: str | None = None,
+        enable_search: str | None = None,
+        model: str | None = None,
+    ) -> None:
         self.command = command or os.getenv("PERSONAL_AGENT_CODEX_COMMAND", "codex")
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = timeout_seconds or _env_int("PERSONAL_AGENT_CODEX_TIMEOUT_SECONDS", 300)
+        self.sandbox_mode = sandbox_mode or os.getenv("PERSONAL_AGENT_CODEX_SANDBOX", "workspace-write")
+        self.approval_policy = approval_policy or os.getenv("PERSONAL_AGENT_CODEX_APPROVAL_POLICY", "never")
+        self.enable_search = enable_search or os.getenv("PERSONAL_AGENT_CODEX_ENABLE_SEARCH", "auto")
+        self.model = model if model is not None else os.getenv("PERSONAL_AGENT_CODEX_MODEL")
 
     def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+        output_dir.mkdir(parents=True, exist_ok=True)
         prompt_path = output_dir / "codex_prompt.txt"
         prompt_path.write_text(prompt, encoding="utf-8")
-        command = [self.command, "exec", "--cwd", str(output_dir), "--prompt-file", str(prompt_path)]
+        command = [
+            self.command,
+            "--ask-for-approval",
+            self.approval_policy,
+        ]
+        if self._should_enable_search(plan):
+            command.append("--search")
+        command.extend(
+            [
+                "exec",
+                "-C",
+                str(output_dir),
+                "--skip-git-repo-check",
+                "--ephemeral",
+                "--color",
+                "never",
+                "--sandbox",
+                self.sandbox_mode,
+            ]
+        )
+        if self.model:
+            command.extend(["--model", self.model])
+        command.append("-")
         return subprocess.run(
             command,
             cwd=output_dir,
+            input=prompt,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=self.timeout_seconds,
             shell=False,
         )
+
+    def _should_enable_search(self, plan: dict) -> bool:
+        mode = self.enable_search.strip().lower()
+        if mode in {"1", "true", "yes", "on"}:
+            return True
+        if mode in {"0", "false", "no", "off"}:
+            return False
+        return bool(plan.get("requested_network_domains") or plan.get("requested_dependencies"))
 
 
 class FakeCodexAdapter:
@@ -51,8 +108,12 @@ class FakeCodexAdapter:
             "name": plan["skill_name"],
             "description": plan["goal"],
             "skill_type": skill_type,
+            "interface_type": plan.get("interface_type", "chat"),
             "entrypoint": "skill.py" if skill_type in {"automation", "hybrid"} else None,
             "instructions_path": "SKILL.md" if skill_type in {"instruction", "hybrid"} else None,
+            "input_schema": plan.get("input_schema"),
+            "output_schema": plan.get("output_schema"),
+            "tool_ui_schema": plan.get("tool_ui_schema"),
             "risk_level": plan["risk_level"],
             "permissions": permissions,
             "schedule": None,
@@ -95,9 +156,19 @@ class FakeCodexAdapter:
 
 
 def default_codex_adapter() -> CodexAdapter:
-    if os.getenv("PERSONAL_AGENT_CODEX_MODE") == "real":
+    if should_use_real_codex():
         return RealCodexAdapter()
     return FakeCodexAdapter()
+
+
+def should_use_real_codex() -> bool:
+    mode = os.getenv("PERSONAL_AGENT_CODEX_MODE", "auto").strip().lower()
+    if mode == "real":
+        return True
+    if mode in {"fake", "dev", "stub", "local"}:
+        return False
+    command = os.getenv("PERSONAL_AGENT_CODEX_COMMAND", "codex")
+    return shutil.which(command) is not None
 
 
 @dataclass
@@ -145,6 +216,8 @@ class CodexService:
 
         skill = self.create_or_update_skill_record(plan, proposed_dir)
         validation = self.proposed_service.validate_proposed_skill(skill)
+        if validation.manifest_valid:
+            self.update_skill_record_from_manifest(skill, proposed_dir)
         generation_request.status = "generated"
         generation_request.proposed_skill_id = skill.id
         if not validation.ok:
@@ -154,15 +227,33 @@ class CodexService:
         self.db.refresh(generation_request)
         return skill, validation
 
+    def update_skill_record_from_manifest(self, skill: Skill, proposed_dir: Path) -> None:
+        manifest = validate_manifest_file(proposed_dir / "manifest.json")
+        skill.description = manifest.description
+        skill.skill_type = manifest.skill_type
+        skill.interface_type = manifest.interface_type
+        skill.risk_level = manifest.risk_level
+        skill.instructions_path = manifest.instructions_path
+        skill.input_schema_json = manifest.input_schema
+        skill.output_schema_json = manifest.output_schema
+        skill.tool_ui_schema_json = manifest.tool_ui_schema
+        skill.enabled = False
+        self.db.commit()
+        self.db.refresh(skill)
+
     def create_or_update_skill_record(self, plan: dict, proposed_dir: Path) -> Skill:
         skill = self.db.scalar(select(Skill).where(Skill.name == plan["skill_name"]))
         values = {
             "description": plan["goal"],
             "skill_type": plan["skill_type"],
+            "interface_type": plan.get("interface_type", "chat"),
             "status": "proposed",
             "risk_level": plan["risk_level"],
             "manifest_path": self.relative_path(proposed_dir / "manifest.json"),
             "instructions_path": "SKILL.md" if plan["skill_type"] in {"instruction", "hybrid"} else None,
+            "input_schema_json": plan.get("input_schema"),
+            "output_schema_json": plan.get("output_schema"),
+            "tool_ui_schema_json": plan.get("tool_ui_schema"),
             "installed_path": None,
             "enabled": False,
         }
@@ -207,6 +298,10 @@ Required files:
 
 Manifest requirements:
 - Use the plan skill_name, skill_type, risk_level, and requested_permissions exactly.
+- Use the plan interface_type exactly.
+- Include input_schema and output_schema from the plan when present.
+- Include tool_ui_schema from the plan when present.
+- If interface_type is tool, prefer a clear declarative tool_ui_schema so the app can render a user-friendly form. Do not generate React, HTML, JavaScript, or frontend app code.
 - Network permissions must be explicit domains only; no wildcard permissions.
 - shell must be false.
 - secrets must be [].

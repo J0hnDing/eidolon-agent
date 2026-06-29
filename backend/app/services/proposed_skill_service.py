@@ -53,10 +53,14 @@ class ProposedSkillService:
         values = {
             "description": f"Sample {skill_type} skill created for review.",
             "skill_type": skill_type,
+            "interface_type": "chat",
             "status": "proposed",
             "risk_level": "low",
             "manifest_path": self._relative_path(proposed_dir / "manifest.json"),
             "instructions_path": "SKILL.md" if skill_type in {"instruction", "hybrid"} else None,
+            "input_schema_json": None,
+            "output_schema_json": None,
+            "tool_ui_schema_json": None,
             "installed_path": None,
             "enabled": False,
         }
@@ -94,15 +98,32 @@ class ProposedSkillService:
                 continue
             skill = self.db.scalar(select(Skill).where(Skill.name == manifest.name))
             if skill is not None:
+                if skill.status == "installed":
+                    skill.description = manifest.description
+                    skill.skill_type = manifest.skill_type
+                    skill.interface_type = manifest.interface_type
+                    skill.risk_level = manifest.risk_level
+                    skill.manifest_path = self._relative_path(manifest_path)
+                    skill.instructions_path = manifest.instructions_path
+                    skill.input_schema_json = manifest.input_schema
+                    skill.output_schema_json = manifest.output_schema
+                    skill.tool_ui_schema_json = manifest.tool_ui_schema
+                    skill.installed_path = self._relative_path(skill_dir)
+                    skill.enabled = manifest.enabled
+                    changed = True
                 continue
             skill = Skill(
                 name=manifest.name,
                 description=manifest.description,
                 skill_type=manifest.skill_type,
+                interface_type=manifest.interface_type,
                 status="installed",
                 risk_level=manifest.risk_level,
                 manifest_path=self._relative_path(manifest_path),
                 instructions_path=manifest.instructions_path,
+                input_schema_json=manifest.input_schema,
+                output_schema_json=manifest.output_schema,
+                tool_ui_schema_json=manifest.tool_ui_schema,
                 installed_path=self._relative_path(skill_dir),
                 enabled=manifest.enabled,
             )
@@ -198,10 +219,14 @@ class ProposedSkillService:
 
         manifest = validate_manifest_file(installed_dir / "manifest.json")
         skill.skill_type = manifest.skill_type
+        skill.interface_type = manifest.interface_type
         skill.status = "installed"
         skill.risk_level = manifest.risk_level
         skill.manifest_path = self._relative_path(installed_dir / "manifest.json")
         skill.instructions_path = manifest.instructions_path
+        skill.input_schema_json = manifest.input_schema
+        skill.output_schema_json = manifest.output_schema
+        skill.tool_ui_schema_json = manifest.tool_ui_schema
         skill.installed_path = self._relative_path(installed_dir)
         skill.enabled = manifest.skill_type == "instruction"
         self.db.commit()
@@ -279,8 +304,12 @@ class ProposedSkillService:
             "name": name,
             "description": f"Sample {skill_type} skill for the proposed skill workflow.",
             "skill_type": skill_type,
+            "interface_type": "chat",
             "entrypoint": "skill.py" if skill_type in {"automation", "hybrid"} else None,
             "instructions_path": "SKILL.md" if skill_type in {"instruction", "hybrid"} else None,
+            "input_schema": None,
+            "output_schema": None,
+            "tool_ui_schema": None,
             "risk_level": "low",
             "permissions": {
                 "network": [],

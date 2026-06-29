@@ -46,6 +46,7 @@ These decisions supersede older milestone wording when there is a conflict:
 7. Runtime network domains may be approved as declared design intent, but the current local runner cannot enforce domain-level network sandboxing. Networked skills must remain blocked from execution until sandboxing exists.
 8. Skill deletion is a hard delete in the local MVP: remove the controlled skill folder and remove the skill database record. Do not leave deleted skills visible in the normal Skills list.
 9. Installed skill folders found on disk under `skills/installed/<skill_name>/` may be registered into the local database if their manifest is valid. This keeps filesystem state and the UI list from drifting apart.
+10. A user-facing tool is not a new `skill_type`. It is an installed runnable automation or hybrid skill with `interface_type = "tool"`. Codex may design a tool UI by writing declarative `tool_ui_schema` JSON in `manifest.json`; generated skills must not inject React, HTML, JavaScript, or app frontend code.
 
 ---
 
@@ -293,8 +294,12 @@ Example:
   "name": "ai_news_digest",
   "description": "Summarizes AI infrastructure news relevant to the user.",
   "skill_type": "automation",
+  "interface_type": "chat",
   "entrypoint": "skill.py",
   "instructions_path": null,
+  "input_schema": null,
+  "output_schema": null,
+  "tool_ui_schema": null,
   "risk_level": "low",
   "permissions": {
     "network": ["reuters.com", "apnews.com", "nvidia.com", "amd.com"],

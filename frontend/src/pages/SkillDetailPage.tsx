@@ -304,6 +304,10 @@ export default function SkillDetailPage() {
             <dd>{skill.skill_type}</dd>
           </div>
           <div>
+            <dt>Interface</dt>
+            <dd>{skill.interface_type}</dd>
+          </div>
+          <div>
             <dt>Status</dt>
             <dd>{skill.status}</dd>
           </div>
@@ -326,6 +330,14 @@ export default function SkillDetailPage() {
           <div>
             <dt>Installed Path</dt>
             <dd>{skill.installed_path ?? "not installed"}</dd>
+          </div>
+          <div>
+            <dt>Input Schema</dt>
+            <dd>{skill.input_schema_json ? "declared" : "none"}</dd>
+          </div>
+          <div>
+            <dt>Output Schema</dt>
+            <dd>{skill.output_schema_json ? "declared" : "none"}</dd>
           </div>
         </dl>
       </section>

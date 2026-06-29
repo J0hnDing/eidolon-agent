@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,17 +48,47 @@ class FakeProjectPlausibilityAdapter:
 
 
 class RealProjectPlausibilityAdapter:
-    def __init__(self, command: str | None = None, timeout_seconds: int = 60, workdir: Path | None = None) -> None:
+    def __init__(
+        self,
+        command: str | None = None,
+        timeout_seconds: int | None = None,
+        workdir: Path | None = None,
+        sandbox_mode: str | None = None,
+        approval_policy: str | None = None,
+        model: str | None = None,
+    ) -> None:
         self.command = command or os.getenv("PERSONAL_AGENT_CODEX_COMMAND", "codex")
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = timeout_seconds or _env_int("PERSONAL_AGENT_CODEX_PLAUSIBILITY_TIMEOUT_SECONDS", 120)
         self.workdir = workdir or Path.cwd()
+        self.sandbox_mode = sandbox_mode or os.getenv("PERSONAL_AGENT_CODEX_PLAUSIBILITY_SANDBOX", "read-only")
+        self.approval_policy = approval_policy or os.getenv("PERSONAL_AGENT_CODEX_APPROVAL_POLICY", "never")
+        self.model = model if model is not None else os.getenv("PERSONAL_AGENT_CODEX_MODEL")
 
     def evaluate(self, prompt: str, message: str) -> ProjectPlausibilityResult:
+        command = [
+            self.command,
+            "--ask-for-approval",
+            self.approval_policy,
+            "exec",
+            "-C",
+            str(self.workdir),
+            "--ephemeral",
+            "--color",
+            "never",
+            "--sandbox",
+            self.sandbox_mode,
+        ]
+        if self.model:
+            command.extend(["--model", self.model])
+        command.append("-")
         result = subprocess.run(
-            [self.command, "exec", "--prompt", prompt],
+            command,
             cwd=self.workdir,
+            input=prompt,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=self.timeout_seconds,
             shell=False,
         )
@@ -86,9 +117,29 @@ class RealProjectPlausibilityAdapter:
 
 
 def default_project_plausibility_adapter() -> ProjectPlausibilityAdapter:
-    if os.getenv("PERSONAL_AGENT_CODEX_MODE") == "real":
+    if should_use_real_codex():
         return RealProjectPlausibilityAdapter(workdir=Path(__file__).resolve().parents[3])
     return FakeProjectPlausibilityAdapter()
+
+
+def should_use_real_codex() -> bool:
+    mode = os.getenv("PERSONAL_AGENT_CODEX_MODE", "auto").strip().lower()
+    if mode == "real":
+        return True
+    if mode in {"fake", "dev", "stub", "local"}:
+        return False
+    command = os.getenv("PERSONAL_AGENT_CODEX_COMMAND", "codex")
+    return shutil.which(command) is not None
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 @dataclass

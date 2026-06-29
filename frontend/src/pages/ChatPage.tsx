@@ -14,7 +14,7 @@ const initialMessages: ChatMessage[] = [
   {
     id: 1,
     role: "assistant",
-    content: "Use Chat mode for normal conversation. Switch to Project mode when you want me to propose a reusable skill.",
+    content: "Use Chat mode for normal Codex-backed conversation. Switch to Project mode when you want me to propose a reusable skill.",
   },
 ];
 
@@ -157,7 +157,7 @@ export default function ChatPage() {
           <span className="muted">
             {mode === "project"
               ? "Project mode creates proposed skills after approval."
-              : "Chat mode will not build skills."}
+              : "Chat mode asks Codex for normal answers and will not build skills."}
           </span>
           <div className="segmented-control" aria-label="Chat mode">
             <button
@@ -185,6 +185,15 @@ export default function ChatPage() {
               <p>{message.content}</p>
             </article>
           ))}
+          {(isSending || isGenerating) && (
+            <article className="message assistant thinking-message" aria-label="Codex is thinking">
+              <span>assistant</span>
+              <div className="thinking-row">
+                <span className="thinking-spinner" aria-hidden="true" />
+                <p>{isGenerating ? "Codex is generating..." : "Codex is thinking..."}</p>
+              </div>
+            </article>
+          )}
         </div>
         <form className="composer" onSubmit={handleSubmit}>
           <input

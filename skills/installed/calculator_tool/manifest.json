@@ -1,0 +1,60 @@
+{
+  "name": "calculator_tool",
+  "description": "A local calculator tool for safely evaluating basic arithmetic expressions.",
+  "skill_type": "automation",
+  "interface_type": "tool",
+  "entrypoint": "skill.py",
+  "instructions_path": null,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "expression": {
+        "type": "string",
+        "description": "Arithmetic expression using numbers, parentheses, and +, -, *, /, //, %, **."
+      }
+    },
+    "required": ["expression"],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "result": {
+        "type": "number"
+      }
+    },
+    "required": ["result"],
+    "additionalProperties": false
+  },
+  "tool_ui_schema": {
+    "title": "Calculator",
+    "description": "Evaluate a basic arithmetic expression locally.",
+    "submit_label": "Calculate",
+    "fields": [
+      {
+        "name": "expression",
+        "label": "Expression",
+        "type": "text",
+        "placeholder": "1+2*3",
+        "help_text": "Supports numbers, parentheses, and arithmetic operators.",
+        "required": true,
+        "default": "1+2*3"
+      }
+    ],
+    "result_template": {
+      "primary_field": "result",
+      "primary_label": "Result"
+    }
+  },
+  "risk_level": "low",
+  "permissions": {
+    "network": [],
+    "filesystem_read": [],
+    "filesystem_write": [],
+    "secrets": [],
+    "shell": false
+  },
+  "schedule": null,
+  "created_by": "manual_sample",
+  "enabled": true
+}

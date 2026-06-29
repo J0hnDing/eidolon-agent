@@ -32,12 +32,24 @@ def create_db_and_tables() -> None:
 
 def ensure_local_schema() -> None:
     inspector = inspect(engine)
-    if "approval_requests" not in inspector.get_table_names():
-        return
-    columns = {column["name"] for column in inspector.get_columns("approval_requests")}
-    if "schedule_id" not in columns:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE approval_requests ADD COLUMN schedule_id INTEGER"))
+    table_names = set(inspector.get_table_names())
+    with engine.begin() as connection:
+        if "approval_requests" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("approval_requests")}
+            if "schedule_id" not in columns:
+                connection.execute(text("ALTER TABLE approval_requests ADD COLUMN schedule_id INTEGER"))
+        if "skills" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("skills")}
+            if "interface_type" not in columns:
+                connection.execute(
+                    text("ALTER TABLE skills ADD COLUMN interface_type VARCHAR(16) NOT NULL DEFAULT 'chat'")
+                )
+            if "input_schema_json" not in columns:
+                connection.execute(text("ALTER TABLE skills ADD COLUMN input_schema_json JSON"))
+            if "output_schema_json" not in columns:
+                connection.execute(text("ALTER TABLE skills ADD COLUMN output_schema_json JSON"))
+            if "tool_ui_schema_json" not in columns:
+                connection.execute(text("ALTER TABLE skills ADD COLUMN tool_ui_schema_json JSON"))
 
 
 def get_db() -> Generator[Session, None, None]:

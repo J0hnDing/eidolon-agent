@@ -36,7 +36,34 @@ def test_valid_low_risk_manifest_passes() -> None:
 
     assert manifest.name == "ai_news_digest"
     assert manifest.skill_type == "automation"
+    assert manifest.interface_type == "chat"
     assert manifest.permissions.network == ["reuters.com", "apnews.com"]
+
+
+def test_manifest_accepts_tool_interface_and_io_schemas() -> None:
+    data = valid_manifest()
+    data["interface_type"] = "tool"
+    data["input_schema"] = {"type": "object", "properties": {"expression": {"type": "string"}}}
+    data["output_schema"] = {"type": "object", "properties": {"result": {"type": "number"}}}
+    data["tool_ui_schema"] = {
+        "title": "Calculator",
+        "fields": [{"name": "expression", "label": "Expression", "type": "text"}],
+    }
+
+    manifest = validate_manifest(data)
+
+    assert manifest.interface_type == "tool"
+    assert manifest.input_schema == {"type": "object", "properties": {"expression": {"type": "string"}}}
+    assert manifest.output_schema == {"type": "object", "properties": {"result": {"type": "number"}}}
+    assert manifest.tool_ui_schema["title"] == "Calculator"
+
+
+def test_manifest_rejects_unknown_interface_type() -> None:
+    data = valid_manifest()
+    data["interface_type"] = "dashboard"
+
+    with pytest.raises(ManifestValidationError, match="interface_type"):
+        validate_manifest(data)
 
 
 def test_manifest_requires_explicit_permission_fields() -> None:
