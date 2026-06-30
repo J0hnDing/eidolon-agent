@@ -334,6 +334,11 @@ textarea {
   color: #24724f;
 }
 
+.status-building {
+  background: #e8f0ff;
+  color: #2458a6;
+}
+
 .status-active {
   background: #e8f5ee;
   color: #24724f;
@@ -342,6 +347,21 @@ textarea {
 .status-pending {
   background: #fff4dd;
   color: #8a5a00;
+}
+
+.status-running {
+  background: #e8f0ff;
+  color: #2458a6;
+}
+
+.status-waiting_for_approval {
+  background: #fff4dd;
+  color: #8a5a00;
+}
+
+.status-succeeded {
+  background: #e8f5ee;
+  color: #24724f;
 }
 
 .status-paused {
@@ -355,7 +375,9 @@ textarea {
 }
 
 .status-disabled,
-.status-deleted {
+.status-deleted,
+.status-cancelled,
+.status-skipped {
   background: #eef2f7;
   color: #667085;
 }
@@ -363,6 +385,11 @@ textarea {
 .status-failed {
   background: #ffe8e4;
   color: #9f332b;
+}
+
+.status-blocked {
+  background: #fff4dd;
+  color: #8a5a00;
 }
 
 .table-wrap {
@@ -403,6 +430,49 @@ th {
   gap: 14px;
   min-height: 520px;
   grid-template-rows: auto 1fr auto;
+}
+
+.chat-workspace {
+  display: grid;
+  grid-template-columns: minmax(190px, 240px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.chat-sidebar {
+  display: grid;
+  gap: 12px;
+  background: #ffffff;
+  border: 1px solid #dde4ee;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.chat-thread-list {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-thread-list button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  background: #f8fafc;
+  color: #1f2937;
+  border: 1px solid #e5eaf1;
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.chat-thread-list button.active {
+  background: #e8f0ff;
+  border-color: #9db7e8;
+}
+
+.chat-thread-list span {
+  color: #667085;
+  font-size: 0.78rem;
 }
 
 .chat-mode-bar {
@@ -730,6 +800,36 @@ pre {
   margin-top: 3px;
 }
 
+.compact-grid {
+  margin: 0;
+}
+
+.agent-step-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.agent-step {
+  display: grid;
+  gap: 12px;
+  border: 1px solid #e6eaf0;
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.agent-step-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-step h3,
+.agent-step p {
+  margin: 0;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -853,5 +953,9 @@ pre {
   .chat-mode-bar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .chat-workspace {
+    grid-template-columns: 1fr;
   }
 }

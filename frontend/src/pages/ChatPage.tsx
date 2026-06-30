@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import PermissionRequestModal from "../components/PermissionRequestModal";
@@ -18,8 +18,19 @@ const initialMessages: ChatMessage[] = [
   },
 ];
 
+type ChatConversation = {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+const STORAGE_KEY = "personal-agent.chat-conversations.v1";
+
 export default function ChatPage() {
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const [conversations, setConversations] = useState<ChatConversation[]>(() => loadStoredConversations());
+  const [activeConversationId, setActiveConversationId] = useState(() => conversations[0]?.id ?? createConversation().id);
   const [draft, setDraft] = useState("");
   const [mode, setMode] = useState<ChatMode>("chat");
   const [pendingRequest, setPendingRequest] = useState<SkillGenerationRequest | null>(null);
@@ -28,6 +39,56 @@ export default function ChatPage() {
   const [isSending, setIsSending] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const activeConversation = useMemo(
+    () => conversations.find((conversation) => conversation.id === activeConversationId) ?? conversations[0],
+    [activeConversationId, conversations],
+  );
+  const messages = activeConversation?.messages ?? initialMessages;
+
+  useEffect(() => {
+    if (conversations.length === 0) {
+      const conversation = createConversation();
+      setConversations([conversation]);
+      setActiveConversationId(conversation.id);
+    }
+  }, [conversations.length]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
+  }, [conversations]);
+
+  function updateActiveConversation(updater: (conversation: ChatConversation) => ChatConversation) {
+    setConversations((current) =>
+      current.map((conversation) =>
+        conversation.id === activeConversationId
+          ? updater(conversation)
+          : conversation,
+      ),
+    );
+  }
+
+  function appendMessages(newMessages: ChatMessage[]) {
+    updateActiveConversation((conversation) => {
+      const firstUserMessage = newMessages.find((message) => message.role === "user")?.content;
+      return {
+        ...conversation,
+        title: conversation.title === "New chat" && firstUserMessage ? makeTitle(firstUserMessage) : conversation.title,
+        messages: [...conversation.messages, ...newMessages],
+        updatedAt: new Date().toISOString(),
+      };
+    });
+  }
+
+  function handleNewChat() {
+    const conversation = createConversation();
+    setConversations((current) => [conversation, ...current]);
+    setActiveConversationId(conversation.id);
+    setDraft("");
+    setError(null);
+    setPendingRequest(null);
+    setPendingPermissionRequest(null);
+    setApprovalResult(null);
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -35,26 +96,19 @@ export default function ChatPage() {
     if (!content) return;
 
     const nextId = Date.now();
-    setMessages((current) => [
-      ...current,
-      { id: nextId, role: "user", content },
-    ]);
+    appendMessages([{ id: nextId, role: "user", content }]);
     setDraft("");
     setIsSending(true);
     setError(null);
     try {
       const response = await api.sendChatMessage(content, mode);
       if (response.type === "direct_answer" || response.type === "unsafe_or_unsupported") {
-        setMessages((current) => [
-          ...current,
-          { id: nextId + 1, role: "assistant", content: response.message },
-        ]);
+        appendMessages([{ id: nextId + 1, role: "assistant", content: response.message }]);
       } else if (response.type === "project_not_plausible") {
         const optionalProjects = response.optional_projects.length
           ? `\n\nOptional projects:\n${response.optional_projects.map((project) => `- ${project}`).join("\n")}`
           : "";
-        setMessages((current) => [
-          ...current,
+        appendMessages([
           {
             id: nextId + 1,
             role: "assistant",
@@ -71,8 +125,7 @@ export default function ChatPage() {
         setApprovalResult(null);
         const displayName =
           generationRequest.proposed_display_name || generationRequest.proposed_skill_name || "this skill";
-        setMessages((current) => [
-          ...current,
+        appendMessages([
           {
             id: nextId + 1,
             role: "assistant",
@@ -101,8 +154,7 @@ export default function ChatPage() {
     try {
       const result = await api.approveSkillGeneration(requestId);
       setApprovalResult(result);
-      setMessages((current) => [
-        ...current,
+      appendMessages([
         {
           id: Date.now(),
           role: "assistant",
@@ -130,8 +182,7 @@ export default function ChatPage() {
     setError(null);
     try {
       await api.denySkillGeneration(requestId);
-      setMessages((current) => [
-        ...current,
+      appendMessages([
         {
           id: Date.now(),
           role: "assistant",
@@ -152,7 +203,26 @@ export default function ChatPage() {
         </div>
       </header>
 
-      <div className="chat-panel">
+      <div className="chat-workspace">
+        <aside className="chat-sidebar" aria-label="Chats">
+          <button type="button" onClick={handleNewChat}>
+            New Chat
+          </button>
+          <div className="chat-thread-list">
+            {conversations.map((conversation) => (
+              <button
+                key={conversation.id}
+                type="button"
+                className={conversation.id === activeConversationId ? "active" : ""}
+                onClick={() => setActiveConversationId(conversation.id)}
+              >
+                <strong>{conversation.title}</strong>
+                <span>{new Date(conversation.updatedAt).toLocaleString()}</span>
+              </button>
+            ))}
+          </div>
+        </aside>
+        <div className="chat-panel">
         <div className="chat-mode-bar">
           <span className="muted">
             {mode === "project"
@@ -207,6 +277,7 @@ export default function ChatPage() {
           </button>
         </form>
       </div>
+      </div>
       {error && <p className="error-text">{error}</p>}
       {approvalResult?.proposed_skill && (
         <section className="detail-panel">
@@ -237,4 +308,46 @@ export default function ChatPage() {
       )}
     </section>
   );
+}
+
+function createConversation(): ChatConversation {
+  const now = new Date().toISOString();
+  return {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    title: "New chat",
+    messages: initialMessages,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function loadStoredConversations(): ChatConversation[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [createConversation()];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [createConversation()];
+    const conversations = parsed.filter(isStoredConversation);
+    return conversations.length ? conversations : [createConversation()];
+  } catch {
+    return [createConversation()];
+  }
+}
+
+function isStoredConversation(value: unknown): value is ChatConversation {
+  if (!value || typeof value !== "object") return false;
+  const raw = value as Record<string, unknown>;
+  return (
+    typeof raw.id === "string" &&
+    typeof raw.title === "string" &&
+    Array.isArray(raw.messages) &&
+    typeof raw.createdAt === "string" &&
+    typeof raw.updatedAt === "string"
+  );
+}
+
+function makeTitle(content: string): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (normalized.length <= 42) return normalized || "New chat";
+  return `${normalized.slice(0, 39)}...`;
 }

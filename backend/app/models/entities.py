@@ -189,3 +189,58 @@ class SkillGenerationRequest(Base):
 
     proposed_skill: Mapped["Skill"] = relationship(back_populates="generation_requests")
     approval_requests: Mapped[list["ApprovalRequest"]] = relationship(back_populates="generation_request")
+
+
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    run_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
+    skill_id: Mapped[int | None] = mapped_column(ForeignKey("skills.id"), nullable=True, index=True)
+    generation_request_id: Mapped[int | None] = mapped_column(
+        ForeignKey("skill_generation_requests.id"),
+        nullable=True,
+        index=True,
+    )
+    user_request: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    current_milestone: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    current_step: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    failure_count_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    blueprint_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    final_summary_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    skill: Mapped["Skill | None"] = relationship()
+    generation_request: Mapped["SkillGenerationRequest | None"] = relationship()
+    steps: Mapped[list["AgentRunStep"]] = relationship(
+        back_populates="agent_run",
+        cascade="all, delete-orphan",
+    )
+
+
+class AgentRunStep(Base):
+    __tablename__ = "agent_run_steps"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    agent_run_id: Mapped[int] = mapped_column(ForeignKey("agent_runs.id"), nullable=False, index=True)
+    step_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    milestone_name: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
+    input_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    output_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    logs: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    agent_run: Mapped["AgentRun"] = relationship(back_populates="steps")

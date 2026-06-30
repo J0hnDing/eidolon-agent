@@ -223,9 +223,44 @@ class CodexService:
         if not validation.ok:
             generation_request.error_message = validation.error_message
         self.db.commit()
-        PermissionService(self.db, project_root=self.project_root).create_runtime_request(skill)
+        if validation.manifest_valid:
+            PermissionService(self.db, project_root=self.project_root).create_runtime_request(skill)
         self.db.refresh(generation_request)
         return skill, validation
+
+    def repair_skill(self, skill: Skill, failure_context: dict) -> subprocess.CompletedProcess[str]:
+        skill_dir = self.proposed_service.skill_dir_for_record(skill)
+        plan = self.plan_from_skill(skill, failure_context)
+        prompt = self.build_repair_prompt(skill, skill_dir, failure_context)
+        result = self.adapter.generate(prompt, skill_dir, plan)
+        if result.returncode != 0:
+            raise CodexGenerationError(result.stderr or "Codex repair failed")
+        return result
+
+    def plan_from_skill(self, skill: Skill, failure_context: dict) -> dict:
+        return {
+            "goal": failure_context.get("user_request") or f"Repair skill {skill.name}.",
+            "skill_name": skill.name,
+            "display_name": skill.name.replace("_", " ").title(),
+            "skill_type": skill.skill_type,
+            "interface_type": skill.interface_type,
+            "input_schema": skill.input_schema_json,
+            "output_schema": skill.output_schema_json,
+            "tool_ui_schema": skill.tool_ui_schema_json,
+            "requested_permissions": failure_context.get(
+                "requested_permissions",
+                {
+                    "network": [],
+                    "filesystem_read": [],
+                    "filesystem_write": ["./cache"] if skill.skill_type in {"automation", "hybrid"} else [],
+                    "secrets": [],
+                    "shell": False,
+                },
+            ),
+            "requested_network_domains": [],
+            "requested_dependencies": [],
+            "risk_level": skill.risk_level,
+        }
 
     def update_skill_record_from_manifest(self, skill: Skill, proposed_dir: Path) -> None:
         manifest = validate_manifest_file(proposed_dir / "manifest.json")
@@ -318,6 +353,36 @@ Executable skill requirements:
 Instruction skill requirements:
 - no skill.py required
 - include SKILL.md with reusable instructions
+""".strip()
+
+    def build_repair_prompt(self, skill: Skill, output_dir: Path, failure_context: dict) -> str:
+        return f"""
+You are BuilderAgent repairing an application skill for the Local-First Self-Extending Personal AI Assistant.
+
+Skill:
+- name: {skill.name}
+- skill_type: {skill.skill_type}
+- interface_type: {skill.interface_type}
+
+Controlled skill folder:
+{output_dir}
+
+Rules:
+- Write only inside the controlled skill folder.
+- Do not modify backend, frontend, project metadata, git files, or app source code.
+- Do not install packages.
+- Do not run the skill task automatically.
+- Do not set shell=true.
+- Do not add secrets, broad filesystem access, unrestricted network access, email/calendar/finance actions, browser automation, purchases, public posting, or file deletion.
+- Preserve manifest.json, README.md, and required skill files.
+- Preserve or reduce permissions unless the failure cannot be fixed without a declared permission change.
+- Automation and hybrid skills must keep tests/test_skill.py.
+- Executable skills must read JSON from stdin and return JSON on stdout.
+
+Failure context:
+{json.dumps(failure_context, indent=2)}
+
+Repair the current milestone using the provided Tester failure context so validation can be rerun. Return no prose; write files only.
 """.strip()
 
     def relative_path(self, path: Path) -> str:

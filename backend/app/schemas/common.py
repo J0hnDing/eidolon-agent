@@ -14,7 +14,7 @@ MemoryCategory = Literal[
 RiskLevel = Literal["low", "medium", "high", "blocked"]
 SkillType = Literal["instruction", "automation", "hybrid"]
 InterfaceType = Literal["chat", "tool", "hidden"]
-SkillStatus = Literal["proposed", "installed", "disabled", "failed", "deleted"]
+SkillStatus = Literal["building", "proposed", "installed", "disabled", "failed", "deleted"]
 SkillRunStatus = Literal["pending", "running", "succeeded", "failed", "blocked"]
 ApprovalStatus = Literal["pending", "approved", "denied", "expired", "superseded"]
 PermissionRequestScope = Literal["build_time", "runtime"]
@@ -36,4 +36,27 @@ GenerationRequestStatus = Literal[
     "generated",
     "failed",
     "cancelled",
+]
+AgentRunType = Literal["build_skill", "repair_skill", "update_skill"]
+AgentRunStatus = Literal["pending", "running", "waiting_for_approval", "succeeded", "failed", "cancelled", "blocked"]
+AgentStepName = Literal["product_manager", "builder", "tester", "security_reviewer"]
+AgentRunStepStatus = Literal[
+    "pending",
+    "running",
+    "waiting_for_approval",
+    "succeeded",
+    "failed",
+    "skipped",
+    "cancelled",
+    "blocked",
+]
+ProductManagerDecision = Literal[
+    "request_permission",
+    "build_next_milestone",
+    "run_tests",
+    "repair_current_milestone",
+    "ask_user_for_input",
+    "finish_ready_for_review",
+    "stop_failed",
+    "stop_unsupported",
 ]

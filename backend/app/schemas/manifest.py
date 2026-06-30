@@ -110,6 +110,7 @@ class SkillManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
+    display_name: str | None = Field(default=None, min_length=1, max_length=256)
     description: str = Field(min_length=1)
     skill_type: SkillType = "automation"
     interface_type: InterfaceType = "chat"

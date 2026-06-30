@@ -17,7 +17,7 @@ from app.services.permission_service import PermissionService
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CALCULATOR_DIR = PROJECT_ROOT / "skills" / "installed" / "calculator_tool"
+CALCULATOR_DIR = PROJECT_ROOT / "skills" / "installed" / "simple_calculator_tool"
 
 
 @pytest.fixture
@@ -49,12 +49,12 @@ def create_skill(
         interface_type=interface_type,
         status=status,
         risk_level="low",
-        manifest_path="skills/installed/calculator_tool/manifest.json",
+        manifest_path="skills/installed/simple_calculator_tool/manifest.json",
         tool_ui_schema_json={
             "title": "Calculator",
             "fields": [{"name": "expression", "label": "Expression", "type": "text"}],
         },
-        installed_path="skills/installed/calculator_tool",
+        installed_path="skills/installed/simple_calculator_tool",
         enabled=enabled,
     )
     db.add(skill)
@@ -95,6 +95,17 @@ def test_get_tool_returns_single_tool_with_ui_schema(db_session: Session) -> Non
 
     assert tool.skill.name == "calculator_card"
     assert tool.skill.tool_ui_schema_json["title"] == "Calculator"
+
+
+def test_installed_sync_preserves_user_enabled_state(db_session: Session) -> None:
+    skill = create_skill(db_session, name="simple_calculator_tool", enabled=True)
+    approve_runtime(db_session, skill)
+
+    tools = list_tools(db_session)
+
+    assert "simple_calculator_tool" in {tool.skill.name for tool in tools}
+    db_session.refresh(skill)
+    assert skill.enabled is True
 
 
 def test_tool_run_requires_runtime_permission_approval(db_session: Session) -> None:
@@ -149,26 +160,23 @@ def test_tool_run_rejects_instruction_skill(db_session: Session) -> None:
 
 
 def test_calculator_tool_outputs_result() -> None:
-    result = run_calculator({"expression": "1+2*3"})
+    result = run_calculator({"operation": "add", "left": 2, "right": 3})
 
-    assert result == {"result": 7}
+    assert result == {"result": 5, "error": None}
 
 
 @pytest.mark.parametrize(
     "expression",
-    [
-        "__import__('os').system('dir')",
-        "open('secret.txt').read()",
-        "2 ** 999",
-    ],
-)
-def test_calculator_tool_rejects_unsafe_expressions(expression: str) -> None:
-    result = run_calculator({"expression": expression})
+        ["power", "__import__", "open"],
+    )
+def test_calculator_tool_rejects_unsafe_operations(expression: str) -> None:
+    result = run_calculator({"operation": expression, "left": 2, "right": 3}, expect_success=False)
 
-    assert "error" in result
+    assert result["result"] is None
+    assert result["error"]
 
 
-def run_calculator(payload: dict) -> dict:
+def run_calculator(payload: dict, *, expect_success: bool = True) -> dict:
     result = subprocess.run(
         [sys.executable, str(CALCULATOR_DIR / "skill.py")],
         input=json.dumps(payload),
@@ -177,5 +185,5 @@ def run_calculator(payload: dict) -> dict:
         timeout=5,
         shell=False,
     )
-    assert result.returncode == 0
+    assert result.returncode == (0 if expect_success else 1)
     return json.loads(result.stdout)

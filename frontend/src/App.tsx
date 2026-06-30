@@ -1,6 +1,8 @@
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 
 import ApprovalRequestsPage from "./pages/ApprovalRequestsPage";
+import AgentRunDetailPage from "./pages/AgentRunDetailPage";
+import AgentRunsPage from "./pages/AgentRunsPage";
 import ChatPage from "./pages/ChatPage";
 import MemoryPage from "./pages/MemoryPage";
 import SkillDetailPage from "./pages/SkillDetailPage";
@@ -15,6 +17,7 @@ const navItems = [
   { to: "/skills", label: "Skills" },
   { to: "/tools", label: "Tools" },
   { to: "/schedules", label: "Schedules" },
+  { to: "/agent-runs", label: "Agent Runs" },
   { to: "/approval-requests", label: "Approvals" },
 ];
 
@@ -52,6 +55,8 @@ export default function App() {
           <Route path="/tools/:skillId" element={<ToolDetailPage />} />
           <Route path="/skills/:skillId" element={<SkillDetailPage />} />
           <Route path="/schedules" element={<SchedulesPage />} />
+          <Route path="/agent-runs" element={<AgentRunsPage />} />
+          <Route path="/agent-runs/:agentRunId" element={<AgentRunDetailPage />} />
           <Route path="/approval-requests" element={<ApprovalRequestsPage />} />
         </Routes>
       </main>

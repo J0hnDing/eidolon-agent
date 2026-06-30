@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.models import SkillGenerationRequest
 from app.schemas.common import ChatIntent
 from app.services.direct_chat_service import DirectChatService
+from app.services.agent_workflow_service import AgentWorkflowService
 from app.services.permission_service import PermissionService
 from app.services.project_plausibility import ProjectPlausibilityResult, ProjectPlausibilityService
 from app.services.skill_plan_service import SkillPlanService
@@ -68,6 +69,7 @@ class ChatOrchestrator:
                     "optional_projects": review.optional_projects,
                 }
             generation_request = self.create_generation_request(message, review)
+            AgentWorkflowService(self.db).create_build_run(generation_request)
             permission_request = PermissionService(self.db).create_build_time_request(generation_request)
             return {
                 "type": "skill_generation_plan",

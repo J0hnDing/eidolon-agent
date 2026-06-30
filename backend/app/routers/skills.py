@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import Skill, SkillRun
 from app.schemas.approval_request import ApprovalRequestRead
+from app.schemas.agent_run import AgentRunRead
 from app.schemas.proposed_skill import (
     ProposedSampleCreate,
     ProposedSkillValidationRead,
@@ -18,6 +19,7 @@ from app.schemas.schedule import ScheduleCreate, ScheduleWithApproval
 from app.schemas.skill import SkillCreate, SkillRead, SkillUpdate
 from app.schemas.skill_run import SkillRunRead, SkillRunRequest
 from app.services.permission_service import PermissionError, PermissionService
+from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
 from app.services.skill_runner import get_runner_status, get_skill_runner
 from app.routers.schedules import create_manifest_schedule, create_skill_schedule
@@ -135,6 +137,17 @@ def create_manifest_schedule_for_skill(
     db: Session = Depends(get_db),
 ) -> ScheduleWithApproval:
     return create_manifest_schedule(skill_id, db)
+
+
+@router.post("/{skill_id}/repair", response_model=AgentRunRead, status_code=status.HTTP_201_CREATED)
+def repair_skill_with_agents(skill_id: int, db: Session = Depends(get_db)) -> AgentRunRead:
+    skill = db.get(Skill, skill_id)
+    if skill is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+    try:
+        return AgentWorkflowService(db).create_repair_run(skill)
+    except AgentWorkflowError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/{skill_id}/files", response_model=list[SkillFileRead])

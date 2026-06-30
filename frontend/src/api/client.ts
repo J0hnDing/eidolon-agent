@@ -13,12 +13,30 @@ export type MemoryCategory =
 export type RiskLevel = "low" | "medium" | "high" | "blocked";
 export type SkillType = "instruction" | "automation" | "hybrid";
 export type InterfaceType = "chat" | "tool" | "hidden";
-export type SkillStatus = "proposed" | "installed" | "disabled" | "failed" | "deleted";
+export type SkillStatus = "building" | "proposed" | "installed" | "disabled" | "failed" | "deleted";
 export type ChatMode = "chat" | "project";
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired" | "superseded";
 export type PermissionRequestScope = "build_time" | "runtime";
 export type ScheduleStatus = "pending" | "active" | "paused" | "denied" | "deleted";
 export type ScheduleType = "daily" | "weekly" | "interval";
+export type AgentRunStatus =
+  | "pending"
+  | "running"
+  | "waiting_for_approval"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "blocked";
+export type AgentRunType = "build_skill" | "repair_skill" | "update_skill";
+export type AgentRunStepStatus =
+  | "pending"
+  | "running"
+  | "waiting_for_approval"
+  | "succeeded"
+  | "failed"
+  | "skipped"
+  | "cancelled"
+  | "blocked";
 
 export interface MemoryFact {
   id: number;
@@ -81,6 +99,43 @@ export interface Tool {
 export interface ToolRunResponse {
   skill: Skill;
   run: SkillRun;
+}
+
+export interface AgentRunStep {
+  id: number;
+  agent_run_id: number;
+  step_name: string;
+  milestone_name: string | null;
+  status: AgentRunStepStatus;
+  input_json: Record<string, unknown> | null;
+  output_json: Record<string, unknown> | null;
+  logs: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  error_message: string | null;
+}
+
+export interface AgentRun {
+  id: number;
+  run_type: AgentRunType;
+  status: AgentRunStatus;
+  skill_id: number | null;
+  generation_request_id: number | null;
+  user_request: string;
+  summary: string | null;
+  current_milestone: string | null;
+  current_step: string | null;
+  failure_count_json: Record<string, number>;
+  blueprint_json: Record<string, unknown> | null;
+  final_summary_json: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  error_message: string | null;
+}
+
+export interface AgentRunDetail extends AgentRun {
+  steps: AgentRunStep[];
 }
 
 export interface RunnerStatus {
@@ -214,17 +269,25 @@ export interface SkillGenerationApprovalResponse {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    });
+  } catch (err) {
+    if (err instanceof TypeError && err.message.toLowerCase().includes("fetch")) {
+      throw new Error("Could not reach the backend. Confirm the FastAPI server is running and try again.");
+    }
+    throw err;
+  }
 
   if (!response.ok) {
     const message = await response.text();
-    throw new Error(message || `Request failed with status ${response.status}`);
+    throw new Error(formatApiError(message) || `Request failed with status ${response.status}`);
   }
 
   if (response.status === 204) {
@@ -232,6 +295,27 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+function formatApiError(raw: string): string {
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(raw) as { detail?: unknown };
+    if (typeof parsed.detail === "string") return parsed.detail;
+    if (Array.isArray(parsed.detail)) {
+      return parsed.detail
+        .map((item) => {
+          if (item && typeof item === "object" && "msg" in item) {
+            return String((item as { msg: unknown }).msg);
+          }
+          return JSON.stringify(item);
+        })
+        .join("\n");
+    }
+  } catch {
+    return raw;
+  }
+  return raw;
 }
 
 export const api = {
@@ -287,6 +371,29 @@ export const api = {
       method: "DELETE",
     }),
   listSkills: () => request<Skill[]>("/skills"),
+  listAgentRuns: () => request<AgentRun[]>("/agent-runs"),
+  getAgentRun: (id: number) => request<AgentRunDetail>(`/agent-runs/${id}`),
+  listAgentRunSteps: (id: number) => request<AgentRunStep[]>(`/agent-runs/${id}/steps`),
+  cancelAgentRun: (id: number) =>
+    request<AgentRun>(`/agent-runs/${id}/cancel`, {
+      method: "POST",
+    }),
+  deleteAgentRun: (id: number) =>
+    request<void>(`/agent-runs/${id}`, {
+      method: "DELETE",
+    }),
+  resumeAgentRun: (id: number) =>
+    request<AgentRun>(`/agent-runs/${id}/resume`, {
+      method: "POST",
+    }),
+  retryCurrentMilestone: (id: number) =>
+    request<AgentRun>(`/agent-runs/${id}/retry-current-milestone`, {
+      method: "POST",
+    }),
+  retryAgentRunStep: (agentRunId: number, stepId: number) =>
+    request<AgentRun>(`/agent-runs/${agentRunId}/retry-step/${stepId}`, {
+      method: "POST",
+    }),
   listTools: () => request<Tool[]>("/tools"),
   getTool: (id: number) => request<Tool>(`/tools/${id}`),
   runTool: (id: number, input: Record<string, unknown> = {}) =>
@@ -365,6 +472,10 @@ export const api = {
     }),
   rejectSkill: (id: number) =>
     request<void>(`/skills/${id}/reject`, {
+      method: "POST",
+    }),
+  repairSkill: (id: number) =>
+    request<AgentRun>(`/skills/${id}/repair`, {
       method: "POST",
     }),
   runSkill: (id: number, input: Record<string, unknown> = {}) =>

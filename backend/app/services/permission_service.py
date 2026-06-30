@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import ApprovalRequest, Skill, SkillGenerationRequest
+from app.models import AgentRun, AgentRunStep, ApprovalRequest, Skill, SkillGenerationRequest
 from app.services.manifest_validator import validate_manifest_file
 from app.services.proposed_skill_service import ProposedSkillService
 
@@ -155,6 +155,7 @@ class PermissionService:
         request.decision_notes = notes
         self.db.commit()
         self.db.refresh(request)
+        self._sync_agent_security_steps(request, approved=True)
         return request
 
     def deny_request(self, request: ApprovalRequest, notes: str | None = None) -> ApprovalRequest:
@@ -168,6 +169,7 @@ class PermissionService:
         request.decision_notes = notes
         self.db.commit()
         self.db.refresh(request)
+        self._sync_agent_security_steps(request, approved=False)
         return request
 
     def can_generate(self, generation_request: SkillGenerationRequest) -> PermissionDecision:
@@ -316,3 +318,54 @@ class PermissionService:
         if blocked_reasons:
             parts.append("Blocked requests: " + " ".join(blocked_reasons))
         return " ".join(parts)
+
+    def _sync_agent_security_steps(self, request: ApprovalRequest, *, approved: bool) -> None:
+        steps = self.db.scalars(
+            select(AgentRunStep)
+            .where(AgentRunStep.step_name == "security_reviewer")
+            .where(AgentRunStep.status == "waiting_for_approval")
+        ).all()
+        changed_run_ids: set[int] = set()
+        for step in steps:
+            if not self._step_matches_permission_request(step, request.id):
+                continue
+            step.status = "succeeded" if approved else "failed"
+            step.ended_at = utc_now()
+            output = dict(step.output_json or {})
+            if "security_review_json" in output and isinstance(output["security_review_json"], dict):
+                output["security_review_json"] = {
+                    **output["security_review_json"],
+                    "status": request.status,
+                }
+            else:
+                output["status"] = request.status
+            step.output_json = output
+            decision = "Approved" if approved else "Denied"
+            step.logs = f"{step.logs or ''}\n\n{decision} by local user.".strip()
+            changed_run_ids.add(step.agent_run_id)
+
+        for run_id in changed_run_ids:
+            agent_run = self.db.get(AgentRun, run_id)
+            if agent_run is None:
+                continue
+            if request.request_scope == "build_time":
+                agent_run.status = "pending" if approved else "cancelled"
+                agent_run.current_step = "security_reviewer"
+                if approved:
+                    agent_run.summary = "Build-time approval is approved. Resume the agent run to continue generation."
+                if not approved:
+                    agent_run.completed_at = utc_now()
+                    agent_run.error_message = "Build-time approval was denied."
+            elif request.request_scope == "runtime" and agent_run.status == "waiting_for_approval":
+                agent_run.status = "succeeded" if approved else "blocked"
+                if not approved:
+                    agent_run.error_message = "Runtime permission approval was denied."
+        if changed_run_ids:
+            self.db.commit()
+
+    def _step_matches_permission_request(self, step: AgentRunStep, request_id: int) -> bool:
+        output = step.output_json or {}
+        if output.get("permission_request_id") == request_id:
+            return True
+        security_review = output.get("security_review_json")
+        return isinstance(security_review, dict) and security_review.get("permission_request_id") == request_id

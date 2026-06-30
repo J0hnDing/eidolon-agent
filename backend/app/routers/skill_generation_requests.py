@@ -8,8 +8,11 @@ from app.schemas.skill_generation import (
     SkillGenerationApprovalResponse,
     SkillGenerationRequestRead,
 )
-from app.services.codex_service import CodexGenerationError, CodexService
+from app.schemas.agent_run import AgentRunRead
+from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
+from app.services.codex_service import CodexGenerationError
 from app.services.permission_service import PermissionError, PermissionService
+from app.services.proposed_skill_service import ProposedSkillService
 
 
 router = APIRouter(prefix="/skill-generation-requests", tags=["skill_generation_requests"])
@@ -46,8 +49,8 @@ def approve_generation_request(
     generation_request.status = "approved"
     db.commit()
     try:
-        skill, validation = CodexService(db).generate_from_request(generation_request)
-    except CodexGenerationError as exc:
+        _agent_run, skill, validation = AgentWorkflowService(db).continue_build_after_approval(generation_request)
+    except (AgentWorkflowError, CodexGenerationError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     db.refresh(generation_request)
     return SkillGenerationApprovalResponse(
@@ -56,6 +59,14 @@ def approve_generation_request(
         proposed_skill=skill,
         validation=validation,
     )
+
+
+@router.post("/{request_id}/agent-run", response_model=AgentRunRead)
+def create_generation_agent_run(request_id: int, db: Session = Depends(get_db)):
+    generation_request = db.get(SkillGenerationRequest, request_id)
+    if generation_request is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generation request not found")
+    return AgentWorkflowService(db).create_build_run(generation_request)
 
 
 @router.post("/{request_id}/deny-generation", response_model=SkillGenerationRequestRead)
@@ -70,6 +81,11 @@ def deny_generation_request(request_id: int, db: Session = Depends(get_db)) -> S
         permission_service.deny_request(permission_request)
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if generation_request.proposed_skill is not None and generation_request.proposed_skill.status == "building":
+        ProposedSkillService(db).delete_skill(generation_request.proposed_skill)
+        generation_request = db.get(SkillGenerationRequest, request_id)
+        if generation_request is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generation request not found")
     generation_request.status = "cancelled"
     db.commit()
     db.refresh(generation_request)

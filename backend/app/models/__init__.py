@@ -1,4 +1,6 @@
 from app.models.entities import (
+    AgentRun,
+    AgentRunStep,
     ApprovalRequest,
     MemoryFact,
     Message,
@@ -11,6 +13,8 @@ from app.models.entities import (
 
 __all__ = [
     "ApprovalRequest",
+    "AgentRun",
+    "AgentRunStep",
     "MemoryFact",
     "Message",
     "Skill",

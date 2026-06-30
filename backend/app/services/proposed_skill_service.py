@@ -109,7 +109,6 @@ class ProposedSkillService:
                     skill.output_schema_json = manifest.output_schema
                     skill.tool_ui_schema_json = manifest.tool_ui_schema
                     skill.installed_path = self._relative_path(skill_dir)
-                    skill.enabled = manifest.enabled
                     changed = True
                 continue
             skill = Skill(

@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import PermissionRequestModal from "../components/PermissionRequestModal";
 import {
+  AgentRun,
   ApprovalRequest,
   ProposedSkillValidation,
   RunnerStatus,
@@ -24,6 +25,7 @@ export default function SkillDetailPage() {
   const [runtimePermission, setRuntimePermission] = useState<ApprovalRequest | null>(null);
   const [runnerStatus, setRunnerStatus] = useState<RunnerStatus | null>(null);
   const [schedules, setSchedules] = useState<SkillSchedule[]>([]);
+  const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [showRuntimeModal, setShowRuntimeModal] = useState(false);
   const [runInput, setRunInput] = useState('{\n  "hello": "world"\n}');
   const [scheduleName, setScheduleName] = useState("Daily run");
@@ -47,13 +49,14 @@ export default function SkillDetailPage() {
       setError(null);
       try {
         const id = Number(skillId);
-        const [loadedSkill, loadedRuns, loadedFiles, permissionRequests, loadedRunnerStatus, loadedSchedules] = await Promise.all([
+        const [loadedSkill, loadedRuns, loadedFiles, permissionRequests, loadedRunnerStatus, loadedSchedules, loadedAgentRuns] = await Promise.all([
           api.getSkill(id),
           api.listSkillRuns(id),
           api.listSkillFiles(id),
           api.listPermissionRequests({ skill_id: id, request_scope: "runtime" }),
           api.getRunnerStatus(),
           api.listSchedules(id),
+          api.listAgentRuns(),
         ]);
         setSkill(loadedSkill);
         setRuns(loadedRuns);
@@ -61,6 +64,7 @@ export default function SkillDetailPage() {
         setRuntimePermission(permissionRequests[0] ?? null);
         setRunnerStatus(loadedRunnerStatus);
         setSchedules(loadedSchedules);
+        setAgentRuns(loadedAgentRuns.filter((run) => run.skill_id === id));
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not load skill");
       } finally {
@@ -148,6 +152,20 @@ export default function SkillDetailPage() {
       navigate("/skills");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not delete skill");
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function handleRepair() {
+    if (!skill) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      const agentRun = await api.repairSkill(skill.id);
+      setAgentRuns((current) => [agentRun, ...current.filter((run) => run.id !== agentRun.id)]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start repair agent run");
     } finally {
       setIsWorking(false);
     }
@@ -436,6 +454,9 @@ export default function SkillDetailPage() {
           <button type="button" className="danger" onClick={handleReject} disabled={isWorking}>
             Reject/Delete
           </button>
+          <button type="button" className="secondary" onClick={handleRepair} disabled={isWorking}>
+            Ask Agents to Repair
+          </button>
         </div>
       ) : (
         <div className="button-row">
@@ -456,6 +477,9 @@ export default function SkillDetailPage() {
           )}
           <button type="button" onClick={handleToggleEnabled} disabled={isWorking}>
             {skill.enabled ? "Disable" : "Enable"}
+          </button>
+          <button type="button" className="secondary" onClick={handleRepair} disabled={isWorking}>
+            Ask Agents to Repair
           </button>
           <button type="button" className="danger" onClick={handleDelete} disabled={isWorking}>
             Delete
@@ -479,6 +503,34 @@ export default function SkillDetailPage() {
       )}
 
       {validation && <ValidationResult validation={validation} />}
+
+      <section className="detail-panel">
+        <header className="page-header">
+          <div>
+            <h2>Agent Runs</h2>
+            <p className="muted">Build and repair workflows are tracked as bounded, observable agent runs.</p>
+          </div>
+          <Link to="/agent-runs">All agent runs</Link>
+        </header>
+        {agentRuns.length > 0 ? (
+          <div className="run-list">
+            {agentRuns.map((agentRun) => (
+              <article key={agentRun.id} className="run-row">
+                <div>
+                  <strong>
+                    <Link to={`/agent-runs/${agentRun.id}`}>Agent Run #{agentRun.id}</Link>
+                  </strong>
+                  <span>{agentRun.run_type} / {agentRun.current_step ?? "none"}</span>
+                  {agentRun.summary && <span>{agentRun.summary}</span>}
+                </div>
+                <span className={`badge status-${agentRun.status}`}>{agentRun.status}</span>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="muted">No agent runs are linked to this skill yet.</p>
+        )}
+      </section>
 
       <section className="detail-panel">
         <header className="page-header">

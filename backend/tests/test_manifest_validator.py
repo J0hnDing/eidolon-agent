@@ -40,6 +40,15 @@ def test_valid_low_risk_manifest_passes() -> None:
     assert manifest.permissions.network == ["reuters.com", "apnews.com"]
 
 
+def test_manifest_accepts_optional_display_name() -> None:
+    data = valid_manifest()
+    data["display_name"] = "Simple Calculator"
+
+    manifest = validate_manifest(data)
+
+    assert manifest.display_name == "Simple Calculator"
+
+
 def test_manifest_accepts_tool_interface_and_io_schemas() -> None:
     data = valid_manifest()
     data["interface_type"] = "tool"

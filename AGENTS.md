@@ -47,6 +47,7 @@ These decisions supersede older milestone wording when there is a conflict:
 8. Skill deletion is a hard delete in the local MVP: remove the controlled skill folder and remove the skill database record. Do not leave deleted skills visible in the normal Skills list.
 9. Installed skill folders found on disk under `skills/installed/<skill_name>/` may be registered into the local database if their manifest is valid. This keeps filesystem state and the UI list from drifting apart.
 10. A user-facing tool is not a new `skill_type`. It is an installed runnable automation or hybrid skill with `interface_type = "tool"`. Codex may design a tool UI by writing declarative `tool_ui_schema` JSON in `manifest.json`; generated skills must not inject React, HTML, JavaScript, or app frontend code.
+11. Skill status `building` means an agent workflow is creating or repairing the skill. Status `proposed` means generation is complete and the skill is waiting for user review, runtime permission approval, installation, or rejection.
 
 ---
 
@@ -118,7 +119,7 @@ Block or require explicit approval for:
 
 ### 6. Test before install
 
-Every generated skill must include tests. A proposed skill cannot be installed unless:
+Every generated automation or hybrid skill must include tests. A proposed skill cannot be installed unless:
 
 1. Its manifest is valid.
 2. Its requested permissions are understood.
@@ -408,6 +409,7 @@ enabled
 Status values:
 
 ```text
+building
 proposed
 installed
 disabled
@@ -764,21 +766,75 @@ Rules:
 3. Scheduled runs must store logs.
 4. User can pause or delete scheduled skills.
 
-### Milestone 10: Repair and Update Loop
+### Milestone 10: Agentic Skill Build and Repair Workflow
 
-When a skill fails:
+Build a bounded agent workflow system for skill generation and repair.
+
+Agent runs are tracked workflows with visible role-based steps. The only
+agent roles in the MVP are:
 
 ```text
-Skill fails
-→ logs are saved
-→ user can click "Ask Codex to repair"
-→ Codex receives manifest, code, tests, and logs
-→ Codex proposes patch
-→ tests rerun
-→ install update only if tests pass
+product_manager
+builder
+security_reviewer
+tester
 ```
 
-If permissions expand, require approval again.
+Agent runs must be observable in the UI. The user should be able to inspect
+step logs, input/output JSON, current status, cancellation state, failed steps,
+and retry actions.
+
+ProductManager replaces the older planner/reviewer roles. Builder handles
+build, update, and repair modes. SecurityReviewer replaces the older
+permission_analyst role. Do not add separate planner, reviewer, or repairer
+agents.
+
+Agent workflows communicate through structured artifacts, not free-form agent
+chat:
+
+```text
+agent_runs
+agent_run_steps
+blueprint_json
+milestone_json
+decision_json
+test_result_json
+failure_log
+security_review_json
+user_summary
+```
+
+Rules:
+
+1. Agent workflows may only call existing bounded services:
+   - Codex service
+   - proposed skill service
+   - permission service
+   - manifest validator/test runner
+   - safe skill runner
+2. Agent workflows must not install skills automatically.
+3. Agent workflows must not run skills automatically.
+4. Build workflows must pause for build-time approval before Codex writes files.
+5. Runtime permission review must still be based on the generated `manifest.json`.
+6. Repair workflows for installed skills should write to a proposed repair copy,
+   not directly mutate the installed skill.
+7. Permission expansion during build or repair must require approval before install/run.
+8. One build-time approval is enough for ProductManager -> Builder -> Tester
+   milestone work. Do not require approval merely because the workflow moves
+   between agent roles.
+9. SecurityReviewer creates approval requests but never approves them.
+10. Skills under active agent construction should use status `building`. A skill
+    should become `proposed` only after the generated package is ready for user
+    review.
+11. If ProductManager selects `interface_type = "tool"`, the blueprint and
+    acceptance criteria must require a declarative `tool_ui_schema` so the Tools
+    page can render a user-facing form.
+12. Builder must not install packages, approve permissions, install skills, run
+    skills, or edit app source code when building generated skills.
+13. Tester may create or update tests, but must not edit implementation code.
+14. If one milestone fails more than 3 times, stop the workflow and have
+    ProductManager write a user-facing stuck summary.
+15. Do not build a general-purpose agent playground in the MVP.
 
 ---
 
