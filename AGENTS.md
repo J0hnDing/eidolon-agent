@@ -48,6 +48,8 @@ These decisions supersede older milestone wording when there is a conflict:
 9. Installed skill folders found on disk under `skills/installed/<skill_name>/` may be registered into the local database if their manifest is valid. This keeps filesystem state and the UI list from drifting apart.
 10. A user-facing tool is not a new `skill_type`. It is an installed runnable automation or hybrid skill with `interface_type = "tool"`. Codex may design a tool UI by writing declarative `tool_ui_schema` JSON in `manifest.json`; generated skills must not inject React, HTML, JavaScript, or app frontend code.
 11. Skill status `building` means an agent workflow is creating or repairing the skill. Status `proposed` means generation is complete and the skill is waiting for user review, runtime permission approval, installation, or rejection.
+12. Build-time and runtime approval prompts should appear inline in the Chat transcript as assistant messages with approve/decline actions. They should not be route-local modal state that disappears when the user switches pages.
+13. Approving build-time permissions from either Chat or the Approval Requests page must mark the linked generation request approved so the agent workflow can resume safely.
 
 ---
 
@@ -119,7 +121,7 @@ Block or require explicit approval for:
 
 ### 6. Test before install
 
-Every generated automation or hybrid skill must include tests. A proposed skill cannot be installed unless:
+Every generated skill must include tests. A proposed skill cannot be installed unless:
 
 1. Its manifest is valid.
 2. Its requested permissions are understood.
@@ -201,6 +203,283 @@ UNSAFE_OR_UNSUPPORTED
 ```
 
 In the current MVP, the user explicitly chooses `chat` or `project` mode in the UI. Only `project` mode can create a skill proposal. Project mode must run a plausibility review before creating a generation plan. Later, the router can become more capable, but it must not silently turn ordinary chat into skill generation.
+
+### Agent Workflow Roles
+
+Milestone 10 uses a bounded agent workflow. Agents are not free-running autonomous actors. They are role-specific workflow steps controlled by the backend.
+
+The MVP agent roles are:
+
+```text
+product_manager
+builder
+tester
+security_reviewer
+```
+
+There are no separate `planner`, `reviewer`, `permission_analyst`, or `repairer` agents in the MVP.
+
+- `ProductManagerAgent` replaces planner/reviewer behavior.
+- `SecurityReviewerAgent` replaces permission-analyst behavior.
+- `BuilderAgent` handles build, update, and repair modes.
+- `TesterAgent` owns test creation, test maintenance, validation, and test execution.
+
+Agents communicate only through structured workflow artifacts stored by the platform:
+
+```text
+agent_runs
+agent_run_steps
+blueprint_json
+milestone_json
+decision_json
+test_result_json
+failure_log
+security_review_json
+user_summary
+```
+
+Agents must not freely chat with each other, spawn other agents, run indefinitely, install skills, run skills, approve permissions, or bypass backend safety checks.
+
+#### ProductManagerAgent
+
+ProductManagerAgent owns workflow direction and user-facing project judgment.
+
+It runs at these decision points:
+
+1. At the start of a build, update, or repair workflow.
+2. After a milestone's tests pass.
+3. After all planned milestones are complete.
+4. After repeated failures on one milestone.
+5. When the workflow is blocked or needs user input.
+
+Responsibilities:
+
+```text
+- understand the user's request
+- decide whether the project is plausible and safe enough to attempt
+- write the project blueprint
+- break the work into explicit milestones
+- define acceptance criteria for each milestone
+- decide the next workflow action
+- summarize progress for the user at approval and completion checkpoints
+- decide whether the project is complete after milestone tests pass
+- request SecurityReviewerAgent review before build-time or runtime approval prompts
+- stop the workflow when the request is unsafe, unsupported, unclear, or repeatedly failing
+```
+
+Allowed ProductManager decisions:
+
+```text
+request_permission
+build_next_milestone
+run_tests
+repair_current_milestone
+ask_user_for_input
+finish_ready_for_review
+stop_failed
+stop_unsupported
+```
+
+ProductManagerAgent must not:
+
+```text
+write implementation code
+edit generated skill files directly
+approve permissions
+install skills
+run skills
+bypass failed tests
+bypass SecurityReviewerAgent
+```
+
+#### BuilderAgent
+
+BuilderAgent writes and modifies skill files inside controlled skill folders.
+
+Builder modes:
+
+```text
+build
+repair
+update
+```
+
+Responsibilities:
+
+```text
+- implement the current ProductManager milestone only
+- create or edit generated skill files under skills/proposed/<skill_name>/
+- create or update manifest.json, README.md, SKILL.md, skill.py, and support files as assigned
+- If runtime errors occurs, log the error and attempt to fix. After three unsucessful fixes, pause, notify user. 
+- fix implementation bugs reported by TesterAgent
+- keep changes consistent with AGENTS.md, the manifest schema, and milestone acceptance criteria
+- identify when a bug or blocker requires user intervention
+```
+
+If BuilderAgent detects that user intervention is required, it must stop and produce a user-action-required report.
+
+Examples requiring user intervention:
+
+```text
+missing API key or secret
+external login required
+unsupported runtime permission
+package installation needed but not approved/supported
+unclear product requirement
+conflict between user request and AGENTS.md safety rules
+network/domain access required but current runtime sandbox cannot support it
+file access requiring a user-selected path
+```
+
+The user-action-required report must include:
+
+```text
+exact blocker
+why BuilderAgent cannot safely continue
+specific user step needed
+whether the workflow can resume after user action
+files, dependencies, or permissions involved
+```
+
+BuilderAgent must not:
+
+```text
+install dependencies automatically
+approve permissions
+install skills
+run skills
+edit backend/frontend app source code while building an application skill
+grant itself permissions through manifest changes without SecurityReviewerAgent review
+```
+
+#### TesterAgent
+
+TesterAgent validates whether the generated skill satisfies the blueprint and milestone acceptance criteria.
+TesterAgent is Codex-backed for test authoring: it should inspect the blueprint and Builder-created files, then write rich but not overly complicated pytest tests. The backend still owns deterministic validation and test execution.
+
+Responsibilities:
+
+```text
+- read the ProductManager blueprint and milestone acceptance criteria
+- inspect Builder-created skill files before writing tests
+- create or update pytest tests for automation/hybrid skills when needed
+- validate manifest schema
+- run tests through the existing safe validation/test path
+- check the JSON stdin/stdout contract for executable skills
+- report failures clearly
+- record failure logs in agent_run_steps and, where practical, a readable failure log artifact
+```
+
+TesterAgent may write or update test files. TesterAgent must not edit implementation code.
+
+TesterAgent must not:
+
+```text
+patch skill.py or implementation files
+approve permissions
+install dependencies
+install skills
+run skills outside the approved validation/test path
+ignore failing tests
+```
+
+#### SecurityReviewerAgent
+
+SecurityReviewerAgent handles permissions, risk, and runtime support review.
+
+Responsibilities:
+
+```text
+- analyze build-time permissions from the ProductManager blueprint
+- analyze runtime permissions from the generated manifest.json
+- detect permission expansion between plan and actual manifest
+- classify risk level
+- identify blocked or unsupported permissions
+- create or update approval requests
+- explain what each requested permission is for
+- explain what approval allows and does not allow
+- decide whether permissions are supported by the current runner
+```
+
+SecurityReviewerAgent must produce a user-facing security summary for build-time and runtime approval checkpoints.
+
+SecurityReviewerAgent must not:
+
+```text
+approve permissions
+weaken runner restrictions
+install skills
+run skills
+ignore permission expansion
+allow blocked permissions in the MVP
+```
+
+Blocked or unsupported in the MVP:
+
+```text
+shell access
+secrets
+broad filesystem access
+unrestricted network access
+browser automation
+email/calendar/finance actions
+public posting
+purchases
+trading
+file deletion
+```
+
+Runtime network domains may be approved as declared design intent, but execution must remain blocked until sandboxing can enforce network access.
+
+#### Combined Approval Summary
+
+At approval checkpoints, the UI should show a combined two-part summary.
+
+Part A: ProductManager summary
+
+```text
+what will be built
+why it is useful
+milestone plan
+expected files
+expected behavior
+what approval allows
+what approval does not allow
+```
+
+Part B: SecurityReviewer summary
+
+```text
+requested permissions
+requested dependencies
+requested network domains
+filesystem access
+blocked or unsupported items
+risk level
+why each permission is needed
+```
+
+The same two-part pattern applies to runtime permission review after generation:
+
+```text
+ProductManager: whether the generated package appears complete and what it does
+SecurityReviewer: actual manifest permissions, risk, blocked items, and runtime support
+```
+
+In the current MVP, these summaries should be rendered inline in the Chat page as assistant messages:
+
+```text
+user project request
+-> assistant message with ProductManager blueprint summary and SecurityReviewer build-time approval summary
+-> inline Approve Generation / Decline buttons
+-> assistant generation progress and completion message
+-> assistant message with ProductManager completion summary and SecurityReviewer runtime permission summary
+-> inline Approve Runtime Permissions / Deny buttons
+```
+
+The inline approval messages must remain in the local chat history when the user navigates away and returns. While a project build is running in that chat window, additional user input in the same window may be ignored or disabled until the build and summaries complete.
+
+Permission expansion should only be shown when the actual generated manifest requests permissions that are meaningfully greater than the approved build-time plan. An empty expansion object must not be presented as a warning.
 
 ### Memory
 
@@ -770,71 +1049,34 @@ Rules:
 
 Build a bounded agent workflow system for skill generation and repair.
 
-Agent runs are tracked workflows with visible role-based steps. The only
-agent roles in the MVP are:
+Agent runs are tracked workflows with visible role-based steps:
 
 ```text
 product_manager
-builder
 security_reviewer
+builder
 tester
-```
-
-Agent runs must be observable in the UI. The user should be able to inspect
-step logs, input/output JSON, current status, cancellation state, failed steps,
-and retry actions.
-
-ProductManager replaces the older planner/reviewer roles. Builder handles
-build, update, and repair modes. SecurityReviewer replaces the older
-permission_analyst role. Do not add separate planner, reviewer, or repairer
-agents.
-
-Agent workflows communicate through structured artifacts, not free-form agent
-chat:
-
-```text
-agent_runs
-agent_run_steps
-blueprint_json
-milestone_json
-decision_json
-test_result_json
-failure_log
-security_review_json
-user_summary
 ```
 
 Rules:
 
-1. Agent workflows may only call existing bounded services:
-   - Codex service
-   - proposed skill service
-   - permission service
-   - manifest validator/test runner
-   - safe skill runner
-2. Agent workflows must not install skills automatically.
-3. Agent workflows must not run skills automatically.
-4. Build workflows must pause for build-time approval before Codex writes files.
-5. Runtime permission review must still be based on the generated `manifest.json`.
-6. Repair workflows for installed skills should write to a proposed repair copy,
-   not directly mutate the installed skill.
-7. Permission expansion during build or repair must require approval before install/run.
-8. One build-time approval is enough for ProductManager -> Builder -> Tester
-   milestone work. Do not require approval merely because the workflow moves
-   between agent roles.
-9. SecurityReviewer creates approval requests but never approves them.
-10. Skills under active agent construction should use status `building`. A skill
-    should become `proposed` only after the generated package is ready for user
-    review.
-11. If ProductManager selects `interface_type = "tool"`, the blueprint and
-    acceptance criteria must require a declarative `tool_ui_schema` so the Tools
-    page can render a user-facing form.
-12. Builder must not install packages, approve permissions, install skills, run
-    skills, or edit app source code when building generated skills.
-13. Tester may create or update tests, but must not edit implementation code.
-14. If one milestone fails more than 3 times, stop the workflow and have
-    ProductManager write a user-facing stuck summary.
-15. Do not build a general-purpose agent playground in the MVP.
+1. ProductManager creates the concise blueprint, milestone plan, acceptance criteria, and user-facing summaries.
+2. SecurityReviewer creates build-time and runtime approval requests and summaries, but never approves permissions.
+3. Builder writes or repairs generated skill files only inside controlled skill folders.
+4. Tester validates manifests, tests, and JSON stdin/stdout contracts through the existing safe validation path.
+5. A build workflow pauses for one build-time approval before Builder writes files.
+6. The workflow should proceed smoothly between ProductManager, SecurityReviewer, Builder, and Tester after that approval. Do not require approval merely because the workflow moves between roles.
+7. If tests fail, Builder should read Tester failure output, attempt repair, and Tester should rerun validation.
+8. If one milestone fails more than 3 times, ProductManager stops the workflow and writes a user-facing stuck summary.
+9. Runtime permission review is based on the actual generated `manifest.json`, not just the original plan.
+10. Permission expansion during build or repair must be shown clearly and require review before install/run.
+11. Empty permission expansion must not be shown as a warning.
+12. Agent workflows must not install skills automatically.
+13. Agent workflows must not run skills automatically.
+14. Repair workflows for installed skills should write to a proposed repair copy, not directly mutate the installed skill.
+15. Skills under active agent construction should use status `building`. A skill should become `proposed` only after the generated package is ready for user review.
+16. If ProductManager selects `interface_type = "tool"`, the blueprint and acceptance criteria must require a declarative `tool_ui_schema` so the Tools page can render a user-facing form.
+17. Do not build a general-purpose agent playground in the MVP.
 
 ---
 

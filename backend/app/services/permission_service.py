@@ -146,6 +146,7 @@ class PermissionService:
         if request.status == "denied":
             raise PermissionError("Denied permission requests cannot be approved")
         if request.status == "approved":
+            self._sync_agent_security_steps(request, approved=True)
             return request
         if request.risk_level == "blocked":
             raise PermissionError("Blocked or unsupported permission requests cannot be approved in this milestone")
@@ -153,6 +154,8 @@ class PermissionService:
         request.resolved_at = utc_now()
         request.resolved_by = "local_user"
         request.decision_notes = notes
+        if request.request_scope == "build_time" and request.generation_request is not None:
+            request.generation_request.status = "approved"
         self.db.commit()
         self.db.refresh(request)
         self._sync_agent_security_steps(request, approved=True)
@@ -162,11 +165,14 @@ class PermissionService:
         if request.status == "approved":
             raise PermissionError("Approved permission requests cannot be denied later in this milestone")
         if request.status == "denied":
+            self._sync_agent_security_steps(request, approved=False)
             return request
         request.status = "denied"
         request.resolved_at = utc_now()
         request.resolved_by = "local_user"
         request.decision_notes = notes
+        if request.request_scope == "build_time" and request.generation_request is not None:
+            request.generation_request.status = "cancelled"
         self.db.commit()
         self.db.refresh(request)
         self._sync_agent_security_steps(request, approved=False)

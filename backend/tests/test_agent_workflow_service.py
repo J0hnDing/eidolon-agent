@@ -42,6 +42,8 @@ def test_product_manager_creates_blueprint_and_milestones(db_session: Session) -
     assert agent_run.blueprint_json["milestones"][0]["name"] == "initial_skill"
     assert [step.step_name for step in agent_run.steps] == ["product_manager", "security_reviewer"]
     assert agent_run.steps[0].output_json["decision_json"]["decision"] == "request_permission"
+    security_step = agent_run.steps[1]
+    assert security_step.input_json["blueprint_json"]["skill_name"] == building_skill.name
 
 
 def test_approval_updates_waiting_security_reviewer_step(db_session: Session) -> None:
@@ -51,10 +53,29 @@ def test_approval_updates_waiting_security_reviewer_step(db_session: Session) ->
     PermissionService(db_session).approve_request(permission_request)
 
     agent_run = AgentWorkflowService(db_session).latest_run_for_generation(response["generation_request"].id)
+    db_session.refresh(response["generation_request"])
     security_step = [step for step in agent_run.steps if step.step_name == "security_reviewer"][0]
     assert security_step.status == "succeeded"
     assert security_step.output_json["status"] == "approved"
     assert agent_run.status == "pending"
+    assert response["generation_request"].status == "approved"
+
+
+def test_resume_after_generic_approval_runs_builder(tmp_path: Path, db_session: Session) -> None:
+    generation_request = create_generation_request(db_session)
+    agent_run = AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
+    permission_request = PermissionService(db_session, project_root=tmp_path).create_build_time_request(generation_request)
+    PermissionService(db_session, project_root=tmp_path).approve_request(permission_request)
+
+    resumed = AgentWorkflowService(
+        db_session,
+        codex_service=CodexService(db_session, adapter=FakeCodexAdapter(), project_root=tmp_path),
+        project_root=tmp_path,
+    ).resume_run(agent_run)
+
+    assert resumed.status == "succeeded"
+    assert [step.step_name for step in resumed.steps].count("builder") == 1
+    assert all(step.error_message != "Generation request is not approved for generation" for step in resumed.steps)
 
 
 def test_build_time_permission_summary_has_pm_and_security_parts(db_session: Session) -> None:
@@ -82,10 +103,11 @@ def test_approved_build_uses_four_roles_and_updates_security_step(tmp_path: Path
     generation_request = create_generation_request(db_session)
     AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
     approve_generation(db_session, generation_request, tmp_path)
+    adapter = FakeCodexAdapter()
 
     agent_run, skill, validation = AgentWorkflowService(
         db_session,
-        codex_service=CodexService(db_session, adapter=FakeCodexAdapter(), project_root=tmp_path),
+        codex_service=CodexService(db_session, adapter=adapter, project_root=tmp_path),
         project_root=tmp_path,
     ).continue_build_after_approval(generation_request)
 
@@ -103,6 +125,51 @@ def test_approved_build_uses_four_roles_and_updates_security_step(tmp_path: Path
     first_security_step = [step for step in agent_run.steps if step.step_name == "security_reviewer"][0]
     assert first_security_step.status == "succeeded"
     assert "Approved by local user" in first_security_step.logs
+    runtime_security_step = [step for step in agent_run.steps if step.step_name == "security_reviewer"][-1]
+    assert runtime_security_step.input_json["blueprint_json"]["skill_name"] == skill.name
+    tester_step = [step for step in agent_run.steps if step.step_name == "tester"][0]
+    assert "skill.py" in tester_step.input_json["code_files"]
+    assert tester_step.output_json["tests_written"] == ["tests/test_skill.py"]
+    assert tester_step.output_json["tester_generation"]["stdout"] == "fake tester wrote tests"
+    test_file = tmp_path / "skills" / "proposed" / skill.name / "tests" / "test_skill.py"
+    test_source = test_file.read_text(encoding="utf-8")
+    assert "test_manifest_matches_blueprint_and_safe_contract" in test_source
+    assert "test_skill_accepts_representative_input_and_outputs_json_object" in test_source
+
+
+def test_tester_agent_invokes_codex_with_blueprint_and_code_context(tmp_path: Path, db_session: Session) -> None:
+    generation_request = create_generation_request(db_session)
+    AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
+    approve_generation(db_session, generation_request, tmp_path)
+
+    class RecordingAdapter(FakeCodexAdapter):
+        def __init__(self) -> None:
+            self.plans: list[dict] = []
+            self.prompts: list[str] = []
+
+        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            self.prompts.append(prompt)
+            self.plans.append(dict(plan))
+            return super().generate(prompt, output_dir, plan)
+
+    adapter = RecordingAdapter()
+    agent_run, skill, validation = AgentWorkflowService(
+        db_session,
+        codex_service=CodexService(db_session, adapter=adapter, project_root=tmp_path),
+        project_root=tmp_path,
+    ).continue_build_after_approval(generation_request)
+
+    assert validation.ok is True
+    tester_plans = [plan for plan in adapter.plans if plan.get("codex_task") == "tester_write_tests"]
+    assert len(tester_plans) == 1
+    tester_plan = tester_plans[0]
+    assert tester_plan["blueprint_json"]["skill_name"] == skill.name
+    assert "skill.py" in tester_plan["code_files"]
+    assert "You are TesterAgent" in adapter.prompts[-1]
+    assert "Write only this file: tests/test_skill.py" in adapter.prompts[-1]
+    builder_plans = [plan for plan in adapter.plans if plan.get("codex_task") != "tester_write_tests"]
+    assert builder_plans[0]["builder_writes_tests"] is False
+    assert agent_run.status == "succeeded"
 
 
 def test_failed_test_triggers_builder_repair(tmp_path: Path, db_session: Session) -> None:
@@ -118,8 +185,12 @@ def test_failed_test_triggers_builder_repair(tmp_path: Path, db_session: Session
             self.calls += 1
             result = super().generate(prompt, output_dir, plan)
             if self.calls == 1:
-                (output_dir / "tests" / "test_skill.py").write_text(
-                    "def test_initial_bug():\n    assert False\n",
+                (output_dir / "skill.py").write_text(
+                    "import sys\n\n"
+                    "def main():\n"
+                    "    sys.exit(1)\n\n"
+                    "if __name__ == '__main__':\n"
+                    "    main()\n",
                     encoding="utf-8",
                 )
             return result
@@ -131,7 +202,7 @@ def test_failed_test_triggers_builder_repair(tmp_path: Path, db_session: Session
         project_root=tmp_path,
     ).continue_build_after_approval(generation_request)
 
-    assert adapter.calls == 2
+    assert adapter.calls == 4
     assert validation.ok is True
     assert agent_run.failure_count_json["initial_skill"] == 1
     builder_steps = [step for step in agent_run.steps if step.step_name == "builder"]
@@ -150,10 +221,17 @@ def test_more_than_three_failures_stops_workflow(tmp_path: Path, db_session: Ses
     class AlwaysFailingTestsAdapter(FakeCodexAdapter):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             result = super().generate(prompt, output_dir, plan)
-            (output_dir / "tests" / "test_skill.py").write_text("def test_fail():\n    assert False\n", encoding="utf-8")
+            (output_dir / "skill.py").write_text(
+                "import sys\n\n"
+                "def main():\n"
+                "    sys.exit(1)\n\n"
+                "if __name__ == '__main__':\n"
+                "    main()\n",
+                encoding="utf-8",
+            )
             return result
 
-    agent_run, _skill, validation = AgentWorkflowService(
+    agent_run, skill, validation = AgentWorkflowService(
         db_session,
         codex_service=CodexService(db_session, adapter=AlwaysFailingTestsAdapter(), project_root=tmp_path),
         project_root=tmp_path,
@@ -163,6 +241,7 @@ def test_more_than_three_failures_stops_workflow(tmp_path: Path, db_session: Ses
     assert agent_run.status == "failed"
     assert agent_run.failure_count_json["initial_skill"] == 4
     assert agent_run.final_summary_json["failure_count_json"]["initial_skill"] == 4
+    assert skill.status == "failed"
     product_manager_steps = [step for step in agent_run.steps if step.step_name == "product_manager"]
     assert product_manager_steps[-1].output_json["decision_json"]["decision"] == "stop_failed"
 
@@ -180,7 +259,14 @@ def test_builder_user_action_required_blocks_workflow(tmp_path: Path, db_session
             self.calls += 1
             if self.calls == 1:
                 result = super().generate(prompt, output_dir, plan)
-                (output_dir / "tests" / "test_skill.py").write_text("def test_fail():\n    assert False\n", encoding="utf-8")
+                (output_dir / "skill.py").write_text(
+                    "import sys\n\n"
+                    "def main():\n"
+                    "    sys.exit(1)\n\n"
+                    "if __name__ == '__main__':\n"
+                    "    main()\n",
+                    encoding="utf-8",
+                )
                 return result
             return subprocess.CompletedProcess(
                 args=["fake"],

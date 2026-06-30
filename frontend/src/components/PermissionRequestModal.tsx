@@ -23,6 +23,7 @@ export default function PermissionRequestModal({
   const blockedReasons = stringList(request.reason_json.blocked_reasons);
   const unsupportedReasons = stringList(request.reason_json.runner_unsupported);
   const expansion = request.reason_json.permission_expansion;
+  const hasExpansion = isNonEmptyObject(expansion);
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
@@ -59,10 +60,10 @@ export default function PermissionRequestModal({
           </section>
         </div>
 
-        {(blockedReasons.length > 0 || unsupportedReasons.length > 0 || Boolean(expansion)) && (
+        {(blockedReasons.length > 0 || unsupportedReasons.length > 0 || hasExpansion) && (
           <section className="permission-warning">
             <h3>Needs Attention</h3>
-            {Boolean(expansion) && <p>Permission expansion was detected compared with the original plan.</p>}
+            {hasExpansion && <p>Permission expansion was detected compared with the original plan.</p>}
             {[...blockedReasons, ...unsupportedReasons].map((reason) => (
               <p key={reason}>{reason}</p>
             ))}
@@ -144,4 +145,8 @@ function arrayLength(value: unknown): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyObject(value: unknown): boolean {
+  return isRecord(value) && Object.keys(value).length > 0;
 }

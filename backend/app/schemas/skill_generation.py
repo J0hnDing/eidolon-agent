@@ -7,6 +7,7 @@ from app.schemas.common import GenerationRequestStatus, RiskLevel, SkillType
 from app.schemas.skill import SkillRead
 from app.schemas.proposed_skill import ProposedSkillValidationRead
 from app.schemas.approval_request import ApprovalRequestRead
+from app.schemas.agent_run import AgentRunRead
 
 
 class ChatRequest(BaseModel):
@@ -62,6 +63,8 @@ class SkillGenerationApprovalResponse(BaseModel):
     permission_request: ApprovalRequestRead | None = None
     proposed_skill: SkillRead | None = None
     validation: ProposedSkillValidationRead | None = None
+    agent_run: AgentRunRead | None = None
+    runtime_permission_request: ApprovalRequestRead | None = None
 
 
 ChatResponse = DirectChatResponse | SkillGenerationPlanResponse | UnsafeChatResponse | ProjectNotPlausibleResponse

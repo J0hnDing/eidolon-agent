@@ -489,6 +489,26 @@ def test_permission_expansion_from_plan_to_manifest_is_detected(
     assert runtime_request.reason_json["permission_expansion"] == {"network": ["example.com"]}
 
 
+def test_empty_runtime_permissions_do_not_create_permission_expansion(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    generation_request = ChatOrchestrator(db_session).create_generation_request(
+        "Create a reusable local workflow skill."
+    )
+    approve_build_time_permissions(db_session, generation_request)
+
+    skill, _validation = CodexService(
+        db_session,
+        adapter=RecordingCodexAdapter(),
+        project_root=tmp_path,
+    ).generate_from_request(generation_request)
+
+    runtime_request = PermissionService(db_session, project_root=tmp_path).create_runtime_request(skill)
+    assert runtime_request.reason_json["permission_expansion"] == {}
+    assert "Permission expansion detected" not in runtime_request.user_explanation
+
+
 def test_install_decision_requires_runtime_permission_approval(
     tmp_path: Path,
     db_session: Session,

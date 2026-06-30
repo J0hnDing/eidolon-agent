@@ -1,0 +1,116 @@
+{
+  "name": "simple_wordle_game",
+  "display_name": "Simple Wordle Game",
+  "description": "A local-only Wordle-style tool that checks five-letter guesses against an embedded answer and returns colored feedback.",
+  "skill_type": "automation",
+  "interface_type": "tool",
+  "entrypoint": "skill.py",
+  "instructions_path": null,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "guesses": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 5
+        },
+        "minItems": 1,
+        "maxItems": 6
+      }
+    },
+    "required": [
+      "guesses"
+    ],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "status": {
+        "type": "string",
+        "enum": [
+          "won",
+          "lost",
+          "in_progress",
+          "invalid"
+        ]
+      },
+      "attempts_used": {
+        "type": "integer"
+      },
+      "max_attempts": {
+        "type": "integer"
+      },
+      "rows": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "guess": {
+              "type": "string"
+            },
+            "feedback": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "correct",
+                  "present",
+                  "absent"
+                ]
+              }
+            }
+          },
+          "required": [
+            "guess",
+            "feedback"
+          ]
+        }
+      },
+      "message": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "status",
+      "attempts_used",
+      "max_attempts",
+      "rows",
+      "message"
+    ],
+    "additionalProperties": false
+  },
+  "tool_ui_schema": {
+    "title": "Simple Wordle Game",
+    "description": "Play a standard six-guess Wordle-style game using local validation and feedback.",
+    "submit_label": "Check Guesses",
+    "fields": [
+      {
+        "name": "guesses",
+        "label": "Guesses",
+        "type": "textarea",
+        "placeholder": "crane\nslate",
+        "help_text": "Enter up to six five-letter guesses, one per line.",
+        "required": true,
+        "default": ""
+      }
+    ],
+    "result_template": {
+      "primary_field": "message",
+      "primary_label": "Result"
+    }
+  },
+  "risk_level": "low",
+  "permissions": {
+    "network": [],
+    "filesystem_read": [],
+    "filesystem_write": [],
+    "secrets": [],
+    "shell": false
+  },
+  "schedule": null,
+  "created_by": "codex",
+  "enabled": false
+}

@@ -374,7 +374,7 @@ export default function SkillDetailPage() {
             {runtimePermission ? runtimePermission.status : "not analyzed"}
           </span>
         </header>
-        {Boolean(runtimePermission?.reason_json?.permission_expansion) && (
+        {isNonEmptyObject(runtimePermission?.reason_json?.permission_expansion) && (
           <p className="error-text">Permission expansion detected. Review the generated manifest before approving.</p>
         )}
         <div className="button-row">
@@ -711,6 +711,10 @@ function parseRunInput(value: string): Record<string, unknown> {
     }
     throw err;
   }
+}
+
+function isNonEmptyObject(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && Object.keys(value).length > 0;
 }
 
 function ScheduleList({

@@ -266,6 +266,8 @@ export interface SkillGenerationApprovalResponse {
   permission_request: ApprovalRequest | null;
   proposed_skill: Skill | null;
   validation: ProposedSkillValidation | null;
+  agent_run: AgentRun | null;
+  runtime_permission_request: ApprovalRequest | null;
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {

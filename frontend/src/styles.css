@@ -525,7 +525,7 @@ th {
   padding: 12px 14px;
 }
 
-.message span {
+.message > span {
   display: block;
   color: #667085;
   font-size: 0.76rem;
@@ -537,6 +537,28 @@ th {
 .message p {
   margin: 0;
   white-space: pre-line;
+}
+
+.chat-approval-card {
+  display: grid;
+  gap: 12px;
+}
+
+.chat-approval-card p {
+  margin: 0;
+}
+
+.permission-inline-summary {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid #d8dee8;
+  padding-top: 10px;
+}
+
+.permission-inline-summary h3 {
+  color: #344054;
+  font-size: 0.84rem;
+  margin: 0 0 4px;
 }
 
 .message.assistant {

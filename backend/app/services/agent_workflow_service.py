@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import AgentRun, AgentRunStep, Skill, SkillGenerationRequest
+from app.schemas.proposed_skill import ProposedSkillValidationRead
 from app.services.codex_service import CodexGenerationError, CodexService
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
@@ -97,7 +98,11 @@ class AgentWorkflowService:
                 agent_run,
                 "security_reviewer",
                 milestone_name=DEFAULT_MILESTONE,
-                input_json={"generation_request_id": generation_request.id},
+                input_json={
+                    "generation_request_id": generation_request.id,
+                    "blueprint_json": blueprint,
+                    "plan_json": generation_request.plan_json,
+                },
                 logs="SecurityReviewer analyzed build-time permissions and created the approval request.",
             ),
             "waiting_for_approval",
@@ -107,6 +112,7 @@ class AgentWorkflowService:
                 "risk_level": permission_request.risk_level,
                 "product_manager_summary": pm_summary,
                 "security_reviewer_summary": security_summary,
+                "blueprint_json": blueprint,
             },
             logs=f"ProductManager: {pm_summary}\n\nSecurityReviewer: {security_summary}",
         )
@@ -140,11 +146,16 @@ class AgentWorkflowService:
                 input_json={
                     "mode": "build",
                     "generation_request_id": generation_request.id,
+                    "blueprint_json": agent_run.blueprint_json,
                     "milestone": self._current_milestone(agent_run),
                 },
                 logs="Builder is implementing the current milestone only.",
             )
-            skill, validation = self.codex_service.generate_from_request(generation_request)
+            skill, validation = self.codex_service.generate_from_request(
+                generation_request,
+                builder_writes_tests=False,
+                initial_skill_status="building",
+            )
             self._finish_step(
                 agent_run,
                 builder_step,
@@ -231,12 +242,18 @@ class AgentWorkflowService:
 
     def resume_run(self, agent_run: AgentRun) -> AgentRun:
         self._ensure_not_cancelled(agent_run)
-        if agent_run.status not in {"waiting_for_approval", "pending"}:
+        if agent_run.status not in {"waiting_for_approval", "pending", "failed"}:
             return agent_run
         if agent_run.generation_request_id:
             generation_request = self.db.get(SkillGenerationRequest, agent_run.generation_request_id)
             if generation_request is None:
                 raise AgentWorkflowError("Generation request no longer exists")
+            if generation_request.status != "approved":
+                decision = PermissionService(self.db, project_root=self.project_root).can_generate(generation_request)
+                if decision.allowed:
+                    generation_request.status = "approved"
+                    agent_run.error_message = None
+                    self.db.commit()
             self.continue_build_after_approval(generation_request)
             self.db.refresh(agent_run)
             return agent_run
@@ -288,17 +305,42 @@ class AgentWorkflowService:
         )
 
     def _test_milestone(self, agent_run: AgentRun, skill: Skill, validation: Any, milestone_name: str = DEFAULT_MILESTONE) -> Any:
+        code_files = self._skill_file_snapshot(skill)
+        tester_context = {
+            "skill_id": skill.id,
+            "blueprint_json": agent_run.blueprint_json,
+            "milestone": self._milestone_by_name(agent_run, milestone_name),
+            "code_files": code_files,
+            "responsibility": "Tester writes or updates tests, then validates manifest and test results.",
+        }
         tester_step = self._start_step(
             agent_run,
             "tester",
             milestone_name=milestone_name,
-            input_json={
-                "skill_id": skill.id,
-                "blueprint_json": agent_run.blueprint_json,
-                "milestone": self._milestone_by_name(agent_run, milestone_name),
-            },
-            logs="Tester validates manifest schema, tests, and JSON stdin/stdout expectations through the existing safe path.",
+            input_json=tester_context,
+            logs="TesterAgent uses Codex to inspect the blueprint and Builder code, write tests, then validate through the existing safe path.",
         )
+        tester_generation: dict[str, Any]
+        try:
+            tester_result = self.codex_service.write_tests_for_skill(skill, tester_context)
+            tests_written = self._existing_test_paths(skill)
+            tester_generation = {
+                "stdout": tester_result.stdout,
+                "stderr": tester_result.stderr,
+                "exit_code": tester_result.returncode,
+            }
+            validation = self.proposed_service.validate_proposed_skill(skill)
+        except CodexGenerationError as exc:
+            tests_written = self._existing_test_paths(skill)
+            tester_generation = {"stdout": "", "stderr": str(exc), "exit_code": 1}
+            validation = ProposedSkillValidationRead(
+                ok=False,
+                manifest_valid=False,
+                error_message=f"TesterAgent failed to write tests: {exc}",
+            )
+        if validation.manifest_valid:
+            skill_dir = self.proposed_service.skill_dir_for_record(skill)
+            self.codex_service.update_skill_record_from_manifest(skill, skill_dir)
         self._finish_step(
             agent_run,
             tester_step,
@@ -306,8 +348,10 @@ class AgentWorkflowService:
             output_json={
                 "test_result_json": validation.model_dump(mode="json"),
                 "failure_log": validation.error_message or validation.stderr or "",
+                "tests_written": tests_written,
+                "tester_generation": tester_generation,
             },
-            logs="Tester completed validation. No skill task was run automatically.",
+            logs="TesterAgent completed Codex-backed test writing and validation. No skill task was run automatically.",
             error_message=validation.error_message,
         )
         if not validation.ok:
@@ -331,6 +375,7 @@ class AgentWorkflowService:
             input_json={
                 "mode": "repair",
                 "skill_id": skill.id,
+                "blueprint_json": agent_run.blueprint_json,
                 "milestone": self._milestone_by_name(agent_run, milestone_name),
                 "failure_context": context,
             },
@@ -350,8 +395,7 @@ class AgentWorkflowService:
             output_json={"stdout": result.stdout, "stderr": result.stderr, "exit_code": result.returncode, "mode": "repair"},
             logs="Builder proposed a repair. The skill was not installed or run.",
         )
-        repaired_validation = self.proposed_service.validate_proposed_skill(skill)
-        return self._test_milestone(agent_run, skill, repaired_validation, milestone_name=milestone_name)
+        return self._test_milestone(agent_run, skill, None, milestone_name=milestone_name)
 
     def _product_manager_after_tests(
         self,
@@ -397,7 +441,11 @@ class AgentWorkflowService:
                 agent_run,
                 "security_reviewer",
                 milestone_name=milestone_name,
-                input_json={"skill_id": skill.id},
+                input_json={
+                    "skill_id": skill.id,
+                    "blueprint_json": agent_run.blueprint_json,
+                    "test_result_json": validation.model_dump(mode="json"),
+                },
                 logs="SecurityReviewer analyzed actual manifest runtime permissions.",
             ),
             status,
@@ -450,6 +498,7 @@ class AgentWorkflowService:
         )
         agent_run.skill_id = skill.id
         agent_run.status = "succeeded"
+        skill.status = "proposed"
         agent_run.current_step = "product_manager"
         agent_run.summary = summary
         agent_run.final_summary_json = final_summary
@@ -479,10 +528,16 @@ class AgentWorkflowService:
             error_message=summary,
         )
         agent_run.status = "failed"
+        skill.status = "failed"
         agent_run.summary = summary
         agent_run.error_message = summary
         agent_run.completed_at = utc_now()
         agent_run.final_summary_json = {"user_summary": summary, "failure_count_json": agent_run.failure_count_json}
+        if agent_run.generation_request_id:
+            generation_request = self.db.get(SkillGenerationRequest, agent_run.generation_request_id)
+            if generation_request is not None:
+                generation_request.status = "failed"
+                generation_request.error_message = validation.error_message or "Skill tests failed"
         self.db.commit()
 
     def _builder_user_action_required(
@@ -513,6 +568,7 @@ class AgentWorkflowService:
         agent_run.summary = report["exact_blocker"]
         agent_run.final_summary_json = {"user_action_required": report}
         agent_run.completed_at = utc_now()
+        self._mark_linked_skill_failed(agent_run, report["exact_blocker"])
         self.db.commit()
 
     def _prepare_repair_target(self, skill: Skill, agent_run: AgentRun) -> Skill:
@@ -661,11 +717,13 @@ class AgentWorkflowService:
         )
 
     def _security_runtime_summary(self, skill: Skill, runtime_request: Any) -> str:
+        expansion = runtime_request.reason_json.get("permission_expansion", {})
+        expansion_text = f" Permission expansion: {expansion}." if expansion else " No permission expansion was detected."
         return (
             f"Actual manifest runtime risk is {runtime_request.risk_level}. "
             f"Permissions: {runtime_request.requested_permissions_json}. "
-            f"Unsupported runner items: {runtime_request.reason_json.get('runner_unsupported', [])}. "
-            f"Permission expansion: {runtime_request.reason_json.get('permission_expansion', {})}."
+            f"Unsupported runner items: {runtime_request.reason_json.get('runner_unsupported', [])}."
+            f"{expansion_text}"
         )
 
     def _apply_combined_permission_summary(self, permission_request: Any, pm_summary: str, security_summary: str) -> None:
@@ -754,6 +812,32 @@ class AgentWorkflowService:
         )
         log_path.write_text(content, encoding="utf-8")
 
+    def _existing_test_paths(self, skill: Skill) -> list[str]:
+        try:
+            skill_dir = self.proposed_service.skill_dir_for_record(skill)
+        except Exception:
+            return []
+        tests_dir = skill_dir / "tests"
+        if not tests_dir.is_dir():
+            return []
+        paths = []
+        for path in sorted(tests_dir.rglob("test_*.py")):
+            paths.append(path.relative_to(skill_dir).as_posix())
+        return paths
+
+    def _skill_file_snapshot(self, skill: Skill) -> dict[str, str]:
+        try:
+            skill_dir = self.proposed_service.skill_dir_for_record(skill)
+        except Exception:
+            return {}
+        snapshot: dict[str, str] = {}
+        for relative_path in ("manifest.json", "README.md", "SKILL.md", "skill.py"):
+            path = skill_dir / relative_path
+            if path.is_file():
+                content = path.read_text(encoding="utf-8")
+                snapshot[relative_path] = content[:12000]
+        return snapshot
+
     def _start_step(
         self,
         agent_run: AgentRun,
@@ -808,7 +892,19 @@ class AgentWorkflowService:
             running_step.status = "failed"
             running_step.error_message = message
             running_step.ended_at = utc_now()
+        self._mark_linked_skill_failed(agent_run, message)
         self.db.commit()
+
+    def _mark_linked_skill_failed(self, agent_run: AgentRun, message: str) -> None:
+        if agent_run.skill_id:
+            skill = self.db.get(Skill, agent_run.skill_id)
+            if skill is not None and skill.status in {"building", "proposed", "failed"}:
+                skill.status = "failed"
+        if agent_run.generation_request_id:
+            generation_request = self.db.get(SkillGenerationRequest, agent_run.generation_request_id)
+            if generation_request is not None and generation_request.status not in {"cancelled"}:
+                generation_request.status = "failed"
+                generation_request.error_message = message
 
     def _ensure_not_cancelled(self, agent_run: AgentRun) -> None:
         if agent_run.status == "cancelled":

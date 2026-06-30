@@ -102,6 +102,14 @@ class RealCodexAdapter:
 class FakeCodexAdapter:
     def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
         output_dir.mkdir(parents=True, exist_ok=True)
+        if plan.get("codex_task") == "tester_write_tests":
+            self._write_tester_tests(output_dir, plan)
+            return subprocess.CompletedProcess(
+                args=["fake-codex-tester"],
+                returncode=0,
+                stdout="fake tester wrote tests",
+                stderr="",
+            )
         skill_type = plan["skill_type"]
         permissions = plan["requested_permissions"]
         manifest = {
@@ -138,21 +146,128 @@ class FakeCodexAdapter:
                 "    main()\n",
                 encoding="utf-8",
             )
-            tests_dir = output_dir / "tests"
-            tests_dir.mkdir(exist_ok=True)
-            (tests_dir / "test_skill.py").write_text(
-                "import json\n"
-                "import subprocess\n"
-                "import sys\n"
-                "from pathlib import Path\n\n"
-                "def test_generated_skill_outputs_json():\n"
-                "    skill_path = Path(__file__).resolve().parents[1] / 'skill.py'\n"
-                "    result = subprocess.run([sys.executable, str(skill_path)], input='{}', capture_output=True, text=True, timeout=5, shell=False)\n"
-                "    assert result.returncode == 0\n"
-                "    assert isinstance(json.loads(result.stdout), dict)\n",
-                encoding="utf-8",
-            )
+            if plan.get("builder_writes_tests", True):
+                tests_dir = output_dir / "tests"
+                tests_dir.mkdir(exist_ok=True)
+                (tests_dir / "test_skill.py").write_text(
+                    "import json\n"
+                    "import subprocess\n"
+                    "import sys\n"
+                    "from pathlib import Path\n\n"
+                    "def test_generated_skill_outputs_json():\n"
+                    "    skill_path = Path(__file__).resolve().parents[1] / 'skill.py'\n"
+                    "    result = subprocess.run([sys.executable, str(skill_path)], input='{}', capture_output=True, text=True, timeout=5, shell=False)\n"
+                    "    assert result.returncode == 0\n"
+                    "    assert isinstance(json.loads(result.stdout), dict)\n",
+                    encoding="utf-8",
+                )
         return subprocess.CompletedProcess(args=["fake-codex"], returncode=0, stdout="fake generation complete", stderr="")
+
+    def _write_tester_tests(self, output_dir: Path, plan: dict) -> None:
+        skill_type = plan.get("skill_type")
+        if skill_type not in {"automation", "hybrid"}:
+            return
+
+        input_schema = plan.get("input_schema")
+        output_schema = plan.get("output_schema")
+        sample_input = self._sample_input_from_schema(input_schema)
+        required_output_fields = []
+        if isinstance(output_schema, dict) and isinstance(output_schema.get("required"), list):
+            required_output_fields = [item for item in output_schema["required"] if isinstance(item, str)]
+
+        tests_dir = output_dir / "tests"
+        tests_dir.mkdir(exist_ok=True)
+        (tests_dir / "test_skill.py").write_text(
+            "import json\n"
+            "import subprocess\n"
+            "import sys\n"
+            "from pathlib import Path\n\n"
+            f"EXPECTED_NAME = {json.dumps(plan.get('skill_name'))}\n"
+            f"EXPECTED_SKILL_TYPE = {json.dumps(skill_type)}\n"
+            f"EXPECTED_INTERFACE_TYPE = {json.dumps(plan.get('interface_type', 'chat'))}\n"
+            f"SAMPLE_INPUT_JSON = {json.dumps(json.dumps(sample_input))}\n"
+            f"REQUIRED_OUTPUT_FIELDS = {json.dumps(required_output_fields)}\n\n"
+            "ROOT = Path(__file__).resolve().parents[1]\n\n"
+            "def run_skill(raw_input):\n"
+            "    skill_path = ROOT / 'skill.py'\n"
+            "    return subprocess.run(\n"
+            "        [sys.executable, str(skill_path)],\n"
+            "        input=raw_input,\n"
+            "        capture_output=True,\n"
+            "        text=True,\n"
+            "        timeout=5,\n"
+            "        shell=False,\n"
+            "    )\n\n"
+            "def parse_stdout(stdout):\n"
+            "    parsed = json.loads(stdout)\n"
+            "    assert isinstance(parsed, dict)\n"
+            "    return parsed\n\n"
+            "def test_manifest_matches_blueprint_and_safe_contract():\n"
+            "    manifest = json.loads((ROOT / 'manifest.json').read_text(encoding='utf-8'))\n"
+            "    assert manifest['name'] == EXPECTED_NAME\n"
+            "    assert manifest['skill_type'] == EXPECTED_SKILL_TYPE\n"
+            "    assert manifest.get('interface_type', 'chat') == EXPECTED_INTERFACE_TYPE\n"
+            "    assert manifest['permissions']['shell'] is False\n"
+            "    assert manifest['permissions']['secrets'] == []\n"
+            "    assert 'dependencies' not in manifest\n"
+            "    if EXPECTED_INTERFACE_TYPE == 'tool':\n"
+            "        assert isinstance(manifest.get('tool_ui_schema'), dict)\n"
+            "        assert manifest['tool_ui_schema'].get('fields')\n\n"
+            "def test_skill_accepts_representative_input_and_outputs_json_object():\n"
+            "    result = run_skill(SAMPLE_INPUT_JSON)\n"
+            "    assert result.returncode == 0, result.stderr\n"
+            "    output = parse_stdout(result.stdout)\n"
+            "    for field in REQUIRED_OUTPUT_FIELDS:\n"
+            "        assert field in output\n\n"
+            "def test_skill_handles_empty_input_without_traceback():\n"
+            "    result = run_skill('{}')\n"
+            "    assert result.returncode == 0, result.stderr\n"
+            "    parse_stdout(result.stdout)\n",
+            encoding="utf-8",
+        )
+
+    def _sample_input_from_schema(self, schema: object) -> dict:
+        if not isinstance(schema, dict) or schema.get("type") != "object":
+            return {}
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            return {}
+        required = schema.get("required")
+        field_names = required if isinstance(required, list) and required else list(properties.keys())
+        sample = {}
+        for raw_name in field_names:
+            if not isinstance(raw_name, str):
+                continue
+            sample[raw_name] = self._sample_value_for_schema(properties.get(raw_name, {}))
+        return sample
+
+    def _sample_value_for_schema(self, schema: object) -> object:
+        if not isinstance(schema, dict):
+            return "sample"
+        if "default" in schema:
+            return schema["default"]
+        enum_values = schema.get("enum")
+        if isinstance(enum_values, list) and enum_values:
+            return enum_values[0]
+        schema_type = schema.get("type")
+        if schema_type == "string":
+            min_length = int(schema.get("minLength") or schema.get("min_length") or 1)
+            max_length = schema.get("maxLength") or schema.get("max_length")
+            value = "sample"
+            if len(value) < min_length:
+                value = "a" * min_length
+            if isinstance(max_length, int) and len(value) > max_length:
+                value = value[:max_length]
+            return value
+        if schema_type in {"integer", "number"}:
+            return 1
+        if schema_type == "boolean":
+            return False
+        if schema_type == "array":
+            return []
+        if schema_type == "object":
+            return self._sample_input_from_schema(schema)
+        return "sample"
 
 
 def default_codex_adapter() -> CodexAdapter:
@@ -185,7 +300,13 @@ class CodexService:
             self.adapter = default_codex_adapter()
         self.proposed_service = ProposedSkillService(self.db, project_root=self.project_root)
 
-    def generate_from_request(self, generation_request: SkillGenerationRequest) -> tuple[Skill, object]:
+    def generate_from_request(
+        self,
+        generation_request: SkillGenerationRequest,
+        *,
+        builder_writes_tests: bool = True,
+        initial_skill_status: str = "proposed",
+    ) -> tuple[Skill, object]:
         if generation_request.status != "approved":
             raise CodexGenerationError("Generation request is not approved for generation")
         permission_decision = PermissionService(self.db, project_root=self.project_root).can_generate(
@@ -206,15 +327,16 @@ class CodexService:
         generation_request.status = "generating"
         self.db.commit()
 
-        prompt = self.build_prompt(plan, proposed_dir)
-        result = self.adapter.generate(prompt, proposed_dir, plan)
+        plan_for_adapter = {**plan, "builder_writes_tests": builder_writes_tests}
+        prompt = self.build_prompt(plan_for_adapter, proposed_dir, builder_writes_tests=builder_writes_tests)
+        result = self.adapter.generate(prompt, proposed_dir, plan_for_adapter)
         if result.returncode != 0:
             generation_request.status = "failed"
             generation_request.error_message = result.stderr or "Codex generation failed"
             self.db.commit()
             raise CodexGenerationError(generation_request.error_message)
 
-        skill = self.create_or_update_skill_record(plan, proposed_dir)
+        skill = self.create_or_update_skill_record(plan, proposed_dir, status=initial_skill_status)
         validation = self.proposed_service.validate_proposed_skill(skill)
         if validation.manifest_valid:
             self.update_skill_record_from_manifest(skill, proposed_dir)
@@ -230,11 +352,29 @@ class CodexService:
 
     def repair_skill(self, skill: Skill, failure_context: dict) -> subprocess.CompletedProcess[str]:
         skill_dir = self.proposed_service.skill_dir_for_record(skill)
-        plan = self.plan_from_skill(skill, failure_context)
+        plan = {**self.plan_from_skill(skill, failure_context), "builder_writes_tests": False}
         prompt = self.build_repair_prompt(skill, skill_dir, failure_context)
         result = self.adapter.generate(prompt, skill_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex repair failed")
+        return result
+
+    def write_tests_for_skill(self, skill: Skill, tester_context: dict) -> subprocess.CompletedProcess[str]:
+        skill_dir = self.proposed_service.skill_dir_for_record(skill)
+        plan = {
+            **self.plan_from_skill(skill, tester_context),
+            "codex_task": "tester_write_tests",
+            "blueprint_json": tester_context.get("blueprint_json", {}),
+            "milestone": tester_context.get("milestone", {}),
+            "code_files": tester_context.get("code_files", {}),
+            "input_schema": skill.input_schema_json,
+            "output_schema": skill.output_schema_json,
+            "tool_ui_schema": skill.tool_ui_schema_json,
+        }
+        prompt = self.build_tester_prompt(skill, skill_dir, tester_context)
+        result = self.adapter.generate(prompt, skill_dir, plan)
+        if result.returncode != 0:
+            raise CodexGenerationError(result.stderr or "Codex tester failed to write tests")
         return result
 
     def plan_from_skill(self, skill: Skill, failure_context: dict) -> dict:
@@ -276,13 +416,13 @@ class CodexService:
         self.db.commit()
         self.db.refresh(skill)
 
-    def create_or_update_skill_record(self, plan: dict, proposed_dir: Path) -> Skill:
+    def create_or_update_skill_record(self, plan: dict, proposed_dir: Path, *, status: str = "proposed") -> Skill:
         skill = self.db.scalar(select(Skill).where(Skill.name == plan["skill_name"]))
         values = {
             "description": plan["goal"],
             "skill_type": plan["skill_type"],
             "interface_type": plan.get("interface_type", "chat"),
-            "status": "proposed",
+            "status": status,
             "risk_level": plan["risk_level"],
             "manifest_path": self.relative_path(proposed_dir / "manifest.json"),
             "instructions_path": "SKILL.md" if plan["skill_type"] in {"instruction", "hybrid"} else None,
@@ -302,7 +442,17 @@ class CodexService:
         self.db.refresh(skill)
         return skill
 
-    def build_prompt(self, plan: dict, output_dir: Path) -> str:
+    def build_prompt(self, plan: dict, output_dir: Path, *, builder_writes_tests: bool = True) -> str:
+        test_file_rule = (
+            "- skill.py and tests/test_skill.py for automation or hybrid skills"
+            if builder_writes_tests
+            else "- skill.py for automation or hybrid skills. Do not create or edit tests; TesterAgent owns tests."
+        )
+        test_requirement = (
+            "- tests must not require installing packages"
+            if builder_writes_tests
+            else "- do not create, modify, or delete tests. TesterAgent will inspect the implementation and write tests separately."
+        )
         return f"""
 You are generating an application skill for the Local-First Self-Extending Personal AI Assistant.
 
@@ -329,7 +479,7 @@ Required files:
 - manifest.json
 - README.md
 - SKILL.md for instruction or hybrid skills
-- skill.py and tests/test_skill.py for automation or hybrid skills
+{test_file_rule}
 
 Manifest requirements:
 - Use the plan skill_name, skill_type, risk_level, and requested_permissions exactly.
@@ -348,7 +498,7 @@ Executable skill requirements:
 - handle errors by returning JSON where possible
 - no side effects on import
 - use a main guard
-- tests must not require installing packages
+{test_requirement}
 
 Instruction skill requirements:
 - no skill.py required
@@ -376,13 +526,46 @@ Rules:
 - Do not add secrets, broad filesystem access, unrestricted network access, email/calendar/finance actions, browser automation, purchases, public posting, or file deletion.
 - Preserve manifest.json, README.md, and required skill files.
 - Preserve or reduce permissions unless the failure cannot be fixed without a declared permission change.
-- Automation and hybrid skills must keep tests/test_skill.py.
+- Do not create or edit tests; TesterAgent owns tests.
 - Executable skills must read JSON from stdin and return JSON on stdout.
 
 Failure context:
 {json.dumps(failure_context, indent=2)}
 
 Repair the current milestone using the provided Tester failure context so validation can be rerun. Return no prose; write files only.
+""".strip()
+
+    def build_tester_prompt(self, skill: Skill, output_dir: Path, tester_context: dict) -> str:
+        return f"""
+You are TesterAgent for the Local-First Self-Extending Personal AI Assistant.
+
+Your job is to understand the ProductManager blueprint, inspect Builder's current skill files, and write focused pytest tests.
+
+Controlled skill folder:
+{output_dir}
+
+Hard rules:
+- Write only this file: tests/test_skill.py.
+- Do not edit manifest.json, README.md, SKILL.md, skill.py, cache files, app source code, project metadata, or git files.
+- Do not install packages.
+- Do not run the skill task outside pytest test code.
+- Do not require network, secrets, shell commands, package installation, browser automation, email/calendar/finance actions, public posting, purchases, trading, or file deletion.
+- Use only Python standard library and pytest.
+- Keep tests rich enough to catch realistic behavior bugs, but not brittle or overly complex.
+- Prefer 3 to 6 tests.
+- Test the manifest contract, representative successful input, JSON stdin/stdout contract, and one or two important edge cases from the blueprint.
+- If interface_type is tool, verify the manifest has a declarative tool_ui_schema with fields.
+- Use subprocess to execute skill.py for end-to-end JSON stdin/stdout checks.
+- Avoid stale assumptions: derive expectations from the blueprint and the current code/manifest shown below.
+- Return no prose. Write files only.
+
+Skill:
+- name: {skill.name}
+- skill_type: {skill.skill_type}
+- interface_type: {skill.interface_type}
+
+Tester context:
+{json.dumps(tester_context, indent=2)}
 """.strip()
 
     def relative_path(self, path: Path) -> str:

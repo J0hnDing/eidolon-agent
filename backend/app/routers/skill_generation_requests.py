@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import SkillGenerationRequest
+from app.models import ApprovalRequest, SkillGenerationRequest
 from app.schemas.skill_generation import (
     SkillGenerationApprovalResponse,
     SkillGenerationRequestRead,
@@ -49,15 +49,25 @@ def approve_generation_request(
     generation_request.status = "approved"
     db.commit()
     try:
-        _agent_run, skill, validation = AgentWorkflowService(db).continue_build_after_approval(generation_request)
+        agent_run, skill, validation = AgentWorkflowService(db).continue_build_after_approval(generation_request)
     except (AgentWorkflowError, CodexGenerationError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     db.refresh(generation_request)
+    runtime_permission_request = None
+    if skill is not None:
+        runtime_permission_request = db.scalar(
+            select(ApprovalRequest)
+            .where(ApprovalRequest.skill_id == skill.id)
+            .where(ApprovalRequest.request_scope == "runtime")
+            .order_by(ApprovalRequest.created_at.desc(), ApprovalRequest.id.desc())
+        )
     return SkillGenerationApprovalResponse(
         generation_request=generation_request,
         permission_request=permission_request,
         proposed_skill=skill,
         validation=validation,
+        agent_run=agent_run,
+        runtime_permission_request=runtime_permission_request,
     )
 
 
