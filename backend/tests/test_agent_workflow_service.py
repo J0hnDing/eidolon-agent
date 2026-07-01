@@ -46,6 +46,30 @@ def test_product_manager_creates_blueprint_and_milestones(db_session: Session) -
     assert security_step.input_json["blueprint_json"]["skill_name"] == building_skill.name
 
 
+def test_product_manager_uses_codex_adapter_for_blueprint_and_summary(tmp_path: Path, db_session: Session) -> None:
+    generation_request = create_generation_request(db_session)
+
+    class RecordingAdapter(FakeCodexAdapter):
+        def __init__(self) -> None:
+            self.tasks: list[str] = []
+
+        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            task = plan.get("codex_task")
+            if task:
+                self.tasks.append(task)
+            return super().generate(prompt, output_dir, plan)
+
+    adapter = RecordingAdapter()
+    AgentWorkflowService(
+        db_session,
+        codex_service=CodexService(db_session, adapter=adapter, project_root=tmp_path),
+        project_root=tmp_path,
+    ).create_build_run(generation_request)
+
+    assert "product_manager_build_blueprint" in adapter.tasks
+    assert "product_manager_summary" in adapter.tasks
+
+
 def test_approval_updates_waiting_security_reviewer_step(db_session: Session) -> None:
     response = ChatOrchestrator(db_session).handle_message("Create a reusable local workflow skill.", mode="project")
     permission_request = response["permission_request"]
@@ -165,8 +189,8 @@ def test_tester_agent_invokes_codex_with_blueprint_and_code_context(tmp_path: Pa
     tester_plan = tester_plans[0]
     assert tester_plan["blueprint_json"]["skill_name"] == skill.name
     assert "skill.py" in tester_plan["code_files"]
-    assert "You are TesterAgent" in adapter.prompts[-1]
-    assert "Write only this file: tests/test_skill.py" in adapter.prompts[-1]
+    assert any("You are TesterAgent" in prompt for prompt in adapter.prompts)
+    assert any("Write only this file: tests/test_skill.py" in prompt for prompt in adapter.prompts)
     builder_plans = [plan for plan in adapter.plans if plan.get("codex_task") != "tester_write_tests"]
     assert builder_plans[0]["builder_writes_tests"] is False
     assert agent_run.status == "succeeded"
@@ -182,6 +206,8 @@ def test_failed_test_triggers_builder_repair(tmp_path: Path, db_session: Session
             self.calls = 0
 
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            if plan.get("codex_task", "").startswith("product_manager"):
+                return super().generate(prompt, output_dir, plan)
             self.calls += 1
             result = super().generate(prompt, output_dir, plan)
             if self.calls == 1:
@@ -295,6 +321,8 @@ def test_security_reviewer_records_permission_expansion(tmp_path: Path, db_sessi
     class ExpandedPermissionAdapter(FakeCodexAdapter):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             result = super().generate(prompt, output_dir, plan)
+            if plan.get("codex_task", "").startswith("product_manager"):
+                return result
             manifest_path = output_dir / "manifest.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest["permissions"]["network"] = ["example.com"]

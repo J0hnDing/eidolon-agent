@@ -50,6 +50,29 @@ def ensure_local_schema() -> None:
                 connection.execute(text("ALTER TABLE skills ADD COLUMN output_schema_json JSON"))
             if "tool_ui_schema_json" not in columns:
                 connection.execute(text("ALTER TABLE skills ADD COLUMN tool_ui_schema_json JSON"))
+            if "active_version_id" not in columns:
+                connection.execute(text("ALTER TABLE skills ADD COLUMN active_version_id INTEGER"))
+        if "skill_versions" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("skill_versions")}
+            if "status" not in columns:
+                connection.execute(text("ALTER TABLE skill_versions ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'draft'"))
+            if "folder_path" not in columns:
+                connection.execute(text("ALTER TABLE skill_versions ADD COLUMN folder_path VARCHAR(512) NOT NULL DEFAULT ''"))
+                connection.execute(text("UPDATE skill_versions SET folder_path = code_snapshot_path WHERE folder_path = ''"))
+            if "activated_at" not in columns:
+                connection.execute(text("ALTER TABLE skill_versions ADD COLUMN activated_at DATETIME"))
+            if "created_by" not in columns:
+                connection.execute(text("ALTER TABLE skill_versions ADD COLUMN created_by VARCHAR(32) NOT NULL DEFAULT 'system'"))
+            if "parent_version_id" not in columns:
+                connection.execute(text("ALTER TABLE skill_versions ADD COLUMN parent_version_id INTEGER"))
+            if "permission_fingerprint" not in columns:
+                connection.execute(text("ALTER TABLE skill_versions ADD COLUMN permission_fingerprint VARCHAR(128) NOT NULL DEFAULT ''"))
+            if "test_status" not in columns:
+                connection.execute(text("ALTER TABLE skill_versions ADD COLUMN test_status VARCHAR(32) NOT NULL DEFAULT 'not_run'"))
+            if "validation_status" not in columns:
+                connection.execute(text("ALTER TABLE skill_versions ADD COLUMN validation_status VARCHAR(32) NOT NULL DEFAULT 'not_run'"))
+            if "changelog" not in columns:
+                connection.execute(text("ALTER TABLE skill_versions ADD COLUMN changelog TEXT"))
         if "agent_runs" in table_names:
             columns = {column["name"] for column in inspector.get_columns("agent_runs")}
             if "current_milestone" not in columns:

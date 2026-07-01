@@ -12,6 +12,8 @@ import {
   SkillFile,
   SkillRun,
   SkillSchedule,
+  SkillVersion,
+  SkillVersionComparison,
   api,
 } from "../api/client";
 
@@ -26,6 +28,10 @@ export default function SkillDetailPage() {
   const [runnerStatus, setRunnerStatus] = useState<RunnerStatus | null>(null);
   const [schedules, setSchedules] = useState<SkillSchedule[]>([]);
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
+  const [versions, setVersions] = useState<SkillVersion[]>([]);
+  const [versionComparison, setVersionComparison] = useState<SkillVersionComparison | null>(null);
+  const [updateSuggestion, setUpdateSuggestion] = useState("");
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
   const [showRuntimeModal, setShowRuntimeModal] = useState(false);
   const [runInput, setRunInput] = useState('{\n  "hello": "world"\n}');
   const [scheduleName, setScheduleName] = useState("Daily run");
@@ -49,7 +55,7 @@ export default function SkillDetailPage() {
       setError(null);
       try {
         const id = Number(skillId);
-        const [loadedSkill, loadedRuns, loadedFiles, permissionRequests, loadedRunnerStatus, loadedSchedules, loadedAgentRuns] = await Promise.all([
+        const [loadedSkill, loadedRuns, loadedFiles, permissionRequests, loadedRunnerStatus, loadedSchedules, loadedAgentRuns, loadedVersions] = await Promise.all([
           api.getSkill(id),
           api.listSkillRuns(id),
           api.listSkillFiles(id),
@@ -57,6 +63,7 @@ export default function SkillDetailPage() {
           api.getRunnerStatus(),
           api.listSchedules(id),
           api.listAgentRuns(),
+          api.listSkillVersions(id).catch(() => []),
         ]);
         setSkill(loadedSkill);
         setRuns(loadedRuns);
@@ -65,6 +72,7 @@ export default function SkillDetailPage() {
         setRunnerStatus(loadedRunnerStatus);
         setSchedules(loadedSchedules);
         setAgentRuns(loadedAgentRuns.filter((run) => run.skill_id === id));
+        setVersions(loadedVersions);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not load skill");
       } finally {
@@ -166,6 +174,76 @@ export default function SkillDetailPage() {
       setAgentRuns((current) => [agentRun, ...current.filter((run) => run.id !== agentRun.id)]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not start repair agent run");
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function refreshVersions() {
+    if (!skill) return;
+    setVersions(await api.listSkillVersions(skill.id));
+  }
+
+  async function handleSuggestUpdate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!skill) return;
+    setIsWorking(true);
+    setError(null);
+    setUpdateMessage(null);
+    try {
+      const response = await api.suggestSkillUpdate(skill.id, updateSuggestion);
+      setUpdateMessage(response.message);
+      setUpdateSuggestion("");
+      await refreshVersions();
+      const loadedAgentRuns = await api.listAgentRuns();
+      setAgentRuns(loadedAgentRuns.filter((run) => run.skill_id === skill.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start update workflow");
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function handleActivateVersion(versionId: number) {
+    if (!skill) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      const updated = await api.activateSkillVersion(skill.id, versionId);
+      setSkill(updated);
+      setFiles(await api.listSkillFiles(updated.id));
+      await refreshVersions();
+      setRuntimePermission((await api.listPermissionRequests({ skill_id: updated.id, request_scope: "runtime" }))[0] ?? null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not activate version");
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function handleDiscardVersion(versionId: number) {
+    if (!skill) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      await api.discardSkillVersion(skill.id, versionId);
+      setVersionComparison(null);
+      await refreshVersions();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not discard version");
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function handleCompareVersion(versionId: number) {
+    if (!skill) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      setVersionComparison(await api.compareSkillVersion(skill.id, versionId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not compare version");
     } finally {
       setIsWorking(false);
     }
@@ -350,6 +428,10 @@ export default function SkillDetailPage() {
             <dd>{skill.installed_path ?? "not installed"}</dd>
           </div>
           <div>
+            <dt>Active Version</dt>
+            <dd>{versions.find((version) => version.id === skill.active_version_id)?.version ?? skill.active_version_id ?? "none"}</dd>
+          </div>
+          <div>
             <dt>Input Schema</dt>
             <dd>{skill.input_schema_json ? "declared" : "none"}</dd>
           </div>
@@ -358,6 +440,48 @@ export default function SkillDetailPage() {
             <dd>{skill.output_schema_json ? "declared" : "none"}</dd>
           </div>
         </dl>
+      </section>
+
+      <section className="detail-panel">
+        <header className="page-header">
+          <div>
+            <h2>Versions</h2>
+            <p className="muted">
+              Updates are built in copied version folders. Activating a version switches the active pointer only after validation and permission checks.
+            </p>
+          </div>
+          <span className="badge">{versions.length}/3 versions</span>
+        </header>
+        {versions.length >= 3 && (
+          <p className="error-text">Maximum 3 versions reached. Discard a draft or proposed update before creating another.</p>
+        )}
+        {skill.status === "installed" && (
+          <form className="form-panel" onSubmit={handleSuggestUpdate}>
+            <h3>Suggest an Improvement</h3>
+            <textarea
+              value={updateSuggestion}
+              onChange={(event) => setUpdateSuggestion(event.target.value)}
+              placeholder="Describe a specific improvement to this skill"
+              rows={4}
+              required
+            />
+            <div className="button-row">
+              <button type="submit" disabled={isWorking || versions.length >= 3}>
+                Start Update Workflow
+              </button>
+            </div>
+            {updateMessage && <p className="muted">{updateMessage}</p>}
+          </form>
+        )}
+        <VersionList
+          versions={versions}
+          activeVersionId={skill.active_version_id}
+          isWorking={isWorking}
+          onCompare={handleCompareVersion}
+          onActivate={handleActivateVersion}
+          onDiscard={handleDiscardVersion}
+        />
+        {versionComparison && <VersionComparisonPanel comparison={versionComparison} />}
       </section>
 
       <section className="detail-panel">
@@ -715,6 +839,88 @@ function parseRunInput(value: string): Record<string, unknown> {
 
 function isNonEmptyObject(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Array.isArray(value) && Object.keys(value).length > 0;
+}
+
+function VersionList({
+  versions,
+  activeVersionId,
+  isWorking,
+  onCompare,
+  onActivate,
+  onDiscard,
+}: {
+  versions: SkillVersion[];
+  activeVersionId: number | null;
+  isWorking: boolean;
+  onCompare: (id: number) => void;
+  onActivate: (id: number) => void;
+  onDiscard: (id: number) => void;
+}) {
+  if (versions.length === 0) {
+    return <p className="muted">No versions have been initialized for this skill yet.</p>;
+  }
+  return (
+    <div className="run-list">
+      {versions.map((version) => {
+        const isActive = version.id === activeVersionId || version.status === "active";
+        const canActivate = version.status === "proposed_update" && !isActive;
+        const canDiscard = !isActive && (version.status === "draft" || version.status === "proposed_update");
+        return (
+          <article key={version.id} className="run-row">
+            <div>
+              <strong>{version.version}</strong>
+              <span>{version.changelog || version.change_summary || "No changelog provided."}</span>
+              <span>
+                Validation: {version.validation_status} / Tests: {version.test_status}
+              </span>
+              <span>{version.folder_path}</span>
+            </div>
+            <div className="button-row">
+              <span className={`badge status-${version.status}`}>{version.status}</span>
+              <button type="button" className="secondary" onClick={() => onCompare(version.id)} disabled={isWorking}>
+                Compare
+              </button>
+              {canActivate && (
+                <button type="button" onClick={() => onActivate(version.id)} disabled={isWorking}>
+                  Activate
+                </button>
+              )}
+              {canDiscard && (
+                <button type="button" className="danger" onClick={() => onDiscard(version.id)} disabled={isWorking}>
+                  Discard
+                </button>
+              )}
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function VersionComparisonPanel({ comparison }: { comparison: SkillVersionComparison }) {
+  return (
+    <div className="version-compare">
+      <h3>
+        Compare {comparison.candidate_version.version} with active {comparison.active_version.version}
+      </h3>
+      {comparison.files.map((file) => (
+        <details key={file.path} className="run-detail">
+          <summary>{file.path}</summary>
+          <div className="compare-grid">
+            <section>
+              <h4>Active</h4>
+              <pre>{file.active ?? "File not present."}</pre>
+            </section>
+            <section>
+              <h4>Candidate</h4>
+              <pre>{file.candidate ?? "File not present."}</pre>
+            </section>
+          </div>
+        </details>
+      ))}
+    </div>
+  );
 }
 
 function ScheduleList({

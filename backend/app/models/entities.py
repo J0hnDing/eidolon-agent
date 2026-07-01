@@ -57,6 +57,7 @@ class Skill(Base):
     output_schema_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     tool_ui_schema_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     installed_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    active_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -79,10 +80,19 @@ class SkillVersion(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id"), nullable=False, index=True)
     version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)
+    folder_path: Mapped[str] = mapped_column(String(512), default="", nullable=False)
     manifest_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     code_snapshot_path: Mapped[str] = mapped_column(String(512), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(32), default="system", nullable=False)
+    parent_version_id: Mapped[int | None] = mapped_column(ForeignKey("skill_versions.id"), nullable=True, index=True)
+    permission_fingerprint: Mapped[str] = mapped_column(String(128), default="", nullable=False, index=True)
+    test_status: Mapped[str] = mapped_column(String(32), default="not_run", nullable=False)
+    validation_status: Mapped[str] = mapped_column(String(32), default="not_run", nullable=False)
     change_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    changelog: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     skill: Mapped["Skill"] = relationship(back_populates="versions")
 
@@ -103,6 +113,17 @@ class SkillRun(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     skill: Mapped["Skill"] = relationship(back_populates="runs")
+
+
+class SkillOperationLock(Base):
+    __tablename__ = "skill_operation_locks"
+
+    skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id"), primary_key=True)
+    operation: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    skill: Mapped["Skill"] = relationship()
 
 
 class SkillSchedule(Base):

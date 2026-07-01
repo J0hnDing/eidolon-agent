@@ -19,6 +19,7 @@ class SkillBase(BaseModel):
     output_schema_json: dict[str, Any] | None = None
     tool_ui_schema_json: dict[str, Any] | None = None
     installed_path: str | None = Field(default=None, max_length=512)
+    active_version_id: int | None = None
     enabled: bool = False
 
 
@@ -39,6 +40,7 @@ class SkillUpdate(BaseModel):
     output_schema_json: dict[str, Any] | None = None
     tool_ui_schema_json: dict[str, Any] | None = None
     installed_path: str | None = Field(default=None, max_length=512)
+    active_version_id: int | None = None
     enabled: bool | None = None
 
 

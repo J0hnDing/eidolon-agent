@@ -592,7 +592,7 @@ def test_run_decision_blocks_without_runtime_approval(tmp_path: Path, db_session
     assert decision.reason == "Runtime permission request is pending"
 
 
-def test_run_decision_blocks_approved_but_unsupported_network(
+def test_run_decision_allows_approved_network_permissions(
     tmp_path: Path,
     db_session: Session,
 ) -> None:
@@ -610,8 +610,7 @@ def test_run_decision_blocks_approved_but_unsupported_network(
     permission_service.approve_request(request)
 
     decision = permission_service.can_run(skill)
-    assert decision.allowed is False
-    assert "current runner cannot enforce domain-level network sandboxing" in decision.reason
+    assert decision.allowed is True
 
 
 def test_run_decision_allows_approved_supported_permissions(
@@ -686,7 +685,7 @@ def test_generated_hybrid_validation_runs_tests_but_not_skill_task(
     assert not (skill_dir / "task_executed.txt").exists()
 
 
-def test_network_requesting_generated_skill_is_not_runnable_under_current_runner(
+def test_network_requesting_generated_skill_can_be_approved_for_runtime(
     tmp_path: Path,
     db_session: Session,
 ) -> None:
@@ -701,23 +700,15 @@ def test_network_requesting_generated_skill_is_not_runnable_under_current_runner
     ).generate_from_request(generation_request)
 
     assert validation.warnings == [
-        "This skill requests network access, but the current runner does not support networked execution yet."
+        "This skill requests network access. Runtime execution requires explicit approval and uses container network access in the current MVP."
     ]
 
-    installed = ProposedSkillService(db_session, project_root=tmp_path).install_proposed_skill(skill)
-    installed.enabled = True
-    db_session.commit()
+    permission_service = PermissionService(db_session, project_root=tmp_path)
+    runtime_request = permission_service.create_runtime_request(skill)
+    permission_service.approve_request(runtime_request)
 
-    from app.services.skill_runner import SkillRunner
-
-    run = SkillRunner(db_session).run(
-        skill_id=installed.id,
-        skill_dir=ProposedSkillService(db_session, project_root=tmp_path).skill_dir_for_record(installed),
-        input_json={},
-    )
-
-    assert run.status == "blocked"
-    assert run.error_message == "network permissions are not supported by the current runner"
+    assert runtime_request.requested_network_domains_json == ["nvidia.com"]
+    assert permission_service.can_run(skill).allowed is True
 
 
 def test_generated_instruction_skill_does_not_require_tests_and_cannot_run(

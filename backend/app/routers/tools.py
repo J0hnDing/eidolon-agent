@@ -11,6 +11,7 @@ from app.schemas.skill_run import SkillRunRequest
 from app.schemas.tool import ToolRead, ToolRunResponse
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
+from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
 from app.services.skill_runner import get_skill_runner
 
 
@@ -72,7 +73,11 @@ def run_tool(
     if not permission_decision.allowed:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=permission_decision.reason)
 
-    run = get_skill_runner(db).run(skill_id=skill.id, skill_dir=resolve_skill_dir(skill), input_json=payload.input)
+    try:
+        with SkillOperationGuard(db).locked(skill, "run", reason="Tool run"):
+            run = get_skill_runner(db).run(skill_id=skill.id, skill_dir=resolve_skill_dir(skill), input_json=payload.input)
+    except SkillOperationConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return ToolRunResponse(skill=skill, run=run)
 
 

@@ -43,13 +43,36 @@ These decisions supersede older milestone wording when there is a conflict:
 4. Skill generation requires build-time permission approval before Codex writes files.
 5. Installing or running a generated skill requires runtime permission review based on the actual generated `manifest.json`, not only the initial plan.
 6. Approval to generate does not approve installation. Approval to install does not approve automatic execution. Skills never run automatically in the MVP.
-7. Runtime network domains may be approved as declared design intent, but the current local runner cannot enforce domain-level network sandboxing. Networked skills must remain blocked from execution until sandboxing exists.
+7. Runtime network domains may be approved and executed after runtime approval. The Docker runner enables container network access for approved networked skills, but domain-level egress filtering is not yet enforced. Skills must still declare explicit domains; wildcard or unrestricted network access remains blocked.
 8. Skill deletion is a hard delete in the local MVP: remove the controlled skill folder and remove the skill database record. Do not leave deleted skills visible in the normal Skills list.
 9. Installed skill folders found on disk under `skills/installed/<skill_name>/` may be registered into the local database if their manifest is valid. This keeps filesystem state and the UI list from drifting apart.
 10. A user-facing tool is not a new `skill_type`. It is an installed runnable automation or hybrid skill with `interface_type = "tool"`. Codex may design a tool UI by writing declarative `tool_ui_schema` JSON in `manifest.json`; generated skills must not inject React, HTML, JavaScript, or app frontend code.
 11. Skill status `building` means an agent workflow is creating or repairing the skill. Status `proposed` means generation is complete and the skill is waiting for user review, runtime permission approval, installation, or rejection.
 12. Build-time and runtime approval prompts should appear inline in the Chat transcript as assistant messages with approve/decline actions. They should not be route-local modal state that disappears when the user switches pages.
 13. Approving build-time permissions from either Chat or the Approval Requests page must mark the linked generation request approved so the agent workflow can resume safely.
+14. Skill operation concurrency is guarded per skill, not globally. One skill may not have overlapping run/install/update/repair/delete operations, but unrelated skills and normal chat may proceed in parallel.
+15. Installed skills use versioned active folders. Updates must copy the active version into a new draft/proposed version folder and must never mutate the active version in place.
+16. A skill may have at most 3 non-discarded versions in the local MVP. The app must block new version creation until the user discards a draft/proposed version or otherwise frees a slot.
+17. Activating a new skill version switches `active_version_id` and active paths only after validation/tests pass and runtime permissions are approved when permissions changed.
+
+---
+
+## Current MVP Limitations
+
+These limitations are intentional until the next safety layers are implemented:
+
+1. Runtime network access is permission-gated, but not domain-firewalled yet. A skill must declare explicit network domains and receive runtime approval, but the Docker runner currently enables general container network access for approved networked skills. Domain-level egress filtering is a known gap.
+2. Build-time package installation is approval-gated. Approved Python dependencies may be installed into the proposed skill's local `.deps` folder for validation and tests, but the app must not silently install packages.
+3. Package dependency declarations must be simple Python package names or version specifiers. URLs, Git references, local paths, editable installs, shell flags, direct references, and generated-skill Dockerfiles are blocked.
+4. Runtime package installation is not supported. Installed skills may use dependencies copied from the approved proposed skill `.deps` folder, but skills must not install packages during execution.
+5. Docker sandbox execution requires Docker and the trusted runner image. If Docker is unavailable, local/dev execution must be explicitly selected and treated as less isolated.
+6. The MVP still blocks shell access, secrets, filesystem reads, broad filesystem writes, browser automation, email/calendar/finance actions, public posting, purchases, trading, file deletion, and arbitrary command execution.
+7. Scheduled runs use the same permission checks as manual runs. Approval for a schedule does not bypass runtime permission approval, runner support checks, or the requirement that the user installed and enabled the skill.
+8. Tool UIs are declarative only. Generated skills may provide `tool_ui_schema` data, but must not inject React, HTML, JavaScript, or app source code.
+9. Skill operation locks are local database locks with stale-lock cleanup. They are intended for the local MVP process model, not as a distributed lock system for multi-user or multi-host deployments.
+10. Version comparison is file-based in the MVP. The UI shows active-vs-candidate file contents, not a rich semantic diff engine.
+11. ProductManager, Builder, and Tester are Codex-backed agents. ProductManager must use Codex for plausibility judgment, blueprints, update review, decisions, and user-facing summaries; backend deterministic logic may only validate or safely fall back when Codex output is unusable.
+12. SecurityReviewer is the exception for now: it is backend-owned deterministic permission logic so blocked permissions cannot be negotiated away by generated text.
 
 ---
 
@@ -165,6 +188,23 @@ The UI must show:
 - Delete / disable / run buttons
 - Approval requests
 
+### 9. Per-skill operation safety
+
+The app should prevent race conditions without blocking unrelated work.
+
+Use a per-skill operation guard for these rules:
+
+```text
+- one run per skill at a time by default
+- one install/update operation per skill at a time
+- no run while the same skill is being installed, repaired, or deleted
+- no install/update/repair/delete while the same skill has an active run
+- no delete while a run is active
+- no global queue for normal chat or unrelated skills
+```
+
+The operation guard should be backend-enforced. Frontend buttons may be disabled for clarity, but UI state must not be the source of truth.
+
 ---
 
 ## Recommended Tech Stack
@@ -243,6 +283,7 @@ Agents must not freely chat with each other, spawn other agents, run indefinitel
 #### ProductManagerAgent
 
 ProductManagerAgent owns workflow direction and user-facing project judgment.
+ProductManagerAgent is Codex-backed in the MVP. The backend must call Codex for ProductManager blueprinting, update review, milestone decisions, and user-facing summaries, then validate the structured JSON output before using it.
 
 It runs at these decision points:
 
@@ -292,6 +333,8 @@ bypass failed tests
 bypass SecurityReviewerAgent
 ```
 
+Backend deterministic ProductManager logic is allowed only as a safety fallback when Codex is unavailable or returns invalid structured output. It must not be the primary path for ProductManager decisions.
+
 #### BuilderAgent
 
 BuilderAgent writes and modifies skill files inside controlled skill folders.
@@ -327,7 +370,7 @@ unsupported runtime permission
 package installation needed but not approved/supported
 unclear product requirement
 conflict between user request and AGENTS.md safety rules
-network/domain access required but current runtime sandbox cannot support it
+network/domain access required but not declared or approved
 file access requiring a user-selected path
 ```
 
@@ -386,6 +429,7 @@ ignore failing tests
 #### SecurityReviewerAgent
 
 SecurityReviewerAgent handles permissions, risk, and runtime support review.
+SecurityReviewerAgent is deterministic/backend-owned in the MVP. It does not use Codex for permission approval decisions because permission blocking must remain enforceable and non-negotiable.
 
 Responsibilities:
 
@@ -429,7 +473,7 @@ trading
 file deletion
 ```
 
-Runtime network domains may be approved as declared design intent, but execution must remain blocked until sandboxing can enforce network access.
+Runtime network domains may be approved and executed after runtime approval. The MVP does not yet enforce domain-level egress filtering inside Docker, so SecurityReviewer must explain that approved domains are an intent/policy record rather than a firewall allowlist.
 
 #### Combined Approval Summary
 
@@ -539,12 +583,21 @@ skills/
       cache/
   installed/
     ai_news_digest/
-      manifest.json
-      skill.py
-      README.md
-      tests/
-        test_skill.py
-      cache/
+      versions/
+        v1/
+          manifest.json
+          skill.py
+          README.md
+          tests/
+            test_skill.py
+          cache/
+        v2/
+          manifest.json
+          skill.py
+          README.md
+          tests/
+            test_skill.py
+          cache/
 ```
 
 Every skill must have:
@@ -580,6 +633,7 @@ Example:
   "input_schema": null,
   "output_schema": null,
   "tool_ui_schema": null,
+  "dependencies": ["requests", "beautifulsoup4"],
   "risk_level": "low",
   "permissions": {
     "network": ["reuters.com", "apnews.com", "nvidia.com", "amd.com"],
@@ -592,6 +646,22 @@ Example:
   "created_by": "codex",
   "enabled": false
 }
+```
+
+### Skill Dependencies
+
+`dependencies` is optional and lists Python packages required by an automation or hybrid skill.
+
+Rules:
+
+```text
+- dependencies require build-time approval before installation
+- dependencies are installed only into the proposed skill's local .deps folder
+- approved dependencies may be copied with the skill when installed
+- generated skills must not install packages at runtime
+- dependency specs must be simple package names or version specifiers
+- URLs, Git refs, local paths, editable installs, shell flags, direct references, and generated Dockerfiles are blocked
+- instruction-only skills must not require executable dependencies
 ```
 
 ### Skill Input and Output
@@ -640,6 +710,7 @@ memory_facts
 skills
 skill_versions
 skill_runs
+skill_operation_locks
 approval_requests
 ```
 
@@ -680,6 +751,7 @@ risk_level
 manifest_path
 instructions_path
 installed_path
+active_version_id
 created_at
 updated_at
 enabled
@@ -702,10 +774,41 @@ deleted
 id
 skill_id
 version
+status
+folder_path
 manifest_json
 code_snapshot_path
+activated_at nullable
+created_by
+parent_version_id nullable
+permission_fingerprint
+test_status
+validation_status
 created_at
 change_summary
+changelog
+```
+
+Status values:
+
+```text
+active
+draft
+proposed_update
+archived
+discarded
+```
+
+Rules:
+
+```text
+- active installed skill paths point at the active version folder
+- update workflows copy the active version into a new draft/proposed version folder
+- active version folders are never modified in place
+- activating a version only switches the active pointer after validation/tests pass
+- permission changes require runtime approval before activation
+- unchanged permissions do not require runtime reapproval
+- maximum 3 non-discarded versions per skill
 ```
 
 ### skill_runs
@@ -732,6 +835,21 @@ running
 succeeded
 failed
 blocked
+```
+
+### skill_operation_locks
+
+```text
+skill_id
+operation
+reason
+created_at
+```
+
+Purpose:
+
+```text
+Prevent overlapping per-skill operations such as concurrent runs, install while running, delete while running, or run while install/repair/delete is active.
 ```
 
 ### approval_requests
@@ -911,7 +1029,7 @@ It should:
 5. Include tests.
 6. Use only low-risk permissions.
 
-Do not use live RSS fetching, arbitrary web scraping, or browser automation yet. Networked news fetching comes after sandbox/network enforcement.
+Live RSS fetching and simple HTTP scraping are allowed only for installed automation/hybrid skills with explicit runtime network permissions approved by the user. Browser automation remains out of scope.
 
 ### Milestone 5: Proposed Skill Workflow
 
@@ -1007,7 +1125,7 @@ runtime - approval for permissions declared in the generated manifest
 
 Runtime approval must be based on the generated manifest. Permission expansion from the build-time plan must be shown clearly. Blocked permissions, including shell access, secrets, broad filesystem access, and unrestricted network access, must not be approved in the MVP.
 
-Runtime network domains can be approved as an intent recorded in the manifest, but execution must remain blocked until sandboxing can enforce network access.
+Runtime network domains can be approved and executed after runtime approval. Docker runtime uses container network access for such skills; domain-level filtering remains a known limitation and must be disclosed in the approval summary.
 
 ### Milestone 8: Sandbox Execution
 
@@ -1024,6 +1142,12 @@ Sandbox goals:
 7. Mount only approved directories.
 
 If Docker is not available, keep a reduced local runner and label it as unsafe/dev-only.
+
+Current limitation:
+
+```text
+Approved networked skills run with container network access, but domain-level egress filtering is not implemented yet. SecurityReviewer must disclose this before runtime approval. Wildcard or unrestricted network access remains blocked.
+```
 
 ### Milestone 9: Scheduling
 
@@ -1077,6 +1201,27 @@ Rules:
 15. Skills under active agent construction should use status `building`. A skill should become `proposed` only after the generated package is ready for user review.
 16. If ProductManager selects `interface_type = "tool"`, the blueprint and acceptance criteria must require a declarative `tool_ui_schema` so the Tools page can render a user-facing form.
 17. Do not build a general-purpose agent playground in the MVP.
+18. ProductManager, Builder, and Tester must run through Codex service adapters. Tests may use fake Codex adapters, but production workflow code should not bypass Codex for these roles.
+19. SecurityReviewer remains the deterministic exception and must not rely on Codex to decide whether permissions are allowed.
+
+### Milestone 11: Skill Versioning and Update Workflow
+
+Add safe versioning for installed skills.
+
+Rules:
+
+1. Never modify the active installed skill in place.
+2. Copy the active version into `skills/installed/<skill_name>/versions/vN/` for updates.
+3. Build, repair, and test the copied version only.
+4. Show active and candidate versions in Skill Detail.
+5. Let the user compare files before activation.
+6. Let the user discard draft/proposed versions.
+7. Activation switches `active_version_id`, `installed_path`, and `manifest_path` only after validation/tests pass.
+8. If permissions and dependencies are unchanged, skip runtime permission reapproval.
+9. If permissions or dependencies change, require runtime permission approval before activation.
+10. Keep at most 3 non-discarded versions per skill.
+11. Do not auto-activate, auto-run, or auto-delete versions.
+12. ProductManager must use Codex to evaluate update suggestions, propose better-scoped alternatives, create the update blueprint, and write readiness summaries.
 
 ---
 
@@ -1115,7 +1260,7 @@ When working in this repository:
 1. Prefer small, testable commits.
 2. Do not implement everything at once.
 3. Do not introduce high-risk features unless they go through the approval system and remain blocked when unsupported.
-4. Do not add browser automation or live network fetching before sandbox/network enforcement exists.
+4. Do not add browser automation. Live network fetching is allowed only through explicit manifest network permissions and user approval.
 5. Do not add email/calendar/finance actions in the MVP.
 6. Keep generated-skill code isolated from application code.
 7. Use clear interfaces between backend, runner, and UI.

@@ -125,9 +125,10 @@ def test_unsupported_permissions_block_run(tmp_path: Path, db_session: Session) 
     write_skill(
         skill_dir,
         manifest_overrides={
+            "risk_level": "medium",
             "permissions": {
-                "network": ["example.com"],
-                "filesystem_read": [],
+                "network": [],
+                "filesystem_read": ["./data"],
                 "filesystem_write": ["./cache"],
                 "secrets": [],
                 "shell": False,
@@ -138,7 +139,7 @@ def test_unsupported_permissions_block_run(tmp_path: Path, db_session: Session) 
     run = run_skill(db_session, skill_dir)
 
     assert run.status == "blocked"
-    assert run.error_message == "network permissions are not supported by the current runner"
+    assert run.error_message == "filesystem read permissions are not supported by the current runner"
     assert run.exit_code is None
 
 

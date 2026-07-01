@@ -49,6 +49,23 @@ def test_manifest_accepts_optional_display_name() -> None:
     assert manifest.display_name == "Simple Calculator"
 
 
+def test_manifest_accepts_simple_dependencies() -> None:
+    data = valid_manifest()
+    data["dependencies"] = ["requests", "beautifulsoup4==4.12.3"]
+
+    manifest = validate_manifest(data)
+
+    assert manifest.dependencies == ["requests", "beautifulsoup4==4.12.3"]
+
+
+def test_manifest_rejects_url_dependencies() -> None:
+    data = valid_manifest()
+    data["dependencies"] = ["https://example.com/package.whl"]
+
+    with pytest.raises(ManifestValidationError, match="dependencies"):
+        validate_manifest(data)
+
+
 def test_manifest_accepts_tool_interface_and_io_schemas() -> None:
     data = valid_manifest()
     data["interface_type"] = "tool"

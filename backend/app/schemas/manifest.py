@@ -119,6 +119,7 @@ class SkillManifest(BaseModel):
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
     tool_ui_schema: dict[str, Any] | None = None
+    dependencies: list[str] = Field(default_factory=list)
     risk_level: RiskLevel
     permissions: ManifestPermissions
     schedule: ManifestSchedule | None = None
@@ -137,6 +138,26 @@ class SkillManifest(BaseModel):
             raise ValueError("skill file paths cannot traverse parent directories")
         return path
 
+    @field_validator("dependencies")
+    @classmethod
+    def validate_dependencies(cls, dependencies: list[str]) -> list[str]:
+        for dependency in dependencies:
+            normalized = dependency.strip()
+            if not normalized:
+                raise ValueError("dependencies cannot contain empty values")
+            lowered = normalized.lower()
+            if (
+                "://" in normalized
+                or "/" in normalized
+                or "\\" in normalized
+                or lowered.startswith("git+")
+                or normalized.startswith("-")
+                or "@" in normalized
+                or ";" in normalized
+            ):
+                raise ValueError("dependencies must be package names or simple version specifiers")
+        return dependencies
+
     @model_validator(mode="after")
     def validate_skill_contract(self) -> "SkillManifest":
         if self.skill_type == "instruction":
@@ -144,6 +165,8 @@ class SkillManifest(BaseModel):
                 raise ValueError("instruction skills require instructions_path")
             if self.entrypoint is not None:
                 raise ValueError("instruction skills cannot declare entrypoint")
+            if self.dependencies:
+                raise ValueError("instruction skills cannot declare dependencies")
             if not has_no_permissions(self.permissions):
                 raise ValueError("instruction skills must request no permissions")
             if self.schedule is not None:

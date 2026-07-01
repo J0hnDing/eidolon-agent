@@ -38,8 +38,6 @@ def utc_now() -> datetime:
 
 def validate_supported_permissions(manifest: SkillManifest) -> None:
     permissions = manifest.permissions
-    if permissions.network:
-        raise UnsupportedSkillPermissionError("network permissions are not supported by the current runner")
     if permissions.filesystem_read:
         raise UnsupportedSkillPermissionError("filesystem read permissions are not supported by the current runner")
     if permissions.secrets:
@@ -260,6 +258,7 @@ class LocalSkillRunner:
             cwd=skill_dir,
             capture_output=True,
             text=True,
+            env=self._skill_env(skill_dir),
             timeout=self.timeout_seconds,
             shell=False,
         )
@@ -287,6 +286,7 @@ class LocalSkillRunner:
             input=json.dumps(input_json),
             capture_output=True,
             text=True,
+            env=self._skill_env(skill_dir),
             timeout=self.timeout_seconds,
             shell=False,
         )
@@ -359,6 +359,14 @@ class LocalSkillRunner:
         run.ended_at = utc_now()
         self.db.commit()
 
+    def _skill_env(self, skill_dir: Path) -> dict[str, str]:
+        env = os.environ.copy()
+        deps_dir = skill_dir / ".deps"
+        if deps_dir.is_dir():
+            existing = env.get("PYTHONPATH")
+            env["PYTHONPATH"] = str(deps_dir) if not existing else f"{deps_dir}{os.pathsep}{existing}"
+        return env
+
 
 class DockerSkillRunner:
     def __init__(
@@ -404,8 +412,8 @@ class DockerSkillRunner:
             entrypoint = self._resolve_entrypoint(skill_dir, manifest.entrypoint)
             self.image_manager.ensure_image()
             cache_dir = self._prepare_cache_dir(skill_id, skill_dir)
-            self._run_tests(skill_dir, cache_dir, run)
-            self._run_entrypoint(entrypoint, skill_dir, cache_dir, input_json, run)
+            self._run_tests(skill_dir, cache_dir, manifest, run)
+            self._run_entrypoint(entrypoint, skill_dir, cache_dir, manifest, input_json, run)
         except DockerImageBuildError as exc:
             self._finish_run(run, status="blocked", error_message=str(exc))
         except (ManifestValidationError, UnsupportedSkillPermissionError, FileNotFoundError) as exc:
@@ -428,13 +436,14 @@ class DockerSkillRunner:
         self.db.refresh(run)
         return run
 
-    def build_base_docker_command(self, skill_dir: Path, cache_dir: Path) -> list[str]:
+    def build_base_docker_command(self, skill_dir: Path, cache_dir: Path, manifest: SkillManifest | None = None) -> list[str]:
+        network_mode = "bridge" if manifest is not None and manifest.permissions.network else "none"
         return [
             "docker",
             "run",
             "--rm",
             "--network",
-            "none",
+            network_mode,
             "--memory",
             self.config.memory_limit,
             "--cpus",
@@ -444,6 +453,8 @@ class DockerSkillRunner:
             "PYTHONDONTWRITEBYTECODE=1",
             "-e",
             "PYTEST_ADDOPTS=-p no:cacheprovider",
+            "-e",
+            "PYTHONPATH=/skill/.deps",
             "-v",
             f"{skill_dir.resolve()}:/skill:ro",
             "-v",
@@ -453,12 +464,18 @@ class DockerSkillRunner:
             self.config.docker_image,
         ]
 
-    def build_pytest_command(self, skill_dir: Path, cache_dir: Path) -> list[str]:
-        return self.build_base_docker_command(skill_dir, cache_dir) + ["python", "-m", "pytest", "/skill/tests"]
+    def build_pytest_command(self, skill_dir: Path, cache_dir: Path, manifest: SkillManifest | None = None) -> list[str]:
+        return self.build_base_docker_command(skill_dir, cache_dir, manifest) + ["python", "-m", "pytest", "/skill/tests"]
 
-    def build_entrypoint_command(self, skill_dir: Path, cache_dir: Path, entrypoint: Path) -> list[str]:
+    def build_entrypoint_command(
+        self,
+        skill_dir: Path,
+        cache_dir: Path,
+        entrypoint: Path,
+        manifest: SkillManifest | None = None,
+    ) -> list[str]:
         relative_entrypoint = entrypoint.relative_to(skill_dir).as_posix()
-        return self.build_base_docker_command(skill_dir, cache_dir) + ["python", f"/skill/{relative_entrypoint}"]
+        return self.build_base_docker_command(skill_dir, cache_dir, manifest) + ["python", f"/skill/{relative_entrypoint}"]
 
     def _load_manifest(self, skill_dir: Path) -> SkillManifest:
         manifest_path = skill_dir / "manifest.json"
@@ -491,14 +508,14 @@ class DockerSkillRunner:
         mountpoint.mkdir(exist_ok=True)
         return cache_dir
 
-    def _run_tests(self, skill_dir: Path, cache_dir: Path, run: SkillRun) -> None:
+    def _run_tests(self, skill_dir: Path, cache_dir: Path, manifest: SkillManifest, run: SkillRun) -> None:
         tests_dir = skill_dir / "tests"
         if not tests_dir.exists():
             self._finish_run(run, status="blocked", error_message="Skill tests directory is missing")
             raise RunAlreadyFinalized("Skill tests directory is missing")
 
         result = self.docker_runner(
-            self.build_pytest_command(skill_dir, cache_dir),
+            self.build_pytest_command(skill_dir, cache_dir, manifest),
             capture_output=True,
             text=True,
             timeout=self.timeout_seconds,
@@ -520,11 +537,12 @@ class DockerSkillRunner:
         entrypoint: Path,
         skill_dir: Path,
         cache_dir: Path,
+        manifest: SkillManifest,
         input_json: dict[str, Any],
         run: SkillRun,
     ) -> None:
         result = self.docker_runner(
-            self.build_entrypoint_command(skill_dir, cache_dir, entrypoint),
+            self.build_entrypoint_command(skill_dir, cache_dir, entrypoint, manifest),
             input=json.dumps(input_json),
             capture_output=True,
             text=True,

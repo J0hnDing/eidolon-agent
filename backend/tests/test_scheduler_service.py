@@ -268,7 +268,11 @@ def test_scheduled_execution_uses_runtime_permission_checks(tmp_path: Path, db_s
     assert schedule.last_run_status == "blocked"
 
 
-def test_network_requesting_skill_remains_blocked_under_current_runner(tmp_path: Path, db_session: Session) -> None:
+def test_network_requesting_skill_runs_after_runtime_approval(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     skill = create_skill(
         db_session,
         tmp_path,
@@ -285,10 +289,34 @@ def test_network_requesting_skill_remains_blocked_under_current_runner(tmp_path:
     schedule, _ = scheduler.create_schedule(skill, daily_payload())
     scheduler.approve_schedule(schedule)
 
+    from app.models import SkillRun
+    from app.services import scheduler_service
+
+    class FakeRunner:
+        def __init__(self, db: Session) -> None:
+            self.db = db
+
+        def run(self, skill_id: int, skill_dir: Path, input_json: dict[str, Any]):
+            run = SkillRun(
+                skill_id=skill_id,
+                status="succeeded",
+                input_json=input_json,
+                output_json={"network": "approved"},
+                started_at=datetime.now(UTC),
+                ended_at=datetime.now(UTC),
+                exit_code=0,
+            )
+            self.db.add(run)
+            self.db.commit()
+            self.db.refresh(run)
+            return run
+
+    monkeypatch.setattr(scheduler_service, "get_skill_runner", lambda db: FakeRunner(db))
+
     run = scheduler.run_scheduled_skill(schedule)
 
-    assert run.status == "blocked"
-    assert "cannot enforce domain-level network sandboxing" in (run.error_message or "")
+    assert run.status == "succeeded"
+    assert run.output_json == {"network": "approved"}
 
 
 def test_scheduled_run_stores_result_with_schedule_marker(tmp_path: Path, db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -13,6 +13,8 @@ from app.schemas.proposed_skill import ProposedSkillValidationRead
 from app.services.codex_service import CodexGenerationError, CodexService
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
+from app.services.skill_operation_guard import SkillOperationGuard
+from app.services.skill_version_service import SkillVersionError, SkillVersionService
 
 
 class AgentWorkflowError(ValueError):
@@ -46,7 +48,7 @@ class AgentWorkflowService:
         if existing and existing.status in {"pending", "running", "waiting_for_approval", "succeeded"}:
             return existing
 
-        blueprint = self._blueprint_from_generation_request(generation_request)
+        blueprint = self.codex_service.product_manager_build_blueprint(generation_request)
         building_skill = self._create_or_update_building_skill(generation_request, blueprint)
         generation_request.proposed_skill_id = building_skill.id
         agent_run = AgentRun(
@@ -65,7 +67,11 @@ class AgentWorkflowService:
         self.db.commit()
         self.db.refresh(agent_run)
 
-        pm_summary = self._pm_build_time_summary(blueprint)
+        pm_summary = self.codex_service.product_manager_summary(
+            "build_time",
+            {"blueprint_json": blueprint, "generation_request_id": generation_request.id},
+            self._pm_build_time_summary(blueprint),
+        )
         self._finish_step(
             agent_run,
             self._start_step(
@@ -183,10 +189,14 @@ class AgentWorkflowService:
             raise
 
     def create_repair_run(self, skill: Skill, user_request: str | None = None) -> AgentRun:
+        with SkillOperationGuard(self.db).locked(skill, "repair", reason="Agent repair workflow"):
+            return self._create_repair_run_locked(skill, user_request)
+
+    def _create_repair_run_locked(self, skill: Skill, user_request: str | None = None) -> AgentRun:
         if skill.status == "deleted":
             raise AgentWorkflowError("Deleted skills cannot be repaired")
 
-        blueprint = self._blueprint_for_repair(skill, user_request)
+        blueprint = self.codex_service.product_manager_repair_blueprint(skill, user_request)
         agent_run = AgentRun(
             run_type="repair_skill",
             status="running",
@@ -204,7 +214,11 @@ class AgentWorkflowService:
 
         try:
             repair_skill = self._prepare_repair_target(skill, agent_run)
-            pm_summary = f"Repair proposed skill {repair_skill.name} using existing failure context and tests."
+            pm_summary = self.codex_service.product_manager_summary(
+                "repair_start",
+                {"skill_id": skill.id, "repair_skill_name": repair_skill.name, "blueprint_json": blueprint},
+                f"Repair proposed skill {repair_skill.name} using existing failure context and tests.",
+            )
             self._finish_step(
                 agent_run,
                 self._start_step(
@@ -239,6 +253,166 @@ class AgentWorkflowService:
                 self._fail_run(agent_run, str(exc))
             raise
         return agent_run
+
+    def create_update_run(self, skill: Skill, suggestion: str) -> AgentRun:
+        version_service = SkillVersionService(self.db, project_root=self.project_root)
+        update_review = self.codex_service.product_manager_update_review(skill, suggestion)
+        decision = {
+            "decision": str(update_review["decision"]),
+            "summary": str(update_review["summary"]),
+        }
+        blueprint = update_review["blueprint"]
+        agent_run = AgentRun(
+            run_type="update_skill",
+            status="running",
+            skill_id=skill.id,
+            user_request=suggestion,
+            current_milestone="update_version",
+            current_step="product_manager",
+            failure_count_json={"update_version": 0},
+            blueprint_json=blueprint,
+            summary="ProductManager evaluated the update suggestion.",
+        )
+        self.db.add(agent_run)
+        self.db.commit()
+        self.db.refresh(agent_run)
+
+        pm_status = "succeeded" if decision["decision"] == "build_next_milestone" else "blocked"
+        self._finish_step(
+            agent_run,
+            self._start_step(
+                agent_run,
+                "product_manager",
+                milestone_name="update_version",
+                input_json={"skill_id": skill.id, "suggestion": suggestion},
+                logs="ProductManager evaluated the improvement suggestion against the current skill and project rules.",
+            ),
+            pm_status,
+            output_json={"decision_json": decision, "blueprint_json": blueprint, "user_summary": decision["summary"]},
+            logs=decision["summary"],
+            error_message=None if pm_status == "succeeded" else decision["summary"],
+        )
+        if decision["decision"] != "build_next_milestone":
+            agent_run.status = "blocked"
+            agent_run.completed_at = utc_now()
+            agent_run.error_message = decision["summary"]
+            self.db.commit()
+            self.db.refresh(agent_run)
+            return agent_run
+
+        try:
+            draft = version_service.create_draft_from_active(skill, decision["summary"], created_by="agent")
+            builder_step = self._start_step(
+                agent_run,
+                "builder",
+                milestone_name="update_version",
+                input_json={
+                    "skill_id": skill.id,
+                    "version_id": draft.id,
+                    "suggestion": suggestion,
+                    "blueprint_json": blueprint,
+                },
+                logs="Builder is modifying only the copied draft version folder.",
+            )
+            result = self.codex_service.update_skill_version(skill, draft, suggestion, blueprint)
+            self._finish_step(
+                agent_run,
+                builder_step,
+                "succeeded",
+                output_json={"version_id": draft.id, "stdout": result.stdout, "stderr": result.stderr},
+                logs="Builder updated the draft version. The active version was not modified.",
+            )
+
+            tester_step = self._start_step(
+                agent_run,
+                "tester",
+                milestone_name="update_version",
+                input_json={"version_id": draft.id, "blueprint_json": blueprint},
+                logs="Tester validates the draft version through manifest validation and pytest.",
+            )
+            validation = version_service.validate_version(draft)
+            self._finish_step(
+                agent_run,
+                tester_step,
+                "succeeded" if validation.ok else "failed",
+                output_json={"version_id": draft.id, "test_result_json": validation.model_dump(mode="json")},
+                logs="Tester completed validation for the draft version.",
+                error_message=validation.error_message,
+            )
+            if not validation.ok:
+                agent_run.status = "failed"
+                agent_run.completed_at = utc_now()
+                agent_run.error_message = validation.error_message or "Draft version validation failed"
+                self.db.commit()
+                self.db.refresh(agent_run)
+                return agent_run
+
+            security_step = self._start_step(
+                agent_run,
+                "security_reviewer",
+                milestone_name="update_version",
+                input_json={"skill_id": skill.id, "version_id": draft.id},
+                logs="SecurityReviewer compares active-version permissions with the draft manifest.",
+            )
+            permission_request = version_service.create_runtime_request_if_needed(skill, draft)
+            if permission_request is None:
+                self._finish_step(
+                    agent_run,
+                    security_step,
+                    "succeeded",
+                    output_json={"version_id": draft.id, "permissions_changed": False},
+                    logs="No runtime permission changes were detected. Runtime reapproval is skipped.",
+                )
+                final_status = "succeeded"
+                summary = self.codex_service.product_manager_summary(
+                    "update_complete",
+                    {"skill_id": skill.id, "version_id": draft.id, "permissions_changed": False},
+                    f"Version {draft.version} is ready to compare and activate. Runtime permissions are unchanged.",
+                )
+            else:
+                self._finish_step(
+                    agent_run,
+                    security_step,
+                    "waiting_for_approval",
+                    output_json={
+                        "version_id": draft.id,
+                        "permission_request_id": permission_request.id,
+                        "permissions_changed": True,
+                        "status": permission_request.status,
+                    },
+                    logs=permission_request.user_explanation,
+                )
+                final_status = "waiting_for_approval"
+                summary = self.codex_service.product_manager_summary(
+                    "update_runtime_permission_required",
+                    {"skill_id": skill.id, "version_id": draft.id, "permissions_changed": True},
+                    f"Version {draft.version} is ready, but runtime permission approval is required before activation.",
+                )
+
+            self._finish_step(
+                agent_run,
+                self._start_step(
+                    agent_run,
+                    "product_manager",
+                    milestone_name="update_version",
+                    input_json={"skill_id": skill.id, "version_id": draft.id},
+                    logs="ProductManager summarized the proposed update.",
+                ),
+                "succeeded",
+                output_json={"version_id": draft.id, "user_summary": summary},
+                logs=summary,
+            )
+            agent_run.status = final_status
+            agent_run.summary = summary
+            agent_run.final_summary_json = {"version_id": draft.id, "user_summary": summary}
+            agent_run.completed_at = utc_now() if final_status == "succeeded" else None
+            self.db.commit()
+            self.db.refresh(agent_run)
+            return agent_run
+        except (SkillVersionError, Exception) as exc:
+            if agent_run.status not in {"blocked", "failed"}:
+                self._fail_run(agent_run, str(exc))
+            raise
 
     def resume_run(self, agent_run: AgentRun) -> AgentRun:
         self._ensure_not_cancelled(agent_run)
@@ -405,9 +579,18 @@ class AgentWorkflowService:
         milestone_name: str = DEFAULT_MILESTONE,
     ) -> None:
         decision = "finish_ready_for_review" if self._all_milestones_complete(agent_run) else "build_next_milestone"
-        summary = (
-            f"Milestone {milestone_name} passed. "
-            "ProductManager considers the planned blueprint complete and is sending it to SecurityReviewer."
+        summary = self.codex_service.product_manager_summary(
+            "milestone_passed",
+            {
+                "skill_id": skill.id,
+                "milestone_name": milestone_name,
+                "test_result_json": validation.model_dump(mode="json"),
+                "blueprint_json": agent_run.blueprint_json,
+            },
+            (
+                f"Milestone {milestone_name} passed. "
+                "ProductManager considers the planned blueprint complete and is sending it to SecurityReviewer."
+            ),
         )
         self._finish_step(
             agent_run,
@@ -433,7 +616,16 @@ class AgentWorkflowService:
         runtime_request = PermissionService(self.db, project_root=self.project_root).create_runtime_request(skill)
         status = "waiting_for_approval" if runtime_request.status == "pending" else "succeeded"
         security_summary = self._security_runtime_summary(skill, runtime_request)
-        pm_summary = self._pm_runtime_summary(skill, validation)
+        pm_summary = self.codex_service.product_manager_summary(
+            "runtime_review_checkpoint",
+            {
+                "skill_id": skill.id,
+                "skill_name": skill.name,
+                "validation_ok": validation.ok,
+                "runtime_permission_status": runtime_request.status,
+            },
+            self._pm_runtime_summary(skill, validation),
+        )
         self._apply_combined_permission_summary(runtime_request, pm_summary, security_summary)
         self._finish_step(
             agent_run,
@@ -472,9 +664,19 @@ class AgentWorkflowService:
         runtime_status: str,
         milestone_name: str = DEFAULT_MILESTONE,
     ) -> None:
-        summary = (
-            f"Skill {skill.name} is ready for user review. Validation passed; runtime permission request is {runtime_status}. "
-            "The skill remains proposed and was not installed or run automatically."
+        summary = self.codex_service.product_manager_summary(
+            "completion",
+            {
+                "skill_id": skill.id,
+                "skill_name": skill.name,
+                "validation_ok": validation.ok,
+                "runtime_permission_status": runtime_status,
+                "blueprint_json": agent_run.blueprint_json,
+            },
+            (
+                f"Skill {skill.name} is ready for user review. Validation passed; runtime permission request is {runtime_status}. "
+                "The skill remains proposed and was not installed or run automatically."
+            ),
         )
         final_summary = {
             "skill_id": skill.id,
@@ -509,9 +711,18 @@ class AgentWorkflowService:
 
     def _product_manager_stop_failed(self, agent_run: AgentRun, skill: Skill, validation: Any) -> None:
         milestone_name = agent_run.current_milestone or DEFAULT_MILESTONE
-        summary = (
-            f"Milestone {milestone_name} failed more than {MAX_MILESTONE_FAILURES} times. "
-            f"Latest failure: {validation.error_message or 'tests failed'}. User review is recommended."
+        summary = self.codex_service.product_manager_summary(
+            "stop_failed",
+            {
+                "skill_id": skill.id,
+                "milestone_name": milestone_name,
+                "failure_count_json": agent_run.failure_count_json,
+                "latest_failure": validation.error_message or validation.stderr or "tests failed",
+            },
+            (
+                f"Milestone {milestone_name} failed more than {MAX_MILESTONE_FAILURES} times. "
+                f"Latest failure: {validation.error_message or 'tests failed'}. User review is recommended."
+            ),
         )
         self._finish_step(
             agent_run,
@@ -688,6 +899,65 @@ class AgentWorkflowService:
                     "name": "repair_skill",
                     "summary": "Repair the proposed skill package and confirm tests pass.",
                     "acceptance_criteria": ["manifest.json is valid", "tests pass", "permissions do not expand silently"],
+                }
+            ],
+        }
+
+    def _evaluate_update_suggestion(self, skill: Skill, suggestion: str) -> dict[str, str]:
+        text = suggestion.strip()
+        lowered = text.lower()
+        if len(text) < 8:
+            return {
+                "decision": "ask_user_for_input",
+                "summary": "Please describe the improvement more specifically before I build a new version.",
+            }
+        unsafe_terms = [
+            "delete files",
+            "shell",
+            "secret",
+            "password",
+            "browser cookie",
+            "trade stock",
+            "buy ",
+            "purchase",
+            "send email",
+            "post publicly",
+        ]
+        if any(term in lowered for term in unsafe_terms):
+            return {
+                "decision": "stop_unsupported",
+                "summary": "ProductManager blocked this update because it asks for unsafe or unsupported MVP behavior.",
+            }
+        if any(term in lowered for term in ["sentient", "guarantee", "make money", "do everything"]):
+            return {
+                "decision": "ask_user_for_input",
+                "summary": (
+                    "This suggestion is too broad or unrealistic for a bounded skill update. "
+                    "A better next project is a small, testable behavior change with clear input and output."
+                ),
+            }
+        return {
+            "decision": "build_next_milestone",
+            "summary": f"Update {skill.name} with this improvement: {text}",
+        }
+
+    def _blueprint_for_update(self, skill: Skill, suggestion: str, decision: dict[str, str]) -> dict[str, Any]:
+        return {
+            "goal": decision["summary"],
+            "skill_name": skill.name,
+            "skill_type": skill.skill_type,
+            "interface_type": skill.interface_type,
+            "suggestion": suggestion,
+            "milestones": [
+                {
+                    "name": "update_version",
+                    "summary": "Copy the active version, implement the requested improvement, and validate the draft.",
+                    "acceptance_criteria": [
+                        "active version folder is not modified",
+                        "draft version manifest is valid",
+                        "draft version tests pass when executable",
+                        "runtime permission changes are detected before activation",
+                    ],
                 }
             ],
         }

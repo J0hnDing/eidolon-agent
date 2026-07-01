@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from app.schemas.common import InterfaceType, RiskLevel, SkillType
 from app.schemas.manifest import ManifestPermissions
@@ -41,6 +41,25 @@ class SkillGenerationPlan(BaseModel):
     validation_steps: list[str]
     risk_level: RiskLevel
     automatic_actions_blocked: list[str]
+
+    @field_validator("requested_dependencies")
+    @classmethod
+    def validate_requested_dependencies(cls, dependencies: list[str]) -> list[str]:
+        for dependency in dependencies:
+            normalized = dependency.strip()
+            lowered = normalized.lower()
+            if (
+                not normalized
+                or "://" in normalized
+                or "/" in normalized
+                or "\\" in normalized
+                or lowered.startswith("git+")
+                or normalized.startswith("-")
+                or "@" in normalized
+                or ";" in normalized
+            ):
+                raise ValueError("requested_dependencies must contain only package names or simple version specifiers")
+        return dependencies
 
     @model_validator(mode="after")
     def validate_plan_contract(self) -> "SkillGenerationPlan":
@@ -226,6 +245,7 @@ Safety requirements:
 - Use filesystem_write ["./cache"] only when useful; otherwise [].
 - Use explicit network domains only when the user request genuinely needs future runtime network access.
 - Do not request package dependencies unless genuinely needed.
+- Package dependencies may be requested for build-time installation only after user approval. Good examples for web scraping are requests, beautifulsoup4, or feedparser when genuinely useful.
 - Do not request email, calendar, finance, browser cookie, public posting, purchase, file deletion, or arbitrary shell behavior.
 
 Choose all skill properties yourself based on the request:
@@ -258,7 +278,7 @@ Return JSON with exactly this shape:
     "shell": false
   }},
   "requested_network_domains": [],
-  "requested_dependencies": [],
+  "requested_dependencies": ["Python package names only, no URLs, no git refs, no local paths"],
   "tests_required": false,
   "validation_steps": ["validate manifest.json", "inspect generated files"],
   "risk_level": "low | medium | high",

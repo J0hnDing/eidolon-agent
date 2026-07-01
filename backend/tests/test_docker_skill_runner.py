@@ -158,11 +158,12 @@ def test_docker_runner_builds_restricted_commands(tmp_path: Path, db_session: Se
     assert (skill_dir / "cache").is_dir()
 
 
-def test_docker_runner_blocks_network_permissions(tmp_path: Path, db_session: Session) -> None:
+def test_docker_runner_allows_explicit_network_permissions_with_bridge_network(tmp_path: Path, db_session: Session) -> None:
     skill_dir = tmp_path / "network_skill"
     write_skill(
         skill_dir,
         {
+            "risk_level": "medium",
             "permissions": {
                 "network": ["example.com"],
                 "filesystem_read": [],
@@ -179,9 +180,10 @@ def test_docker_runner_blocks_network_permissions(tmp_path: Path, db_session: Se
         skill.id, skill_dir, {}
     )
 
-    assert run.status == "blocked"
-    assert run.error_message == "network permissions are not supported by the current runner"
-    assert commands == []
+    assert run.status == "failed"
+    assert len(commands) == 2
+    assert commands[0][commands[0].index("--network") + 1] == "bridge"
+    assert commands[1][commands[1].index("--network") + 1] == "bridge"
 
 
 def test_docker_runner_blocks_filesystem_read(tmp_path: Path, db_session: Session) -> None:

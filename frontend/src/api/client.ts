@@ -67,12 +67,13 @@ export interface Skill {
   output_schema_json: Record<string, unknown> | null;
   tool_ui_schema_json: Record<string, unknown> | null;
   installed_path: string | null;
+  active_version_id: number | null;
   enabled: boolean;
   created_at: string;
   updated_at: string;
 }
 
-export type SkillInput = Omit<Skill, "id" | "created_at" | "updated_at">;
+export type SkillInput = Omit<Skill, "id" | "created_at" | "updated_at" | "active_version_id">;
 
 export type SkillRunStatus = "pending" | "running" | "succeeded" | "failed" | "blocked";
 
@@ -88,6 +89,40 @@ export interface SkillRun {
   started_at: string | null;
   ended_at: string | null;
   error_message: string | null;
+}
+
+export type SkillVersionStatus = "active" | "draft" | "proposed_update" | "archived" | "discarded";
+
+export interface SkillVersion {
+  id: number;
+  skill_id: number;
+  version: string;
+  status: SkillVersionStatus;
+  folder_path: string;
+  manifest_json: Record<string, unknown>;
+  code_snapshot_path: string;
+  created_by: "user" | "agent" | "system";
+  parent_version_id: number | null;
+  permission_fingerprint: string;
+  test_status: string;
+  validation_status: string;
+  change_summary: string | null;
+  changelog: string | null;
+  created_at: string;
+  activated_at: string | null;
+}
+
+export interface SkillUpdateResponse {
+  agent_run_id: number;
+  version: SkillVersion | null;
+  status: string;
+  message: string;
+}
+
+export interface SkillVersionComparison {
+  active_version: SkillVersion;
+  candidate_version: SkillVersion;
+  files: Array<{ path: string; active: string | null; candidate: string | null }>;
 }
 
 export interface Tool {
@@ -416,6 +451,22 @@ export const api = {
     }),
   getRunnerStatus: () => request<RunnerStatus>("/skills/runner-status"),
   getSkill: (id: number) => request<Skill>(`/skills/${id}`),
+  listSkillVersions: (id: number) => request<SkillVersion[]>(`/skills/${id}/versions`),
+  suggestSkillUpdate: (id: number, suggestion: string) =>
+    request<SkillUpdateResponse>(`/skills/${id}/versions/update-suggestion`, {
+      method: "POST",
+      body: JSON.stringify({ suggestion }),
+    }),
+  activateSkillVersion: (skillId: number, versionId: number) =>
+    request<Skill>(`/skills/${skillId}/versions/${versionId}/activate`, {
+      method: "POST",
+    }),
+  discardSkillVersion: (skillId: number, versionId: number) =>
+    request<void>(`/skills/${skillId}/versions/${versionId}/discard`, {
+      method: "POST",
+    }),
+  compareSkillVersion: (skillId: number, versionId: number) =>
+    request<SkillVersionComparison>(`/skills/${skillId}/versions/${versionId}/compare`),
   listSchedules: (skillId?: number) =>
     request<SkillSchedule[]>(`/schedules${skillId ? `?skill_id=${skillId}` : ""}`),
   createSchedule: (skillId: number, payload: { name: string; schedule: SchedulePayload }) =>

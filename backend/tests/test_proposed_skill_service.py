@@ -1,6 +1,9 @@
 import json
+import subprocess
+import sys
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi import HTTPException
@@ -9,7 +12,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import Skill
+from app.models import ApprovalRequest, Skill, SkillGenerationRequest
 from app.routers.skills import run_skill as run_skill_route
 from app.schemas.skill_run import SkillRunRequest
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
@@ -109,6 +112,95 @@ def test_validates_proposed_automation_with_passing_tests(service: ProposedSkill
     assert result.tests_passed is True
 
 
+def test_validation_blocks_unapproved_dependencies(service: ProposedSkillService) -> None:
+    skill = service.create_sample("dependency_without_approval", "automation")
+    skill_dir = service.proposed_dir("dependency_without_approval")
+    manifest_path = skill_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["dependencies"] = ["requests"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = service.validate_proposed_skill(skill)
+
+    assert result.ok is False
+    assert result.tests_run is False
+    assert result.error_message == "Skill dependency installation failed"
+    assert "Build-time dependency approval is missing for: requests" in result.stderr
+
+
+def test_validation_installs_approved_dependencies_locally(
+    monkeypatch: pytest.MonkeyPatch,
+    service: ProposedSkillService,
+    db_session: Session,
+) -> None:
+    skill = service.create_sample("dependency_with_approval", "automation")
+    skill_dir = service.proposed_dir("dependency_with_approval")
+    manifest_path = skill_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["dependencies"] = ["requests"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    generation_request = SkillGenerationRequest(
+        user_message="Create a web scraper skill.",
+        proposed_skill_name=skill.name,
+        proposed_display_name="Dependency With Approval",
+        proposed_skill_type="automation",
+        plan_json={
+            "skill_name": skill.name,
+            "requested_dependencies": ["requests"],
+            "requested_permissions": manifest["permissions"],
+        },
+        requested_permissions_json=manifest["permissions"],
+        requested_dependencies_json=["requests"],
+        requested_network_domains_json=[],
+        risk_level="medium",
+        status="approved",
+        proposed_skill_id=skill.id,
+    )
+    db_session.add(generation_request)
+    db_session.add(
+        ApprovalRequest(
+            generation_request=generation_request,
+            request_scope="build_time",
+            request_type="generation",
+            risk_level="medium",
+            requested_permissions_json={},
+            requested_dependencies_json=["requests"],
+            requested_network_domains_json=[],
+            requested_filesystem_json={},
+            reason_json={},
+            reason="approved",
+            user_explanation="approved",
+            status="approved",
+        )
+    )
+    db_session.commit()
+    calls: list[dict[str, Any]] = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append({"command": command, "kwargs": kwargs})
+        if "pip" in command:
+            return subprocess.CompletedProcess(command, 0, stdout="installed", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="tests passed", stderr="")
+
+    monkeypatch.setattr("app.services.proposed_skill_service.subprocess.run", fake_run)
+
+    result = service.validate_proposed_skill(skill)
+
+    assert result.ok is True
+    pip_call = calls[0]
+    assert pip_call["command"][:5] == [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+    ]
+    assert "--target" in pip_call["command"]
+    assert str(skill_dir / ".deps") in pip_call["command"]
+    test_call = calls[1]
+    assert str(skill_dir / ".deps") in test_call["kwargs"]["env"]["PYTHONPATH"]
+
+
 def test_validation_fails_when_automation_tests_fail(service: ProposedSkillService) -> None:
     skill = service.create_sample("failing_automation", "automation")
     skill_dir = service.proposed_dir("failing_automation")
@@ -145,8 +237,10 @@ def test_installs_valid_proposed_automation_skill(service: ProposedSkillService)
     assert installed.status == "installed"
     assert installed.skill_type == "automation"
     assert installed.enabled is False
-    assert installed.installed_path == "skills/installed/install_automation"
+    assert installed.installed_path == "skills/installed/install_automation/versions/v1"
     assert service.installed_dir("install_automation").is_dir()
+    assert (service.installed_dir("install_automation") / "versions" / "v1").is_dir()
+    assert installed.active_version_id is not None
     assert not service.proposed_dir("install_automation").exists()
 
 

@@ -93,18 +93,22 @@ class PermissionService:
         skill_dir = self.proposed_service.skill_dir_for_record(skill)
         manifest = validate_manifest_file(skill_dir / "manifest.json")
         permissions = manifest.permissions.model_dump()
-        risk_level, blocked_reasons = self._risk_for_permissions(permissions, dependencies=[])
+        dependencies = list(manifest.dependencies)
+        risk_level, blocked_reasons = self._risk_for_permissions(permissions, dependencies=dependencies)
         expansion = self.detect_permission_expansion(skill, permissions)
+        dependency_expansion = self.detect_dependency_expansion(skill, dependencies)
         if expansion:
             risk_level = "blocked" if risk_level == "blocked" else "medium"
-        explanation = self._runtime_explanation(skill, permissions, blocked_reasons, expansion)
+        if dependency_expansion:
+            risk_level = "blocked" if risk_level == "blocked" else "medium"
+        explanation = self._runtime_explanation(skill, permissions, blocked_reasons, expansion, dependencies)
         request = ApprovalRequest(
             skill_id=skill.id,
             request_scope="runtime",
             request_type="install",
             risk_level=risk_level,
             requested_permissions_json=permissions,
-            requested_dependencies_json=[],
+            requested_dependencies_json=dependencies,
             requested_network_domains_json=list(permissions.get("network", [])),
             requested_filesystem_json={
                 "filesystem_read": permissions.get("filesystem_read", []),
@@ -113,7 +117,14 @@ class PermissionService:
             reason_json={
                 "blocked_reasons": blocked_reasons,
                 "permission_expansion": expansion,
+                "dependency_expansion": dependency_expansion,
                 "runner_unsupported": self.unsupported_runtime_reasons(permissions),
+                "runner_network_enforcement": (
+                    "Approved network domains enable container network access for this MVP; "
+                    "domain-level egress filtering is not enforced yet."
+                )
+                if permissions.get("network")
+                else "",
             },
             reason=explanation,
             user_explanation=explanation,
@@ -141,6 +152,17 @@ class PermissionService:
         if actual_permissions.get("shell") and not planned.get("shell"):
             expansion["shell"] = True
         return expansion
+
+    def detect_dependency_expansion(self, skill: Skill, actual_dependencies: list[str]) -> list[str]:
+        generation_request = self.db.scalar(
+            select(SkillGenerationRequest)
+            .where(SkillGenerationRequest.proposed_skill_id == skill.id)
+            .order_by(SkillGenerationRequest.created_at.desc())
+        )
+        if generation_request is None:
+            return []
+        planned = set(generation_request.plan_json.get("requested_dependencies", []))
+        return sorted(set(actual_dependencies) - planned)
 
     def approve_request(self, request: ApprovalRequest, notes: str | None = None) -> ApprovalRequest:
         if request.status == "denied":
@@ -187,7 +209,7 @@ class PermissionService:
         return PermissionDecision(True, "Build-time permissions are approved")
 
     def can_install(self, skill: Skill) -> PermissionDecision:
-        request = self._latest_request(skill_id=skill.id, scope="runtime", request_type="install")
+        request = self._latest_active_runtime_request(skill)
         if request is None:
             return PermissionDecision(False, "Runtime permissions have not been reviewed")
         if request.risk_level == "blocked":
@@ -200,18 +222,28 @@ class PermissionService:
         install_decision = self.can_install(skill)
         if not install_decision.allowed:
             return install_decision
-        request = self._latest_request(skill_id=skill.id, scope="runtime", request_type="install")
+        request = self._latest_active_runtime_request(skill)
         unsupported = self.unsupported_runtime_reasons(request.requested_permissions_json if request else {})
         if unsupported:
             return PermissionDecision(False, "; ".join(unsupported))
         return PermissionDecision(True, "Runtime permissions are approved and supported")
 
+    def _latest_active_runtime_request(self, skill: Skill) -> ApprovalRequest | None:
+        requests = self.db.scalars(
+            select(ApprovalRequest)
+            .where(ApprovalRequest.skill_id == skill.id)
+            .where(ApprovalRequest.request_scope == "runtime")
+            .where(ApprovalRequest.request_type == "install")
+            .order_by(ApprovalRequest.created_at.desc(), ApprovalRequest.id.desc())
+        ).all()
+        for request in requests:
+            version_id = (request.reason_json or {}).get("version_id")
+            if version_id is None or version_id == skill.active_version_id:
+                return request
+        return None
+
     def unsupported_runtime_reasons(self, permissions: dict[str, Any]) -> list[str]:
         reasons = []
-        if permissions.get("network"):
-            reasons.append(
-                "This skill requests network access, but the current runner cannot enforce domain-level network sandboxing yet."
-            )
         if permissions.get("filesystem_read"):
             reasons.append("Filesystem read permissions are not supported until a safe file picker exists.")
         if permissions.get("secrets"):
@@ -309,13 +341,20 @@ class PermissionService:
         permissions: dict[str, Any],
         blocked_reasons: list[str],
         expansion: dict[str, Any],
+        dependencies: list[str],
     ) -> str:
         parts = [f"The generated skill {skill.name} declares these runtime permissions from manifest.json."]
         if permissions.get("network"):
             parts.append(
                 "It requests network access to "
                 + ", ".join(permissions["network"])
-                + ". The current runner cannot enforce domain-level network sandboxing, so execution remains blocked."
+                + ". Approving runtime permissions allows container network access for this MVP; domain-level filtering is not enforced yet."
+            )
+        if dependencies:
+            parts.append(
+                "It declares Python package dependencies "
+                + ", ".join(dependencies)
+                + ". These must have been approved and installed into the skill-local dependency folder before runtime."
             )
         if permissions.get("filesystem_write"):
             parts.append("It requests filesystem write access to " + ", ".join(permissions["filesystem_write"]) + ".")

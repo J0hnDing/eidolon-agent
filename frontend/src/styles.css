@@ -344,6 +344,21 @@ textarea {
   color: #24724f;
 }
 
+.status-draft {
+  background: #eef2f7;
+  color: #667085;
+}
+
+.status-proposed_update {
+  background: #e8f0ff;
+  color: #2458a6;
+}
+
+.status-archived {
+  background: #f4f0e8;
+  color: #6f5a30;
+}
+
 .status-pending {
   background: #fff4dd;
   color: #8a5a00;
@@ -852,6 +867,23 @@ pre {
   margin: 0;
 }
 
+.version-compare {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.compare-grid h4 {
+  margin: 0 0 8px;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -968,7 +1000,8 @@ pre {
   }
 
   .form-grid,
-  .composer {
+  .composer,
+  .compare-grid {
     grid-template-columns: 1fr;
   }
 
