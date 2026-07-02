@@ -236,6 +236,20 @@ textarea {
   padding: 12px;
 }
 
+.callout {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #cfd6e1;
+  border-left: 4px solid #2457a6;
+  border-radius: 6px;
+  background: #f7f9fc;
+  padding: 12px;
+}
+
+.callout p {
+  margin: 0;
+}
+
 .item-grid,
 .section-grid {
   display: grid;
@@ -557,6 +571,14 @@ th {
 .chat-approval-card {
   display: grid;
   gap: 12px;
+}
+
+.update-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid #d8dee8;
+  padding-top: 12px;
 }
 
 .chat-approval-card p {

@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Skill, SkillType, api } from "../api/client";
+import { usePolling } from "../lib/usePolling";
 
 const skillTypes: SkillType[] = ["instruction", "automation", "hybrid"];
 
@@ -17,15 +18,17 @@ export default function SkillsPage() {
     loadSkills();
   }, []);
 
-  async function loadSkills() {
-    setIsLoading(true);
+  usePolling(() => loadSkills({ showLoading: false }), true, 5000);
+
+  async function loadSkills(options: { showLoading?: boolean } = {}) {
+    if (options.showLoading !== false) setIsLoading(true);
     setError(null);
     try {
       setSkills(await api.listSkills());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load skills");
     } finally {
-      setIsLoading(false);
+      if (options.showLoading !== false) setIsLoading(false);
     }
   }
 

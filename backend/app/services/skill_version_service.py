@@ -216,8 +216,8 @@ class SkillVersionService:
     def activate_version(self, skill: Skill, version: SkillVersion) -> Skill:
         if version.skill_id != skill.id:
             raise SkillVersionError("Version does not belong to this skill")
-        if version.status != "proposed_update":
-            raise SkillVersionError("Only proposed update versions can be activated")
+        if version.status not in {"proposed_update", "archived"}:
+            raise SkillVersionError("Only proposed update or archived versions can be activated")
         if version.validation_status != "passed" or version.test_status not in {"passed", "not_required"}:
             raise SkillVersionError("Version must pass validation and tests before activation")
         active = self.ensure_active_version(skill)
@@ -229,7 +229,8 @@ class SkillVersionService:
 
         try:
             with SkillOperationGuard(self.db).locked(skill, "update", reason=f"Activating {version.version}"):
-                active.status = "archived"
+                if active.id != version.id:
+                    active.status = "archived"
                 version.status = "active"
                 version.activated_at = utc_now()
                 self._point_skill_at_version(skill, version)

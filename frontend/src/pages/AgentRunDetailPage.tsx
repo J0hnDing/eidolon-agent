@@ -2,6 +2,9 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 
 import { AgentRunDetail, api } from "../api/client";
+import { usePolling } from "../lib/usePolling";
+
+const LIVE_RUN_STATUSES = new Set(["pending", "running", "waiting_for_approval"]);
 
 export default function AgentRunDetailPage() {
   const { agentRunId } = useParams();
@@ -16,21 +19,27 @@ export default function AgentRunDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentRunId]);
 
-  async function loadRun() {
+  usePolling(
+    () => loadRun({ showLoading: false }),
+    Boolean(run && LIVE_RUN_STATUSES.has(run.status)),
+    1500,
+  );
+
+  async function loadRun(options: { showLoading?: boolean } = {}) {
     const id = Number(agentRunId);
     if (!Number.isInteger(id)) {
       setError("Invalid agent run id.");
       setIsLoading(false);
       return;
     }
-    setIsLoading(true);
+    if (options.showLoading !== false) setIsLoading(true);
     setError(null);
     try {
       setRun(await api.getAgentRun(id));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load agent run");
     } finally {
-      setIsLoading(false);
+      if (options.showLoading !== false) setIsLoading(false);
     }
   }
 

@@ -2,6 +2,9 @@ import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 
 import { AgentRun, api } from "../api/client";
+import { usePolling } from "../lib/usePolling";
+
+const LIVE_RUN_STATUSES = new Set(["pending", "running", "waiting_for_approval"]);
 
 export default function AgentRunsPage() {
   const [runs, setRuns] = useState<AgentRun[]>([]);
@@ -12,15 +15,21 @@ export default function AgentRunsPage() {
     loadRuns();
   }, []);
 
-  async function loadRuns() {
-    setIsLoading(true);
+  usePolling(
+    () => loadRuns({ showLoading: false }),
+    runs.some((run) => LIVE_RUN_STATUSES.has(run.status)),
+    2000,
+  );
+
+  async function loadRuns(options: { showLoading?: boolean } = {}) {
+    if (options.showLoading !== false) setIsLoading(true);
     setError(null);
     try {
       setRuns(await api.listAgentRuns());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load agent runs");
     } finally {
-      setIsLoading(false);
+      if (options.showLoading !== false) setIsLoading(false);
     }
   }
 

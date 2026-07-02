@@ -54,6 +54,10 @@ These decisions supersede older milestone wording when there is a conflict:
 15. Installed skills use versioned active folders. Updates must copy the active version into a new draft/proposed version folder and must never mutate the active version in place.
 16. A skill may have at most 3 non-discarded versions in the local MVP. The app must block new version creation until the user discards a draft/proposed version or otherwise frees a slot.
 17. Activating a new skill version switches `active_version_id` and active paths only after validation/tests pass and runtime permissions are approved when permissions changed.
+18. Skill update suggestions are entered from Skill Detail and should behave as an inline local chat for that skill. ProductManager must respond there whether the suggestion is blocked, unclear, valid without extra approval, or requires build-time approval.
+19. Update build-time approval is separate from runtime approval. If ProductManager requests permission before building an update, the app must create a build-time approval request with `request_type = "update"` and wait before Builder creates a draft version.
+20. ProductManager user-facing decisions such as `ask_user_for_input`, `stop_unsupported`, or `request_permission` are not agent-run errors. They should be stored as summaries/structured decisions and surfaced to the user in the relevant chat surface.
+21. Frontend workflow state is refreshed with targeted polling in the MVP. Agent run, skill detail, approval, schedule, skills, and tools pages should update without requiring a manual refresh, while avoiding broad global polling.
 
 ---
 
@@ -73,6 +77,7 @@ These limitations are intentional until the next safety layers are implemented:
 10. Version comparison is file-based in the MVP. The UI shows active-vs-candidate file contents, not a rich semantic diff engine.
 11. ProductManager, Builder, and Tester are Codex-backed agents. ProductManager must use Codex for plausibility judgment, blueprints, update review, decisions, and user-facing summaries; backend deterministic logic may only validate or safely fall back when Codex output is unusable.
 12. SecurityReviewer is the exception for now: it is backend-owned deterministic permission logic so blocked permissions cannot be negotiated away by generated text.
+13. Live frontend updates use polling, not push events. UI changes should appear within the configured polling interval, but they are not literally instantaneous. SSE or WebSockets are a later improvement if the app needs lower-latency event delivery.
 
 ---
 
@@ -523,6 +528,20 @@ user project request
 
 The inline approval messages must remain in the local chat history when the user navigates away and returns. While a project build is running in that chat window, additional user input in the same window may be ignored or disabled until the build and summaries complete.
 
+For skill updates, the same approval-summary pattern should appear in the Skill Detail `Suggest an Improvement` chat surface:
+
+```text
+user update suggestion
+-> ProductManager evaluates the suggestion
+-> if blocked, unclear, or unsupported, ProductManager replies in the update chat with the reason and any safer alternatives
+-> if valid and no extra build-time permission is needed, Builder creates a draft version through the controlled update workflow
+-> if build-time permission is needed, Skill Detail shows ProductManager + SecurityReviewer summaries with inline Approve Update Build / Decline buttons
+-> approval lets Builder create a draft version only
+-> runtime permission review is still required before activation if manifest permissions or dependencies changed
+```
+
+ProductManager responses for blocked, unsupported, unclear, or permission-gated updates must not be presented as generic errors in Agent Run pages. Agent Run errors are reserved for actual workflow failures such as exceptions, failed tests, or repeated unsuccessful repair attempts.
+
 Permission expansion should only be shown when the actual generated manifest requests permissions that are meaningfully greater than the approved build-time plan. An empty expansion object must not be presented as a warning.
 
 ### Memory
@@ -892,6 +911,32 @@ build_time
 runtime
 ```
 
+Request types include:
+
+```text
+generation
+update
+install
+run
+dependency
+network
+filesystem
+secret
+shell
+schedule
+other
+```
+
+Rules:
+
+```text
+- build_time/generation requests are linked to skill_generation_requests
+- build_time/update requests are linked to the skill and should include agent_run_id in reason_json
+- runtime/install requests are linked to the skill and, for version updates, should include version_id in reason_json
+- approving a build_time/update request allows the agent workflow to resume and create a draft version only
+- approving a build_time/update request does not activate the version or approve runtime permissions
+```
+
 Risk levels may also include:
 
 ```text
@@ -1222,6 +1267,21 @@ Rules:
 10. Keep at most 3 non-discarded versions per skill.
 11. Do not auto-activate, auto-run, or auto-delete versions.
 12. ProductManager must use Codex to evaluate update suggestions, propose better-scoped alternatives, create the update blueprint, and write readiness summaries.
+13. ProductManager must reply in the Skill Detail update chat for every update suggestion outcome: accepted, blocked, unsupported, unclear, or permission-gated.
+14. If ProductManager decides an update needs build-time approval, the workflow must create a pending `build_time` approval request with `request_type = "update"` and pause before Builder creates the draft version.
+15. Approving update build-time permission resumes the agent workflow and lets Builder create the draft version only. It must not activate or run the skill.
+16. Denying update build-time permission should stop the update attempt without creating a draft version.
+17. Agent Run `error_message` should not be used for normal ProductManager decisions. Use `summary`, `final_summary_json`, and agent step outputs for user-facing PM decisions; reserve errors for actual workflow failures.
+18. Archived inactive versions may be switched back to when validation/test/permission requirements are satisfied. Active versions must not be deleted.
+
+Frontend expectations:
+
+```text
+- Skill Detail contains the update suggestion chat and inline approval controls.
+- Agent Run, Agent Runs, Skill Detail, Skills, Tools, Schedules, and Approval Requests pages use targeted polling for changing backend state.
+- Polling should stop or slow when watched records reach terminal states.
+- Full push-based live updates through SSE/WebSockets are not required in the MVP.
+```
 
 ---
 

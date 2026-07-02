@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 
 import { Tool, api } from "../api/client";
+import { usePolling } from "../lib/usePolling";
 
 export default function ToolsPage() {
   const [tools, setTools] = useState<Tool[]>([]);
@@ -12,15 +13,17 @@ export default function ToolsPage() {
     loadTools();
   }, []);
 
-  async function loadTools() {
-    setIsLoading(true);
+  usePolling(() => loadTools({ showLoading: false }), true, 5000);
+
+  async function loadTools(options: { showLoading?: boolean } = {}) {
+    if (options.showLoading !== false) setIsLoading(true);
     setError(null);
     try {
       setTools(await api.listTools());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load tools");
     } finally {
-      setIsLoading(false);
+      if (options.showLoading !== false) setIsLoading(false);
     }
   }
 

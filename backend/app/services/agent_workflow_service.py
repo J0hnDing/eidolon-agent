@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AgentRun, AgentRunStep, Skill, SkillGenerationRequest
+from app.models import AgentRun, AgentRunStep, ApprovalRequest, Skill, SkillGenerationRequest
 from app.schemas.proposed_skill import ProposedSkillValidationRead
 from app.services.codex_service import CodexGenerationError, CodexService
 from app.services.permission_service import PermissionService
@@ -255,7 +255,6 @@ class AgentWorkflowService:
         return agent_run
 
     def create_update_run(self, skill: Skill, suggestion: str) -> AgentRun:
-        version_service = SkillVersionService(self.db, project_root=self.project_root)
         update_review = self.codex_service.product_manager_update_review(skill, suggestion)
         decision = {
             "decision": str(update_review["decision"]),
@@ -277,7 +276,7 @@ class AgentWorkflowService:
         self.db.commit()
         self.db.refresh(agent_run)
 
-        pm_status = "succeeded" if decision["decision"] == "build_next_milestone" else "blocked"
+        pm_status = "succeeded" if decision["decision"] in {"build_next_milestone", "request_permission"} else "blocked"
         self._finish_step(
             agent_run,
             self._start_step(
@@ -290,18 +289,76 @@ class AgentWorkflowService:
             pm_status,
             output_json={"decision_json": decision, "blueprint_json": blueprint, "user_summary": decision["summary"]},
             logs=decision["summary"],
-            error_message=None if pm_status == "succeeded" else decision["summary"],
+            error_message=None,
         )
-        if decision["decision"] != "build_next_milestone":
-            agent_run.status = "blocked"
-            agent_run.completed_at = utc_now()
-            agent_run.error_message = decision["summary"]
+
+        if decision["decision"] == "request_permission":
+            permission_request = PermissionService(self.db, project_root=self.project_root).create_update_build_time_request(
+                skill,
+                agent_run,
+                blueprint,  # type: ignore[arg-type]
+                decision["summary"],
+            )
+            security_summary = self._security_build_time_summary(blueprint, permission_request)  # type: ignore[arg-type]
+            self._apply_combined_permission_summary(permission_request, decision["summary"], security_summary)
+            self._finish_step(
+                agent_run,
+                self._start_step(
+                    agent_run,
+                    "security_reviewer",
+                    milestone_name="update_version",
+                    input_json={"skill_id": skill.id, "blueprint_json": blueprint},
+                    logs="SecurityReviewer analyzed build-time update permissions and created the approval request.",
+                ),
+                "waiting_for_approval",
+                output_json={
+                    "permission_request_id": permission_request.id,
+                    "status": permission_request.status,
+                    "risk_level": permission_request.risk_level,
+                    "product_manager_summary": decision["summary"],
+                    "security_reviewer_summary": security_summary,
+                },
+                logs=f"ProductManager: {decision['summary']}\n\nSecurityReviewer: {security_summary}",
+            )
+            agent_run.status = "waiting_for_approval"
+            agent_run.current_step = "security_reviewer"
+            agent_run.summary = decision["summary"]
+            agent_run.final_summary_json = {
+                "permission_request_id": permission_request.id,
+                "user_summary": decision["summary"],
+            }
+            agent_run.error_message = None
             self.db.commit()
             self.db.refresh(agent_run)
             return agent_run
 
+        if decision["decision"] != "build_next_milestone":
+            agent_run.status = "blocked"
+            agent_run.completed_at = utc_now()
+            agent_run.summary = decision["summary"]
+            agent_run.final_summary_json = {"user_summary": decision["summary"], "decision_json": decision}
+            agent_run.error_message = None
+            self.db.commit()
+            self.db.refresh(agent_run)
+            return agent_run
+
+        return self._execute_update_run(agent_run, skill, suggestion, blueprint, decision["summary"])  # type: ignore[arg-type]
+
+    def _execute_update_run(
+        self,
+        agent_run: AgentRun,
+        skill: Skill,
+        suggestion: str,
+        blueprint: dict[str, Any],
+        summary: str,
+    ) -> AgentRun:
+        version_service = SkillVersionService(self.db, project_root=self.project_root)
+        agent_run.status = "running"
+        agent_run.current_step = "builder"
+        agent_run.error_message = None
+        self.db.commit()
         try:
-            draft = version_service.create_draft_from_active(skill, decision["summary"], created_by="agent")
+            draft = version_service.create_draft_from_active(skill, summary, created_by="agent")
             builder_step = self._start_step(
                 agent_run,
                 "builder",
@@ -431,6 +488,25 @@ class AgentWorkflowService:
             self.continue_build_after_approval(generation_request)
             self.db.refresh(agent_run)
             return agent_run
+        if agent_run.run_type == "update_skill" and agent_run.skill_id:
+            skill = self.db.get(Skill, agent_run.skill_id)
+            if skill is None:
+                raise AgentWorkflowError("Skill no longer exists")
+            request = self._latest_update_build_time_request(agent_run)
+            if request is None:
+                raise AgentWorkflowError("Update build-time permission request is missing")
+            if request.status != "approved":
+                raise AgentWorkflowError(f"Update build-time permission request is {request.status}")
+            self._mark_waiting_security_step_approved(agent_run)
+            self._execute_update_run(
+                agent_run,
+                skill,
+                agent_run.user_request,
+                agent_run.blueprint_json or {},
+                agent_run.summary or agent_run.user_request,
+            )
+            self.db.refresh(agent_run)
+            return agent_run
         return agent_run
 
     def retry_current_milestone(self, agent_run: AgentRun) -> AgentRun:
@@ -477,6 +553,21 @@ class AgentWorkflowService:
             .where(AgentRun.generation_request_id == generation_request_id)
             .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
         )
+
+    def _latest_update_build_time_request(self, agent_run: AgentRun) -> ApprovalRequest | None:
+        if agent_run.skill_id is None:
+            return None
+        requests = self.db.scalars(
+            select(ApprovalRequest)
+            .where(ApprovalRequest.skill_id == agent_run.skill_id)
+            .where(ApprovalRequest.request_scope == "build_time")
+            .where(ApprovalRequest.request_type == "update")
+            .order_by(ApprovalRequest.created_at.desc(), ApprovalRequest.id.desc())
+        ).all()
+        for request in requests:
+            if (request.reason_json or {}).get("agent_run_id") == agent_run.id:
+                return request
+        return None
 
     def _test_milestone(self, agent_run: AgentRun, skill: Skill, validation: Any, milestone_name: str = DEFAULT_MILESTONE) -> Any:
         code_files = self._skill_file_snapshot(skill)

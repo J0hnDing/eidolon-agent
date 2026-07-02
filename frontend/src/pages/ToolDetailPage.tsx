@@ -3,6 +3,7 @@ import type { ChangeEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 
 import { SkillRun, Tool, api } from "../api/client";
+import { usePolling } from "../lib/usePolling";
 
 type ToolFieldType = "text" | "number" | "textarea" | "checkbox" | "select";
 
@@ -51,25 +52,29 @@ export default function ToolDetailPage() {
   const hasForm = fields.length > 0;
   const isReady = tool?.runtime_permission_status === "ready";
 
-  async function loadTool() {
+  usePolling(() => loadTool({ showLoading: false, preserveInput: true }), Boolean(tool && !isReady && !isRunning), 3000);
+
+  async function loadTool(options: { showLoading?: boolean; preserveInput?: boolean } = {}) {
     if (!Number.isInteger(numericSkillId)) {
       setError("Invalid tool id.");
       setIsLoading(false);
       return;
     }
-    setIsLoading(true);
+    if (options.showLoading !== false) setIsLoading(true);
     setError(null);
     try {
       const data = await api.getTool(numericSkillId);
       setTool(data);
-      const parsedSchema = parseToolUiSchema(data.skill.tool_ui_schema_json);
-      const initialValues = buildInitialValues(parsedSchema?.fields ?? []);
-      setFormValues(initialValues);
-      setJsonInput(JSON.stringify(buildInputFromFields(parsedSchema?.fields ?? [], initialValues), null, 2));
+      if (!options.preserveInput) {
+        const parsedSchema = parseToolUiSchema(data.skill.tool_ui_schema_json);
+        const initialValues = buildInitialValues(parsedSchema?.fields ?? []);
+        setFormValues(initialValues);
+        setJsonInput(JSON.stringify(buildInputFromFields(parsedSchema?.fields ?? [], initialValues), null, 2));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load tool");
     } finally {
-      setIsLoading(false);
+      if (options.showLoading !== false) setIsLoading(false);
     }
   }
 

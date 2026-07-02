@@ -262,6 +262,11 @@ class FakeCodexAdapter:
     def _product_manager_update_decision(self, plan: dict) -> dict:
         suggestion = str(plan.get("suggestion", "")).strip()
         lowered = suggestion.lower()
+        requested_network_domains = []
+        requested_dependencies = []
+        if any(term in lowered for term in ["web", "internet", "scrape", "scraper", "news", "rss", "site", "website"]):
+            requested_network_domains = ["example.com"]
+            requested_dependencies = ["requests", "beautifulsoup4"]
         if len(suggestion) < 8:
             decision = {
                 "decision": "ask_user_for_input",
@@ -305,6 +310,8 @@ class FakeCodexAdapter:
             "skill_type": plan["skill_type"],
             "interface_type": plan.get("interface_type", "chat"),
             "suggestion": suggestion,
+            "requested_network_domains": requested_network_domains,
+            "requested_dependencies": requested_dependencies,
             "milestones": [
                 {
                     "name": "update_version",
@@ -885,6 +892,9 @@ Allowed decisions:
 
 Safety:
 - Block or ask for input for shell access, secrets, broad filesystem access, browser automation, email/calendar/finance actions, purchases, trading, public posting, file deletion, or unclear/high-risk requests.
+- Do not block a project merely because public web access may be useful. Infer a small set of specific likely public domains and dependencies for SecurityReviewer review.
+- Runtime network access is allowed only when explicit domains are declared in the manifest and approved later. Wildcard or unrestricted network access remains unsupported.
+- If the user asks for general internet/web scraping/news access without naming domains, propose reasonable specific domains in the blueprint instead of asking the user to supply every domain upfront.
 - If interface_type is tool, require declarative tool_ui_schema in acceptance criteria.
 - Keep output concise and structured.
 
@@ -895,7 +905,7 @@ Payload:
 
 Required output by task:
 - build_blueprint or repair_blueprint: {{"blueprint": {{"goal": "...", "skill_name": "...", "skill_type": "instruction|automation|hybrid", "interface_type": "chat|tool|hidden", "expected_files": [], "milestones": [{{"name": "...", "summary": "...", "acceptance_criteria": []}}]}}}}
-- update_review: {{"decision": "...", "summary": "...", "blueprint": {{"goal": "...", "skill_name": "...", "skill_type": "...", "interface_type": "...", "suggestion": "...", "milestones": [{{"name": "update_version", "summary": "...", "acceptance_criteria": []}}]}}}}
+- update_review: {{"decision": "...", "summary": "...", "blueprint": {{"goal": "...", "skill_name": "...", "skill_type": "...", "interface_type": "...", "suggestion": "...", "requested_network_domains": [], "requested_dependencies": [], "milestones": [{{"name": "update_version", "summary": "...", "acceptance_criteria": []}}]}}}}
 - summary: {{"summary": "..."}}
 """.strip()
 
@@ -1029,6 +1039,11 @@ Required output by task:
     def _fallback_update_review(self, skill: Skill, suggestion: str) -> dict[str, object]:
         text = suggestion.strip()
         lowered = text.lower()
+        requested_network_domains = []
+        requested_dependencies = []
+        if any(term in lowered for term in ["web", "internet", "scrape", "scraper", "news", "rss", "site", "website"]):
+            requested_network_domains = ["example.com"]
+            requested_dependencies = ["requests", "beautifulsoup4"]
         if len(text) < 8:
             decision = {
                 "decision": "ask_user_for_input",
@@ -1072,6 +1087,8 @@ Required output by task:
             "skill_type": skill.skill_type,
             "interface_type": skill.interface_type,
             "suggestion": suggestion,
+            "requested_network_domains": requested_network_domains,
+            "requested_dependencies": requested_dependencies,
             "milestones": [
                 {
                     "name": "update_version",

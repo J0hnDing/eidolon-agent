@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { ApprovalRequest, api } from "../api/client";
+import { usePolling } from "../lib/usePolling";
 
 export default function ApprovalRequestsPage() {
   const [requests, setRequests] = useState<ApprovalRequest[]>([]);
@@ -22,6 +23,8 @@ export default function ApprovalRequestsPage() {
   useEffect(() => {
     loadRequests();
   }, []);
+
+  usePolling(() => loadRequests(), requests.some((request) => request.status === "pending"), 3000);
 
   async function decide(action: "approve" | "deny") {
     if (!selected) return;

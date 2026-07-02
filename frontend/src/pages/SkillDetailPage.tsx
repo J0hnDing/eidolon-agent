@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import PermissionRequestModal from "../components/PermissionRequestModal";
+import { usePolling } from "../lib/usePolling";
 import {
   AgentRun,
   ApprovalRequest,
@@ -12,10 +13,24 @@ import {
   SkillFile,
   SkillRun,
   SkillSchedule,
+  SkillUpdateResponse,
   SkillVersion,
   SkillVersionComparison,
   api,
 } from "../api/client";
+
+const LIVE_AGENT_RUN_STATUSES = new Set(["pending", "running", "waiting_for_approval"]);
+const LIVE_SKILL_STATUSES = new Set(["building"]);
+
+type UpdateChatMessage = {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  kind?: "text" | "thinking" | "build_approval";
+  permissionRequest?: ApprovalRequest;
+  agentRunId?: number;
+  actionStatus?: "pending" | "working" | "approved" | "denied" | "failed";
+};
 
 export default function SkillDetailPage() {
   const { skillId } = useParams();
@@ -31,7 +46,8 @@ export default function SkillDetailPage() {
   const [versions, setVersions] = useState<SkillVersion[]>([]);
   const [versionComparison, setVersionComparison] = useState<SkillVersionComparison | null>(null);
   const [updateSuggestion, setUpdateSuggestion] = useState("");
-  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [updateResponse, setUpdateResponse] = useState<SkillUpdateResponse | null>(null);
+  const [updateMessages, setUpdateMessages] = useState<UpdateChatMessage[]>([]);
   const [showRuntimeModal, setShowRuntimeModal] = useState(false);
   const [runInput, setRunInput] = useState('{\n  "hello": "world"\n}');
   const [scheduleName, setScheduleName] = useState("Daily run");
@@ -49,38 +65,47 @@ export default function SkillDetailPage() {
   const latestRun = runs[0] ?? null;
 
   useEffect(() => {
-    async function loadSkillDetail() {
-      if (!skillId) return;
-      setIsLoading(true);
-      setError(null);
-      try {
-        const id = Number(skillId);
-        const [loadedSkill, loadedRuns, loadedFiles, permissionRequests, loadedRunnerStatus, loadedSchedules, loadedAgentRuns, loadedVersions] = await Promise.all([
-          api.getSkill(id),
-          api.listSkillRuns(id),
-          api.listSkillFiles(id),
-          api.listPermissionRequests({ skill_id: id, request_scope: "runtime" }),
-          api.getRunnerStatus(),
-          api.listSchedules(id),
-          api.listAgentRuns(),
-          api.listSkillVersions(id).catch(() => []),
-        ]);
-        setSkill(loadedSkill);
-        setRuns(loadedRuns);
-        setFiles(loadedFiles);
-        setRuntimePermission(permissionRequests[0] ?? null);
-        setRunnerStatus(loadedRunnerStatus);
-        setSchedules(loadedSchedules);
-        setAgentRuns(loadedAgentRuns.filter((run) => run.skill_id === id));
-        setVersions(loadedVersions);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Could not load skill");
-      } finally {
-        setIsLoading(false);
-      }
-    }
     loadSkillDetail();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [skillId]);
+
+  const hasLiveAgentRun = agentRuns.some((run) => LIVE_AGENT_RUN_STATUSES.has(run.status));
+  const shouldPollSkillDetail = Boolean(
+    skill && (LIVE_SKILL_STATUSES.has(skill.status) || hasLiveAgentRun || runtimePermission?.status === "pending"),
+  );
+
+  usePolling(() => loadSkillDetail({ showLoading: false }), shouldPollSkillDetail, 2000);
+
+  async function loadSkillDetail(options: { showLoading?: boolean } = {}) {
+    if (!skillId) return;
+    if (options.showLoading !== false) setIsLoading(true);
+    setError(null);
+    try {
+      const id = Number(skillId);
+      const [loadedSkill, loadedRuns, loadedFiles, permissionRequests, loadedRunnerStatus, loadedSchedules, loadedAgentRuns, loadedVersions] = await Promise.all([
+        api.getSkill(id),
+        api.listSkillRuns(id),
+        api.listSkillFiles(id),
+        api.listPermissionRequests({ skill_id: id, request_scope: "runtime" }),
+        api.getRunnerStatus(),
+        api.listSchedules(id),
+        api.listAgentRuns(),
+        api.listSkillVersions(id).catch(() => []),
+      ]);
+      setSkill(loadedSkill);
+      setRuns(loadedRuns);
+      setFiles(loadedFiles);
+      setRuntimePermission(permissionRequests[0] ?? null);
+      setRunnerStatus(loadedRunnerStatus);
+      setSchedules(loadedSchedules);
+      setAgentRuns(loadedAgentRuns.filter((run) => run.skill_id === id));
+      setVersions(loadedVersions);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load skill");
+    } finally {
+      if (options.showLoading !== false) setIsLoading(false);
+    }
+  }
 
   async function handleRun() {
     if (!skill) return;
@@ -187,18 +212,117 @@ export default function SkillDetailPage() {
   async function handleSuggestUpdate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!skill) return;
+    const suggestion = updateSuggestion.trim();
+    if (!suggestion) return;
+    const requestMessageId = Date.now();
+    setUpdateMessages((current) => [
+      ...current,
+      {
+        id: requestMessageId,
+        role: "user",
+        content: `Suggest an update for ${skill.name}: ${suggestion}`,
+      },
+      {
+        id: requestMessageId + 1,
+        role: "assistant",
+        kind: "thinking",
+        content: `ProductManager is reviewing the update suggestion for ${skill.name}...`,
+      },
+    ]);
     setIsWorking(true);
     setError(null);
-    setUpdateMessage(null);
+    setUpdateResponse(null);
     try {
-      const response = await api.suggestSkillUpdate(skill.id, updateSuggestion);
-      setUpdateMessage(response.message);
+      const response = await api.suggestSkillUpdate(skill.id, suggestion);
+      setUpdateResponse(response);
       setUpdateSuggestion("");
+      setUpdateMessages((current) =>
+        replaceUpdateMessage(current, requestMessageId + 1, [
+        {
+          id: Date.now(),
+          role: "assistant",
+          kind: response.permission_request ? "build_approval" : "text",
+          content: updateResponseText(skill.name, response),
+          permissionRequest: response.permission_request ?? undefined,
+          actionStatus: response.permission_request?.status === "pending" ? "pending" : undefined,
+          agentRunId: response.agent_run_id,
+        },
+        ]),
+      );
       await refreshVersions();
       const loadedAgentRuns = await api.listAgentRuns();
       setAgentRuns(loadedAgentRuns.filter((run) => run.skill_id === skill.id));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not start update workflow");
+      const message = err instanceof Error ? err.message : "Could not start update workflow";
+      setUpdateMessages((current) =>
+        replaceUpdateMessage(current, requestMessageId + 1, [
+        {
+          id: Date.now(),
+          role: "assistant",
+          content: `ProductManager could not start the update workflow for ${skill.name}.\n\n${message}`,
+        },
+        ]),
+      );
+      setError(message);
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function handleApproveUpdatePermission(message: UpdateChatMessage) {
+    if (!message.permissionRequest || !message.agentRunId) return;
+    setUpdateMessages((current) =>
+      updateUpdateMessage(current, message.id, (item) => ({ ...item, actionStatus: "working" })),
+    );
+    setIsWorking(true);
+    setError(null);
+    try {
+      const request = await api.approvePermissionRequest(message.permissionRequest.id);
+      await api.resumeAgentRun(message.agentRunId);
+      setUpdateMessages((current) =>
+        updateUpdateMessage(current, message.id, (item) => ({
+          ...item,
+          permissionRequest: request,
+          actionStatus: "approved",
+          content: `${item.content}\n\nApproved. Builder and Tester are now creating the draft version.`,
+        })),
+      );
+      await loadSkillDetail({ showLoading: false });
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Could not approve update";
+      setUpdateMessages((current) =>
+        updateUpdateMessage(current, message.id, (item) => ({ ...item, actionStatus: "failed" })),
+      );
+      setError(errorMessage);
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function handleDenyUpdatePermission(message: UpdateChatMessage) {
+    if (!message.permissionRequest) return;
+    setUpdateMessages((current) =>
+      updateUpdateMessage(current, message.id, (item) => ({ ...item, actionStatus: "working" })),
+    );
+    setIsWorking(true);
+    setError(null);
+    try {
+      const request = await api.denyPermissionRequest(message.permissionRequest.id);
+      setUpdateMessages((current) =>
+        updateUpdateMessage(current, message.id, (item) => ({
+          ...item,
+          permissionRequest: request,
+          actionStatus: "denied",
+          content: `${item.content}\n\nDeclined. No draft version was created.`,
+        })),
+      );
+      await loadSkillDetail({ showLoading: false });
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Could not decline update";
+      setUpdateMessages((current) =>
+        updateUpdateMessage(current, message.id, (item) => ({ ...item, actionStatus: "failed" })),
+      );
+      setError(errorMessage);
     } finally {
       setIsWorking(false);
     }
@@ -470,9 +594,15 @@ export default function SkillDetailPage() {
                 Start Update Workflow
               </button>
             </div>
-            {updateMessage && <p className="muted">{updateMessage}</p>}
           </form>
         )}
+        <UpdateSuggestionChat
+          messages={updateMessages}
+          isWorking={isWorking}
+          latestResponse={updateResponse}
+          onApprove={handleApproveUpdatePermission}
+          onDeny={handleDenyUpdatePermission}
+        />
         <VersionList
           versions={versions}
           activeVersionId={skill.active_version_id}
@@ -837,6 +967,159 @@ function parseRunInput(value: string): Record<string, unknown> {
   }
 }
 
+function UpdateSuggestionChat({
+  messages,
+  isWorking,
+  latestResponse,
+  onApprove,
+  onDeny,
+}: {
+  messages: UpdateChatMessage[];
+  isWorking: boolean;
+  latestResponse: SkillUpdateResponse | null;
+  onApprove: (message: UpdateChatMessage) => void;
+  onDeny: (message: UpdateChatMessage) => void;
+}) {
+  if (messages.length === 0) {
+    return null;
+  }
+  return (
+    <div className="update-chat">
+      {messages.map((message) => (
+        <article key={message.id} className={`message ${message.role}`}>
+          <span>{message.role}</span>
+          {message.kind === "thinking" ? (
+            <div className="thinking-row">
+              <span className="thinking-spinner" aria-hidden="true" />
+              <p>{message.content}</p>
+            </div>
+          ) : message.kind === "build_approval" && message.permissionRequest ? (
+            <div className="chat-approval-card">
+              <p>{message.content}</p>
+              <InlinePermissionSummary request={message.permissionRequest} />
+              <div className="button-row">
+                <button
+                  type="button"
+                  onClick={() => onApprove(message)}
+                  disabled={isWorking || message.actionStatus === "working" || message.permissionRequest.risk_level === "blocked"}
+                >
+                  {message.actionStatus === "working" ? "Working..." : "Approve Update Build"}
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => onDeny(message)}
+                  disabled={isWorking || message.actionStatus === "working"}
+                >
+                  Decline
+                </button>
+              </div>
+              {message.actionStatus && !["pending", "working"].includes(message.actionStatus) && (
+                <p className="muted">Status: {message.actionStatus}</p>
+              )}
+            </div>
+          ) : (
+            <p>{message.content}</p>
+          )}
+        </article>
+      ))}
+      {latestResponse && (
+        <p className="muted">
+          Agent Run: <Link to={`/agent-runs/${latestResponse.agent_run_id}`}>#{latestResponse.agent_run_id}</Link>
+          {latestResponse.version ? ` / Draft version: ${latestResponse.version.version}` : ""}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function InlinePermissionSummary({ request }: { request: ApprovalRequest }) {
+  const pmSummary = reasonText(request, "product_manager_summary");
+  const securitySummary = reasonText(request, "security_reviewer_summary");
+  return (
+    <div className="permission-inline-summary">
+      {pmSummary && (
+        <section>
+          <h3>ProductManager Summary</h3>
+          <p>{pmSummary}</p>
+        </section>
+      )}
+      {securitySummary && (
+        <section>
+          <h3>SecurityReviewer Summary</h3>
+          <p>{securitySummary}</p>
+        </section>
+      )}
+      <section>
+        <h3>Requested Access</h3>
+        <div className="chip-list">
+          {permissionLabels(request).map((label) => (
+            <span key={label} className="permission-chip">
+              {label}
+            </span>
+          ))}
+        </div>
+      </section>
+      <p className="muted">
+        Approval creates a draft version only. It does not activate the version or run the skill.
+      </p>
+    </div>
+  );
+}
+
+function updateResponseText(skillName: string, response: SkillUpdateResponse): string {
+  const rows = [`ProductManager update response for ${skillName}:`, response.message, `Status: ${response.status}`];
+  if (response.permission_request) {
+    rows.push("Review the approval details below to continue.");
+  }
+  if (response.version) {
+    rows.push(`Draft version: ${response.version.version}`);
+  }
+  return rows.join("\n\n");
+}
+
+function replaceUpdateMessage(
+  messages: UpdateChatMessage[],
+  messageId: number,
+  replacementMessages: UpdateChatMessage[],
+): UpdateChatMessage[] {
+  return messages.flatMap((message) => (message.id === messageId ? replacementMessages : [message]));
+}
+
+function updateUpdateMessage(
+  messages: UpdateChatMessage[],
+  messageId: number,
+  updater: (message: UpdateChatMessage) => UpdateChatMessage,
+): UpdateChatMessage[] {
+  return messages.map((message) => (message.id === messageId ? updater(message) : message));
+}
+
+function reasonText(request: ApprovalRequest, key: string): string | null {
+  const value = request.reason_json[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function permissionLabels(request: ApprovalRequest): string[] {
+  const labels = [];
+  if (request.requested_permissions_json.codex_generation) labels.push("Codex generation");
+  if (request.requested_permissions_json.internet_research) labels.push("Internet research");
+  if (request.requested_network_domains_json.length) {
+    labels.push(`Network: ${request.requested_network_domains_json.join(", ")}`);
+  }
+  if (request.requested_dependencies_json.length) {
+    labels.push(`Packages: ${request.requested_dependencies_json.join(", ")}`);
+  }
+  const writes = request.requested_filesystem_json.filesystem_write;
+  if (Array.isArray(writes) && writes.length) {
+    labels.push(`Write: ${writes.join(", ")}`);
+  }
+  const reads = request.requested_filesystem_json.filesystem_read;
+  if (Array.isArray(reads) && reads.length) {
+    labels.push(`Read: ${reads.join(", ")}`);
+  }
+  return labels.length ? labels : ["No special permissions"];
+}
+
 function isNonEmptyObject(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Array.isArray(value) && Object.keys(value).length > 0;
 }
@@ -863,8 +1146,8 @@ function VersionList({
     <div className="run-list">
       {versions.map((version) => {
         const isActive = version.id === activeVersionId || version.status === "active";
-        const canActivate = version.status === "proposed_update" && !isActive;
-        const canDiscard = !isActive && (version.status === "draft" || version.status === "proposed_update");
+        const canActivate = !isActive && (version.status === "proposed_update" || version.status === "archived");
+        const canDiscard = !isActive;
         return (
           <article key={version.id} className="run-row">
             <div>
@@ -882,12 +1165,12 @@ function VersionList({
               </button>
               {canActivate && (
                 <button type="button" onClick={() => onActivate(version.id)} disabled={isWorking}>
-                  Activate
+                  {version.status === "archived" ? "Switch Back" : "Activate"}
                 </button>
               )}
               {canDiscard && (
                 <button type="button" className="danger" onClick={() => onDiscard(version.id)} disabled={isWorking}>
-                  Discard
+                  Delete Version
                 </button>
               )}
             </div>

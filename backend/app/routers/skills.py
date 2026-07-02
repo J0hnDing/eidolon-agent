@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Skill, SkillRun, SkillVersion
+from app.models import ApprovalRequest, Skill, SkillRun, SkillVersion
 from app.schemas.approval_request import ApprovalRequestRead
 from app.schemas.agent_run import AgentRunRead
 from app.schemas.proposed_skill import (
@@ -157,9 +157,13 @@ def suggest_skill_update(
             if version.status in {"draft", "proposed_update"}:
                 latest_version = version
                 break
+        permission_request = None
+        if agent_run.final_summary_json and agent_run.final_summary_json.get("permission_request_id"):
+            permission_request = db.get(ApprovalRequest, agent_run.final_summary_json["permission_request_id"])
         return SkillUpdateResponse(
             agent_run_id=agent_run.id,
             version=latest_version,
+            permission_request=permission_request,
             status=agent_run.status,
             message=agent_run.summary or agent_run.error_message or "Update workflow started.",
         )

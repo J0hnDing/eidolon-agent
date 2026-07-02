@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { SkillSchedule, api } from "../api/client";
+import { usePolling } from "../lib/usePolling";
 
 export default function SchedulesPage() {
   const [schedules, setSchedules] = useState<SkillSchedule[]>([]);
@@ -13,15 +14,17 @@ export default function SchedulesPage() {
     loadSchedules();
   }, []);
 
-  async function loadSchedules() {
-    setIsLoading(true);
+  usePolling(() => loadSchedules({ showLoading: false }), schedules.some((schedule) => schedule.status === "active" || schedule.status === "pending"), 5000);
+
+  async function loadSchedules(options: { showLoading?: boolean } = {}) {
+    if (options.showLoading !== false) setIsLoading(true);
     setError(null);
     try {
       setSchedules(await api.listSchedules());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load schedules");
     } finally {
-      setIsLoading(false);
+      if (options.showLoading !== false) setIsLoading(false);
     }
   }
 

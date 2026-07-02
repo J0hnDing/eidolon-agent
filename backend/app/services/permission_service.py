@@ -85,6 +85,83 @@ class PermissionService:
         self.db.refresh(request)
         return request
 
+    def create_update_build_time_request(
+        self,
+        skill: Skill,
+        agent_run: AgentRun,
+        blueprint: dict[str, Any],
+        product_manager_summary: str,
+    ) -> ApprovalRequest:
+        existing_requests = self.db.scalars(
+            select(ApprovalRequest)
+            .where(ApprovalRequest.skill_id == skill.id)
+            .where(ApprovalRequest.request_scope == "build_time")
+            .where(ApprovalRequest.request_type == "update")
+            .order_by(ApprovalRequest.created_at.desc(), ApprovalRequest.id.desc())
+        ).all()
+        for existing in existing_requests:
+            if (existing.reason_json or {}).get("agent_run_id") == agent_run.id and existing.status in {
+                "pending",
+                "approved",
+                "denied",
+            }:
+                return existing
+
+        future_permissions = dict(
+            blueprint.get(
+                "requested_permissions",
+                {"network": [], "filesystem_read": [], "filesystem_write": [], "secrets": [], "shell": False},
+            )
+        )
+        dependencies = list(blueprint.get("requested_dependencies", []) or [])
+        network = list(blueprint.get("requested_network_domains", []) or [])
+        filesystem = {
+            "filesystem_read": future_permissions.get("filesystem_read", []),
+            "filesystem_write": future_permissions.get("filesystem_write", []),
+        }
+        risk_level, blocked_reasons = self._risk_for_permissions(future_permissions, dependencies=dependencies)
+        permissions = {
+            "codex_generation": True,
+            "internet_research": bool(network or dependencies),
+            "future_runtime_permissions": future_permissions,
+            "future_runtime_network": network,
+            "future_runtime_filesystem_write": future_permissions.get("filesystem_write", []),
+        }
+        explanation = (
+            f"ProductManager wants to update {skill.name}. "
+            "Approving this lets Builder create a draft version only; it does not activate, install, or run the skill."
+        )
+        request = ApprovalRequest(
+            skill_id=skill.id,
+            request_scope="build_time",
+            request_type="update",
+            risk_level=risk_level,
+            requested_permissions_json=permissions,
+            requested_dependencies_json=dependencies,
+            requested_network_domains_json=network,
+            requested_filesystem_json=filesystem,
+            reason_json={
+                "agent_run_id": agent_run.id,
+                "blueprint_json": blueprint,
+                "blocked_reasons": blocked_reasons,
+                "product_manager_summary": product_manager_summary,
+                "approval_means": "Builder may create a draft version folder for this update.",
+                "approval_does_not_mean": [
+                    "activating the new version",
+                    "running the skill",
+                    "installing packages silently",
+                    "approving runtime permissions",
+                ],
+            },
+            reason=explanation,
+            user_explanation=explanation,
+            status="pending",
+        )
+        self.db.add(request)
+        self.db.commit()
+        self.db.refresh(request)
+        return request
+
     def create_runtime_request(self, skill: Skill) -> ApprovalRequest:
         existing = self._latest_request(skill_id=skill.id, scope="runtime", request_type="install")
         if existing and existing.status in {"pending", "approved", "denied"}:
@@ -323,7 +400,7 @@ class PermissionService:
             parts.append(
                 "The proposed design may later request network access to "
                 + ", ".join(network)
-                + ". Runtime execution will remain blocked until sandboxed network enforcement exists."
+                + ". Runtime execution still requires separate manifest-based approval; domain-level filtering is not enforced yet."
             )
         if dependencies:
             parts.append(

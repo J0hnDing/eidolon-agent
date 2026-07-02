@@ -11,43 +11,23 @@ import {
   SkillGenerationRequest,
   api,
 } from "../api/client";
-
-type ChatMessage = {
-  id: number;
-  role: "user" | "assistant";
-  content: string;
-  kind?: "text" | "thinking" | "build_approval" | "runtime_approval" | "generation_result";
-  generationRequest?: SkillGenerationRequest;
-  permissionRequest?: ApprovalRequest;
-  skill?: Skill;
-  validation?: ProposedSkillValidation | null;
-  agentRun?: AgentRun | null;
-  actionStatus?: "pending" | "working" | "approved" | "denied" | "expired" | "superseded" | "completed" | "failed";
-};
-
-const initialMessages: ChatMessage[] = [
-  {
-    id: 1,
-    role: "assistant",
-    content: "Use Chat mode for normal Codex-backed conversation. Switch to Project mode when you want me to propose a reusable skill.",
-  },
-];
-
-type ChatConversation = {
-  id: string;
-  title: string;
-  messages: ChatMessage[];
-  createdAt: string;
-  updatedAt: string;
-};
-
-const STORAGE_KEY = "personal-agent.chat-conversations.v1";
+import {
+  appendMessages as appendStoredMessages,
+  CHAT_UPDATED_EVENT,
+  ChatConversation,
+  ChatMessage,
+  createConversation,
+  initialMessages,
+  loadActiveConversationId,
+  loadStoredConversations,
+  saveActiveConversationId,
+  saveStoredConversations,
+  updateStoredConversations,
+} from "../lib/chatStore";
 
 export default function ChatPage() {
   const [conversations, setConversations] = useState<ChatConversation[]>(() => loadStoredConversations());
-  const [activeConversationId, setActiveConversationId] = useState(() => conversations[0]?.id ?? createConversation().id);
-  const [draft, setDraft] = useState("");
-  const [mode, setMode] = useState<ChatMode>("chat");
+  const [activeConversationId, setActiveConversationId] = useState(() => loadActiveConversationId(conversations));
   const [approvalResult, setApprovalResult] = useState<SkillGenerationApprovalResponse | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -57,27 +37,39 @@ export default function ChatPage() {
     [activeConversationId, conversations],
   );
   const messages = activeConversation?.messages ?? initialMessages;
+  const draft = activeConversation?.draft ?? "";
+  const mode = activeConversation?.mode ?? "chat";
+  const hasPendingMessage = messages.some(
+    (message) => message.kind === "thinking" || message.actionStatus === "working",
+  );
+  const isBusy = isSending || isGenerating || hasPendingMessage;
 
   useEffect(() => {
     if (conversations.length === 0) {
       const conversation = createConversation();
+      saveStoredConversations([conversation]);
       setConversations([conversation]);
-      setActiveConversationId(conversation.id);
+      selectConversation(conversation.id);
     }
   }, [conversations.length]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
-  }, [conversations]);
+    function handleStoredChatUpdate() {
+      setConversations(loadStoredConversations());
+    }
+    window.addEventListener(CHAT_UPDATED_EVENT, handleStoredChatUpdate);
+    return () => window.removeEventListener(CHAT_UPDATED_EVENT, handleStoredChatUpdate);
+  }, []);
 
   function updateConversation(conversationId: string, updater: (conversation: ChatConversation) => ChatConversation) {
-    setConversations((current) =>
+    const nextConversations = updateStoredConversations((current) =>
       current.map((conversation) =>
         conversation.id === conversationId
           ? updater(conversation)
           : conversation,
       ),
     );
+    setConversations(nextConversations);
   }
 
   function updateActiveConversation(updater: (conversation: ChatConversation) => ChatConversation) {
@@ -86,13 +78,7 @@ export default function ChatPage() {
 
   function appendMessagesToConversation(conversationId: string, newMessages: ChatMessage[]) {
     updateConversation(conversationId, (conversation) => {
-      const firstUserMessage = newMessages.find((message) => message.role === "user")?.content;
-      return {
-        ...conversation,
-        title: conversation.title === "New chat" && firstUserMessage ? makeTitle(firstUserMessage) : conversation.title,
-        messages: [...conversation.messages, ...newMessages],
-        updatedAt: new Date().toISOString(),
-      };
+      return appendStoredMessages(conversation, newMessages);
     });
   }
 
@@ -102,11 +88,32 @@ export default function ChatPage() {
 
   function handleNewChat() {
     const conversation = createConversation();
-    setConversations((current) => [conversation, ...current]);
-    setActiveConversationId(conversation.id);
-    setDraft("");
+    const nextConversations = updateStoredConversations((current) => [conversation, ...current]);
+    setConversations(nextConversations);
+    selectConversation(conversation.id);
     setError(null);
     setApprovalResult(null);
+  }
+
+  function selectConversation(conversationId: string) {
+    saveActiveConversationId(conversationId);
+    setActiveConversationId(conversationId);
+  }
+
+  function updateDraft(value: string) {
+    updateActiveConversation((conversation) => ({
+      ...conversation,
+      draft: value,
+      updatedAt: new Date().toISOString(),
+    }));
+  }
+
+  function updateMode(value: ChatMode) {
+    updateActiveConversation((conversation) => ({
+      ...conversation,
+      mode: value,
+      updatedAt: new Date().toISOString(),
+    }));
   }
 
   function updateMessageInConversation(
@@ -142,9 +149,10 @@ export default function ChatPage() {
     const content = draft.trim();
     if (!content) return;
 
+    const conversationId = activeConversationId;
     const nextId = Date.now();
     const thinkingId = nextId + 1;
-    appendMessages([
+    appendMessagesToConversation(conversationId, [
       { id: nextId, role: "user", content },
       {
         id: thinkingId,
@@ -153,19 +161,19 @@ export default function ChatPage() {
         kind: "thinking",
       },
     ]);
-    setDraft("");
+    updateConversation(conversationId, (conversation) => ({ ...conversation, draft: "" }));
     setIsSending(true);
     setError(null);
     try {
       const response = await api.sendChatMessage(content, mode);
-      removeMessage(thinkingId);
+      removeMessageFromConversation(conversationId, thinkingId);
       if (response.type === "direct_answer" || response.type === "unsafe_or_unsupported") {
-        appendMessages([{ id: nextId + 2, role: "assistant", content: response.message }]);
+        appendMessagesToConversation(conversationId, [{ id: nextId + 2, role: "assistant", content: response.message }]);
       } else if (response.type === "project_not_plausible") {
         const optionalProjects = response.optional_projects.length
           ? `\n\nOptional projects:\n${response.optional_projects.map((project) => `- ${project}`).join("\n")}`
           : "";
-        appendMessages([
+        appendMessagesToConversation(conversationId, [
           {
             id: nextId + 2,
             role: "assistant",
@@ -180,7 +188,7 @@ export default function ChatPage() {
         setApprovalResult(null);
         const displayName =
           generationRequest.proposed_display_name || generationRequest.proposed_skill_name || "this skill";
-        appendMessages([
+        appendMessagesToConversation(conversationId, [
           {
             id: nextId + 2,
             role: "assistant",
@@ -193,8 +201,10 @@ export default function ChatPage() {
         ]);
       }
     } catch (err) {
-      removeMessage(thinkingId);
-      setError(err instanceof Error ? err.message : "Could not send chat message");
+      removeMessageFromConversation(conversationId, thinkingId);
+      const message = err instanceof Error ? err.message : "Could not send chat message";
+      appendMessagesToConversation(conversationId, [{ id: nextId + 3, role: "assistant", content: message }]);
+      setError(message);
     } finally {
       setIsSending(false);
     }
@@ -345,7 +355,7 @@ export default function ChatPage() {
                 key={conversation.id}
                 type="button"
                 className={conversation.id === activeConversationId ? "active" : ""}
-                onClick={() => setActiveConversationId(conversation.id)}
+                onClick={() => selectConversation(conversation.id)}
               >
                 <strong>{conversation.title}</strong>
                 <span>{new Date(conversation.updatedAt).toLocaleString()}</span>
@@ -364,7 +374,7 @@ export default function ChatPage() {
             <button
               type="button"
               className={mode === "chat" ? "active" : ""}
-              onClick={() => setMode("chat")}
+              onClick={() => updateMode("chat")}
               aria-pressed={mode === "chat"}
             >
               Chat
@@ -372,7 +382,7 @@ export default function ChatPage() {
             <button
               type="button"
               className={mode === "project" ? "active" : ""}
-              onClick={() => setMode("project")}
+              onClick={() => updateMode("project")}
               aria-pressed={mode === "project"}
             >
               Project
@@ -393,7 +403,7 @@ export default function ChatPage() {
               />
             </article>
           ))}
-          {(isSending || isGenerating) && (
+          {(isSending || isGenerating) && !messages.some((message) => message.kind === "thinking") && (
             <article className="message assistant thinking-message" aria-label="Codex is thinking">
               <span>assistant</span>
               <div className="thinking-row">
@@ -406,18 +416,18 @@ export default function ChatPage() {
         <form className="composer" onSubmit={handleSubmit}>
           <input
             value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => updateDraft(event.target.value)}
             placeholder={
-              isGenerating
+              isBusy
                 ? "Project build is running..."
                 : mode === "project"
                   ? "Describe the skill you want to propose"
                   : "Type a message"
             }
             aria-label="Chat message"
-            disabled={isGenerating}
+            disabled={isBusy && mode === "project"}
           />
-          <button type="submit" disabled={isSending || isGenerating}>
+          <button type="submit" disabled={isBusy}>
             {isSending ? "Sending..." : "Send"}
           </button>
         </form>
@@ -441,48 +451,6 @@ export default function ChatPage() {
       )}
     </section>
   );
-}
-
-function createConversation(): ChatConversation {
-  const now = new Date().toISOString();
-  return {
-    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    title: "New chat",
-    messages: initialMessages,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-function loadStoredConversations(): ChatConversation[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [createConversation()];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [createConversation()];
-    const conversations = parsed.filter(isStoredConversation);
-    return conversations.length ? conversations : [createConversation()];
-  } catch {
-    return [createConversation()];
-  }
-}
-
-function isStoredConversation(value: unknown): value is ChatConversation {
-  if (!value || typeof value !== "object") return false;
-  const raw = value as Record<string, unknown>;
-  return (
-    typeof raw.id === "string" &&
-    typeof raw.title === "string" &&
-    Array.isArray(raw.messages) &&
-    typeof raw.createdAt === "string" &&
-    typeof raw.updatedAt === "string"
-  );
-}
-
-function makeTitle(content: string): string {
-  const normalized = content.replace(/\s+/g, " ").trim();
-  if (normalized.length <= 42) return normalized || "New chat";
-  return `${normalized.slice(0, 39)}...`;
 }
 
 function MessageBody({

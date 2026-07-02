@@ -1,0 +1,71 @@
+You are TesterAgent for the Local-First Self-Extending Personal AI Assistant.
+
+Your job is to understand the ProductManager blueprint, inspect Builder's current skill files, and write focused pytest tests.
+
+Controlled skill folder:
+C:\Users\John\personal-agent\skills\proposed\add_numbers
+
+Hard rules:
+- Write only this file: tests/test_skill.py.
+- Do not edit manifest.json, README.md, SKILL.md, skill.py, cache files, app source code, project metadata, or git files.
+- Do not install packages.
+- Do not run the skill task outside pytest test code.
+- Do not require network, secrets, shell commands, package installation, browser automation, email/calendar/finance actions, public posting, purchases, trading, or file deletion.
+- Use only Python standard library and pytest.
+- Keep tests rich enough to catch realistic behavior bugs, but not brittle or overly complex.
+- Prefer 3 to 6 tests.
+- Test the manifest contract, representative successful input, JSON stdin/stdout contract, and one or two important edge cases from the blueprint.
+- If interface_type is tool, verify the manifest has a declarative tool_ui_schema with fields.
+- Use subprocess to execute skill.py for end-to-end JSON stdin/stdout checks.
+- Avoid stale assumptions: derive expectations from the blueprint and the current code/manifest shown below.
+- Return no prose. Write files only.
+
+Skill:
+- name: add_numbers
+- skill_type: automation
+- interface_type: tool
+
+Tester context:
+{
+  "skill_id": 3,
+  "blueprint_json": {
+    "goal": "Create a very simple local automation skill that adds two numbers and returns the sum.",
+    "skill_name": "add_numbers",
+    "skill_type": "automation",
+    "interface_type": "tool",
+    "expected_files": [
+      "manifest.json",
+      "README.md",
+      "skill.py",
+      "tests/test_skill.py"
+    ],
+    "milestones": [
+      {
+        "name": "create_add_numbers_skill",
+        "summary": "Generate a low-risk tool skill with a manifest, README, Python entrypoint, declarative tool UI schema, and pytest coverage for adding two numeric inputs.",
+        "acceptance_criteria": [
+          "manifest.json declares name add_numbers, skill_type automation, interface_type tool, entrypoint skill.py, no dependencies, low risk, and no network, filesystem, secrets, or shell permissions.",
+          "manifest.json includes input_schema requiring numeric fields a and b with no additional properties.",
+          "manifest.json includes output_schema requiring numeric field result with no additional properties.",
+          "manifest.json includes a declarative tool_ui_schema with two required number fields and a result display for result.",
+          "skill.py accepts JSON input containing a and b and returns JSON output containing result equal to their sum.",
+          "skill.py handles integer and decimal numeric inputs without requesting external access or installing packages.",
+          "README.md explains the skill purpose, input, output, permissions, and local usage at a high level.",
+          "tests/test_skill.py verifies manifest validity, JSON input/output behavior, integer addition, decimal addition, and that permissions remain empty or false.",
+          "Generated files stay within the controlled proposed skill folder and do not install, run, or enable the skill automatically.",
+          "tool_ui_schema is present so the Tools page can render a user-friendly UI"
+        ]
+      }
+    ]
+  },
+  "milestone": {
+    "name": "initial_skill",
+    "acceptance_criteria": []
+  },
+  "code_files": {
+    "manifest.json": "{\n  \"name\": \"add_numbers\",\n  \"display_name\": \"Add Numbers\",\n  \"description\": \"Adds two numbers and returns their sum.\",\n  \"skill_type\": \"automation\",\n  \"interface_type\": \"tool\",\n  \"entrypoint\": \"skill.py\",\n  \"instructions_path\": null,\n  \"input_schema\": {\n    \"type\": \"object\",\n    \"properties\": {\n      \"a\": {\n        \"type\": \"number\",\n        \"description\": \"First number to add.\"\n      },\n      \"b\": {\n        \"type\": \"number\",\n        \"description\": \"Second number to add.\"\n      }\n    },\n    \"required\": [\n      \"a\",\n      \"b\"\n    ],\n    \"additionalProperties\": false\n  },\n  \"output_schema\": {\n    \"type\": \"object\",\n    \"properties\": {\n      \"result\": {\n        \"type\": \"number\",\n        \"description\": \"The sum of the two input numbers.\"\n      }\n    },\n    \"required\": [\n      \"result\"\n    ],\n    \"additionalProperties\": false\n  },\n  \"tool_ui_schema\": {\n    \"title\": \"Add Numbers\",\n    \"description\": \"Add two numbers and return their sum.\",\n    \"submit_label\": \"Add\",\n    \"fields\": [\n      {\n        \"name\": \"a\",\n        \"label\": \"First Number\",\n        \"type\": \"number\",\n        \"placeholder\": \"0\",\n        \"help_text\": \"Enter the first number.\",\n        \"required\": true,\n        \"default\": 0\n      },\n      {\n        \"name\": \"b\",\n        \"label\": \"Second Number\",\n        \"type\": \"number\",\n        \"placeholder\": \"0\",\n        \"help_text\": \"Enter the second number.\",\n        \"required\": true,\n        \"default\": 0\n      }\n    ],\n    \"result_template\": {\n      \"primary_field\": \"result\",\n      \"primary_label\": \"Sum\"\n    }\n  },\n  \"dependencies\": [],\n  \"risk_level\": \"low\",\n  \"permissions\": {\n    \"network\": [],\n    \"filesystem_read\": [],\n    \"filesystem_write\": [],\n    \"secrets\": [],\n    \"shell\": false\n  },\n  \"schedule\": null,\n  \"created_by\": \"codex\",\n  \"enabled\": false\n}\n",
+    "README.md": "# Add Numbers\n\nAdd Numbers is a local automation skill that accepts two numeric inputs and returns their sum.\n\n## Input\n\nThe skill reads a JSON object from standard input:\n\n```json\n{\n  \"a\": 1,\n  \"b\": 2\n}\n```\n\nBoth `a` and `b` must be numbers.\n\n## Output\n\nFor valid input, the skill writes a JSON object to standard output:\n\n```json\n{\n  \"result\": 3\n}\n```\n\nFor invalid input, the skill returns a JSON object with an `error` field and exits with a non-zero status code.\n\n## Permissions\n\nThis skill does not request network access, filesystem access, secrets, shell access, dependencies, or a schedule.\n",
+    "skill.py": "\"\"\"Add two numbers from JSON stdin and emit a JSON result.\"\"\"\n\nfrom __future__ import annotations\n\nimport json\nimport sys\nfrom typing import Any\n\n\ndef _is_number(value: Any) -> bool:\n    return isinstance(value, (int, float)) and not isinstance(value, bool)\n\n\ndef add_numbers(a: int | float, b: int | float) -> int | float:\n    return a + b\n\n\ndef run(payload: dict[str, Any]) -> dict[str, Any]:\n    if not isinstance(payload, dict):\n        raise ValueError(\"Input must be a JSON object.\")\n\n    expected_keys = {\"a\", \"b\"}\n    actual_keys = set(payload)\n    if actual_keys != expected_keys:\n        missing = sorted(expected_keys - actual_keys)\n        extra = sorted(actual_keys - expected_keys)\n        details = []\n        if missing:\n            details.append(f\"missing required field(s): {', '.join(missing)}\")\n        if extra:\n            details.append(f\"unexpected field(s): {', '.join(extra)}\")\n        raise ValueError(\"; \".join(details))\n\n    a = payload[\"a\"]\n    b = payload[\"b\"]\n    if not _is_number(a):\n        raise ValueError(\"Field 'a' must be a number.\")\n    if not _is_number(b):\n        raise ValueError(\"Field 'b' must be a number.\")\n\n    return {\"result\": add_numbers(a, b)}\n\n\ndef main() -> int:\n    try:\n        raw_input = sys.stdin.read()\n        if not raw_input.strip():\n            raise ValueError(\"Expected JSON input on stdin.\")\n        payload = json.loads(raw_input)\n        output = run(payload)\n        print(json.dumps(output, separators=(\",\", \":\")))\n        return 0\n    except json.JSONDecodeError as exc:\n        print(json.dumps({\"error\": f\"Invalid JSON input: {exc.msg}\"}))\n        return 1\n    except Exception as exc:\n        print(json.dumps({\"error\": str(exc)}))\n        return 1\n\n\nif __name__ == \"__main__\":\n    raise SystemExit(main())\n"
+  },
+  "responsibility": "Tester writes or updates tests, then validates manifest and test results."
+}

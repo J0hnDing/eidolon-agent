@@ -115,6 +115,7 @@ export interface SkillVersion {
 export interface SkillUpdateResponse {
   agent_run_id: number;
   version: SkillVersion | null;
+  permission_request: ApprovalRequest | null;
   status: string;
   message: string;
 }

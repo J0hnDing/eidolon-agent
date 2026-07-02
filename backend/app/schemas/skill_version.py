@@ -3,6 +3,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.approval_request import ApprovalRequestRead
 from app.schemas.common import SkillVersionActor, SkillVersionStatus
 
 
@@ -41,6 +42,7 @@ class SkillUpdateSuggestion(BaseModel):
 class SkillUpdateResponse(BaseModel):
     agent_run_id: int
     version: SkillVersionRead | None = None
+    permission_request: ApprovalRequestRead | None = None
     status: str
     message: str
 

@@ -1,4 +1,5 @@
 import json
+import subprocess
 from collections.abc import Generator
 from pathlib import Path
 
@@ -209,7 +210,8 @@ def test_pm_blocks_unrealistic_suggestion(tmp_path: Path, db_session: Session) -
     agent_run = service.create_update_run(skill, "Make it sentient and guarantee perfect results")
 
     assert agent_run.status == "blocked"
-    assert "too broad or unrealistic" in (agent_run.error_message or "")
+    assert agent_run.error_message is None
+    assert "too broad or unrealistic" in (agent_run.summary or "")
 
 
 def test_pm_can_propose_better_solution_for_broad_request(tmp_path: Path, db_session: Session) -> None:
@@ -218,7 +220,8 @@ def test_pm_can_propose_better_solution_for_broad_request(tmp_path: Path, db_ses
     agent_run = AgentWorkflowService(db_session, project_root=tmp_path).create_update_run(skill, "do everything")
 
     assert agent_run.status == "blocked"
-    assert "better next project" in (agent_run.error_message or "")
+    assert agent_run.error_message is None
+    assert "better next project" in (agent_run.summary or "")
 
 
 def test_update_workflow_creates_blueprint_and_builder_edits_only_new_version(
@@ -262,6 +265,69 @@ def test_update_product_manager_review_uses_codex_adapter(tmp_path: Path, db_ses
 
     assert "product_manager_update_review" in adapter.tasks
     assert "product_manager_summary" in adapter.tasks
+
+
+def test_update_request_permission_waits_and_resumes_after_approval(tmp_path: Path, db_session: Session) -> None:
+    skill = create_installed_skill(db_session, tmp_path)
+
+    class PermissionFirstAdapter(FakeCodexAdapter):
+        def generate(self, prompt: str, output_dir: Path, plan: dict):
+            if plan.get("codex_task") == "product_manager_update_review":
+                payload = {
+                    "decision": "request_permission",
+                    "summary": "This update is valid, but build-time internet research needs approval first.",
+                    "blueprint": {
+                        "goal": "Add public documentation lookup support.",
+                        "skill_name": skill.name,
+                        "skill_type": skill.skill_type,
+                        "interface_type": skill.interface_type,
+                        "suggestion": plan["suggestion"],
+                        "requested_network_domains": ["docs.python.org"],
+                        "requested_dependencies": [],
+                        "requested_permissions": {
+                            "network": ["docs.python.org"],
+                            "filesystem_read": [],
+                            "filesystem_write": [],
+                            "secrets": [],
+                            "shell": False,
+                        },
+                        "milestones": [
+                            {
+                                "name": "update_version",
+                                "summary": "Create the approved draft update.",
+                                "acceptance_criteria": ["draft version tests pass"],
+                            }
+                        ],
+                    },
+                }
+                return subprocess.CompletedProcess(args=["fake"], returncode=0, stdout=json.dumps(payload), stderr="")
+            return super().generate(prompt, output_dir, plan)
+
+    service = AgentWorkflowService(
+        db_session,
+        codex_service=CodexService(db_session, adapter=PermissionFirstAdapter(), project_root=tmp_path),
+        project_root=tmp_path,
+    )
+
+    agent_run = service.create_update_run(skill, "Let the update look at Python docs online")
+    request = db_session.query(ApprovalRequest).filter_by(
+        skill_id=skill.id,
+        request_scope="build_time",
+        request_type="update",
+    ).one()
+
+    assert agent_run.status == "waiting_for_approval"
+    assert agent_run.error_message is None
+    assert request.status == "pending"
+    assert request.requested_network_domains_json == ["docs.python.org"]
+
+    PermissionService(db_session, project_root=tmp_path).approve_request(request)
+    service.resume_run(agent_run)
+
+    db_session.refresh(agent_run)
+    versions = SkillVersionService(db_session, project_root=tmp_path).list_versions(skill)
+    assert agent_run.status in {"succeeded", "waiting_for_approval"}
+    assert any(version.version == "v2" for version in versions)
 
 
 def test_old_version_remains_runnable_after_failed_update(tmp_path: Path, db_session: Session) -> None:

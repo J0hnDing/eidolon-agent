@@ -94,6 +94,16 @@ class ProposedSkillService:
                 continue
             manifest_path = skill_dir / "manifest.json"
             active_dir = skill_dir
+            skill = self.db.scalar(select(Skill).where(Skill.name == skill_dir.name))
+            if skill is not None and skill.status == "installed" and skill.active_version_id:
+                active_version = self.db.get(SkillVersion, skill.active_version_id)
+                if active_version is not None and active_version.folder_path:
+                    candidate_dir = (self.project_root / active_version.folder_path).resolve()
+                    installed_root = (self.project_root / "skills" / "installed").resolve()
+                    candidate_manifest = candidate_dir / "manifest.json"
+                    if candidate_dir.is_relative_to(installed_root) and candidate_manifest.is_file():
+                        active_dir = candidate_dir
+                        manifest_path = candidate_manifest
             if not manifest_path.is_file():
                 version_dirs = sorted((skill_dir / "versions").glob("v*")) if (skill_dir / "versions").is_dir() else []
                 for version_dir in version_dirs:
@@ -108,7 +118,7 @@ class ProposedSkillService:
                 manifest = validate_manifest_file(manifest_path)
             except ManifestValidationError:
                 continue
-            skill = self.db.scalar(select(Skill).where(Skill.name == manifest.name))
+            skill = skill or self.db.scalar(select(Skill).where(Skill.name == manifest.name))
             if skill is not None:
                 if skill.status == "installed":
                     skill.description = manifest.description

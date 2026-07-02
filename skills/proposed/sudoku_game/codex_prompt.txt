@@ -1,0 +1,73 @@
+You are BuilderAgent repairing an application skill for the Local-First Self-Extending Personal AI Assistant.
+
+Skill:
+- name: sudoku_game
+- skill_type: automation
+- interface_type: tool
+
+Controlled skill folder:
+C:\Users\John\personal-agent\skills\proposed\sudoku_game
+
+Rules:
+- Write only inside the controlled skill folder.
+- Do not modify backend, frontend, project metadata, git files, or app source code.
+- Do not install packages.
+- Do not run the skill task automatically.
+- Do not set shell=true.
+- Do not add secrets, broad filesystem access, unrestricted network access, email/calendar/finance actions, browser automation, purchases, public posting, or file deletion.
+- Preserve manifest.json, README.md, and required skill files.
+- Preserve or reduce permissions unless the failure cannot be fixed without a declared permission change.
+- Do not create or edit tests; TesterAgent owns tests.
+- Executable skills must read JSON from stdin and return JSON on stdout.
+
+Failure context:
+{
+  "user_request": "I want to build a sudoku game",
+  "skill_id": 2,
+  "skill_name": "sudoku_game",
+  "status": "building",
+  "blueprint_json": {
+    "goal": "Build a local Sudoku tool that generates playable puzzles, checks completed grids, validates solutions, and can return a safe hint without network access or external dependencies.",
+    "skill_name": "sudoku_game",
+    "skill_type": "automation",
+    "interface_type": "tool",
+    "expected_files": [
+      "manifest.json",
+      "README.md",
+      "skill.py",
+      "tests/test_skill.py"
+    ],
+    "milestones": [
+      {
+        "name": "local_sudoku_tool",
+        "summary": "Create a self-contained Python Sudoku automation skill with declarative tool UI metadata, JSON input/output schemas, puzzle generation, solution checking, hint support, and pytest coverage.",
+        "acceptance_criteria": [
+          "manifest.json declares skill_name sudoku_game, skill_type automation, interface_type tool, entrypoint skill.py, no dependencies, low risk, no network, no filesystem access, no secrets, and shell false",
+          "manifest.json includes input_schema, output_schema, and a declarative tool_ui_schema for generate/check mode, difficulty, puzzle, solution, and include_hint fields",
+          "skill.py accepts JSON input on stdin and returns JSON output on stdout matching the declared output schema",
+          "generate mode returns an 81-character puzzle, human-readable 9x9 grid, selected difficulty, no validation errors, and a short message",
+          "check mode validates puzzle and solution strings for length, allowed characters, row/column/box rules, completion status, and incorrect entries",
+          "include_hint returns one deterministic safe next-cell hint when a puzzle is provided and a hint is possible",
+          "implementation uses only local deterministic Sudoku logic and does not access network, shell, secrets, or files outside the skill package",
+          "README.md explains local usage, accepted input fields, output fields, limitations, and that the skill runs without network access",
+          "tests/test_skill.py covers manifest validity, generate mode, check mode success and failure cases, malformed input handling, hint behavior, and JSON schema contract expectations",
+          "tool_ui_schema is present so the Tools page can render a user-friendly UI"
+        ]
+      }
+    ]
+  },
+  "recent_runs": [],
+  "test_result_json": {
+    "ok": false,
+    "skill_type": "automation",
+    "manifest_valid": true,
+    "tests_run": true,
+    "tests_passed": false,
+    "stdout": "============================= test session starts =============================\nplatform win32 -- Python 3.14.6, pytest-9.1.1, pluggy-1.6.0\nrootdir: C:\\Users\\John\\personal-agent\\skills\\proposed\\sudoku_game\nplugins: anyio-4.14.1\ncollected 6 items\n\ntests\\test_skill.py ...F..                                               [100%]\n\n================================== FAILURES ===================================\n________ test_check_mode_rejects_incorrect_and_rule_breaking_solution _________\n\n    def test_check_mode_rejects_incorrect_and_rule_breaking_solution():\n        bad_solution = \"1\" + SOLVED_GRID[1:]\n        result = run_skill({\"mode\": \"check\", \"puzzle\": PUZZLE, \"solution\": bad_solution})\n    \n        assert_output_contract(result)\n        assert result[\"is_valid\"] is False\n>       assert result[\"is_complete\"] is True\nE       assert False is True\n\ntests\\test_skill.py:162: AssertionError\n=========================== short test summary info ===========================\nFAILED tests/test_skill.py::test_check_mode_rejects_incorrect_and_rule_breaking_solution\n========================= 1 failed, 5 passed in 0.46s =========================\n",
+    "stderr": "",
+    "error_message": "Skill tests failed",
+    "warnings": []
+  }
+}
+
+Repair the current milestone using the provided Tester failure context so validation can be rerun. Return no prose; write files only.
