@@ -320,13 +320,14 @@ def test_implausible_project_reports_reason_and_does_not_create_generation_reque
     assert db_session.query(SkillGenerationRequest).count() == 0
 
 
-def test_unsafe_chat_request_is_rejected(db_session: Session) -> None:
+def test_project_mode_does_not_use_backend_unsafe_keyword_heuristic(db_session: Session) -> None:
     response = ChatOrchestrator(db_session).handle_message(
         "Make a skill that deletes files automatically.",
         mode="project",
     )
 
-    assert response["type"] == "unsafe_or_unsupported"
+    assert response["type"] == "skill_generation_plan"
+    assert db_session.query(SkillGenerationRequest).count() == 1
 
 
 def test_generation_request_contains_plan_permissions_and_dependencies(db_session: Session) -> None:
@@ -356,6 +357,56 @@ def test_generation_request_contains_plan_permissions_and_dependencies(db_sessio
     assert generation_request.requested_permissions_json["network"]
     assert "requests" in generation_request.requested_dependencies_json
     assert generation_request.risk_level == "medium"
+
+
+def test_build_time_permission_allows_skill_own_cache_read(db_session: Session) -> None:
+    response = ChatOrchestrator(
+        db_session,
+        skill_plan_service=SkillPlanService(
+            adapter=FixedSkillPlanAdapter(
+                skill_plan(
+                    requested_permissions={
+                        "network": [],
+                        "filesystem_read": ["./cache"],
+                        "filesystem_write": ["./cache"],
+                        "secrets": [],
+                        "shell": False,
+                    },
+                )
+            )
+        ),
+    ).handle_message("Create a local game tool with cache-backed state.", mode="project")
+
+    permission_request = response["permission_request"]
+    assert permission_request.risk_level == "low"
+    assert permission_request.requested_filesystem_json["filesystem_read"] == ["./cache"]
+
+
+def test_stale_blocked_build_time_request_is_refreshed_before_approval(db_session: Session) -> None:
+    response = ChatOrchestrator(
+        db_session,
+        skill_plan_service=SkillPlanService(
+            adapter=FixedSkillPlanAdapter(
+                skill_plan(
+                    requested_permissions={
+                        "network": [],
+                        "filesystem_read": ["./cache"],
+                        "filesystem_write": ["./cache"],
+                        "secrets": [],
+                        "shell": False,
+                    },
+                )
+            )
+        ),
+    ).handle_message("Create a local game tool with cache-backed state.", mode="project")
+    permission_request = response["permission_request"]
+    permission_request.risk_level = "blocked"
+    db_session.commit()
+
+    approved = PermissionService(db_session).approve_request(permission_request)
+
+    assert approved.status == "approved"
+    assert approved.risk_level == "low"
 
 
 def test_skill_plan_service_uses_adapter_decided_skill_and_interface_type() -> None:

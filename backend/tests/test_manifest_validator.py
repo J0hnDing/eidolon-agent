@@ -140,6 +140,16 @@ def test_manifest_requires_risk_level_to_match_permissions() -> None:
         validate_manifest(data)
 
 
+def test_manifest_treats_own_cache_read_as_low_risk() -> None:
+    data = valid_manifest()
+    data["permissions"]["filesystem_read"] = ["./cache"]
+    data["permissions"]["filesystem_write"] = ["./cache"]
+
+    manifest = validate_manifest(data)
+
+    assert manifest.risk_level == "low"
+
+
 def test_manifest_accepts_declared_medium_risk_for_filesystem_read() -> None:
     data = valid_manifest()
     data["risk_level"] = "medium"

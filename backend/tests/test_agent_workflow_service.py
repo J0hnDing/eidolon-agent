@@ -36,14 +36,15 @@ def test_product_manager_creates_blueprint_and_milestones(db_session: Session) -
     building_skill = db_session.get(Skill, response["generation_request"].proposed_skill_id)
 
     assert agent_run.status == "waiting_for_approval"
-    assert agent_run.current_step == "security_reviewer"
-    assert agent_run.current_milestone == "initial_skill"
+    assert agent_run.current_step == "product_manager"
+    assert agent_run.current_milestone == "core_skill"
     assert building_skill.status == "building"
-    assert agent_run.blueprint_json["milestones"][0]["name"] == "initial_skill"
-    assert [step.step_name for step in agent_run.steps] == ["product_manager", "security_reviewer"]
+    assert agent_run.blueprint_json["milestones"][0]["name"] == "core_skill"
+    assert [step.step_name for step in agent_run.steps] == ["product_manager"]
     assert agent_run.steps[0].output_json["decision_json"]["decision"] == "request_permission"
-    security_step = agent_run.steps[1]
-    assert security_step.input_json["blueprint_json"]["skill_name"] == building_skill.name
+    assert agent_run.steps[0].output_json["blueprint_json"]["skill_name"] == building_skill.name
+    assert agent_run.steps[0].output_json["permission_path"].endswith("permissions.json")
+    assert agent_run.steps[0].output_json["milestone_paths"][0].endswith("milestones/core_skill.json")
 
 
 def test_product_manager_uses_codex_adapter_for_blueprint_and_summary(tmp_path: Path, db_session: Session) -> None:
@@ -70,7 +71,7 @@ def test_product_manager_uses_codex_adapter_for_blueprint_and_summary(tmp_path: 
     assert "product_manager_summary" in adapter.tasks
 
 
-def test_approval_updates_waiting_security_reviewer_step(db_session: Session) -> None:
+def test_approval_updates_waiting_product_manager_permission_step(db_session: Session) -> None:
     response = ChatOrchestrator(db_session).handle_message("Create a reusable local workflow skill.", mode="project")
     permission_request = response["permission_request"]
 
@@ -78,9 +79,9 @@ def test_approval_updates_waiting_security_reviewer_step(db_session: Session) ->
 
     agent_run = AgentWorkflowService(db_session).latest_run_for_generation(response["generation_request"].id)
     db_session.refresh(response["generation_request"])
-    security_step = [step for step in agent_run.steps if step.step_name == "security_reviewer"][0]
-    assert security_step.status == "succeeded"
-    assert security_step.output_json["status"] == "approved"
+    pm_step = [step for step in agent_run.steps if step.step_name == "product_manager"][0]
+    assert pm_step.status == "succeeded"
+    assert pm_step.output_json["status"] == "approved"
     assert agent_run.status == "pending"
     assert response["generation_request"].status == "approved"
 
@@ -102,14 +103,14 @@ def test_resume_after_generic_approval_runs_builder(tmp_path: Path, db_session: 
     assert all(step.error_message != "Generation request is not approved for generation" for step in resumed.steps)
 
 
-def test_build_time_permission_summary_has_pm_and_security_parts(db_session: Session) -> None:
+def test_build_time_permission_summary_has_pm_and_permission_review_parts(db_session: Session) -> None:
     response = ChatOrchestrator(db_session).handle_message("Create a reusable local workflow skill.", mode="project")
     permission_request = response["permission_request"]
 
     assert "ProductManager:" in permission_request.user_explanation
-    assert "SecurityReviewer:" in permission_request.user_explanation
+    assert "Permission review:" in permission_request.user_explanation
     assert permission_request.reason_json["product_manager_summary"]
-    assert permission_request.reason_json["security_reviewer_summary"]
+    assert permission_request.reason_json["permission_review_summary"]
 
 
 def test_workflow_pauses_for_single_user_approval_before_build(tmp_path: Path, db_session: Session) -> None:
@@ -123,7 +124,7 @@ def test_workflow_pauses_for_single_user_approval_before_build(tmp_path: Path, d
     assert not (tmp_path / "skills" / "proposed").exists()
 
 
-def test_approved_build_uses_four_roles_and_updates_security_step(tmp_path: Path, db_session: Session) -> None:
+def test_approved_build_uses_pm_builder_tester_and_permission_artifacts(tmp_path: Path, db_session: Session) -> None:
     generation_request = create_generation_request(db_session)
     AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
     approve_generation(db_session, generation_request, tmp_path)
@@ -144,13 +145,13 @@ def test_approved_build_uses_four_roles_and_updates_security_step(tmp_path: Path
         "product_manager",
         "builder",
         "tester",
-        "security_reviewer",
     }
-    first_security_step = [step for step in agent_run.steps if step.step_name == "security_reviewer"][0]
-    assert first_security_step.status == "succeeded"
-    assert "Approved by local user" in first_security_step.logs
-    runtime_security_step = [step for step in agent_run.steps if step.step_name == "security_reviewer"][-1]
-    assert runtime_security_step.input_json["blueprint_json"]["skill_name"] == skill.name
+    first_pm_step = [step for step in agent_run.steps if step.step_name == "product_manager"][0]
+    assert first_pm_step.status == "succeeded"
+    assert "Approved by local user" in first_pm_step.logs
+    runtime_artifact = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "runtime_permissions.json"
+    assert runtime_artifact.is_file()
+    assert json.loads(runtime_artifact.read_text(encoding="utf-8"))["skill_id"] == skill.id
     tester_step = [step for step in agent_run.steps if step.step_name == "tester"][0]
     assert "skill.py" in tester_step.input_json["code_files"]
     assert tester_step.output_json["tests_written"] == ["tests/test_skill.py"]
@@ -159,6 +160,62 @@ def test_approved_build_uses_four_roles_and_updates_security_step(tmp_path: Path
     test_source = test_file.read_text(encoding="utf-8")
     assert "test_manifest_matches_blueprint_and_safe_contract" in test_source
     assert "test_skill_accepts_representative_input_and_outputs_json_object" in test_source
+
+
+def test_build_workflow_executes_pm_milestone_files_in_order(tmp_path: Path, db_session: Session) -> None:
+    generation_request = create_generation_request(db_session)
+
+    class TwoMilestoneAdapter(FakeCodexAdapter):
+        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            result = super().generate(prompt, output_dir, plan)
+            if plan.get("codex_task") == "product_manager_build_blueprint":
+                payload = json.loads(result.stdout)
+                payload["blueprint"]["milestones"] = [
+                    {
+                        "name": "scaffold",
+                        "summary": "Create the basic skill package files.",
+                        "acceptance_criteria": ["manifest.json is valid", "skill.py exists"],
+                    },
+                    {
+                        "name": "edge_cases",
+                        "summary": "Add input edge case behavior.",
+                        "acceptance_criteria": ["empty input returns JSON", "tests pass"],
+                    },
+                ]
+                return subprocess.CompletedProcess(
+                    args=result.args,
+                    returncode=0,
+                    stdout=json.dumps(payload),
+                    stderr="",
+                )
+            return result
+
+    adapter = TwoMilestoneAdapter()
+    service = AgentWorkflowService(
+        db_session,
+        codex_service=CodexService(db_session, adapter=adapter, project_root=tmp_path),
+        project_root=tmp_path,
+    )
+    agent_run = service.create_build_run(generation_request)
+    approve_generation(db_session, generation_request, tmp_path)
+
+    agent_run, _skill, validation = service.continue_build_after_approval(generation_request)
+
+    assert validation.ok is True
+    assert agent_run.status == "succeeded"
+    assert agent_run.failure_count_json == {"scaffold": 0, "edge_cases": 0}
+    assert [step.milestone_name for step in agent_run.steps if step.step_name == "builder"] == ["scaffold", "edge_cases"]
+    assert [step.milestone_name for step in agent_run.steps if step.step_name == "tester"] == ["scaffold", "edge_cases"]
+    scaffold_file = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "milestones" / "scaffold.json"
+    edge_file = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "milestones" / "edge_cases.json"
+    assert scaffold_file.is_file()
+    assert edge_file.is_file()
+    scaffold_payload = json.loads(scaffold_file.read_text(encoding="utf-8"))
+    assert "blueprint_path" not in scaffold_payload
+    assert "permission_path" not in scaffold_payload
+    builder_steps = [step for step in agent_run.steps if step.step_name == "builder"]
+    assert builder_steps[0].input_json["milestone_path"].endswith("milestones/scaffold.json")
+    assert builder_steps[1].input_json["milestone_path"].endswith("milestones/edge_cases.json")
 
 
 def test_tester_agent_invokes_codex_with_blueprint_and_code_context(tmp_path: Path, db_session: Session) -> None:
@@ -230,7 +287,7 @@ def test_failed_test_triggers_builder_repair(tmp_path: Path, db_session: Session
 
     assert adapter.calls == 4
     assert validation.ok is True
-    assert agent_run.failure_count_json["initial_skill"] == 1
+    assert agent_run.failure_count_json["core_skill"] == 1
     builder_steps = [step for step in agent_run.steps if step.step_name == "builder"]
     assert builder_steps[0].input_json["mode"] == "build"
     assert builder_steps[1].input_json["mode"] == "repair"
@@ -265,8 +322,8 @@ def test_more_than_three_failures_stops_workflow(tmp_path: Path, db_session: Ses
 
     assert validation.ok is False
     assert agent_run.status == "failed"
-    assert agent_run.failure_count_json["initial_skill"] == 4
-    assert agent_run.final_summary_json["failure_count_json"]["initial_skill"] == 4
+    assert agent_run.failure_count_json["core_skill"] == 4
+    assert agent_run.final_summary_json["failure_count_json"]["core_skill"] == 4
     assert skill.status == "failed"
     product_manager_steps = [step for step in agent_run.steps if step.step_name == "product_manager"]
     assert product_manager_steps[-1].output_json["decision_json"]["decision"] == "stop_failed"
@@ -313,7 +370,7 @@ def test_builder_user_action_required_blocks_workflow(tmp_path: Path, db_session
     assert agent_run.final_summary_json["user_action_required"]["exact_blocker"] == "missing API key"
 
 
-def test_security_reviewer_records_permission_expansion(tmp_path: Path, db_session: Session) -> None:
+def test_permission_review_records_permission_expansion(tmp_path: Path, db_session: Session) -> None:
     generation_request = create_generation_request(db_session)
     AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
     approve_generation(db_session, generation_request, tmp_path)
@@ -336,9 +393,9 @@ def test_security_reviewer_records_permission_expansion(tmp_path: Path, db_sessi
         project_root=tmp_path,
     ).continue_build_after_approval(generation_request)
 
-    runtime_security_step = [step for step in agent_run.steps if step.step_name == "security_reviewer"][-1]
-    assert runtime_security_step.status == "waiting_for_approval"
-    assert runtime_security_step.output_json["security_review_json"]["permission_expansion"] == {"network": ["example.com"]}
+    runtime_artifact = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "runtime_permissions.json"
+    runtime_review = json.loads(runtime_artifact.read_text(encoding="utf-8"))
+    assert runtime_review["permission_expansion"] == {"network": ["example.com"]}
 
 
 def test_repair_agent_run_creates_proposed_copy_for_installed_skill(tmp_path: Path, db_session: Session) -> None:

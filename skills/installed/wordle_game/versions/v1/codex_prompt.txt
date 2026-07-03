@@ -1,0 +1,116 @@
+You are TesterAgent validating one milestone of an application skill.
+
+Read the ProductManager blueprint, current milestone file, milestone acceptance criteria, and Builder-created files. Then write rich but not overly complicated pytest tests for the current milestone.
+
+Rules:
+- Write only this file: tests/test_skill.py.
+- Do not edit manifest.json, README.md, SKILL.md, skill.py, cache files, app source code, project metadata, or git files.
+- Use only Python standard library and pytest.
+- Prefer 3 to 6 focused tests.
+- Test the manifest contract, representative successful input, JSON stdin/stdout behavior for executable skills, and one or two important edge cases from the blueprint.
+- Include checks that correspond to the current milestone acceptance criteria.
+- If interface_type is tool, verify manifest.json has a declarative tool_ui_schema with fields.
+- Do not require network, secrets, shell commands, package installation, browser automation, email/calendar/finance actions, public posting, purchases, trading, or file deletion.
+- Use subprocess inside pytest only for executable JSON stdin/stdout checks.
+
+Return no prose. Write files only.
+
+Controlled skill folder:
+C:\Users\John\personal-agent\skills\proposed\wordle_game
+
+Skill:
+- name: wordle_game
+- skill_type: automation
+- interface_type: tool
+
+Tester context:
+{
+  "skill_id": 2,
+  "blueprint_json": {
+    "goal": "Build a local Wordle-style five-letter word guessing game that runs manually as a tool skill, preserves session state in the skill cache, and returns structured JSON feedback for each guess.",
+    "skill_name": "wordle_game",
+    "skill_type": "automation",
+    "interface_type": "tool",
+    "expected_files": [
+      "manifest.json",
+      "README.md",
+      "skill.py",
+      "tests/test_skill.py",
+      "cache/"
+    ],
+    "expected_behavior": {
+      "input": "Accept JSON input with required five-letter guess plus optional session_id and new_game fields.",
+      "output": "Return JSON containing result, session_id, normalized guess, per-letter feedback, attempts_used, attempts_remaining, game_status, and answer only when won or lost.",
+      "game_rules": "Allow six attempts per session, score duplicate letters correctly, mark feedback statuses as correct, present, or absent, and prevent continued guessing after win or loss unless new_game is true.",
+      "state": "Persist session state under ./cache so repeated calls with the same session_id continue the same game.",
+      "tool_ui_schema": "manifest.json must include a declarative tool_ui_schema with fields for guess, optional session_id, and new_game; no generated frontend code is allowed."
+    },
+    "milestones": [
+      {
+        "name": "wordle_tool_core",
+        "summary": "Create the Wordle tool skill package with manifest metadata, declarative tool UI schema, Python JSON stdin/stdout entrypoint, local word list, game scoring, and cache-backed session state.",
+        "acceptance_criteria": [
+          "manifest.json declares name wordle_game, skill_type automation, interface_type tool, entrypoint skill.py, no dependencies, risk_level low, no network, filesystem_write limited to ./cache, shell false, and a declarative tool_ui_schema for guess, session_id, and new_game.",
+          "skill.py accepts a single JSON object, validates guess as exactly five alphabetic characters, normalizes guesses to uppercase or lowercase consistently, and returns only JSON on stdout.",
+          "The game uses six attempts, returns feedback for exactly five letters, supports statuses correct, present, and absent, and handles duplicate letters using Wordle-style count limits.",
+          "The skill creates or resumes a session by session_id, uses a default session when session_id is omitted or blank, and persists state only inside ./cache.",
+          "new_game true resets the selected session before applying the submitted guess.",
+          "The answer is null while game_status is in_progress and included only after game_status is won or lost.",
+          "README.md explains local use, inputs, outputs, session behavior, and permission requirements without claiming the skill is installed or approved.",
+          "tool_ui_schema is present so the Tools page can render a user-friendly UI"
+        ]
+      },
+      {
+        "name": "wordle_validation_tests",
+        "summary": "Add pytest coverage for the Wordle behavior, manifest contract, JSON interface, and cache-backed session continuity.",
+        "acceptance_criteria": [
+          "tests/test_skill.py verifies manifest permissions, interface_type tool, tool_ui_schema fields, input/output schemas where present, and absence of network, secrets, shell, and external dependencies.",
+          "Tests cover new game creation, valid guess feedback, duplicate-letter scoring, win state, loss state after six attempts, invalid guess rejection, default session behavior, named session continuity, and new_game reset behavior.",
+          "Tests verify skill.py can be invoked through the expected JSON stdin/stdout contract and produces schema-compatible output.",
+          "Tests do not require network access, secrets, external packages beyond pytest, or writes outside the skill's temporary/cache-controlled test area."
+        ]
+      }
+    ],
+    "permission_plan": {
+      "build_time": {
+        "codex_generation": true,
+        "internet_research": false,
+        "dependencies": [],
+        "reason": "Codex must generate the local skill files and tests. No internet research or package installation is needed for a self-contained Wordle-style game."
+      },
+      "runtime": {
+        "permissions": {
+          "network": [],
+          "filesystem_read": [],
+          "filesystem_write": [
+            "./cache"
+          ],
+          "secrets": [],
+          "shell": false
+        },
+        "network_domains": [],
+        "dependencies": [],
+        "reason": "Runtime only needs to store local game session state in the skill-owned cache directory. The game has no network, secrets, shell, or external dependency requirements."
+      }
+    },
+    "product_manager_summary": "This is a coherent low-risk local tool skill: a self-contained Wordle-style game with declarative UI fields, JSON input/output, tests, and cache-only session persistence. Generation needs approval before Codex writes the skill files.",
+    "decision": "request_permission"
+  },
+  "milestone": {
+    "name": "wordle_validation_tests",
+    "summary": "Add pytest coverage for the Wordle behavior, manifest contract, JSON interface, and cache-backed session continuity.",
+    "acceptance_criteria": [
+      "tests/test_skill.py verifies manifest permissions, interface_type tool, tool_ui_schema fields, input/output schemas where present, and absence of network, secrets, shell, and external dependencies.",
+      "Tests cover new game creation, valid guess feedback, duplicate-letter scoring, win state, loss state after six attempts, invalid guess rejection, default session behavior, named session continuity, and new_game reset behavior.",
+      "Tests verify skill.py can be invoked through the expected JSON stdin/stdout contract and produces schema-compatible output.",
+      "Tests do not require network access, secrets, external packages beyond pytest, or writes outside the skill's temporary/cache-controlled test area."
+    ]
+  },
+  "milestone_path": "runtime/agent_runs/run_1/milestones/wordle_validation_tests.json",
+  "code_files": {
+    "manifest.json": "{\n  \"name\": \"wordle_game\",\n  \"description\": \"Play a local Wordle-style five-letter word guessing game with cache-backed session state.\",\n  \"skill_type\": \"automation\",\n  \"interface_type\": \"tool\",\n  \"entrypoint\": \"skill.py\",\n  \"instructions_path\": null,\n  \"input_schema\": {\n    \"type\": \"object\",\n    \"properties\": {\n      \"session_id\": {\n        \"type\": \"string\",\n        \"description\": \"Optional session identifier for continuing a specific game.\"\n      },\n      \"guess\": {\n        \"type\": \"string\",\n        \"pattern\": \"^[A-Za-z]{5}$\",\n        \"description\": \"A five-letter word guess.\"\n      },\n      \"new_game\": {\n        \"type\": \"boolean\",\n        \"description\": \"Start a new puzzle before applying the guess.\"\n      }\n    },\n    \"required\": [\n      \"guess\"\n    ],\n    \"additionalProperties\": false\n  },\n  \"output_schema\": {\n    \"type\": \"object\",\n    \"properties\": {\n      \"result\": {\n        \"type\": \"string\"\n      },\n      \"session_id\": {\n        \"type\": \"string\"\n      },\n      \"guess\": {\n        \"type\": \"string\"\n      },\n      \"feedback\": {\n        \"type\": \"array\",\n        \"items\": {\n          \"type\": \"object\",\n          \"properties\": {\n            \"letter\": {\n              \"type\": \"string\"\n            },\n            \"status\": {\n              \"type\": \"string\",\n              \"enum\": [\n                \"correct\",\n                \"present\",\n                \"absent\"\n              ]\n            }\n          },\n          \"required\": [\n            \"letter\",\n            \"status\"\n          ],\n          \"additionalProperties\": false\n        }\n      },\n      \"attempts_used\": {\n        \"type\": \"integer\",\n        \"minimum\": 0\n      },\n      \"attempts_remaining\": {\n        \"type\": \"integer\",\n        \"minimum\": 0\n      },\n      \"game_status\": {\n        \"type\": \"string\",\n        \"enum\": [\n          \"in_progress\",\n          \"won\",\n          \"lost\"\n        ]\n      },\n      \"answer\": {\n        \"type\": [\n          \"string\",\n          \"null\"\n        ]\n      }\n    },\n    \"required\": [\n      \"result\",\n      \"session_id\",\n      \"guess\",\n      \"feedback\",\n      \"attempts_used\",\n      \"attempts_remaining\",\n      \"game_status\",\n      \"answer\"\n    ],\n    \"additionalProperties\": false\n  },\n  \"tool_ui_schema\": {\n    \"title\": \"Wordle Game\",\n    \"description\": \"Play a local five-letter word guessing game and get letter-by-letter feedback.\",\n    \"submit_label\": \"Submit Guess\",\n    \"fields\": [\n      {\n        \"name\": \"guess\",\n        \"label\": \"Guess\",\n        \"type\": \"text\",\n        \"placeholder\": \"crane\",\n        \"help_text\": \"Enter exactly five letters.\",\n        \"required\": true,\n        \"default\": \"\"\n      },\n      {\n        \"name\": \"session_id\",\n        \"label\": \"Session ID\",\n        \"type\": \"text\",\n        \"placeholder\": \"default\",\n        \"help_text\": \"Use the same ID to continue a game, or leave blank for the default session.\",\n        \"required\": false,\n        \"default\": \"\"\n      },\n      {\n        \"name\": \"new_game\",\n        \"label\": \"Start New Game\",\n        \"type\": \"checkbox\",\n        \"placeholder\": \"\",\n        \"help_text\": \"Reset the selected session before submitting this guess.\",\n        \"required\": false,\n        \"default\": false\n      }\n    ],\n    \"result_template\": {\n      \"primary_field\": \"result\",\n      \"primary_label\": \"Result\"\n    }\n  },\n  \"dependencies\": [],\n  \"risk_level\": \"low\",\n  \"permissions\": {\n    \"network\": [],\n    \"filesystem_read\": [],\n    \"filesystem_write\": [\n      \"./cache\"\n    ],\n    \"secrets\": [],\n    \"shell\": false\n  },\n  \"schedule\": null,\n  \"created_by\": \"codex\",\n  \"enabled\": false\n}\n",
+    "README.md": "# Wordle Game\n\nWordle Game is a local tool skill for playing a five-letter word guessing game. It reads one JSON object from stdin and writes one JSON object to stdout.\n\n## Inputs\n\n- `guess` is required and must be exactly five alphabetic characters.\n- `session_id` is optional. Use the same value to continue a specific game. Blank or omitted values use the `default` session.\n- `new_game` is optional. Set it to `true` to reset the selected session before applying the submitted guess.\n\nExample input:\n\n```json\n{\n  \"guess\": \"crane\",\n  \"session_id\": \"default\",\n  \"new_game\": false\n}\n```\n\n## Outputs\n\nThe skill returns:\n\n- `result`: a short outcome summary.\n- `session_id`: the session used for the game.\n- `guess`: the normalized uppercase guess.\n- `feedback`: five letter results using `correct`, `present`, or `absent`.\n- `attempts_used`: number of submitted guesses in the current session.\n- `attempts_remaining`: number of guesses left.\n- `game_status`: `in_progress`, `won`, or `lost`.\n- `answer`: `null` while the game is in progress, then the answer after a win or loss.\n\n## Game Rules\n\nEach session allows six attempts. Feedback follows Wordle-style duplicate-letter limits: exact-position matches are marked first, then present letters are counted only while unmatched copies remain in the answer.\n\nAfter a session is won or lost, additional guesses do not change that session. Start a new puzzle by submitting `new_game: true`.\n\n## Local State and Permissions\n\nSession state is stored only in `./cache` inside this skill folder. The skill does not use network access, secrets, shell access, external dependencies, or filesystem access outside its own cache directory.\n",
+    "skill.py": "import hashlib\nimport json\nimport sys\nfrom collections import Counter\nfrom pathlib import Path\n\n\nMAX_ATTEMPTS = 6\nDEFAULT_SESSION_ID = \"default\"\nCACHE_DIR = Path(__file__).resolve().parent / \"cache\"\n\nANSWERS = [\n    \"APPLE\",\n    \"BRAIN\",\n    \"CHAIR\",\n    \"DELTA\",\n    \"EAGER\",\n    \"FLAME\",\n    \"GRACE\",\n    \"HOUSE\",\n    \"INDEX\",\n    \"JELLY\",\n    \"KNIFE\",\n    \"LEMON\",\n    \"MANGO\",\n    \"NERVE\",\n    \"OCEAN\",\n    \"PLANT\",\n    \"QUEEN\",\n    \"ROAST\",\n    \"STONE\",\n    \"TRAIN\",\n    \"UNION\",\n    \"VIVID\",\n    \"WATER\",\n    \"YEAST\",\n    \"ZEBRA\"\n]\n\n\ndef normalize_session_id(value):\n    if value is None:\n        return DEFAULT_SESSION_ID\n    session_id = str(value).strip()\n    return session_id or DEFAULT_SESSION_ID\n\n\ndef session_path(session_id):\n    digest = hashlib.sha256(session_id.encode(\"utf-8\")).hexdigest()\n    return CACHE_DIR / f\"{digest}.json\"\n\n\ndef choose_answer(session_id, game_number):\n    seed = f\"{session_id}:{game_number}\".encode(\"utf-8\")\n    digest = hashlib.sha256(seed).hexdigest()\n    index = int(digest, 16) % len(ANSWERS)\n    return ANSWERS[index]\n\n\ndef new_state(session_id, game_number=1):\n    return {\n        \"session_id\": session_id,\n        \"game_number\": game_number,\n        \"answer\": choose_answer(session_id, game_number),\n        \"attempts\": [],\n        \"status\": \"in_progress\"\n    }\n\n\ndef load_state(session_id):\n    path = session_path(session_id)\n    if not path.exists():\n        return new_state(session_id)\n\n    try:\n        with path.open(\"r\", encoding=\"utf-8\") as handle:\n            state = json.load(handle)\n    except (OSError, json.JSONDecodeError):\n        return new_state(session_id)\n\n    if not isinstance(state, dict):\n        return new_state(session_id)\n\n    answer = state.get(\"answer\")\n    attempts = state.get(\"attempts\")\n    status = state.get(\"status\")\n    game_number = state.get(\"game_number\", 1)\n\n    if (\n        not isinstance(answer, str)\n        or len(answer) != 5\n        or not answer.isalpha()\n        or not isinstance(attempts, list)\n        or status not in {\"in_progress\", \"won\", \"lost\"}\n        or not isinstance(game_number, int)\n    ):\n        return new_state(session_id)\n\n    return {\n        \"session_id\": session_id,\n        \"game_number\": max(1, game_number),\n        \"answer\": answer.upper(),\n        \"attempts\": [str(item).upper() for item in attempts if isinstance(item, str)],\n        \"status\": status\n    }\n\n\ndef save_state(state):\n    CACHE_DIR.mkdir(parents=True, exist_ok=True)\n    path = session_path(state[\"session_id\"])\n    with path.open(\"w\", encoding=\"utf-8\") as handle:\n        json.dump(state, handle, indent=2, sort_keys=True)\n\n\ndef score_guess(guess, answer):\n    statuses = [\"absent\"] * 5\n    remaining = Counter()\n\n    for index, letter in enumerate(guess):\n        if letter == answer[index]:\n            statuses[index] = \"correct\"\n        else:\n            remaining[answer[index]] += 1\n\n    for index, letter in enumerate(guess):\n        if statuses[index] == \"correct\":\n            continue\n        if remaining[letter] > 0:\n            statuses[index] = \"present\"\n            remaining[letter] -= 1\n\n    return [\n        {\n            \"letter\": letter,\n            \"status\": statuses[index]\n        }\n        for index, letter in enumerate(guess)\n    ]\n\n\ndef visible_answer(state):\n    if state[\"status\"] in {\"won\", \"lost\"}:\n        return state[\"answer\"]\n    return None\n\n\ndef response(result, session_id, guess, feedback, state):\n    attempts_used = len(state[\"attempts\"])\n    return {\n        \"result\": result,\n        \"session_id\": session_id,\n        \"guess\": guess,\n        \"feedback\": feedback,\n        \"attempts_used\": attempts_used,\n        \"attempts_remaining\": max(0, MAX_ATTEMPTS - attempts_used),\n        \"game_status\": state[\"status\"],\n        \"answer\": visible_answer(state)\n    }\n\n\ndef validate_input(payload):\n    if not isinstance(payload, dict):\n        raise ValueError(\"Input must be a JSON object.\")\n    if \"guess\" not in payload:\n        raise ValueError(\"Missing required field: guess.\")\n\n    guess = payload[\"guess\"]\n    if not isinstance(guess, str):\n        raise ValueError(\"Guess must be a string.\")\n\n    guess = guess.strip().upper()\n    if len(guess) != 5 or not guess.isalpha():\n        raise ValueError(\"Guess must contain exactly five alphabetic characters.\")\n\n    return guess\n\n\ndef play(payload):\n    session_id = normalize_session_id(payload.get(\"session_id\"))\n    guess = validate_input(payload)\n    state = load_state(session_id)\n\n    if bool(payload.get(\"new_game\")):\n        state = new_state(session_id, state.get(\"game_number\", 1) + 1)\n\n    if state[\"status\"] != \"in_progress\":\n        return response(\n            f\"This game is already {state['status']}. Start a new game to keep playing.\",\n            session_id,\n            guess,\n            [],\n            state\n        )\n\n    feedback = score_guess(guess, state[\"answer\"])\n    state[\"attempts\"].append(guess)\n\n    if guess == state[\"answer\"]:\n        state[\"status\"] = \"won\"\n        result = f\"Correct. You solved the puzzle in {len(state['attempts'])} attempt(s).\"\n    elif len(state[\"attempts\"]) >= MAX_ATTEMPTS:\n        state[\"status\"] = \"lost\"\n        result = f\"No attempts remaining. The answer was {state['answer']}.\"\n    else:\n        remaining = MAX_ATTEMPTS - len(state[\"attempts\"])\n        result = f\"Guess recorded. {remaining} attempt(s) remaining.\"\n\n    save_state(state)\n    return response(result, session_id, guess, feedback, state)\n\n\ndef error_response(message):\n    return {\n        \"result\": message,\n        \"session_id\": DEFAULT_SESSION_ID,\n        \"guess\": \"\",\n        \"feedback\": [],\n        \"attempts_used\": 0,\n        \"attempts_remaining\": MAX_ATTEMPTS,\n        \"game_status\": \"in_progress\",\n        \"answer\": None\n    }\n\n\ndef main():\n    try:\n        raw_input = sys.stdin.read()\n        payload = json.loads(raw_input)\n        output = play(payload)\n    except json.JSONDecodeError:\n        output = error_response(\"Input must be valid JSON.\")\n    except ValueError as exc:\n        output = error_response(str(exc))\n    except Exception as exc:\n        output = error_response(f\"Unexpected error: {exc}\")\n\n    sys.stdout.write(json.dumps(output, separators=(\",\", \":\")))\n    sys.stdout.write(\"\\n\")\n\n\nif __name__ == \"__main__\":\n    main()\n"
+  },
+  "responsibility": "Tester writes or updates tests, then validates manifest and test results."
+}

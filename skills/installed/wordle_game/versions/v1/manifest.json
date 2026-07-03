@@ -1,0 +1,153 @@
+{
+  "name": "wordle_game",
+  "description": "Play a local Wordle-style five-letter word guessing game with cache-backed session state.",
+  "skill_type": "automation",
+  "interface_type": "tool",
+  "entrypoint": "skill.py",
+  "instructions_path": null,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "session_id": {
+        "type": "string",
+        "description": "Optional session identifier for continuing a specific game."
+      },
+      "guess": {
+        "type": "string",
+        "pattern": "^[A-Za-z]{5}$",
+        "description": "A five-letter word guess."
+      },
+      "new_game": {
+        "type": "boolean",
+        "description": "Start a new puzzle before applying the guess."
+      }
+    },
+    "required": [
+      "guess"
+    ],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "result": {
+        "type": "string"
+      },
+      "session_id": {
+        "type": "string"
+      },
+      "guess": {
+        "type": "string"
+      },
+      "feedback": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "letter": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "correct",
+                "present",
+                "absent"
+              ]
+            }
+          },
+          "required": [
+            "letter",
+            "status"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "attempts_used": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "attempts_remaining": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "game_status": {
+        "type": "string",
+        "enum": [
+          "in_progress",
+          "won",
+          "lost"
+        ]
+      },
+      "answer": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "result",
+      "session_id",
+      "guess",
+      "feedback",
+      "attempts_used",
+      "attempts_remaining",
+      "game_status",
+      "answer"
+    ],
+    "additionalProperties": false
+  },
+  "tool_ui_schema": {
+    "title": "Wordle Game",
+    "description": "Play a local five-letter word guessing game and get letter-by-letter feedback.",
+    "submit_label": "Submit Guess",
+    "fields": [
+      {
+        "name": "guess",
+        "label": "Guess",
+        "type": "text",
+        "placeholder": "crane",
+        "help_text": "Enter exactly five letters.",
+        "required": true,
+        "default": ""
+      },
+      {
+        "name": "session_id",
+        "label": "Session ID",
+        "type": "text",
+        "placeholder": "default",
+        "help_text": "Use the same ID to continue a game, or leave blank for the default session.",
+        "required": false,
+        "default": ""
+      },
+      {
+        "name": "new_game",
+        "label": "Start New Game",
+        "type": "checkbox",
+        "placeholder": "",
+        "help_text": "Reset the selected session before submitting this guess.",
+        "required": false,
+        "default": false
+      }
+    ],
+    "result_template": {
+      "primary_field": "result",
+      "primary_label": "Result"
+    }
+  },
+  "dependencies": [],
+  "risk_level": "low",
+  "permissions": {
+    "network": [],
+    "filesystem_read": [],
+    "filesystem_write": [
+      "./cache"
+    ],
+    "secrets": [],
+    "shell": false
+  },
+  "schedule": null,
+  "created_by": "codex",
+  "enabled": false
+}

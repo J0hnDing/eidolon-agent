@@ -22,7 +22,7 @@ class AgentWorkflowError(ValueError):
 
 
 MAX_MILESTONE_FAILURES = 3
-DEFAULT_MILESTONE = "initial_skill"
+DEFAULT_MILESTONE = "core_skill"
 
 
 def utc_now() -> datetime:
@@ -49,6 +49,9 @@ class AgentWorkflowService:
             return existing
 
         blueprint = self.codex_service.product_manager_build_blueprint(generation_request)
+        permission_plan = self._apply_blueprint_permission_plan(generation_request, blueprint)
+        milestones = self._milestones_from_blueprint(blueprint)
+        first_milestone = milestones[0]["name"]
         building_skill = self._create_or_update_building_skill(generation_request, blueprint)
         generation_request.proposed_skill_id = building_skill.id
         agent_run = AgentRun(
@@ -57,21 +60,33 @@ class AgentWorkflowService:
             skill_id=building_skill.id,
             generation_request_id=generation_request.id,
             user_request=generation_request.user_message,
-            current_milestone=DEFAULT_MILESTONE,
+            current_milestone=first_milestone,
             current_step="product_manager",
-            failure_count_json={DEFAULT_MILESTONE: 0},
+            failure_count_json={milestone["name"]: 0 for milestone in milestones},
             blueprint_json=blueprint,
             summary="ProductManager created the skill blueprint.",
         )
         self.db.add(agent_run)
         self.db.commit()
         self.db.refresh(agent_run)
+        blueprint_path = self._write_json_artifact(agent_run, "blueprint.json", blueprint)
+        permission_path = self._write_json_artifact(agent_run, "permissions.json", permission_plan)
+        milestone_paths = self._write_milestone_artifacts(agent_run, milestones)
 
         pm_summary = self.codex_service.product_manager_summary(
             "build_time",
-            {"blueprint_json": blueprint, "generation_request_id": generation_request.id},
-            self._pm_build_time_summary(blueprint),
+            {
+                "blueprint_json": blueprint,
+                "permission_plan": permission_plan,
+                "generation_request_id": generation_request.id,
+            },
+            str(blueprint.get("product_manager_summary") or "") or self._pm_build_time_summary(blueprint),
         )
+        permission_request = PermissionService(self.db, project_root=self.project_root).create_build_time_request(
+            generation_request
+        )
+        permission_summary = self._permission_build_time_summary(generation_request.plan_json, permission_request)
+        self._apply_combined_permission_summary(permission_request, pm_summary, permission_summary)
         self._finish_step(
             agent_run,
             self._start_step(
@@ -81,50 +96,34 @@ class AgentWorkflowService:
                 input_json={"user_request": generation_request.user_message},
                 logs="ProductManager created a concise blueprint and selected the next action.",
             ),
-            "succeeded",
+            "waiting_for_approval",
             output_json={
                 "blueprint_json": blueprint,
+                "permission_plan": permission_plan,
+                "blueprint_path": blueprint_path,
+                "permission_path": permission_path,
+                "milestone_paths": milestone_paths,
+                "permission_request_id": permission_request.id,
+                "risk_level": permission_request.risk_level,
                 "decision_json": {
                     "decision": "request_permission",
                     "reason": "Build-time approval is required before Codex writes proposed files.",
                 },
                 "user_summary": pm_summary,
+                "permission_review_summary": permission_summary,
             },
-            logs=pm_summary,
-        )
-
-        permission_request = PermissionService(self.db, project_root=self.project_root).create_build_time_request(
-            generation_request
-        )
-        security_summary = self._security_build_time_summary(generation_request.plan_json, permission_request)
-        self._apply_combined_permission_summary(permission_request, pm_summary, security_summary)
-        self._finish_step(
-            agent_run,
-            self._start_step(
-                agent_run,
-                "security_reviewer",
-                milestone_name=DEFAULT_MILESTONE,
-                input_json={
-                    "generation_request_id": generation_request.id,
-                    "blueprint_json": blueprint,
-                    "plan_json": generation_request.plan_json,
-                },
-                logs="SecurityReviewer analyzed build-time permissions and created the approval request.",
-            ),
-            "waiting_for_approval",
-            output_json={
-                "permission_request_id": permission_request.id,
-                "status": permission_request.status,
-                "risk_level": permission_request.risk_level,
-                "product_manager_summary": pm_summary,
-                "security_reviewer_summary": security_summary,
-                "blueprint_json": blueprint,
-            },
-            logs=f"ProductManager: {pm_summary}\n\nSecurityReviewer: {security_summary}",
+            logs=f"ProductManager: {pm_summary}\n\nPermission review: {permission_summary}",
         )
         agent_run.status = "waiting_for_approval"
-        agent_run.current_step = "security_reviewer"
+        agent_run.current_step = "product_manager"
         agent_run.summary = "Waiting for one build-time approval."
+        agent_run.final_summary_json = {
+            "blueprint_path": blueprint_path,
+            "permission_path": permission_path,
+            "milestone_paths": milestone_paths,
+            "permission_request_id": permission_request.id,
+            "user_summary": pm_summary,
+        }
         self.db.commit()
         self.db.refresh(agent_run)
         return agent_run
@@ -135,52 +134,90 @@ class AgentWorkflowService:
         decision = PermissionService(self.db, project_root=self.project_root).can_generate(generation_request)
         if not decision.allowed:
             agent_run.status = "waiting_for_approval"
-            agent_run.current_step = "security_reviewer"
+            agent_run.current_step = "product_manager"
             self.db.commit()
             raise AgentWorkflowError(decision.reason)
 
-        self._mark_waiting_security_step_approved(agent_run)
+        self._mark_waiting_permission_steps_approved(agent_run)
+        self._write_milestone_artifacts(agent_run, self._milestones(agent_run))
         agent_run.status = "running"
         agent_run.current_step = "builder"
         self.db.commit()
 
         try:
-            builder_step = self._start_step(
-                agent_run,
-                "builder",
-                milestone_name=DEFAULT_MILESTONE,
-                input_json={
-                    "mode": "build",
-                    "generation_request_id": generation_request.id,
-                    "blueprint_json": agent_run.blueprint_json,
-                    "milestone": self._current_milestone(agent_run),
-                },
-                logs="Builder is implementing the current milestone only.",
-            )
-            skill, validation = self.codex_service.generate_from_request(
-                generation_request,
-                builder_writes_tests=False,
-                initial_skill_status="building",
-            )
-            self._finish_step(
-                agent_run,
-                builder_step,
-                "succeeded",
-                output_json={"skill_id": skill.id, "skill_name": skill.name, "mode": "build"},
-                logs="Builder generated proposed skill files. The skill was not installed or run.",
-            )
+            skill: Skill | None = None
+            validation: Any = None
+            for milestone in self._milestones(agent_run):
+                milestone_name = milestone["name"]
+                agent_run.current_milestone = milestone_name
+                self.db.commit()
+                builder_step = self._start_step(
+                    agent_run,
+                    "builder",
+                    milestone_name=milestone_name,
+                    input_json={
+                        "mode": "build",
+                        "generation_request_id": generation_request.id,
+                        "blueprint_json": agent_run.blueprint_json,
+                        "blueprint_path": self._artifact_relative_path(agent_run, "blueprint.json"),
+                        "permission_path": self._artifact_relative_path(agent_run, "permissions.json"),
+                        "milestone": milestone,
+                        "milestone_path": self._milestone_artifact_relative_path(agent_run, milestone_name),
+                    },
+                    logs=f"Builder is implementing milestone {milestone_name} only.",
+                )
+                if skill is None:
+                    skill, validation = self.codex_service.generate_from_request(
+                        generation_request,
+                        builder_writes_tests=False,
+                        initial_skill_status="building",
+                        milestone_context={
+                            "milestone": milestone,
+                            "milestone_path": self._milestone_artifact_relative_path(agent_run, milestone_name),
+                        },
+                        create_runtime_request=False,
+                    )
+                    builder_output = {"skill_id": skill.id, "skill_name": skill.name, "mode": "build"}
+                else:
+                    result, validation = self.codex_service.build_skill_milestone(
+                        skill,
+                        generation_request,
+                        {
+                            "milestone": milestone,
+                            "milestone_path": self._milestone_artifact_relative_path(agent_run, milestone_name),
+                        },
+                    )
+                    builder_output = {
+                        "skill_id": skill.id,
+                        "skill_name": skill.name,
+                        "mode": "build",
+                        "stdout": result.stdout,
+                        "stderr": result.stderr,
+                        "exit_code": result.returncode,
+                    }
+                self._finish_step(
+                    agent_run,
+                    builder_step,
+                    "succeeded",
+                    output_json=builder_output,
+                    logs=f"Builder completed milestone {milestone_name}. The skill was not installed or run.",
+                )
 
-            validation = self._test_milestone(agent_run, skill, validation)
-            while not validation.ok:
-                self._increment_failure_count(agent_run, DEFAULT_MILESTONE)
-                if self._failure_count(agent_run, DEFAULT_MILESTONE) > MAX_MILESTONE_FAILURES:
-                    self._product_manager_stop_failed(agent_run, skill, validation)
-                    return agent_run, skill, validation
-                validation = self._repair_current_milestone(agent_run, skill, validation)
+                validation = self._test_milestone(agent_run, skill, validation, milestone_name=milestone_name)
+                while not validation.ok:
+                    self._increment_failure_count(agent_run, milestone_name)
+                    if self._failure_count(agent_run, milestone_name) > MAX_MILESTONE_FAILURES:
+                        self._product_manager_stop_failed(agent_run, skill, validation)
+                        return agent_run, skill, validation
+                    validation = self._repair_current_milestone(agent_run, skill, validation, milestone_name=milestone_name)
 
-            self._product_manager_after_tests(agent_run, skill, validation)
-            runtime_status = self._runtime_security_review(agent_run, skill, validation)
-            self._product_manager_finish(agent_run, skill, validation, runtime_status)
+                self._product_manager_after_tests(agent_run, skill, validation, milestone_name=milestone_name)
+
+            if skill is None:
+                raise AgentWorkflowError("No build milestones were available")
+            pm_runtime_summary = self._product_manager_verify_project(agent_run, skill, validation)
+            runtime_status = self._runtime_permission_review(agent_run, skill, validation, pm_summary=pm_runtime_summary)
+            self._product_manager_finish(agent_run, skill, validation, runtime_status, pm_summary=pm_runtime_summary)
             self.db.refresh(agent_run)
             return agent_run, skill, validation
         except Exception as exc:
@@ -246,7 +283,7 @@ class AgentWorkflowService:
                 validation = self._repair_current_milestone(agent_run, repair_skill, validation, milestone_name="repair_skill")
 
             self._product_manager_after_tests(agent_run, repair_skill, validation, milestone_name="repair_skill")
-            runtime_status = self._runtime_security_review(agent_run, repair_skill, validation, milestone_name="repair_skill")
+            runtime_status = self._runtime_permission_review(agent_run, repair_skill, validation, milestone_name="repair_skill")
             self._product_manager_finish(agent_run, repair_skill, validation, runtime_status, milestone_name="repair_skill")
         except Exception as exc:
             if agent_run.status != "blocked":
@@ -275,6 +312,9 @@ class AgentWorkflowService:
         self.db.add(agent_run)
         self.db.commit()
         self.db.refresh(agent_run)
+        blueprint_path = self._write_json_artifact(agent_run, "blueprint.json", blueprint)
+        permission_plan = self._permission_plan_from_blueprint(blueprint)
+        permission_path = self._write_json_artifact(agent_run, "permissions.json", permission_plan)
 
         pm_status = "succeeded" if decision["decision"] in {"build_next_milestone", "request_permission"} else "blocked"
         self._finish_step(
@@ -287,7 +327,14 @@ class AgentWorkflowService:
                 logs="ProductManager evaluated the improvement suggestion against the current skill and project rules.",
             ),
             pm_status,
-            output_json={"decision_json": decision, "blueprint_json": blueprint, "user_summary": decision["summary"]},
+            output_json={
+                "decision_json": decision,
+                "blueprint_json": blueprint,
+                "permission_plan": permission_plan,
+                "blueprint_path": blueprint_path,
+                "permission_path": permission_path,
+                "user_summary": decision["summary"],
+            },
             logs=decision["summary"],
             error_message=None,
         )
@@ -299,32 +346,25 @@ class AgentWorkflowService:
                 blueprint,  # type: ignore[arg-type]
                 decision["summary"],
             )
-            security_summary = self._security_build_time_summary(blueprint, permission_request)  # type: ignore[arg-type]
-            self._apply_combined_permission_summary(permission_request, decision["summary"], security_summary)
-            self._finish_step(
-                agent_run,
-                self._start_step(
-                    agent_run,
-                    "security_reviewer",
-                    milestone_name="update_version",
-                    input_json={"skill_id": skill.id, "blueprint_json": blueprint},
-                    logs="SecurityReviewer analyzed build-time update permissions and created the approval request.",
-                ),
-                "waiting_for_approval",
-                output_json={
-                    "permission_request_id": permission_request.id,
-                    "status": permission_request.status,
-                    "risk_level": permission_request.risk_level,
-                    "product_manager_summary": decision["summary"],
-                    "security_reviewer_summary": security_summary,
-                },
-                logs=f"ProductManager: {decision['summary']}\n\nSecurityReviewer: {security_summary}",
-            )
+            permission_summary = self._permission_build_time_summary(blueprint, permission_request)  # type: ignore[arg-type]
+            self._apply_combined_permission_summary(permission_request, decision["summary"], permission_summary)
+            pm_step = agent_run.steps[-1]
+            pm_step.status = "waiting_for_approval"
+            pm_step.ended_at = utc_now()
+            pm_step.output_json = {
+                **(pm_step.output_json or {}),
+                "permission_request_id": permission_request.id,
+                "risk_level": permission_request.risk_level,
+                "permission_review_summary": permission_summary,
+            }
+            pm_step.logs = f"{pm_step.logs or decision['summary']}\n\nPermission review: {permission_summary}"
             agent_run.status = "waiting_for_approval"
-            agent_run.current_step = "security_reviewer"
+            agent_run.current_step = "product_manager"
             agent_run.summary = decision["summary"]
             agent_run.final_summary_json = {
                 "permission_request_id": permission_request.id,
+                "blueprint_path": blueprint_path,
+                "permission_path": permission_path,
                 "user_summary": decision["summary"],
             }
             agent_run.error_message = None
@@ -368,6 +408,9 @@ class AgentWorkflowService:
                     "version_id": draft.id,
                     "suggestion": suggestion,
                     "blueprint_json": blueprint,
+                    "blueprint_path": self._artifact_relative_path(agent_run, "blueprint.json"),
+                    "permission_path": self._artifact_relative_path(agent_run, "permissions.json"),
+                    "project_files": self._version_file_snapshot(draft),
                 },
                 logs="Builder is modifying only the copied draft version folder.",
             )
@@ -380,46 +423,17 @@ class AgentWorkflowService:
                 logs="Builder updated the draft version. The active version was not modified.",
             )
 
-            tester_step = self._start_step(
-                agent_run,
-                "tester",
-                milestone_name="update_version",
-                input_json={"version_id": draft.id, "blueprint_json": blueprint},
-                logs="Tester validates the draft version through manifest validation and pytest.",
-            )
-            validation = version_service.validate_version(draft)
-            self._finish_step(
-                agent_run,
-                tester_step,
-                "succeeded" if validation.ok else "failed",
-                output_json={"version_id": draft.id, "test_result_json": validation.model_dump(mode="json")},
-                logs="Tester completed validation for the draft version.",
-                error_message=validation.error_message,
-            )
-            if not validation.ok:
-                agent_run.status = "failed"
-                agent_run.completed_at = utc_now()
-                agent_run.error_message = validation.error_message or "Draft version validation failed"
-                self.db.commit()
-                self.db.refresh(agent_run)
-                return agent_run
+            validation = self._test_version_milestone(agent_run, skill, draft, version_service, blueprint)
+            while not validation.ok:
+                self._increment_failure_count(agent_run, "update_version")
+                if self._failure_count(agent_run, "update_version") > MAX_MILESTONE_FAILURES:
+                    self._product_manager_stop_update_failed(agent_run, skill, draft, validation)
+                    self.db.refresh(agent_run)
+                    return agent_run
+                validation = self._repair_update_version(agent_run, skill, draft, version_service, validation, blueprint)
 
-            security_step = self._start_step(
-                agent_run,
-                "security_reviewer",
-                milestone_name="update_version",
-                input_json={"skill_id": skill.id, "version_id": draft.id},
-                logs="SecurityReviewer compares active-version permissions with the draft manifest.",
-            )
             permission_request = version_service.create_runtime_request_if_needed(skill, draft)
             if permission_request is None:
-                self._finish_step(
-                    agent_run,
-                    security_step,
-                    "succeeded",
-                    output_json={"version_id": draft.id, "permissions_changed": False},
-                    logs="No runtime permission changes were detected. Runtime reapproval is skipped.",
-                )
                 final_status = "succeeded"
                 summary = self.codex_service.product_manager_summary(
                     "update_complete",
@@ -427,24 +441,25 @@ class AgentWorkflowService:
                     f"Version {draft.version} is ready to compare and activate. Runtime permissions are unchanged.",
                 )
             else:
-                self._finish_step(
+                permission_summary = self._permission_runtime_summary(skill, permission_request)
+                self._write_json_artifact(
                     agent_run,
-                    security_step,
-                    "waiting_for_approval",
-                    output_json={
+                    f"runtime_permissions_v{draft.id}.json",
+                    {
                         "version_id": draft.id,
                         "permission_request_id": permission_request.id,
                         "permissions_changed": True,
                         "status": permission_request.status,
+                        "permissions": permission_request.requested_permissions_json,
                     },
-                    logs=permission_request.user_explanation,
                 )
-                final_status = "waiting_for_approval"
+                final_status = "succeeded"
                 summary = self.codex_service.product_manager_summary(
                     "update_runtime_permission_required",
                     {"skill_id": skill.id, "version_id": draft.id, "permissions_changed": True},
                     f"Version {draft.version} is ready, but runtime permission approval is required before activation.",
                 )
+                self._apply_combined_permission_summary(permission_request, summary, permission_summary)
 
             self._finish_step(
                 agent_run,
@@ -461,7 +476,11 @@ class AgentWorkflowService:
             )
             agent_run.status = final_status
             agent_run.summary = summary
-            agent_run.final_summary_json = {"version_id": draft.id, "user_summary": summary}
+            agent_run.final_summary_json = {
+                "version_id": draft.id,
+                "user_summary": summary,
+                "runtime_permission_request_id": permission_request.id if permission_request is not None else None,
+            }
             agent_run.completed_at = utc_now() if final_status == "succeeded" else None
             self.db.commit()
             self.db.refresh(agent_run)
@@ -497,7 +516,7 @@ class AgentWorkflowService:
                 raise AgentWorkflowError("Update build-time permission request is missing")
             if request.status != "approved":
                 raise AgentWorkflowError(f"Update build-time permission request is {request.status}")
-            self._mark_waiting_security_step_approved(agent_run)
+            self._mark_waiting_permission_steps_approved(agent_run)
             self._execute_update_run(
                 agent_run,
                 skill,
@@ -575,6 +594,7 @@ class AgentWorkflowService:
             "skill_id": skill.id,
             "blueprint_json": agent_run.blueprint_json,
             "milestone": self._milestone_by_name(agent_run, milestone_name),
+            "milestone_path": self._milestone_artifact_relative_path(agent_run, milestone_name),
             "code_files": code_files,
             "responsibility": "Tester writes or updates tests, then validates manifest and test results.",
         }
@@ -623,6 +643,117 @@ class AgentWorkflowService:
             self._write_failure_log(agent_run, milestone_name, validation)
         return validation
 
+    def _test_version_milestone(
+        self,
+        agent_run: AgentRun,
+        skill: Skill,
+        draft: Any,
+        version_service: SkillVersionService,
+        blueprint: dict[str, Any],
+    ) -> Any:
+        code_files = self._version_file_snapshot(draft)
+        tester_context = {
+            "mode": "update",
+            "skill_id": skill.id,
+            "version_id": draft.id,
+            "blueprint_json": blueprint,
+            "milestone": self._milestone_by_name(agent_run, "update_version"),
+            "code_files": code_files,
+            "blueprint_path": self._artifact_relative_path(agent_run, "blueprint.json"),
+            "permission_path": self._artifact_relative_path(agent_run, "permissions.json"),
+            "responsibility": "Tester writes or updates tests for the draft version, then validates manifest and test results.",
+        }
+        tester_step = self._start_step(
+            agent_run,
+            "tester",
+            milestone_name="update_version",
+            input_json=tester_context,
+            logs="TesterAgent uses Codex to inspect the update blueprint and draft code, write tests, then validate through the existing safe path.",
+        )
+        try:
+            tester_result = self.codex_service.write_tests_for_version(skill, draft, tester_context)
+            tester_generation = {
+                "stdout": tester_result.stdout,
+                "stderr": tester_result.stderr,
+                "exit_code": tester_result.returncode,
+            }
+            validation = version_service.validate_version(draft)
+        except CodexGenerationError as exc:
+            tester_generation = {"stdout": "", "stderr": str(exc), "exit_code": 1}
+            validation = ProposedSkillValidationRead(
+                ok=False,
+                manifest_valid=False,
+                error_message=f"TesterAgent failed to write draft-version tests: {exc}",
+            )
+        self._finish_step(
+            agent_run,
+            tester_step,
+            "succeeded" if validation.ok else "failed",
+            output_json={
+                "version_id": draft.id,
+                "test_result_json": validation.model_dump(mode="json"),
+                "failure_log": validation.error_message or validation.stderr or "",
+                "tests_written": self._version_test_paths(draft),
+                "tester_generation": tester_generation,
+            },
+            logs="TesterAgent completed Codex-backed draft-version test writing and validation.",
+            error_message=validation.error_message,
+        )
+        self._write_text_artifact(
+            agent_run,
+            "update_version_test.log",
+            self._validation_log_text("update_version", validation),
+        )
+        return validation
+
+    def _repair_update_version(
+        self,
+        agent_run: AgentRun,
+        skill: Skill,
+        draft: Any,
+        version_service: SkillVersionService,
+        validation: Any,
+        blueprint: dict[str, Any],
+    ) -> Any:
+        context = {
+            "user_request": agent_run.user_request,
+            "skill_id": skill.id,
+            "version_id": draft.id,
+            "blueprint_json": blueprint,
+            "milestone": self._milestone_by_name(agent_run, "update_version"),
+            "test_result_json": validation.model_dump(mode="json"),
+            "failure_log_path": self._artifact_relative_path(agent_run, "update_version_test.log"),
+            "project_files": self._version_file_snapshot(draft),
+        }
+        builder_step = self._start_step(
+            agent_run,
+            "builder",
+            milestone_name="update_version",
+            input_json={
+                "mode": "repair",
+                "skill_id": skill.id,
+                "version_id": draft.id,
+                "blueprint_json": blueprint,
+                "failure_context": context,
+            },
+            logs="Builder is repairing the draft version using Tester failure output.",
+        )
+        try:
+            result = self.codex_service.repair_skill_version(skill, draft, context)
+        except CodexGenerationError as exc:
+            if "USER_ACTION_REQUIRED:" in str(exc):
+                self._builder_user_action_required(agent_run, builder_step, str(exc), "update_version")
+                raise AgentWorkflowError(str(exc)) from exc
+            raise
+        self._finish_step(
+            agent_run,
+            builder_step,
+            "succeeded",
+            output_json={"stdout": result.stdout, "stderr": result.stderr, "exit_code": result.returncode, "mode": "repair"},
+            logs="Builder repaired the draft version. The active version was not modified.",
+        )
+        return self._test_version_milestone(agent_run, skill, draft, version_service, blueprint)
+
     def _repair_current_milestone(
         self,
         agent_run: AgentRun,
@@ -642,6 +773,7 @@ class AgentWorkflowService:
                 "skill_id": skill.id,
                 "blueprint_json": agent_run.blueprint_json,
                 "milestone": self._milestone_by_name(agent_run, milestone_name),
+                "milestone_path": self._milestone_artifact_relative_path(agent_run, milestone_name),
                 "failure_context": context,
             },
             logs="Builder is repairing the current milestone using Tester failure output.",
@@ -669,18 +801,24 @@ class AgentWorkflowService:
         validation: Any,
         milestone_name: str = DEFAULT_MILESTONE,
     ) -> None:
-        decision = "finish_ready_for_review" if self._all_milestones_complete(agent_run) else "build_next_milestone"
+        next_milestone = self._next_milestone_name(agent_run, milestone_name)
+        decision = "finish_ready_for_review" if next_milestone is None else "build_next_milestone"
         summary = self.codex_service.product_manager_summary(
             "milestone_passed",
             {
                 "skill_id": skill.id,
                 "milestone_name": milestone_name,
+                "next_milestone": next_milestone,
                 "test_result_json": validation.model_dump(mode="json"),
                 "blueprint_json": agent_run.blueprint_json,
             },
             (
-                f"Milestone {milestone_name} passed. "
-                "ProductManager considers the planned blueprint complete and is sending it to SecurityReviewer."
+                f"Milestone {milestone_name} passed. " +
+                (
+                    "ProductManager considers the planned blueprint complete and is preparing runtime permission review."
+                    if next_milestone is None
+                    else f"ProductManager is continuing to milestone {next_milestone}."
+                )
             ),
         )
         self._finish_step(
@@ -697,53 +835,80 @@ class AgentWorkflowService:
             logs=summary,
         )
 
-    def _runtime_security_review(
+    def _product_manager_verify_project(self, agent_run: AgentRun, skill: Skill, validation: Any) -> str:
+        code_files = self._skill_file_snapshot(skill)
+        context = {
+            "skill_id": skill.id,
+            "skill_name": skill.name,
+            "user_request": agent_run.user_request,
+            "blueprint_json": agent_run.blueprint_json,
+            "milestone_paths": self._milestone_artifact_paths(agent_run),
+            "code_files": code_files,
+            "test_result_json": validation.model_dump(mode="json"),
+        }
+        summary = self.codex_service.product_manager_summary(
+            "project_verification",
+            context,
+            (
+                f"ProductManager reviewed {skill.name} against the original request and passing tests. "
+                "The proposed skill appears ready for user review; runtime permissions still require review."
+            ),
+        )
+        self._finish_step(
+            agent_run,
+            self._start_step(
+                agent_run,
+                "product_manager",
+                milestone_name=agent_run.current_milestone,
+                input_json=context,
+                logs="ProductManager reviewed the completed project against the user request, blueprint, files, and test result.",
+            ),
+            "succeeded",
+            output_json={
+                "decision_json": {"decision": "finish_ready_for_review"},
+                "user_summary": summary,
+                "code_files": code_files,
+            },
+            logs=summary,
+        )
+        return summary
+
+    def _runtime_permission_review(
         self,
         agent_run: AgentRun,
         skill: Skill,
         validation: Any,
         milestone_name: str = DEFAULT_MILESTONE,
+        pm_summary: str | None = None,
     ) -> str:
         runtime_request = PermissionService(self.db, project_root=self.project_root).create_runtime_request(skill)
-        status = "waiting_for_approval" if runtime_request.status == "pending" else "succeeded"
-        security_summary = self._security_runtime_summary(skill, runtime_request)
-        pm_summary = self.codex_service.product_manager_summary(
-            "runtime_review_checkpoint",
+        permission_summary = self._permission_runtime_summary(skill, runtime_request)
+        if pm_summary is None:
+            pm_summary = self.codex_service.product_manager_summary(
+                "runtime_review_checkpoint",
+                {
+                    "skill_id": skill.id,
+                    "skill_name": skill.name,
+                    "validation_ok": validation.ok,
+                    "runtime_permission_status": runtime_request.status,
+                },
+                self._pm_runtime_summary(skill, validation),
+            )
+        self._apply_combined_permission_summary(runtime_request, pm_summary, permission_summary)
+        self._write_json_artifact(
+            agent_run,
+            "runtime_permissions.json",
             {
                 "skill_id": skill.id,
-                "skill_name": skill.name,
-                "validation_ok": validation.ok,
-                "runtime_permission_status": runtime_request.status,
-            },
-            self._pm_runtime_summary(skill, validation),
-        )
-        self._apply_combined_permission_summary(runtime_request, pm_summary, security_summary)
-        self._finish_step(
-            agent_run,
-            self._start_step(
-                agent_run,
-                "security_reviewer",
-                milestone_name=milestone_name,
-                input_json={
-                    "skill_id": skill.id,
-                    "blueprint_json": agent_run.blueprint_json,
-                    "test_result_json": validation.model_dump(mode="json"),
-                },
-                logs="SecurityReviewer analyzed actual manifest runtime permissions.",
-            ),
-            status,
-            output_json={
-                "security_review_json": {
-                    "permission_request_id": runtime_request.id,
-                    "status": runtime_request.status,
-                    "risk_level": runtime_request.risk_level,
-                    "permission_expansion": runtime_request.reason_json.get("permission_expansion", {}),
-                    "runner_unsupported": runtime_request.reason_json.get("runner_unsupported", []),
-                },
+                "permission_request_id": runtime_request.id,
+                "status": runtime_request.status,
+                "risk_level": runtime_request.risk_level,
+                "permission_expansion": runtime_request.reason_json.get("permission_expansion", {}),
+                "runner_unsupported": runtime_request.reason_json.get("runner_unsupported", []),
+                "permissions": runtime_request.requested_permissions_json,
                 "product_manager_summary": pm_summary,
-                "security_reviewer_summary": security_summary,
+                "permission_review_summary": permission_summary,
             },
-            logs=f"ProductManager: {pm_summary}\n\nSecurityReviewer: {security_summary}",
         )
         return runtime_request.status
 
@@ -754,21 +919,22 @@ class AgentWorkflowService:
         validation: Any,
         runtime_status: str,
         milestone_name: str = DEFAULT_MILESTONE,
+        pm_summary: str | None = None,
     ) -> None:
-        summary = self.codex_service.product_manager_summary(
-            "completion",
-            {
-                "skill_id": skill.id,
-                "skill_name": skill.name,
-                "validation_ok": validation.ok,
-                "runtime_permission_status": runtime_status,
-                "blueprint_json": agent_run.blueprint_json,
-            },
-            (
-                f"Skill {skill.name} is ready for user review. Validation passed; runtime permission request is {runtime_status}. "
-                "The skill remains proposed and was not installed or run automatically."
-            ),
-        )
+        summary = pm_summary or self.codex_service.product_manager_summary(
+                "completion",
+                {
+                    "skill_id": skill.id,
+                    "skill_name": skill.name,
+                    "validation_ok": validation.ok,
+                    "runtime_permission_status": runtime_status,
+                    "blueprint_json": agent_run.blueprint_json,
+                },
+                (
+                    f"Skill {skill.name} is ready for user review. Validation passed; runtime permission request is {runtime_status}. "
+                    "The skill remains proposed and was not installed or run automatically."
+                ),
+            )
         final_summary = {
             "skill_id": skill.id,
             "skill_name": skill.name,
@@ -840,6 +1006,52 @@ class AgentWorkflowService:
             if generation_request is not None:
                 generation_request.status = "failed"
                 generation_request.error_message = validation.error_message or "Skill tests failed"
+        self.db.commit()
+
+    def _product_manager_stop_update_failed(
+        self,
+        agent_run: AgentRun,
+        skill: Skill,
+        draft: Any,
+        validation: Any,
+    ) -> None:
+        summary = self.codex_service.product_manager_summary(
+            "update_stop_failed",
+            {
+                "skill_id": skill.id,
+                "version_id": draft.id,
+                "milestone_name": "update_version",
+                "failure_count_json": agent_run.failure_count_json,
+                "latest_failure": validation.error_message or validation.stderr or "tests failed",
+            },
+            (
+                f"Update version {draft.version} failed more than {MAX_MILESTONE_FAILURES} times. "
+                "The active version was not modified. User review is recommended."
+            ),
+        )
+        self._finish_step(
+            agent_run,
+            self._start_step(
+                agent_run,
+                "product_manager",
+                milestone_name="update_version",
+                input_json={"skill_id": skill.id, "version_id": draft.id, "failure_count_json": agent_run.failure_count_json},
+                logs="ProductManager stopped the update workflow after repeated draft-version failures.",
+            ),
+            "failed",
+            output_json={"decision_json": {"decision": "stop_failed"}, "user_summary": summary},
+            logs=summary,
+            error_message=summary,
+        )
+        agent_run.status = "failed"
+        agent_run.summary = summary
+        agent_run.error_message = summary
+        agent_run.completed_at = utc_now()
+        agent_run.final_summary_json = {
+            "version_id": draft.id,
+            "user_summary": summary,
+            "failure_count_json": agent_run.failure_count_json,
+        }
         self.db.commit()
 
     def _builder_user_action_required(
@@ -994,44 +1206,6 @@ class AgentWorkflowService:
             ],
         }
 
-    def _evaluate_update_suggestion(self, skill: Skill, suggestion: str) -> dict[str, str]:
-        text = suggestion.strip()
-        lowered = text.lower()
-        if len(text) < 8:
-            return {
-                "decision": "ask_user_for_input",
-                "summary": "Please describe the improvement more specifically before I build a new version.",
-            }
-        unsafe_terms = [
-            "delete files",
-            "shell",
-            "secret",
-            "password",
-            "browser cookie",
-            "trade stock",
-            "buy ",
-            "purchase",
-            "send email",
-            "post publicly",
-        ]
-        if any(term in lowered for term in unsafe_terms):
-            return {
-                "decision": "stop_unsupported",
-                "summary": "ProductManager blocked this update because it asks for unsafe or unsupported MVP behavior.",
-            }
-        if any(term in lowered for term in ["sentient", "guarantee", "make money", "do everything"]):
-            return {
-                "decision": "ask_user_for_input",
-                "summary": (
-                    "This suggestion is too broad or unrealistic for a bounded skill update. "
-                    "A better next project is a small, testable behavior change with clear input and output."
-                ),
-            }
-        return {
-            "decision": "build_next_milestone",
-            "summary": f"Update {skill.name} with this improvement: {text}",
-        }
-
     def _blueprint_for_update(self, skill: Skill, suggestion: str, decision: dict[str, str]) -> dict[str, Any]:
         return {
             "goal": decision["summary"],
@@ -1061,7 +1235,61 @@ class AgentWorkflowService:
             "Approval lets Codex generate proposed files only; it does not install or run the skill."
         )
 
-    def _security_build_time_summary(self, plan: dict[str, Any], permission_request: Any) -> str:
+    def _permission_plan_from_blueprint(self, blueprint: dict[str, Any]) -> dict[str, Any]:
+        value = blueprint.get("permission_plan")
+        if not isinstance(value, dict):
+            value = {}
+        runtime = value.get("runtime") if isinstance(value.get("runtime"), dict) else {}
+        permissions = runtime.get("permissions") if isinstance(runtime.get("permissions"), dict) else {}
+        permissions = {
+            "network": list(permissions.get("network", []) or []),
+            "filesystem_read": list(permissions.get("filesystem_read", []) or []),
+            "filesystem_write": list(permissions.get("filesystem_write", []) or []),
+            "secrets": list(permissions.get("secrets", []) or []),
+            "shell": bool(permissions.get("shell", False)),
+        }
+        network_domains = list(runtime.get("network_domains", permissions["network"]) or [])
+        dependencies = list(runtime.get("dependencies", []) or [])
+        build_time = value.get("build_time") if isinstance(value.get("build_time"), dict) else {}
+        return {
+            "build_time": {
+                "codex_generation": bool(build_time.get("codex_generation", True)),
+                "internet_research": bool(build_time.get("internet_research", bool(network_domains or dependencies))),
+                "dependencies": list(build_time.get("dependencies", dependencies) or []),
+                "reason": str(build_time.get("reason") or "Codex needs to generate controlled skill files."),
+            },
+            "runtime": {
+                "permissions": permissions,
+                "network_domains": network_domains,
+                "dependencies": dependencies,
+                "reason": str(runtime.get("reason") or "Expected runtime permissions for this skill."),
+            },
+        }
+
+    def _apply_blueprint_permission_plan(
+        self,
+        generation_request: SkillGenerationRequest,
+        blueprint: dict[str, Any],
+    ) -> dict[str, Any]:
+        permission_plan = self._permission_plan_from_blueprint(blueprint)
+        runtime = permission_plan["runtime"]
+        plan = dict(generation_request.plan_json or {})
+        plan["blueprint_json"] = blueprint
+        plan["permission_plan"] = permission_plan
+        plan["requested_permissions"] = runtime["permissions"]
+        plan["requested_network_domains"] = runtime["network_domains"]
+        plan["requested_dependencies"] = runtime["dependencies"]
+        if "expected_files" in blueprint:
+            plan["files_to_generate"] = blueprint.get("expected_files") or plan.get("files_to_generate", [])
+        generation_request.plan_json = plan
+        generation_request.requested_permissions_json = runtime["permissions"]
+        generation_request.requested_dependencies_json = runtime["dependencies"]
+        generation_request.requested_network_domains_json = runtime["network_domains"]
+        self.db.commit()
+        self.db.refresh(generation_request)
+        return permission_plan
+
+    def _permission_build_time_summary(self, plan: dict[str, Any], permission_request: Any) -> str:
         permissions = plan.get("requested_permissions", {})
         dependencies = plan.get("requested_dependencies", [])
         network = plan.get("requested_network_domains", [])
@@ -1077,7 +1305,7 @@ class AgentWorkflowService:
             "It remains proposed until the user explicitly installs it."
         )
 
-    def _security_runtime_summary(self, skill: Skill, runtime_request: Any) -> str:
+    def _permission_runtime_summary(self, skill: Skill, runtime_request: Any) -> str:
         expansion = runtime_request.reason_json.get("permission_expansion", {})
         expansion_text = f" Permission expansion: {expansion}." if expansion else " No permission expansion was detected."
         return (
@@ -1087,22 +1315,22 @@ class AgentWorkflowService:
             f"{expansion_text}"
         )
 
-    def _apply_combined_permission_summary(self, permission_request: Any, pm_summary: str, security_summary: str) -> None:
+    def _apply_combined_permission_summary(self, permission_request: Any, pm_summary: str, permission_summary: str) -> None:
         permission_request.reason_json = {
             **(permission_request.reason_json or {}),
             "product_manager_summary": pm_summary,
-            "security_reviewer_summary": security_summary,
+            "permission_review_summary": permission_summary,
         }
-        permission_request.user_explanation = f"ProductManager: {pm_summary}\n\nSecurityReviewer: {security_summary}"
+        permission_request.user_explanation = f"ProductManager: {pm_summary}\n\nPermission review: {permission_summary}"
         permission_request.reason = permission_request.user_explanation
         self.db.commit()
         self.db.refresh(permission_request)
 
-    def _mark_waiting_security_step_approved(self, agent_run: AgentRun) -> None:
+    def _mark_waiting_permission_steps_approved(self, agent_run: AgentRun) -> None:
         waiting_steps = [
             step
             for step in agent_run.steps
-            if step.step_name == "security_reviewer" and step.status == "waiting_for_approval"
+            if step.status == "waiting_for_approval" and (step.output_json or {}).get("permission_request_id")
         ]
         for step in waiting_steps:
             step.status = "succeeded"
@@ -1133,20 +1361,70 @@ class AgentWorkflowService:
             "skill_name": skill.name,
             "status": skill.status,
             "blueprint_json": agent_run.blueprint_json,
+            "milestone_path": self._milestone_artifact_relative_path(agent_run, agent_run.current_milestone or DEFAULT_MILESTONE),
             "recent_runs": runs,
         }
 
     def _current_milestone(self, agent_run: AgentRun) -> dict[str, Any]:
         return self._milestone_by_name(agent_run, agent_run.current_milestone or DEFAULT_MILESTONE)
 
+    def _milestones(self, agent_run: AgentRun) -> list[dict[str, Any]]:
+        return self._milestones_from_blueprint(agent_run.blueprint_json or {})
+
+    def _milestones_from_blueprint(self, blueprint: dict[str, Any]) -> list[dict[str, Any]]:
+        raw_milestones = blueprint.get("milestones")
+        if not isinstance(raw_milestones, list) or not raw_milestones:
+            raw_milestones = [
+                {
+                    "name": DEFAULT_MILESTONE,
+                    "summary": "Create the core proposed skill package.",
+                    "acceptance_criteria": ["manifest.json describes the skill contract", "validation and tests pass"],
+                }
+            ]
+        milestones = []
+        used_names: set[str] = set()
+        for index, raw in enumerate(raw_milestones, start=1):
+            if not isinstance(raw, dict):
+                raw = {}
+            base_name = self._safe_milestone_name(str(raw.get("name") or f"milestone_{index}"))
+            name = base_name
+            suffix = 2
+            while name in used_names:
+                name = f"{base_name}_{suffix}"
+                suffix += 1
+            used_names.add(name)
+            criteria = raw.get("acceptance_criteria")
+            milestone = dict(raw)
+            milestone["name"] = name
+            milestone["summary"] = str(raw.get("summary") or "Build and validate this milestone.")
+            milestone["acceptance_criteria"] = criteria if isinstance(criteria, list) else []
+            milestones.append(milestone)
+        return milestones
+
+    def _safe_milestone_name(self, value: str) -> str:
+        normalized = "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in value.strip().lower())
+        normalized = normalized.strip("_-")
+        if normalized == "initial_skill":
+            return DEFAULT_MILESTONE
+        return normalized or DEFAULT_MILESTONE
+
     def _milestone_by_name(self, agent_run: AgentRun, name: str) -> dict[str, Any]:
-        for milestone in (agent_run.blueprint_json or {}).get("milestones", []):
+        for milestone in self._milestones(agent_run):
             if milestone.get("name") == name:
                 return milestone
         return {"name": name, "acceptance_criteria": []}
 
     def _all_milestones_complete(self, agent_run: AgentRun) -> bool:
-        return True
+        return self._next_milestone_name(agent_run, agent_run.current_milestone or DEFAULT_MILESTONE) is None
+
+    def _next_milestone_name(self, agent_run: AgentRun, current_name: str) -> str | None:
+        milestones = self._milestones(agent_run)
+        for index, milestone in enumerate(milestones):
+            if milestone["name"] == current_name:
+                if index + 1 < len(milestones):
+                    return milestones[index + 1]["name"]
+                return None
+        return None
 
     def _failure_count(self, agent_run: AgentRun, milestone_name: str) -> int:
         return int((agent_run.failure_count_json or {}).get(milestone_name, 0))
@@ -1161,7 +1439,11 @@ class AgentWorkflowService:
         log_dir = self.project_root / "runtime" / "agent_runs" / f"run_{agent_run.id}"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / f"{milestone_name}_failure.log"
-        content = "\n".join(
+        content = self._validation_log_text(milestone_name, validation)
+        log_path.write_text(content, encoding="utf-8")
+
+    def _validation_log_text(self, milestone_name: str, validation: Any) -> str:
+        return "\n".join(
             [
                 f"milestone={milestone_name}",
                 f"error={validation.error_message or ''}",
@@ -1171,7 +1453,6 @@ class AgentWorkflowService:
                 validation.stderr or "",
             ]
         )
-        log_path.write_text(content, encoding="utf-8")
 
     def _existing_test_paths(self, skill: Skill) -> list[str]:
         try:
@@ -1198,6 +1479,63 @@ class AgentWorkflowService:
                 content = path.read_text(encoding="utf-8")
                 snapshot[relative_path] = content[:12000]
         return snapshot
+
+    def _version_file_snapshot(self, version: Any) -> dict[str, str]:
+        version_dir = (self.project_root / version.folder_path).resolve()
+        snapshot: dict[str, str] = {}
+        for relative_path in ("manifest.json", "README.md", "SKILL.md", "skill.py"):
+            path = version_dir / relative_path
+            if path.is_file():
+                snapshot[relative_path] = path.read_text(encoding="utf-8")[:12000]
+        return snapshot
+
+    def _version_test_paths(self, version: Any) -> list[str]:
+        version_dir = (self.project_root / version.folder_path).resolve()
+        tests_dir = version_dir / "tests"
+        if not tests_dir.is_dir():
+            return []
+        return [path.relative_to(version_dir).as_posix() for path in sorted(tests_dir.rglob("test_*.py"))]
+
+    def _artifact_dir(self, agent_run: AgentRun) -> Path:
+        path = self.project_root / "runtime" / "agent_runs" / f"run_{agent_run.id}"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _artifact_relative_path(self, agent_run: AgentRun, filename: str) -> str:
+        return (self._artifact_dir(agent_run) / filename).resolve().relative_to(self.project_root).as_posix()
+
+    def _milestone_artifact_relative_path(self, agent_run: AgentRun, milestone_name: str) -> str:
+        return (self._artifact_dir(agent_run) / "milestones" / f"{milestone_name}.json").resolve().relative_to(
+            self.project_root
+        ).as_posix()
+
+    def _milestone_artifact_paths(self, agent_run: AgentRun) -> list[str]:
+        return [self._milestone_artifact_relative_path(agent_run, milestone["name"]) for milestone in self._milestones(agent_run)]
+
+    def _write_milestone_artifacts(self, agent_run: AgentRun, milestones: list[dict[str, Any]]) -> list[str]:
+        milestone_dir = self._artifact_dir(agent_run) / "milestones"
+        milestone_dir.mkdir(parents=True, exist_ok=True)
+        paths = []
+        for index, milestone in enumerate(milestones, start=1):
+            payload = {**milestone, "index": index}
+            path = milestone_dir / f"{milestone['name']}.json"
+            path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            paths.append(path.resolve().relative_to(self.project_root).as_posix())
+        expected = {f"{milestone['name']}.json" for milestone in milestones}
+        for existing in milestone_dir.glob("*.json"):
+            if existing.name not in expected:
+                existing.unlink()
+        return paths
+
+    def _write_json_artifact(self, agent_run: AgentRun, filename: str, payload: dict[str, Any]) -> str:
+        path = self._artifact_dir(agent_run) / filename
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return path.resolve().relative_to(self.project_root).as_posix()
+
+    def _write_text_artifact(self, agent_run: AgentRun, filename: str, content: str) -> str:
+        path = self._artifact_dir(agent_run) / filename
+        path.write_text(content, encoding="utf-8")
+        return path.resolve().relative_to(self.project_root).as_posix()
 
     def _start_step(
         self,

@@ -21,28 +21,9 @@ class ProjectPlausibilityAdapter(Protocol):
 
 class FakeProjectPlausibilityAdapter:
     def evaluate(self, prompt: str, message: str) -> ProjectPlausibilityResult:
-        normalized = message.lower().strip()
-        if len(normalized) < 12:
-            return ProjectPlausibilityResult(
-                plausible=False,
-                reason="The request is too short to turn into a useful reusable skill proposal.",
-                optional_projects=[
-                    "Describe the repeated workflow you want to reuse.",
-                    "Describe an instruction, automation, or hybrid skill with expected inputs and outputs.",
-                ],
-            )
-        if any(term in normalized for term in ("what is ", "explain ", "define ")):
-            return ProjectPlausibilityResult(
-                plausible=False,
-                reason="This reads like a one-off question rather than a reusable capability package.",
-                optional_projects=[
-                    "Create a reusable instruction for answering this kind of question.",
-                    "Create an automation that transforms recurring inputs into a structured output.",
-                ],
-            )
         return ProjectPlausibilityResult(
             plausible=True,
-            reason="The request is plausible as a reusable application skill proposal.",
+            reason="Fake Codex plausibility adapter accepts the project request for local tests.",
             optional_projects=[],
         )
 

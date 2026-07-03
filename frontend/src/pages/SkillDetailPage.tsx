@@ -1035,7 +1035,7 @@ function UpdateSuggestionChat({
 
 function InlinePermissionSummary({ request }: { request: ApprovalRequest }) {
   const pmSummary = reasonText(request, "product_manager_summary");
-  const securitySummary = reasonText(request, "security_reviewer_summary");
+  const permissionSummary = reasonText(request, "permission_review_summary") || reasonText(request, "security_reviewer_summary");
   return (
     <div className="permission-inline-summary">
       {pmSummary && (
@@ -1044,10 +1044,10 @@ function InlinePermissionSummary({ request }: { request: ApprovalRequest }) {
           <p>{pmSummary}</p>
         </section>
       )}
-      {securitySummary && (
+      {permissionSummary && (
         <section>
-          <h3>SecurityReviewer Summary</h3>
-          <p>{securitySummary}</p>
+          <h3>Permission Review</h3>
+          <p>{permissionSummary}</p>
         </section>
       )}
       <section>

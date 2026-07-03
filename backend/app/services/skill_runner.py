@@ -38,8 +38,14 @@ def utc_now() -> datetime:
 
 def validate_supported_permissions(manifest: SkillManifest) -> None:
     permissions = manifest.permissions
-    if permissions.filesystem_read:
-        raise UnsupportedSkillPermissionError("filesystem read permissions are not supported by the current runner")
+    requested_reads = {
+        path.replace("\\", "/").removeprefix("./").rstrip("/")
+        for path in permissions.filesystem_read
+    }
+    if not requested_reads.issubset({"cache"}):
+        raise UnsupportedSkillPermissionError(
+            "filesystem read permissions are limited to the skill's own ./cache directory"
+        )
     if permissions.secrets:
         raise UnsupportedSkillPermissionError("secret permissions are not supported by the current runner")
     if permissions.shell:

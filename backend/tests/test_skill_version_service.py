@@ -205,7 +205,30 @@ def test_approved_changed_permissions_allow_activation(tmp_path: Path, db_sessio
 
 def test_pm_blocks_unrealistic_suggestion(tmp_path: Path, db_session: Session) -> None:
     skill = create_installed_skill(db_session, tmp_path)
-    service = AgentWorkflowService(db_session, project_root=tmp_path)
+
+    class BlockingProductManagerAdapter(FakeCodexAdapter):
+        def generate(self, prompt: str, output_dir: Path, plan: dict):
+            if plan.get("codex_task") == "product_manager_update_review":
+                payload = {
+                    "decision": "ask_user_for_input",
+                    "summary": "This suggestion is too broad or unrealistic for a bounded skill update.",
+                    "blueprint": {
+                        "goal": "Do not build this update.",
+                        "skill_name": skill.name,
+                        "skill_type": skill.skill_type,
+                        "interface_type": skill.interface_type,
+                        "suggestion": plan["suggestion"],
+                        "milestones": [],
+                    },
+                }
+                return subprocess.CompletedProcess(args=["fake"], returncode=0, stdout=json.dumps(payload), stderr="")
+            return super().generate(prompt, output_dir, plan)
+
+    service = AgentWorkflowService(
+        db_session,
+        codex_service=CodexService(db_session, adapter=BlockingProductManagerAdapter(), project_root=tmp_path),
+        project_root=tmp_path,
+    )
 
     agent_run = service.create_update_run(skill, "Make it sentient and guarantee perfect results")
 
@@ -217,7 +240,29 @@ def test_pm_blocks_unrealistic_suggestion(tmp_path: Path, db_session: Session) -
 def test_pm_can_propose_better_solution_for_broad_request(tmp_path: Path, db_session: Session) -> None:
     skill = create_installed_skill(db_session, tmp_path)
 
-    agent_run = AgentWorkflowService(db_session, project_root=tmp_path).create_update_run(skill, "do everything")
+    class BetterSolutionProductManagerAdapter(FakeCodexAdapter):
+        def generate(self, prompt: str, output_dir: Path, plan: dict):
+            if plan.get("codex_task") == "product_manager_update_review":
+                payload = {
+                    "decision": "ask_user_for_input",
+                    "summary": "A better next project is a small, testable behavior change with clear input and output.",
+                    "blueprint": {
+                        "goal": "Ask for a narrower update.",
+                        "skill_name": skill.name,
+                        "skill_type": skill.skill_type,
+                        "interface_type": skill.interface_type,
+                        "suggestion": plan["suggestion"],
+                        "milestones": [],
+                    },
+                }
+                return subprocess.CompletedProcess(args=["fake"], returncode=0, stdout=json.dumps(payload), stderr="")
+            return super().generate(prompt, output_dir, plan)
+
+    agent_run = AgentWorkflowService(
+        db_session,
+        codex_service=CodexService(db_session, adapter=BetterSolutionProductManagerAdapter(), project_root=tmp_path),
+        project_root=tmp_path,
+    ).create_update_run(skill, "do everything")
 
     assert agent_run.status == "blocked"
     assert agent_run.error_message is None

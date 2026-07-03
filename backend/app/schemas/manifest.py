@@ -210,7 +210,11 @@ def has_no_permissions(permissions: ManifestPermissions) -> bool:
 def classify_permission_risk(permissions: ManifestPermissions) -> RiskLevel:
     if permissions.shell or permissions.secrets:
         return "high"
-    if permissions.filesystem_read:
+    read_paths = {
+        path.replace("\\", "/").removeprefix("./").rstrip("/")
+        for path in permissions.filesystem_read
+    }
+    if read_paths - {"cache"}:
         return "medium"
     unsafe_writes = {
         path.replace("\\", "/").removeprefix("./").rstrip("/")

@@ -157,7 +157,7 @@ export default function ChatPage() {
       {
         id: thinkingId,
         role: "assistant",
-        content: mode === "project" ? "ProductManager and SecurityReviewer are preparing the blueprint..." : "Codex is thinking...",
+        content: mode === "project" ? "ProductManager is preparing the blueprint and permission file..." : "Codex is thinking...",
         kind: "thinking",
       },
     ]);
@@ -478,7 +478,7 @@ function MessageBody({
           isWorking={isWorking}
           approveLabel="Approve Generation"
           denyLabel="Decline"
-          approveDisabled={message.permissionRequest.risk_level === "blocked"}
+          approveDisabled={false}
           onApprove={() => onApproveBuild(message)}
           onDeny={() => onDenyBuild(message)}
         />
@@ -567,7 +567,7 @@ function ApprovalButtons({
 
 function PermissionSummary({ request }: { request: ApprovalRequest }) {
   const pmSummary = getReasonText(request, "product_manager_summary");
-  const securitySummary = getReasonText(request, "security_reviewer_summary");
+  const permissionSummary = getReasonText(request, "permission_review_summary") || getReasonText(request, "security_reviewer_summary");
   const expansion = request.reason_json.permission_expansion;
   const hasExpansion = isNonEmptyObject(expansion);
   return (
@@ -578,10 +578,10 @@ function PermissionSummary({ request }: { request: ApprovalRequest }) {
           <p>{pmSummary}</p>
         </section>
       )}
-      {securitySummary && (
+      {permissionSummary && (
         <section>
-          <h3>SecurityReviewer Summary</h3>
-          <p>{securitySummary}</p>
+          <h3>Permission Review</h3>
+          <p>{permissionSummary}</p>
         </section>
       )}
       <section>
@@ -603,7 +603,7 @@ function PermissionSummary({ request }: { request: ApprovalRequest }) {
 }
 
 function buildApprovalMessage(displayName: string): string {
-  return `I prepared a skill blueprint for ${displayName}. Review the ProductManager and SecurityReviewer summaries below, then approve or decline generation.`;
+  return `I prepared a skill blueprint for ${displayName}. Review the ProductManager summary and permission review below, then approve or decline generation.`;
 }
 
 function generationResultMessage(

@@ -55,11 +55,7 @@ class RealCodexAdapter:
         output_dir.mkdir(parents=True, exist_ok=True)
         prompt_path = output_dir / "codex_prompt.txt"
         prompt_path.write_text(prompt, encoding="utf-8")
-        command = [
-            self.command,
-            "--ask-for-approval",
-            self.approval_policy,
-        ]
+        command = [self.command, "--ask-for-approval", self.approval_policy]
         if self._should_enable_search(plan):
             command.append("--search")
         command.extend(
@@ -108,7 +104,14 @@ class FakeCodexAdapter:
             return subprocess.CompletedProcess(
                 args=["fake-codex-product-manager"],
                 returncode=0,
-                stdout=json.dumps({"blueprint": blueprint}),
+                stdout=json.dumps(
+                    {
+                        "blueprint": blueprint,
+                        "permission_plan": blueprint["permission_plan"],
+                        "decision": "request_permission",
+                        "summary": f"Build {blueprint['skill_name']} as a reusable skill.",
+                    }
+                ),
                 stderr="",
             )
         if task == "product_manager_repair_blueprint":
@@ -180,6 +183,13 @@ class FakeCodexAdapter:
                 stdout="fake update complete",
                 stderr="",
             )
+        if task == "skill_update_repair":
+            return subprocess.CompletedProcess(
+                args=["fake-codex-update-repair"],
+                returncode=0,
+                stdout="fake update repair complete",
+                stderr="",
+            )
         skill_type = plan["skill_type"]
         permissions = plan["requested_permissions"]
         manifest = {
@@ -243,6 +253,23 @@ class FakeCodexAdapter:
         ]
         if plan.get("interface_type") == "tool":
             acceptance_criteria.append("tool_ui_schema is present so the Tools page can render a user-friendly UI")
+        permission_plan = {
+            "build_time": {
+                "codex_generation": True,
+                "internet_research": bool(plan.get("requested_network_domains") or plan.get("requested_dependencies")),
+                "dependencies": plan.get("requested_dependencies", []),
+                "reason": "Codex needs to generate proposed skill files.",
+            },
+            "runtime": {
+                "permissions": plan.get(
+                    "requested_permissions",
+                    {"network": [], "filesystem_read": [], "filesystem_write": [], "secrets": [], "shell": False},
+                ),
+                "network_domains": plan.get("requested_network_domains", []),
+                "dependencies": plan.get("requested_dependencies", []),
+                "reason": "Runtime permissions expected by the proposed skill design.",
+            },
+        }
         return {
             "goal": plan.get("goal") or user_message,
             "skill_name": plan.get("skill_name"),
@@ -250,10 +277,11 @@ class FakeCodexAdapter:
             "interface_type": plan.get("interface_type", "chat"),
             "expected_files": plan.get("files_to_generate", []),
             "expected_behavior": plan.get("expected_output", {}),
+            "permission_plan": permission_plan,
             "milestones": [
                 {
-                    "name": "initial_skill",
-                    "summary": "Create the proposed skill package and tests.",
+                    "name": "core_skill",
+                    "summary": "Create the core proposed skill package.",
                     "acceptance_criteria": acceptance_criteria,
                 }
             ],
@@ -261,55 +289,38 @@ class FakeCodexAdapter:
 
     def _product_manager_update_decision(self, plan: dict) -> dict:
         suggestion = str(plan.get("suggestion", "")).strip()
-        lowered = suggestion.lower()
-        requested_network_domains = []
-        requested_dependencies = []
-        if any(term in lowered for term in ["web", "internet", "scrape", "scraper", "news", "rss", "site", "website"]):
-            requested_network_domains = ["example.com"]
-            requested_dependencies = ["requests", "beautifulsoup4"]
-        if len(suggestion) < 8:
-            decision = {
-                "decision": "ask_user_for_input",
-                "summary": "Please describe the improvement more specifically before I build a new version.",
-            }
-        elif any(
-            term in lowered
-            for term in [
-                "delete files",
-                "shell",
-                "secret",
-                "password",
-                "browser cookie",
-                "trade stock",
-                "buy ",
-                "purchase",
-                "send email",
-                "post publicly",
-            ]
-        ):
-            decision = {
-                "decision": "stop_unsupported",
-                "summary": "ProductManager blocked this update because it asks for unsafe or unsupported MVP behavior.",
-            }
-        elif any(term in lowered for term in ["sentient", "guarantee", "make money", "do everything"]):
-            decision = {
-                "decision": "ask_user_for_input",
-                "summary": (
-                    "This suggestion is too broad or unrealistic for a bounded skill update. "
-                    "A better next project is a small, testable behavior change with clear input and output."
-                ),
-            }
-        else:
-            decision = {
-                "decision": "build_next_milestone",
-                "summary": f"Update {plan['skill_name']} with this improvement: {suggestion}",
-            }
+        requested_network_domains: list[str] = []
+        requested_dependencies: list[str] = []
+        decision = {
+            "decision": "build_next_milestone",
+            "summary": f"Update {plan['skill_name']} with this improvement: {suggestion}",
+        }
         decision["blueprint"] = {
             "goal": decision["summary"],
             "skill_name": plan["skill_name"],
             "skill_type": plan["skill_type"],
             "interface_type": plan.get("interface_type", "chat"),
             "suggestion": suggestion,
+            "permission_plan": {
+                "build_time": {
+                    "codex_generation": True,
+                    "internet_research": bool(requested_network_domains or requested_dependencies),
+                    "dependencies": requested_dependencies,
+                    "reason": "Codex needs to create a draft version for this update.",
+                },
+                "runtime": {
+                    "permissions": {
+                        "network": requested_network_domains,
+                        "filesystem_read": [],
+                        "filesystem_write": ["./cache"] if requested_network_domains else [],
+                        "secrets": [],
+                        "shell": False,
+                    },
+                    "network_domains": requested_network_domains,
+                    "dependencies": requested_dependencies,
+                    "reason": "Expected runtime permissions for the updated skill design.",
+                },
+            },
             "requested_network_domains": requested_network_domains,
             "requested_dependencies": requested_dependencies,
             "milestones": [
@@ -460,6 +471,7 @@ class CodexService:
         if self.project_root is None:
             self.project_root = Path(__file__).resolve().parents[3]
         self.project_root = self.project_root.resolve()
+        self.instruction_dir = Path(__file__).resolve().parents[1] / "agent_instructions"
         if self.adapter is None:
             self.adapter = default_codex_adapter()
         self.proposed_service = ProposedSkillService(self.db, project_root=self.project_root)
@@ -478,7 +490,14 @@ class CodexService:
             payload,
         )
         parsed = self._parse_product_manager_json(result, fallback={"blueprint": fallback})
-        return self._sanitize_blueprint(parsed.get("blueprint"), fallback)
+        blueprint = self._sanitize_blueprint(parsed.get("blueprint"), fallback)
+        permission_plan = self._sanitize_permission_plan(parsed.get("permission_plan"), generation_request.plan_json)
+        blueprint["permission_plan"] = permission_plan
+        if isinstance(parsed.get("summary"), str):
+            blueprint["product_manager_summary"] = str(parsed["summary"]).strip()
+        if isinstance(parsed.get("decision"), str):
+            blueprint["decision"] = str(parsed["decision"]).strip()
+        return blueprint
 
     def product_manager_repair_blueprint(self, skill: Skill, user_request: str | None) -> dict[str, object]:
         payload = {
@@ -505,6 +524,7 @@ class CodexService:
             "interface_type": skill.interface_type,
             "description": skill.description,
             "suggestion": suggestion,
+            "project_files": self._read_skill_files(skill),
         }
         fallback = self._fallback_update_review(skill, suggestion)
         result = self.adapter.generate(
@@ -539,6 +559,8 @@ class CodexService:
         *,
         builder_writes_tests: bool = True,
         initial_skill_status: str = "proposed",
+        milestone_context: dict[str, object] | None = None,
+        create_runtime_request: bool = True,
     ) -> tuple[Skill, object]:
         if generation_request.status != "approved":
             raise CodexGenerationError("Generation request is not approved for generation")
@@ -561,6 +583,8 @@ class CodexService:
         self.db.commit()
 
         plan_for_adapter = {**plan, "builder_writes_tests": builder_writes_tests}
+        if milestone_context is not None:
+            plan_for_adapter["current_milestone"] = milestone_context
         prompt = self.build_prompt(plan_for_adapter, proposed_dir, builder_writes_tests=builder_writes_tests)
         result = self.adapter.generate(prompt, proposed_dir, plan_for_adapter)
         if result.returncode != 0:
@@ -578,10 +602,33 @@ class CodexService:
         if not validation.ok:
             generation_request.error_message = validation.error_message
         self.db.commit()
-        if validation.manifest_valid:
+        if create_runtime_request and validation.manifest_valid:
             PermissionService(self.db, project_root=self.project_root).create_runtime_request(skill)
         self.db.refresh(generation_request)
         return skill, validation
+
+    def build_skill_milestone(
+        self,
+        skill: Skill,
+        generation_request: SkillGenerationRequest,
+        milestone_context: dict[str, object],
+    ) -> tuple[subprocess.CompletedProcess[str], object]:
+        skill_dir = self.proposed_service.skill_dir_for_record(skill)
+        plan = {
+            **generation_request.plan_json,
+            "codex_task": "skill_build_milestone",
+            "builder_writes_tests": False,
+            "current_milestone": milestone_context,
+            "existing_files": self._read_files_from_dir(skill_dir),
+        }
+        prompt = self.build_prompt(plan, skill_dir, builder_writes_tests=False)
+        result = self.adapter.generate(prompt, skill_dir, plan)
+        if result.returncode != 0:
+            raise CodexGenerationError(result.stderr or "Codex milestone build failed")
+        validation = self.proposed_service.validate_proposed_skill(skill)
+        if validation.manifest_valid:
+            self.update_skill_record_from_manifest(skill, skill_dir)
+        return result, validation
 
     def repair_skill(self, skill: Skill, failure_context: dict) -> subprocess.CompletedProcess[str]:
         skill_dir = self.proposed_service.skill_dir_for_record(skill)
@@ -590,6 +637,28 @@ class CodexService:
         result = self.adapter.generate(prompt, skill_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex repair failed")
+        return result
+
+    def repair_skill_version(
+        self,
+        skill: Skill,
+        version: SkillVersion,
+        failure_context: dict,
+    ) -> subprocess.CompletedProcess[str]:
+        version_dir = (self.project_root / version.folder_path).resolve()
+        installed_root = (self.project_root / "skills" / "installed").resolve()
+        if not version_dir.is_relative_to(installed_root):
+            raise CodexGenerationError("Version folder must stay inside skills/installed")
+        plan = {
+            **self.plan_from_skill(skill, failure_context),
+            "codex_task": "skill_update_repair",
+            "version_id": version.id,
+            "builder_writes_tests": False,
+        }
+        prompt = self.build_repair_prompt(skill, version_dir, failure_context)
+        result = self.adapter.generate(prompt, version_dir, plan)
+        if result.returncode != 0:
+            raise CodexGenerationError(result.stderr or "Codex draft-version repair failed")
         return result
 
     def update_skill_version(
@@ -608,6 +677,7 @@ class CodexService:
             "codex_task": "skill_update",
             "suggestion": suggestion,
             "blueprint_json": blueprint,
+            "project_files": self._read_files_from_dir(version_dir),
         }
         prompt = self.build_update_prompt(skill, version, version_dir, suggestion, blueprint)
         result = self.adapter.generate(prompt, version_dir, plan)
@@ -631,6 +701,34 @@ class CodexService:
         result = self.adapter.generate(prompt, skill_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex tester failed to write tests")
+        return result
+
+    def write_tests_for_version(
+        self,
+        skill: Skill,
+        version: SkillVersion,
+        tester_context: dict,
+    ) -> subprocess.CompletedProcess[str]:
+        version_dir = (self.project_root / version.folder_path).resolve()
+        installed_root = (self.project_root / "skills" / "installed").resolve()
+        if not version_dir.is_relative_to(installed_root):
+            raise CodexGenerationError("Version folder must stay inside skills/installed")
+        plan = {
+            **self.plan_from_skill(skill, tester_context),
+            "codex_task": "tester_write_tests",
+            "mode": "update",
+            "version_id": version.id,
+            "blueprint_json": tester_context.get("blueprint_json", {}),
+            "milestone": tester_context.get("milestone", {}),
+            "code_files": tester_context.get("code_files", {}),
+            "input_schema": skill.input_schema_json,
+            "output_schema": skill.output_schema_json,
+            "tool_ui_schema": skill.tool_ui_schema_json,
+        }
+        prompt = self.build_tester_prompt(skill, version_dir, {**tester_context, "mode": "update"})
+        result = self.adapter.generate(prompt, version_dir, plan)
+        if result.returncode != 0:
+            raise CodexGenerationError(result.stderr or "Codex tester failed to write draft-version tests")
         return result
 
     def plan_from_skill(self, skill: Skill, failure_context: dict) -> dict:
@@ -657,6 +755,21 @@ class CodexService:
             "requested_dependencies": [],
             "risk_level": skill.risk_level,
         }
+
+    def _read_skill_files(self, skill: Skill) -> dict[str, str]:
+        try:
+            skill_dir = self.proposed_service.skill_dir_for_record(skill)
+        except (ProposedSkillError, ValueError, FileNotFoundError):
+            return {}
+        return self._read_files_from_dir(skill_dir)
+
+    def _read_files_from_dir(self, root: Path) -> dict[str, str]:
+        files: dict[str, str] = {}
+        for relative_path in ("manifest.json", "README.md", "SKILL.md", "skill.py", "tests/test_skill.py"):
+            path = root / relative_path
+            if path.is_file():
+                files[relative_path] = path.read_text(encoding="utf-8")[:12000]
+        return files
 
     def update_skill_record_from_manifest(self, skill: Skill, proposed_dir: Path) -> None:
         manifest = validate_manifest_file(proposed_dir / "manifest.json")
@@ -699,18 +812,14 @@ class CodexService:
         return skill
 
     def build_prompt(self, plan: dict, output_dir: Path, *, builder_writes_tests: bool = True) -> str:
-        test_file_rule = (
-            "- skill.py and tests/test_skill.py for automation or hybrid skills"
-            if builder_writes_tests
-            else "- skill.py for automation or hybrid skills. Do not create or edit tests; TesterAgent owns tests."
-        )
+        instruction = self._instruction("builder_instruction_build.md")
         test_requirement = (
             "- tests must not require installing packages"
             if builder_writes_tests
             else "- do not create, modify, or delete tests. TesterAgent will inspect the implementation and write tests separately."
         )
         return f"""
-You are generating an application skill for the Local-First Self-Extending Personal AI Assistant.
+{instruction}
 
 Application skill definition:
 - A skill is a reusable capability package.
@@ -722,20 +831,16 @@ Application skill definition:
 Write files only inside this exact folder:
 {output_dir}
 
-Do not modify backend, frontend, tests outside this folder, project metadata, git files, or any app source code.
-Do not install packages.
-Do not run the generated skill.
-Do not set shell=true.
-Do not implement email sending, calendar modification, trading, purchases, public posting, browser cookie access, file deletion, or arbitrary shell execution.
-
 Generation plan:
 {json.dumps(plan, indent=2)}
 
-Required files:
-- manifest.json
-- README.md
-- SKILL.md for instruction or hybrid skills
-{test_file_rule}
+Product structure:
+- Follow the ProductManager blueprint, expected_files, and current milestone.
+- Do not write blueprint.json, permissions.json, milestone JSON files, or runtime/agent_runs artifacts; those are platform workflow artifacts.
+- Platform validation still requires manifest.json and README.md in every skill package.
+- Instruction and hybrid skills need the manifest instructions_path to point to an instructions file such as SKILL.md.
+- Automation and hybrid skills need the manifest entrypoint to point to executable Python code such as skill.py.
+- TesterAgent owns test files in this workflow unless builder_writes_tests is explicitly true.
 
 Manifest requirements:
 - Use the plan skill_name, skill_type, risk_level, and requested_permissions exactly.
@@ -763,8 +868,9 @@ Instruction skill requirements:
 """.strip()
 
     def build_repair_prompt(self, skill: Skill, output_dir: Path, failure_context: dict) -> str:
+        instruction = self._instruction("builder_instruction_repair.md")
         return f"""
-You are BuilderAgent repairing an application skill for the Local-First Self-Extending Personal AI Assistant.
+{instruction}
 
 Skill:
 - name: {skill.name}
@@ -774,47 +880,20 @@ Skill:
 Controlled skill folder:
 {output_dir}
 
-Rules:
-- Write only inside the controlled skill folder.
-- Do not modify backend, frontend, project metadata, git files, or app source code.
-- Do not install packages.
-- Do not run the skill task automatically.
-- Do not set shell=true.
-- Do not add secrets, broad filesystem access, unrestricted network access, email/calendar/finance actions, browser automation, purchases, public posting, or file deletion.
-- Preserve manifest.json, README.md, and required skill files.
-- Preserve or reduce permissions unless the failure cannot be fixed without a declared permission change.
-- Do not create or edit tests; TesterAgent owns tests.
-- Executable skills must read JSON from stdin and return JSON on stdout.
-
 Failure context:
 {json.dumps(failure_context, indent=2)}
 
-Repair the current milestone using the provided Tester failure context so validation can be rerun. Return no prose; write files only.
+Repair the current milestone using the provided Tester failure context so validation can be rerun.
 """.strip()
 
     def build_tester_prompt(self, skill: Skill, output_dir: Path, tester_context: dict) -> str:
+        instruction_name = "tester_instruction_update.md" if tester_context.get("mode") == "update" else "tester_instruction_build.md"
+        instruction = self._instruction(instruction_name)
         return f"""
-You are TesterAgent for the Local-First Self-Extending Personal AI Assistant.
-
-Your job is to understand the ProductManager blueprint, inspect Builder's current skill files, and write focused pytest tests.
+{instruction}
 
 Controlled skill folder:
 {output_dir}
-
-Hard rules:
-- Write only this file: tests/test_skill.py.
-- Do not edit manifest.json, README.md, SKILL.md, skill.py, cache files, app source code, project metadata, or git files.
-- Do not install packages.
-- Do not run the skill task outside pytest test code.
-- Do not require network, secrets, shell commands, package installation, browser automation, email/calendar/finance actions, public posting, purchases, trading, or file deletion.
-- Use only Python standard library and pytest.
-- Keep tests rich enough to catch realistic behavior bugs, but not brittle or overly complex.
-- Prefer 3 to 6 tests.
-- Test the manifest contract, representative successful input, JSON stdin/stdout contract, and one or two important edge cases from the blueprint.
-- If interface_type is tool, verify the manifest has a declarative tool_ui_schema with fields.
-- Use subprocess to execute skill.py for end-to-end JSON stdin/stdout checks.
-- Avoid stale assumptions: derive expectations from the blueprint and the current code/manifest shown below.
-- Return no prose. Write files only.
 
 Skill:
 - name: {skill.name}
@@ -833,8 +912,9 @@ Tester context:
         suggestion: str,
         blueprint: dict[str, object],
     ) -> str:
+        instruction = self._instruction("builder_instruction_update.md")
         return f"""
-You are BuilderAgent updating an application skill for the Local-First Self-Extending Personal AI Assistant.
+{instruction}
 
 Skill:
 - name: {skill.name}
@@ -851,62 +931,25 @@ User improvement suggestion:
 ProductManager update blueprint:
 {json.dumps(blueprint, indent=2)}
 
-Rules:
-- Write only inside the draft version folder.
-- Do not modify the active installed version, backend, frontend, app tests, project metadata, git files, or other skills.
-- Do not install packages.
-- Do not run the skill task automatically.
-- Preserve manifest name and skill_type unless the blueprint explicitly requires otherwise.
-- Preserve or reduce permissions unless the blueprint explicitly calls for a permission change.
-- Do not set shell=true.
-- Do not add secrets, broad filesystem access, unrestricted network access, browser automation, email/calendar/finance actions, purchases, public posting, trading, or file deletion.
-- Automation and hybrid skills must keep JSON stdin/stdout behavior.
-- Update README.md with a concise changelog for this version.
+Current draft files:
+{json.dumps(self._read_files_from_dir(output_dir), indent=2)}
 """.strip()
 
     def build_product_manager_prompt(self, task: str, payload: dict[str, object]) -> str:
+        instruction_by_task = {
+            "build_blueprint": "product_manager_build.md",
+            "repair_blueprint": "product_manager_repair.md",
+            "update_review": "product_manager_update.md",
+            "summary": "product_manager_summary.md",
+        }
+        instruction = self._instruction(instruction_by_task.get(task, "product_manager_summary.md"))
         return f"""
-You are ProductManagerAgent for the Local-First Self-Extending Personal AI Assistant.
-
-You must return exactly one JSON object and no prose.
-
-Responsibilities:
-- evaluate user requests and skill update suggestions
-- create concise project blueprints and milestone plans
-- define acceptance criteria
-- write user-facing summaries
-- never write implementation code
-- never approve permissions
-- never install or run skills
-- never bypass SecurityReviewer
-
-Allowed decisions:
-- request_permission
-- build_next_milestone
-- run_tests
-- repair_current_milestone
-- ask_user_for_input
-- finish_ready_for_review
-- stop_failed
-- stop_unsupported
-
-Safety:
-- Block or ask for input for shell access, secrets, broad filesystem access, browser automation, email/calendar/finance actions, purchases, trading, public posting, file deletion, or unclear/high-risk requests.
-- Do not block a project merely because public web access may be useful. Infer a small set of specific likely public domains and dependencies for SecurityReviewer review.
-- Runtime network access is allowed only when explicit domains are declared in the manifest and approved later. Wildcard or unrestricted network access remains unsupported.
-- If the user asks for general internet/web scraping/news access without naming domains, propose reasonable specific domains in the blueprint instead of asking the user to supply every domain upfront.
-- If interface_type is tool, require declarative tool_ui_schema in acceptance criteria.
-- Keep output concise and structured.
+{instruction}
 
 Task: {task}
 
 Payload:
 {json.dumps(payload, indent=2)}
-
-Required output by task:
-- build_blueprint or repair_blueprint: {{"blueprint": {{"goal": "...", "skill_name": "...", "skill_type": "instruction|automation|hybrid", "interface_type": "chat|tool|hidden", "expected_files": [], "milestones": [{{"name": "...", "summary": "...", "acceptance_criteria": []}}]}}}}
-- update_review: {{"decision": "...", "summary": "...", "blueprint": {{"goal": "...", "skill_name": "...", "skill_type": "...", "interface_type": "...", "suggestion": "...", "requested_network_domains": [], "requested_dependencies": [], "milestones": [{{"name": "update_version", "summary": "...", "acceptance_criteria": []}}]}}}}
-- summary: {{"summary": "..."}}
 """.strip()
 
     def _parse_product_manager_json(self, result: subprocess.CompletedProcess[str], fallback: dict[str, object]) -> dict[str, object]:
@@ -947,7 +990,7 @@ Required output by task:
                 criteria = milestone.get("acceptance_criteria")
                 sanitized_milestones.append(
                     {
-                        "name": str(milestone.get("name") or "initial_skill"),
+                        "name": str(milestone.get("name") or "core_skill"),
                         "summary": str(milestone.get("summary") or "Build and validate the current milestone."),
                         "acceptance_criteria": criteria if isinstance(criteria, list) else [],
                     }
@@ -957,7 +1000,79 @@ Required output by task:
             criteria = blueprint["milestones"][0].setdefault("acceptance_criteria", [])
             if "tool_ui_schema is present so the Tools page can render a user-friendly UI" not in criteria:
                 criteria.append("tool_ui_schema is present so the Tools page can render a user-friendly UI")
+        permission_source: object = blueprint.get("permission_plan")
+        if not isinstance(permission_source, dict) and any(
+            key in blueprint for key in ("requested_permissions", "requested_network_domains", "requested_dependencies")
+        ):
+            permission_source = {
+                "build_time": {
+                    "codex_generation": True,
+                    "internet_research": bool(
+                        blueprint.get("requested_network_domains") or blueprint.get("requested_dependencies")
+                    ),
+                    "dependencies": blueprint.get("requested_dependencies", []),
+                    "reason": "Codex needs to generate controlled skill files.",
+                },
+                "runtime": {
+                    "permissions": blueprint.get(
+                        "requested_permissions",
+                        {"network": [], "filesystem_read": [], "filesystem_write": [], "secrets": [], "shell": False},
+                    ),
+                    "network_domains": blueprint.get("requested_network_domains", []),
+                    "dependencies": blueprint.get("requested_dependencies", []),
+                    "reason": "Expected runtime permissions for this skill.",
+                },
+            }
+        blueprint["permission_plan"] = self._sanitize_permission_plan(permission_source, fallback)
         return blueprint
+
+    def _sanitize_permission_plan(self, value: object, fallback_plan: dict[str, object]) -> dict[str, object]:
+        default_permissions = {
+            "network": list(fallback_plan.get("requested_network_domains", []) or []),
+            "filesystem_read": [],
+            "filesystem_write": list(
+                (fallback_plan.get("requested_permissions") or {}).get("filesystem_write", [])  # type: ignore[union-attr]
+                if isinstance(fallback_plan.get("requested_permissions"), dict)
+                else []
+            ),
+            "secrets": [],
+            "shell": False,
+        }
+        if isinstance(fallback_plan.get("requested_permissions"), dict):
+            default_permissions = {
+                **default_permissions,
+                **dict(fallback_plan["requested_permissions"]),  # type: ignore[index]
+            }
+        default_dependencies = list(fallback_plan.get("requested_dependencies", []) or [])
+        default_network = list(fallback_plan.get("requested_network_domains", default_permissions.get("network", [])) or [])
+        if not isinstance(value, dict):
+            value = {}
+        build_time = value.get("build_time") if isinstance(value.get("build_time"), dict) else {}
+        runtime = value.get("runtime") if isinstance(value.get("runtime"), dict) else {}
+        permissions = runtime.get("permissions") if isinstance(runtime.get("permissions"), dict) else default_permissions
+        sanitized_permissions = {
+            "network": list(permissions.get("network", []) or []),
+            "filesystem_read": list(permissions.get("filesystem_read", []) or []),
+            "filesystem_write": list(permissions.get("filesystem_write", []) or []),
+            "secrets": list(permissions.get("secrets", []) or []),
+            "shell": bool(permissions.get("shell", False)),
+        }
+        network_domains = list(runtime.get("network_domains", sanitized_permissions["network"]) or [])
+        dependencies = list(runtime.get("dependencies", default_dependencies) or [])
+        return {
+            "build_time": {
+                "codex_generation": bool(build_time.get("codex_generation", True)),
+                "internet_research": bool(build_time.get("internet_research", bool(network_domains or dependencies))),
+                "dependencies": list(build_time.get("dependencies", dependencies) or []),
+                "reason": str(build_time.get("reason") or "Codex needs to generate controlled skill files."),
+            },
+            "runtime": {
+                "permissions": sanitized_permissions,
+                "network_domains": network_domains or default_network,
+                "dependencies": dependencies,
+                "reason": str(runtime.get("reason") or "Expected runtime permissions for this skill."),
+            },
+        }
 
     def _sanitize_update_review(
         self,
@@ -1004,6 +1119,23 @@ Required output by task:
         ]
         if plan.get("interface_type") == "tool":
             acceptance_criteria.append("tool_ui_schema is present so the Tools page can render a user-friendly UI")
+        permission_plan = {
+            "build_time": {
+                "codex_generation": True,
+                "internet_research": bool(plan.get("requested_network_domains") or plan.get("requested_dependencies")),
+                "dependencies": plan.get("requested_dependencies", []),
+                "reason": "Codex needs to generate proposed skill files.",
+            },
+            "runtime": {
+                "permissions": plan.get(
+                    "requested_permissions",
+                    {"network": [], "filesystem_read": [], "filesystem_write": [], "secrets": [], "shell": False},
+                ),
+                "network_domains": plan.get("requested_network_domains", []),
+                "dependencies": plan.get("requested_dependencies", []),
+                "reason": "Runtime permissions expected by the proposed skill design.",
+            },
+        }
         return {
             "goal": plan.get("goal") or generation_request.user_message,
             "skill_name": plan.get("skill_name"),
@@ -1011,10 +1143,11 @@ Required output by task:
             "interface_type": plan.get("interface_type", "chat"),
             "expected_files": plan.get("files_to_generate", []),
             "expected_behavior": plan.get("expected_output", {}),
+            "permission_plan": permission_plan,
             "milestones": [
                 {
-                    "name": "initial_skill",
-                    "summary": "Create the proposed skill package and tests.",
+                    "name": "core_skill",
+                    "summary": "Create the core proposed skill package.",
                     "acceptance_criteria": acceptance_criteria,
                 }
             ],
@@ -1038,55 +1171,38 @@ Required output by task:
 
     def _fallback_update_review(self, skill: Skill, suggestion: str) -> dict[str, object]:
         text = suggestion.strip()
-        lowered = text.lower()
-        requested_network_domains = []
-        requested_dependencies = []
-        if any(term in lowered for term in ["web", "internet", "scrape", "scraper", "news", "rss", "site", "website"]):
-            requested_network_domains = ["example.com"]
-            requested_dependencies = ["requests", "beautifulsoup4"]
-        if len(text) < 8:
-            decision = {
-                "decision": "ask_user_for_input",
-                "summary": "Please describe the improvement more specifically before I build a new version.",
-            }
-        elif any(
-            term in lowered
-            for term in [
-                "delete files",
-                "shell",
-                "secret",
-                "password",
-                "browser cookie",
-                "trade stock",
-                "buy ",
-                "purchase",
-                "send email",
-                "post publicly",
-            ]
-        ):
-            decision = {
-                "decision": "stop_unsupported",
-                "summary": "ProductManager blocked this update because it asks for unsafe or unsupported MVP behavior.",
-            }
-        elif any(term in lowered for term in ["sentient", "guarantee", "make money", "do everything"]):
-            decision = {
-                "decision": "ask_user_for_input",
-                "summary": (
-                    "This suggestion is too broad or unrealistic for a bounded skill update. "
-                    "A better next project is a small, testable behavior change with clear input and output."
-                ),
-            }
-        else:
-            decision = {
-                "decision": "build_next_milestone",
-                "summary": f"Update {skill.name} with this improvement: {text}",
-            }
+        requested_network_domains: list[str] = []
+        requested_dependencies: list[str] = []
+        decision = {
+            "decision": "build_next_milestone",
+            "summary": f"Update {skill.name} with this improvement: {text}",
+        }
         decision["blueprint"] = {
             "goal": decision["summary"],
             "skill_name": skill.name,
             "skill_type": skill.skill_type,
             "interface_type": skill.interface_type,
             "suggestion": suggestion,
+            "permission_plan": {
+                "build_time": {
+                    "codex_generation": True,
+                    "internet_research": bool(requested_network_domains or requested_dependencies),
+                    "dependencies": requested_dependencies,
+                    "reason": "Codex needs to create a draft version for this update.",
+                },
+                "runtime": {
+                    "permissions": {
+                        "network": requested_network_domains,
+                        "filesystem_read": [],
+                        "filesystem_write": ["./cache"] if requested_network_domains else [],
+                        "secrets": [],
+                        "shell": False,
+                    },
+                    "network_domains": requested_network_domains,
+                    "dependencies": requested_dependencies,
+                    "reason": "Expected runtime permissions for the updated skill design.",
+                },
+            },
             "requested_network_domains": requested_network_domains,
             "requested_dependencies": requested_dependencies,
             "milestones": [
@@ -1106,3 +1222,10 @@ Required output by task:
 
     def relative_path(self, path: Path) -> str:
         return path.resolve().relative_to(self.project_root).as_posix()
+
+    def _instruction(self, filename: str) -> str:
+        path = self.instruction_dir / filename
+        try:
+            return path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            raise CodexGenerationError(f"Missing agent instruction file: {filename}") from None

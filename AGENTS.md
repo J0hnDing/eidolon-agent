@@ -38,8 +38,8 @@ These decisions supersede older milestone wording when there is a conflict:
 1. Chat has explicit modes:
    - `chat` mode is normal conversation and must not create skills.
    - `project` mode is the only mode that may propose or generate application skills.
-2. Do not use keyword heuristics to decide whether normal chat should become a skill. The user chooses project mode explicitly.
-3. In project mode, the backend must evaluate whether the requested project is plausible before creating a skill generation plan. If it is not plausible, explain why and suggest safer or better-scoped project ideas.
+2. Do not use backend keyword heuristics to decide whether normal chat should become a skill, or to block/allow a project as "obviously unsafe." The user chooses project mode explicitly, and Codex-backed ProductManager/plausibility review handles project judgment.
+3. In project mode, the backend coordinates Codex-backed agents and validates their structured outputs. It must evaluate whether the requested project is plausible before creating a skill generation plan. If it is not plausible, explain why and suggest safer or better-scoped project ideas.
 4. Skill generation requires build-time permission approval before Codex writes files.
 5. Installing or running a generated skill requires runtime permission review based on the actual generated `manifest.json`, not only the initial plan.
 6. Approval to generate does not approve installation. Approval to install does not approve automatic execution. Skills never run automatically in the MVP.
@@ -54,10 +54,17 @@ These decisions supersede older milestone wording when there is a conflict:
 15. Installed skills use versioned active folders. Updates must copy the active version into a new draft/proposed version folder and must never mutate the active version in place.
 16. A skill may have at most 3 non-discarded versions in the local MVP. The app must block new version creation until the user discards a draft/proposed version or otherwise frees a slot.
 17. Activating a new skill version switches `active_version_id` and active paths only after validation/tests pass and runtime permissions are approved when permissions changed.
-18. Skill update suggestions are entered from Skill Detail and should behave as an inline local chat for that skill. ProductManager must respond there whether the suggestion is blocked, unclear, valid without extra approval, or requires build-time approval.
-19. Update build-time approval is separate from runtime approval. If ProductManager requests permission before building an update, the app must create a build-time approval request with `request_type = "update"` and wait before Builder creates a draft version.
+18. In the build workflow, after all milestone tests pass, ProductManager must inspect the original user request, blueprint, milestone files, generated files, and test result, then verify whether the proposed skill appears to work as expected by the user.
+19. After ProductManager verification, the app must write and show the ProductManager completion summary plus runtime permission review summary in Chat. Runtime approval is still based on the generated `manifest.json`.
 20. ProductManager user-facing decisions such as `ask_user_for_input`, `stop_unsupported`, or `request_permission` are not agent-run errors. They should be stored as summaries/structured decisions and surfaced to the user in the relevant chat surface.
 21. Frontend workflow state is refreshed with targeted polling in the MVP. Agent run, skill detail, approval, schedule, skills, and tools pages should update without requiring a manual refresh, while avoiding broad global polling.
+22. Agent behavior is defined by repo instruction files under `backend/app/agent_instructions/`. Backend code selects the instruction file for each bounded action, passes it to Codex CLI, and stores agent communication through files and database artifacts rather than relying only on embedded prompt strings.
+23. For build workflows, ProductManager must write a blueprint artifact, a permission artifact, and milestone artifacts before build work starts. The backend tracks the current milestone and runs BuilderAgent and TesterAgent milestone by milestone.
+24. The milestone-by-milestone build scheme does not apply to the update workflow in the MVP. Updates still use one copied draft/proposed version workspace, with agents given the project-related files they need.
+25. ProductManager controls the skill's product structure through blueprint and milestone artifacts. Backend prompts should not impose arbitrary fixed product files beyond platform minimums such as `manifest.json`, `README.md`, executable entrypoints for automation/hybrid skills, and tests written by TesterAgent.
+26. Workflow artifacts such as `blueprint.json`, `permissions.json`, and `milestones/*.json` are not generated skill files. BuilderAgent should read them but must not recreate them inside the skill package.
+27. Skill update suggestions are entered from Skill Detail and should behave as an inline local chat for that skill. ProductManager must respond there whether the suggestion is blocked, unclear, valid without extra approval, or requires build-time approval.
+28. Update build-time approval is separate from runtime approval. If ProductManager requests permission before building an update, the app must create a build-time approval request with `request_type = "update"` and wait before Builder creates a draft version.
 
 ---
 
@@ -70,14 +77,15 @@ These limitations are intentional until the next safety layers are implemented:
 3. Package dependency declarations must be simple Python package names or version specifiers. URLs, Git references, local paths, editable installs, shell flags, direct references, and generated-skill Dockerfiles are blocked.
 4. Runtime package installation is not supported. Installed skills may use dependencies copied from the approved proposed skill `.deps` folder, but skills must not install packages during execution.
 5. Docker sandbox execution requires Docker and the trusted runner image. If Docker is unavailable, local/dev execution must be explicitly selected and treated as less isolated.
-6. The MVP still blocks shell access, secrets, filesystem reads, broad filesystem writes, browser automation, email/calendar/finance actions, public posting, purchases, trading, file deletion, and arbitrary command execution.
+6. The MVP still blocks shell access, secrets, arbitrary filesystem reads, broad filesystem writes, browser automation, email/calendar/finance actions, public posting, purchases, trading, file deletion, and arbitrary command execution. Reading and writing the skill's own `./cache` directory is allowed as low-risk local runtime state.
 7. Scheduled runs use the same permission checks as manual runs. Approval for a schedule does not bypass runtime permission approval, runner support checks, or the requirement that the user installed and enabled the skill.
 8. Tool UIs are declarative only. Generated skills may provide `tool_ui_schema` data, but must not inject React, HTML, JavaScript, or app source code.
 9. Skill operation locks are local database locks with stale-lock cleanup. They are intended for the local MVP process model, not as a distributed lock system for multi-user or multi-host deployments.
 10. Version comparison is file-based in the MVP. The UI shows active-vs-candidate file contents, not a rich semantic diff engine.
-11. ProductManager, Builder, and Tester are Codex-backed agents. ProductManager must use Codex for plausibility judgment, blueprints, update review, decisions, and user-facing summaries; backend deterministic logic may only validate or safely fall back when Codex output is unusable.
-12. SecurityReviewer is the exception for now: it is backend-owned deterministic permission logic so blocked permissions cannot be negotiated away by generated text.
+11. ProductManager, Builder, and Tester are Codex-backed agents. ProductManager must use Codex for plausibility judgment, blueprints, permission-file drafting, update review, decisions, and user-facing summaries; backend deterministic logic may only validate or safely fall back when Codex output is unusable.
+12. Permission review is the exception for now: it is backend-owned deterministic logic that mechanically reads ProductManager permission artifacts and generated manifests so blocked permissions cannot be negotiated away by generated text.
 13. Live frontend updates use polling, not push events. UI changes should appear within the configured polling interval, but they are not literally instantaneous. SSE or WebSockets are a later improvement if the app needs lower-latency event delivery.
+14. The build workflow is milestone-file-based, but the update workflow is not yet milestone-file-based. Update agents receive project context and source snapshots, then work on a single draft version.
 
 ---
 
@@ -259,15 +267,14 @@ The MVP agent roles are:
 product_manager
 builder
 tester
-security_reviewer
 ```
 
-There are no separate `planner`, `reviewer`, `permission_analyst`, or `repairer` agents in the MVP.
+There are no separate `planner`, `reviewer`, `permission_analyst`, `security_reviewer`, or `repairer` agents in the MVP.
 
 - `ProductManagerAgent` replaces planner/reviewer behavior.
-- `SecurityReviewerAgent` replaces permission-analyst behavior.
 - `BuilderAgent` handles build, update, and repair modes.
 - `TesterAgent` owns test creation, test maintenance, validation, and test execution.
+- Permission review is a deterministic backend service, not an agent role.
 
 Agents communicate only through structured workflow artifacts stored by the platform:
 
@@ -275,11 +282,13 @@ Agents communicate only through structured workflow artifacts stored by the plat
 agent_runs
 agent_run_steps
 blueprint_json
+blueprint.json artifact
+permissions.json artifact
 milestone_json
 decision_json
 test_result_json
 failure_log
-security_review_json
+runtime_permissions.json artifact
 user_summary
 ```
 
@@ -306,10 +315,12 @@ Responsibilities:
 - write the project blueprint
 - break the work into explicit milestones
 - define acceptance criteria for each milestone
+- write milestone artifacts that specify what BuilderAgent and TesterAgent should do for each build milestone
 - decide the next workflow action
 - summarize progress for the user at approval and completion checkpoints
-- decide whether the project is complete after milestone tests pass
-- request SecurityReviewerAgent review before build-time or runtime approval prompts
+- after all build milestone tests pass, inspect the request, blueprint, milestone files, generated files, and test result to verify whether the skill appears to work as expected by the user
+- write the build/update blueprint artifact
+- write the build-time and expected-runtime permission artifact
 - stop the workflow when the request is unsafe, unsupported, unclear, or repeatedly failing
 ```
 
@@ -335,10 +346,10 @@ approve permissions
 install skills
 run skills
 bypass failed tests
-bypass SecurityReviewerAgent
+bypass permission review
 ```
 
-Backend deterministic ProductManager logic is allowed only as a safety fallback when Codex is unavailable or returns invalid structured output. It must not be the primary path for ProductManager decisions.
+Backend deterministic ProductManager logic is allowed only as schema validation, state coordination, and a safety fallback when Codex is unavailable or returns invalid structured output. It must not use arbitrary keyword heuristics as the primary path for ProductManager decisions.
 
 #### BuilderAgent
 
@@ -356,6 +367,7 @@ Responsibilities:
 
 ```text
 - implement the current ProductManager milestone only
+- read the current build milestone artifact before writing build changes
 - create or edit generated skill files under skills/proposed/<skill_name>/
 - create or update manifest.json, README.md, SKILL.md, skill.py, and support files as assigned
 - If runtime errors occurs, log the error and attempt to fix. After three unsucessful fixes, pause, notify user. 
@@ -397,7 +409,7 @@ approve permissions
 install skills
 run skills
 edit backend/frontend app source code while building an application skill
-grant itself permissions through manifest changes without SecurityReviewerAgent review
+grant itself permissions through manifest changes without deterministic permission review
 ```
 
 #### TesterAgent
@@ -409,6 +421,7 @@ Responsibilities:
 
 ```text
 - read the ProductManager blueprint and milestone acceptance criteria
+- read the current build milestone artifact before writing build tests
 - inspect Builder-created skill files before writing tests
 - create or update pytest tests for automation/hybrid skills when needed
 - validate manifest schema
@@ -431,15 +444,23 @@ run skills outside the approved validation/test path
 ignore failing tests
 ```
 
-#### SecurityReviewerAgent
+#### Permission Review
 
-SecurityReviewerAgent handles permissions, risk, and runtime support review.
-SecurityReviewerAgent is deterministic/backend-owned in the MVP. It does not use Codex for permission approval decisions because permission blocking must remain enforceable and non-negotiable.
+Permission review handles permissions, risk, and runtime support review.
+It is deterministic/backend-owned in the MVP. It does not use Codex for approval decisions because permission blocking must remain enforceable and non-negotiable.
+
+Permission review mechanically reads:
+
+```text
+runtime/agent_runs/run_<id>/permissions.json
+generated manifest.json
+approval_requests
+```
 
 Responsibilities:
 
 ```text
-- analyze build-time permissions from the ProductManager blueprint
+- analyze build-time permissions from the ProductManager permission artifact
 - analyze runtime permissions from the generated manifest.json
 - detect permission expansion between plan and actual manifest
 - classify risk level
@@ -450,9 +471,9 @@ Responsibilities:
 - decide whether permissions are supported by the current runner
 ```
 
-SecurityReviewerAgent must produce a user-facing security summary for build-time and runtime approval checkpoints.
+Permission review must produce a user-facing summary for build-time and runtime approval checkpoints.
 
-SecurityReviewerAgent must not:
+Permission review must not:
 
 ```text
 approve permissions
@@ -478,7 +499,9 @@ trading
 file deletion
 ```
 
-Runtime network domains may be approved and executed after runtime approval. The MVP does not yet enforce domain-level egress filtering inside Docker, so SecurityReviewer must explain that approved domains are an intent/policy record rather than a firewall allowlist.
+Runtime network domains may be approved and executed after runtime approval. The MVP does not yet enforce domain-level egress filtering inside Docker, so permission review must explain that approved domains are an intent/policy record rather than a firewall allowlist.
+
+Reading or writing the skill's own `./cache` directory is allowed as low-risk local state. Any other filesystem read remains blocked until user-selected folder access exists.
 
 #### Combined Approval Summary
 
@@ -496,7 +519,7 @@ what approval allows
 what approval does not allow
 ```
 
-Part B: SecurityReviewer summary
+Part B: Permission Review summary
 
 ```text
 requested permissions
@@ -512,21 +535,33 @@ The same two-part pattern applies to runtime permission review after generation:
 
 ```text
 ProductManager: whether the generated package appears complete and what it does
-SecurityReviewer: actual manifest permissions, risk, blocked items, and runtime support
+Permission Review: actual manifest permissions, risk, blocked items, and runtime support
 ```
 
 In the current MVP, these summaries should be rendered inline in the Chat page as assistant messages:
 
 ```text
 user project request
--> assistant message with ProductManager blueprint summary and SecurityReviewer build-time approval summary
+-> assistant message with ProductManager blueprint summary and Permission Review build-time approval summary
 -> inline Approve Generation / Decline buttons
 -> assistant generation progress and completion message
--> assistant message with ProductManager completion summary and SecurityReviewer runtime permission summary
+-> assistant message with ProductManager completion summary and Permission Review runtime permission summary
 -> inline Approve Runtime Permissions / Deny buttons
 ```
 
 The inline approval messages must remain in the local chat history when the user navigates away and returns. While a project build is running in that chat window, additional user input in the same window may be ignored or disabled until the build and summaries complete.
+
+For new skill builds, the build loop is milestone-file-based:
+
+```text
+ProductManager writes blueprint.json, permissions.json, and milestones/<milestone>.json files
+-> backend records current_milestone
+-> BuilderAgent reads blueprint, permissions, and the current milestone file, then implements only that milestone inside the generated skill folder
+-> TesterAgent reads blueprint, the current milestone file, and Builder-created code, then writes/runs tests for that milestone
+-> if tests fail, BuilderAgent repairs the same milestone using the failure log
+-> after all milestones pass, ProductManager verifies the full proposed skill against the user request and generated files
+-> ProductManager completion summary and runtime permission review are shown in Chat
+```
 
 For skill updates, the same approval-summary pattern should appear in the Skill Detail `Suggest an Improvement` chat surface:
 
@@ -535,10 +570,14 @@ user update suggestion
 -> ProductManager evaluates the suggestion
 -> if blocked, unclear, or unsupported, ProductManager replies in the update chat with the reason and any safer alternatives
 -> if valid and no extra build-time permission is needed, Builder creates a draft version through the controlled update workflow
--> if build-time permission is needed, Skill Detail shows ProductManager + SecurityReviewer summaries with inline Approve Update Build / Decline buttons
+-> if build-time permission is needed, Skill Detail shows ProductManager + Permission Review summaries with inline Approve Update Build / Decline buttons
 -> approval lets Builder create a draft version only
 -> runtime permission review is still required before activation if manifest permissions or dependencies changed
 ```
+
+The update workflow is intentionally not milestone-file-based in the MVP. ProductManager, BuilderAgent, and TesterAgent should receive project-related files, including blueprint and source snapshots, and work on one copied draft version.
+
+Milestone files should specify product work for that milestone only. They should not contain `blueprint_path` or `permission_path`; the backend passes those paths separately as workflow context.
 
 ProductManager responses for blocked, unsupported, unclear, or permission-gated updates must not be presented as generic errors in Agent Run pages. Agent Run errors are reserved for actual workflow failures such as exceptions, failed tests, or repeated unsuccessful repair attempts.
 
@@ -1191,7 +1230,7 @@ If Docker is not available, keep a reduced local runner and label it as unsafe/d
 Current limitation:
 
 ```text
-Approved networked skills run with container network access, but domain-level egress filtering is not implemented yet. SecurityReviewer must disclose this before runtime approval. Wildcard or unrestricted network access remains blocked.
+Approved networked skills run with container network access, but domain-level egress filtering is not implemented yet. Permission review must disclose this before runtime approval. Wildcard or unrestricted network access remains blocked.
 ```
 
 ### Milestone 9: Scheduling
@@ -1222,7 +1261,6 @@ Agent runs are tracked workflows with visible role-based steps:
 
 ```text
 product_manager
-security_reviewer
 builder
 tester
 ```
@@ -1230,11 +1268,11 @@ tester
 Rules:
 
 1. ProductManager creates the concise blueprint, milestone plan, acceptance criteria, and user-facing summaries.
-2. SecurityReviewer creates build-time and runtime approval requests and summaries, but never approves permissions.
+2. Deterministic permission review creates build-time and runtime approval requests from ProductManager permission artifacts and generated manifests, but never approves permissions.
 3. Builder writes or repairs generated skill files only inside controlled skill folders.
 4. Tester validates manifests, tests, and JSON stdin/stdout contracts through the existing safe validation path.
 5. A build workflow pauses for one build-time approval before Builder writes files.
-6. The workflow should proceed smoothly between ProductManager, SecurityReviewer, Builder, and Tester after that approval. Do not require approval merely because the workflow moves between roles.
+6. The workflow should proceed smoothly between ProductManager, Builder, and Tester after that approval. Do not require approval merely because the workflow moves between roles.
 7. If tests fail, Builder should read Tester failure output, attempt repair, and Tester should rerun validation.
 8. If one milestone fails more than 3 times, ProductManager stops the workflow and writes a user-facing stuck summary.
 9. Runtime permission review is based on the actual generated `manifest.json`, not just the original plan.
@@ -1247,7 +1285,8 @@ Rules:
 16. If ProductManager selects `interface_type = "tool"`, the blueprint and acceptance criteria must require a declarative `tool_ui_schema` so the Tools page can render a user-facing form.
 17. Do not build a general-purpose agent playground in the MVP.
 18. ProductManager, Builder, and Tester must run through Codex service adapters. Tests may use fake Codex adapters, but production workflow code should not bypass Codex for these roles.
-19. SecurityReviewer remains the deterministic exception and must not rely on Codex to decide whether permissions are allowed.
+19. Permission review remains the deterministic exception and must not rely on Codex to decide whether permissions are allowed.
+20. Agent prompts are selected from action-specific instruction files, such as ProductManager build/update, Builder build/repair/update, and Tester build/update instructions.
 
 ### Milestone 11: Skill Versioning and Update Workflow
 

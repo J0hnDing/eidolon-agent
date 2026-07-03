@@ -206,7 +206,7 @@ def test_docker_runner_blocks_filesystem_read(tmp_path: Path, db_session: Sessio
     run = make_runner(db_session, tmp_path, lambda command, **_: completed()).run(skill.id, skill_dir, {})
 
     assert run.status == "blocked"
-    assert run.error_message == "filesystem read permissions are not supported by the current runner"
+    assert run.error_message == "filesystem read permissions are limited to the skill's own ./cache directory"
 
 
 def test_docker_runner_blocks_shell_true(tmp_path: Path, db_session: Session) -> None:

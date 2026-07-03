@@ -4,29 +4,11 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models import SkillGenerationRequest
-from app.schemas.common import ChatIntent
 from app.services.direct_chat_service import DirectChatService
 from app.services.agent_workflow_service import AgentWorkflowService
 from app.services.permission_service import PermissionService
 from app.services.project_plausibility import ProjectPlausibilityResult, ProjectPlausibilityService
 from app.services.skill_plan_service import SkillPlanService
-
-
-UNSAFE_PATTERNS = (
-    "delete files",
-    "deletes files",
-    "trade stocks",
-    "trades stocks",
-    "financial trading",
-    "send replies without asking",
-    "send emails without asking",
-    "browser cookies",
-    "ssh keys",
-    "arbitrary shell",
-    "shell commands",
-    "make purchases",
-    "post publicly",
-)
 
 
 @dataclass
@@ -44,22 +26,8 @@ class ChatOrchestrator:
         if self.skill_plan_service is None:
             self.skill_plan_service = SkillPlanService()
 
-    def classify(self, message: str, mode: str = "chat") -> ChatIntent:
-        normalized = message.lower()
-        if any(pattern in normalized for pattern in UNSAFE_PATTERNS):
-            return "UNSAFE_OR_UNSUPPORTED"
-        if mode == "project":
-            return "CREATE_SKILL_PROPOSAL"
-        return "DIRECT_ANSWER"
-
     def handle_message(self, message: str, mode: str = "chat") -> dict[str, Any]:
-        intent = self.classify(message, mode)
-        if intent == "UNSAFE_OR_UNSUPPORTED":
-            return {
-                "type": "unsafe_or_unsupported",
-                "message": "That request is unsafe or unsupported for this MVP.",
-            }
-        if intent == "CREATE_SKILL_PROPOSAL":
+        if mode == "project":
             review = self.plausibility_service.evaluate(message)
             if not review.plausible:
                 return {

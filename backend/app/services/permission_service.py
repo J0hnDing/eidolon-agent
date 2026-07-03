@@ -35,25 +35,34 @@ class PermissionService:
 
     def create_build_time_request(self, generation_request: SkillGenerationRequest) -> ApprovalRequest:
         existing = self._latest_request(generation_request_id=generation_request.id, scope="build_time")
-        if existing and existing.status in {"pending", "approved", "denied"}:
+        if existing and existing.status == "pending":
+            return self._refresh_build_time_request(existing, generation_request)
+        if existing and existing.status in {"approved", "denied"}:
             return existing
 
+        return self._create_new_build_time_request(generation_request)
+
+    def _create_new_build_time_request(self, generation_request: SkillGenerationRequest) -> ApprovalRequest:
         plan = generation_request.plan_json
+        permission_plan = self._permission_plan_from_plan(plan)
+        runtime_plan = permission_plan["runtime"]
+        build_time_plan = permission_plan["build_time"]
+        future_permissions = runtime_plan["permissions"]
+        dependencies = list(runtime_plan["dependencies"])
+        network = list(runtime_plan["network_domains"])
         permissions = {
-            "codex_generation": True,
-            "internet_research": bool(plan.get("requested_network_domains") or plan.get("requested_dependencies")),
-            "future_runtime_permissions": plan.get("requested_permissions", {}),
-            "future_runtime_network": plan.get("requested_network_domains", []),
-            "future_runtime_filesystem_write": plan.get("requested_permissions", {}).get("filesystem_write", []),
+            "codex_generation": bool(build_time_plan.get("codex_generation", True)),
+            "internet_research": bool(build_time_plan.get("internet_research", bool(network or dependencies))),
+            "future_runtime_permissions": future_permissions,
+            "future_runtime_network": network,
+            "future_runtime_filesystem_write": future_permissions.get("filesystem_write", []),
         }
-        dependencies = list(plan.get("requested_dependencies", []))
-        network = list(plan.get("requested_network_domains", []))
         filesystem = {
-            "filesystem_read": plan.get("requested_permissions", {}).get("filesystem_read", []),
-            "filesystem_write": plan.get("requested_permissions", {}).get("filesystem_write", []),
+            "filesystem_read": future_permissions.get("filesystem_read", []),
+            "filesystem_write": future_permissions.get("filesystem_write", []),
         }
         risk_level, blocked_reasons = self._risk_for_permissions(
-            plan.get("requested_permissions", {}),
+            future_permissions,
             dependencies=dependencies,
         )
         explanation = self._build_time_explanation(plan, dependencies, network, blocked_reasons)
@@ -85,6 +94,63 @@ class PermissionService:
         self.db.refresh(request)
         return request
 
+    def _refresh_build_time_request(
+        self,
+        request: ApprovalRequest,
+        generation_request: SkillGenerationRequest,
+    ) -> ApprovalRequest:
+        plan = generation_request.plan_json
+        permission_plan = self._permission_plan_from_plan(plan)
+        runtime_plan = permission_plan["runtime"]
+        build_time_plan = permission_plan["build_time"]
+        future_permissions = runtime_plan["permissions"]
+        dependencies = list(runtime_plan["dependencies"])
+        network = list(runtime_plan["network_domains"])
+        permissions = {
+            "codex_generation": bool(build_time_plan.get("codex_generation", True)),
+            "internet_research": bool(build_time_plan.get("internet_research", bool(network or dependencies))),
+            "future_runtime_permissions": future_permissions,
+            "future_runtime_network": network,
+            "future_runtime_filesystem_write": future_permissions.get("filesystem_write", []),
+        }
+        filesystem = {
+            "filesystem_read": future_permissions.get("filesystem_read", []),
+            "filesystem_write": future_permissions.get("filesystem_write", []),
+        }
+        risk_level, blocked_reasons = self._risk_for_permissions(future_permissions, dependencies=dependencies)
+        explanation = self._build_time_explanation(plan, dependencies, network, blocked_reasons)
+        previous_reason = request.reason_json or {}
+        request.risk_level = risk_level
+        request.requested_permissions_json = permissions
+        request.requested_dependencies_json = dependencies
+        request.requested_network_domains_json = network
+        request.requested_filesystem_json = filesystem
+        request.reason_json = {
+            **previous_reason,
+            "blocked_reasons": blocked_reasons,
+            "approval_means": "Codex may generate proposed skill files only.",
+            "approval_does_not_mean": [
+                "installing the skill",
+                "running the skill",
+                "installing packages",
+                "approving runtime permissions",
+            ],
+        }
+        if "permission_review_summary" in request.reason_json:
+            request.reason_json["permission_review_summary"] = explanation
+        request.reason = explanation
+        if "product_manager_summary" in request.reason_json:
+            request.user_explanation = (
+                f"ProductManager: {request.reason_json['product_manager_summary']}\n\n"
+                f"Permission review: {request.reason_json.get('permission_review_summary', explanation)}"
+            )
+            request.reason = request.user_explanation
+        else:
+            request.user_explanation = explanation
+        self.db.commit()
+        self.db.refresh(request)
+        return request
+
     def create_update_build_time_request(
         self,
         skill: Skill,
@@ -107,14 +173,10 @@ class PermissionService:
             }:
                 return existing
 
-        future_permissions = dict(
-            blueprint.get(
-                "requested_permissions",
-                {"network": [], "filesystem_read": [], "filesystem_write": [], "secrets": [], "shell": False},
-            )
-        )
-        dependencies = list(blueprint.get("requested_dependencies", []) or [])
-        network = list(blueprint.get("requested_network_domains", []) or [])
+        permission_plan = self._permission_plan_from_plan(blueprint)
+        future_permissions = permission_plan["runtime"]["permissions"]
+        dependencies = list(permission_plan["runtime"]["dependencies"])
+        network = list(permission_plan["runtime"]["network_domains"])
         filesystem = {
             "filesystem_read": future_permissions.get("filesystem_read", []),
             "filesystem_write": future_permissions.get("filesystem_write", []),
@@ -245,8 +307,10 @@ class PermissionService:
         if request.status == "denied":
             raise PermissionError("Denied permission requests cannot be approved")
         if request.status == "approved":
-            self._sync_agent_security_steps(request, approved=True)
+            self._sync_agent_permission_steps(request, approved=True)
             return request
+        if request.status == "pending" and request.request_scope == "build_time" and request.generation_request is not None:
+            request = self._refresh_build_time_request(request, request.generation_request)
         if request.risk_level == "blocked":
             raise PermissionError("Blocked or unsupported permission requests cannot be approved in this milestone")
         request.status = "approved"
@@ -257,14 +321,14 @@ class PermissionService:
             request.generation_request.status = "approved"
         self.db.commit()
         self.db.refresh(request)
-        self._sync_agent_security_steps(request, approved=True)
+        self._sync_agent_permission_steps(request, approved=True)
         return request
 
     def deny_request(self, request: ApprovalRequest, notes: str | None = None) -> ApprovalRequest:
         if request.status == "approved":
             raise PermissionError("Approved permission requests cannot be denied later in this milestone")
         if request.status == "denied":
-            self._sync_agent_security_steps(request, approved=False)
+            self._sync_agent_permission_steps(request, approved=False)
             return request
         request.status = "denied"
         request.resolved_at = utc_now()
@@ -274,7 +338,7 @@ class PermissionService:
             request.generation_request.status = "cancelled"
         self.db.commit()
         self.db.refresh(request)
-        self._sync_agent_security_steps(request, approved=False)
+        self._sync_agent_permission_steps(request, approved=False)
         return request
 
     def can_generate(self, generation_request: SkillGenerationRequest) -> PermissionDecision:
@@ -349,6 +413,49 @@ class PermissionService:
             query = query.where(ApprovalRequest.generation_request_id == generation_request_id)
         return self.db.scalar(query.order_by(ApprovalRequest.created_at.desc(), ApprovalRequest.id.desc()))
 
+    def _permission_plan_from_plan(self, plan: dict[str, Any]) -> dict[str, Any]:
+        value = plan.get("permission_plan")
+        if not isinstance(value, dict):
+            value = {}
+        runtime = value.get("runtime") if isinstance(value.get("runtime"), dict) else {}
+        build_time = value.get("build_time") if isinstance(value.get("build_time"), dict) else {}
+        fallback_permissions = plan.get(
+            "requested_permissions",
+            {"network": [], "filesystem_read": [], "filesystem_write": [], "secrets": [], "shell": False},
+        )
+        if not isinstance(fallback_permissions, dict):
+            fallback_permissions = {
+                "network": [],
+                "filesystem_read": [],
+                "filesystem_write": [],
+                "secrets": [],
+                "shell": False,
+            }
+        raw_permissions = runtime.get("permissions") if isinstance(runtime.get("permissions"), dict) else fallback_permissions
+        permissions = {
+            "network": list(raw_permissions.get("network", []) or []),
+            "filesystem_read": list(raw_permissions.get("filesystem_read", []) or []),
+            "filesystem_write": list(raw_permissions.get("filesystem_write", []) or []),
+            "secrets": list(raw_permissions.get("secrets", []) or []),
+            "shell": bool(raw_permissions.get("shell", False)),
+        }
+        dependencies = list(runtime.get("dependencies", plan.get("requested_dependencies", [])) or [])
+        network = list(runtime.get("network_domains", plan.get("requested_network_domains", permissions["network"])) or [])
+        return {
+            "build_time": {
+                "codex_generation": bool(build_time.get("codex_generation", True)),
+                "internet_research": bool(build_time.get("internet_research", bool(network or dependencies))),
+                "dependencies": list(build_time.get("dependencies", dependencies) or []),
+                "reason": str(build_time.get("reason") or "Codex needs to generate controlled skill files."),
+            },
+            "runtime": {
+                "permissions": permissions,
+                "network_domains": network,
+                "dependencies": dependencies,
+                "reason": str(runtime.get("reason") or "Expected runtime permissions for this skill."),
+            },
+        }
+
     def _risk_for_permissions(
         self,
         permissions: dict[str, Any],
@@ -359,8 +466,14 @@ class PermissionService:
         network = permissions.get("network", [])
         if any(domain in {"*", "all", "0.0.0.0/0"} or "*" in str(domain) for domain in network):
             blocked.append("Unrestricted or wildcard network access is blocked.")
-        if permissions.get("filesystem_read"):
-            blocked.append("Filesystem read access is blocked until user-selected folders are implemented.")
+        unsupported_reads = [
+            path for path in permissions.get("filesystem_read", []) if self._normalize_path(path) != "./cache"
+        ]
+        if unsupported_reads:
+            blocked.append(
+                "Filesystem read access is blocked until user-selected folders are implemented: "
+                + ", ".join(str(path) for path in unsupported_reads)
+            )
         for path in permissions.get("filesystem_write", []):
             normalized = self._normalize_path(path)
             if normalized != "./cache":
@@ -441,10 +554,9 @@ class PermissionService:
             parts.append("Blocked requests: " + " ".join(blocked_reasons))
         return " ".join(parts)
 
-    def _sync_agent_security_steps(self, request: ApprovalRequest, *, approved: bool) -> None:
+    def _sync_agent_permission_steps(self, request: ApprovalRequest, *, approved: bool) -> None:
         steps = self.db.scalars(
             select(AgentRunStep)
-            .where(AgentRunStep.step_name == "security_reviewer")
             .where(AgentRunStep.status == "waiting_for_approval")
         ).all()
         changed_run_ids: set[int] = set()
@@ -454,11 +566,13 @@ class PermissionService:
             step.status = "succeeded" if approved else "failed"
             step.ended_at = utc_now()
             output = dict(step.output_json or {})
-            if "security_review_json" in output and isinstance(output["security_review_json"], dict):
-                output["security_review_json"] = {
-                    **output["security_review_json"],
+            if "permission_review_json" in output and isinstance(output["permission_review_json"], dict):
+                output["permission_review_json"] = {
+                    **output["permission_review_json"],
                     "status": request.status,
                 }
+            elif "security_review_json" in output and isinstance(output["security_review_json"], dict):
+                output["security_review_json"] = {**output["security_review_json"], "status": request.status}
             else:
                 output["status"] = request.status
             step.output_json = output
@@ -472,7 +586,7 @@ class PermissionService:
                 continue
             if request.request_scope == "build_time":
                 agent_run.status = "pending" if approved else "cancelled"
-                agent_run.current_step = "security_reviewer"
+                agent_run.current_step = "product_manager"
                 if approved:
                     agent_run.summary = "Build-time approval is approved. Resume the agent run to continue generation."
                 if not approved:
@@ -488,6 +602,9 @@ class PermissionService:
     def _step_matches_permission_request(self, step: AgentRunStep, request_id: int) -> bool:
         output = step.output_json or {}
         if output.get("permission_request_id") == request_id:
+            return True
+        permission_review = output.get("permission_review_json")
+        if isinstance(permission_review, dict) and permission_review.get("permission_request_id") == request_id:
             return True
         security_review = output.get("security_review_json")
         return isinstance(security_review, dict) and security_review.get("permission_request_id") == request_id

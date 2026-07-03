@@ -139,8 +139,37 @@ def test_unsupported_permissions_block_run(tmp_path: Path, db_session: Session) 
     run = run_skill(db_session, skill_dir)
 
     assert run.status == "blocked"
-    assert run.error_message == "filesystem read permissions are not supported by the current runner"
+    assert run.error_message == "filesystem read permissions are limited to the skill's own ./cache directory"
     assert run.exit_code is None
+
+
+def test_own_cache_read_permission_is_supported(tmp_path: Path, db_session: Session) -> None:
+    skill_dir = tmp_path / "cache_read_skill"
+    write_skill(
+        skill_dir,
+        manifest_overrides={
+            "permissions": {
+                "network": [],
+                "filesystem_read": ["./cache"],
+                "filesystem_write": ["./cache"],
+                "secrets": [],
+                "shell": False,
+            }
+        },
+        skill_source=(
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            "cache = Path('cache')\n"
+            "cache.mkdir(exist_ok=True)\n"
+            "value = (cache / 'state.txt').read_text(encoding='utf-8') if (cache / 'state.txt').exists() else 'empty'\n"
+            "print(json.dumps({'cache': value, 'input': json.loads(sys.stdin.read() or '{}')}))\n"
+        ),
+    )
+
+    run = run_skill(db_session, skill_dir)
+
+    assert run.status == "succeeded"
+    assert run.output_json["cache"] == "empty"
 
 
 def test_instruction_skill_is_blocked_from_execution(tmp_path: Path, db_session: Session) -> None:
