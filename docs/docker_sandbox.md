@@ -1,72 +1,44 @@
 # Docker Skill Sandbox
 
-Milestone 8 adds a Docker runner for installed automation and hybrid skills.
+This is a short compatibility page for the Milestone 8 Docker runner notes. The main sandbox documentation now lives in:
 
-## Trusted Runtime Image
+- [Sandbox Execution](security/sandbox_execution.md)
+- [Permissions](security/permissions.md)
 
-The backend automatically builds the trusted runner image when it is missing or when `backend/docker/skill-runner.Dockerfile` changes. The fixed build context is the project root. Generated skills cannot provide Dockerfiles, build contexts, image names, or build args.
+## Current Behavior
 
-Build metadata and the latest build log are stored in `runtime/docker_runner_build.json`.
-
-The image is based on `python:3.12-slim` and includes `pytest` so the runner can test a skill before executing its entrypoint. The manual equivalent is:
-
-```powershell
-docker build -f backend/docker/skill-runner.Dockerfile -t personal-agent-skill-runner:latest .
-```
-
-## Runner Mode
-
-The backend reads these environment variables:
+Installed automation and hybrid skills run through the selected runner mode:
 
 ```powershell
 $env:PERSONAL_AGENT_RUNNER_MODE = "auto"   # auto, docker, local, or dev
 $env:PERSONAL_AGENT_DOCKER_IMAGE = "personal-agent-skill-runner:latest"
-$env:PERSONAL_AGENT_DOCKER_MEMORY = "256m"
-$env:PERSONAL_AGENT_DOCKER_CPUS = "1.0"
-$env:PERSONAL_AGENT_SKILL_TIMEOUT_SECONDS = "10"
 ```
 
-`auto` and `docker` select the Docker sandbox. If Docker is unavailable, skill runs are blocked with a clear error. The local subprocess runner is only used when `PERSONAL_AGENT_RUNNER_MODE` is explicitly set to `local` or `dev`.
+`auto` and `docker` select the Docker sandbox. If Docker is unavailable, runs are blocked unless local/dev mode is explicitly selected.
 
-## Sandbox Restrictions
+The Docker runner uses the trusted image from `backend/docker/skill-runner.Dockerfile`. The backend can build that image automatically when it is missing or outdated. Generated skills cannot provide Dockerfiles, image names, build contexts, or build args.
 
-Each run uses a disposable container with:
+## Restrictions
 
-- `--rm`
-- `--network none`
-- memory and CPU limits
-- the skill folder mounted read-only at `/skill`
-- a per-skill cache folder mounted writable at `/skill/cache`
-- JSON input passed through stdin
-- stdout/stderr/exit-code capture
-- timeout enforcement
+Each Docker run uses a disposable container with:
 
-The runner does not mount the project root, user home, or application secrets.
+- the skill folder mounted read-only at `/skill`;
+- a per-skill cache mounted writable at `/skill/cache`;
+- JSON input through stdin;
+- stdout, stderr, exit-code, timeout, CPU, and memory capture;
+- no project root, user home, or app secrets mounted.
 
-## Runtime Permissions
+Network mode is permission-dependent:
 
-The current runner only supports:
+- no declared network domains: Docker runs with `--network none`;
+- approved explicit network domains: Docker runs with container network enabled.
 
-```json
-{
-  "network": [],
-  "filesystem_read": [],
-  "filesystem_write": [] ,
-  "secrets": [],
-  "shell": false
-}
-```
-
-`filesystem_write` may also be `["./cache"]`.
-
-Network domains, filesystem reads, secrets, shell access, absolute paths, and parent traversal are blocked. Runtime network domains may be approved as future design intent, but execution remains blocked until domain-level network sandboxing exists.
+Important limitation: approved domains are currently a policy record, not a Docker egress firewall. Domain-level network enforcement is not implemented yet.
 
 ## Manual Verification
 
 1. Start the backend with `PERSONAL_AGENT_RUNNER_MODE=auto` or `docker`.
-2. Register or install a low-risk automation skill with runtime permissions approved.
-3. Open the skill detail page and confirm the Runner / Sandbox panel shows Docker and image status.
-4. Click Run. If the image is missing or outdated, the backend builds it automatically before tests run.
-5. Inspect the run history, stdout, stderr, and output JSON.
-
-For development only, set `PERSONAL_AGENT_RUNNER_MODE=local` to use the older subprocess runner.
+2. Confirm Docker is running.
+3. Open an installed, enabled automation or hybrid skill with approved runtime permissions.
+4. Run it from Skill Detail or Tools.
+5. Inspect run history, stdout, stderr, output JSON, and sandbox/image status.

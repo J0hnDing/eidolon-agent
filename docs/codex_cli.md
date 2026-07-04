@@ -1,19 +1,22 @@
 # Codex CLI Integration
 
-The backend can use the local Codex CLI to evaluate Project mode requests and generate proposed application skills.
+This is a short compatibility page for the original Codex CLI setup notes. The main integration documentation now lives in:
 
-## Required Local Setup
+- [Codex CLI Integration](integrations/codex_cli.md)
+- [Agent Workflow](agents/overview.md)
+- [Agent Build and Repair Workflow](workflows/agent_build_repair.md)
 
-Install and log in to the Codex CLI on the host machine:
+## Defaults
 
-```powershell
-codex login
-codex doctor
-```
+The backend can use the local Codex CLI for:
 
-By default, the backend uses `PERSONAL_AGENT_CODEX_MODE=auto`. In auto mode it uses the real Codex CLI when `codex` is available on `PATH`; otherwise it falls back to the fake/dev adapter.
+- direct Chat-mode answers;
+- Project-mode plausibility and ProductManager work;
+- Builder skill generation and repair;
+- Tester test authoring;
+- update review and summaries.
 
-These defaults are already built in:
+Default environment values:
 
 ```text
 PERSONAL_AGENT_CODEX_MODE=auto
@@ -25,77 +28,32 @@ PERSONAL_AGENT_CODEX_APPROVAL_POLICY=never
 PERSONAL_AGENT_CODEX_ENABLE_SEARCH=auto
 ```
 
-Only set environment variables when you want to override the defaults:
+`auto` uses real Codex when `codex` is available on `PATH`; otherwise the app uses fake/dev adapters.
+
+## Setup
 
 ```powershell
-$env:PERSONAL_AGENT_CODEX_COMMAND = "codex"
-$env:PERSONAL_AGENT_CODEX_SANDBOX = "workspace-write"
-$env:PERSONAL_AGENT_CODEX_PLAUSIBILITY_SANDBOX = "read-only"
-$env:PERSONAL_AGENT_CODEX_CHAT_SANDBOX = "read-only"
-$env:PERSONAL_AGENT_CODEX_APPROVAL_POLICY = "never"
-$env:PERSONAL_AGENT_CODEX_ENABLE_SEARCH = "auto"
+codex login
+codex doctor
 ```
 
-To force fake/dev mode:
-
-```powershell
-$env:PERSONAL_AGENT_CODEX_MODE = "fake"
-```
-
-To force real mode even if auto-detection would fail:
+Optional overrides:
 
 ```powershell
 $env:PERSONAL_AGENT_CODEX_MODE = "real"
-```
-
-Optional:
-
-```powershell
 $env:PERSONAL_AGENT_CODEX_MODEL = "gpt-5"
 $env:PERSONAL_AGENT_CODEX_TIMEOUT_SECONDS = "300"
-$env:PERSONAL_AGENT_CODEX_PLAUSIBILITY_TIMEOUT_SECONDS = "120"
-$env:PERSONAL_AGENT_CODEX_CHAT_TIMEOUT_SECONDS = "120"
 ```
 
-## Permission Boundary
+## Boundaries
 
-Generation uses:
+Chat and plausibility run read-only. Skill build/update work runs in a controlled skill workspace. Codex must not modify backend or frontend app source while generating an application skill.
 
-```text
-codex --ask-for-approval never exec -C skills/proposed/<skill_name> --sandbox workspace-write --skip-git-repo-check -
-```
+Build-time web search may be enabled when approved permissions request network domains or package dependencies. Runtime network access is separate and still requires manifest declaration, runtime approval, and runner support.
 
-This gives Codex a writable root inside the proposed skill folder. It should not modify backend, frontend, app tests, Git metadata, or installed skills.
-
-Plausibility review uses:
-
-```text
-codex --ask-for-approval never exec -C <project_root> --sandbox read-only -
-```
-
-This lets Codex evaluate whether the user's Project mode request is plausible without writing files.
-
-Chat mode uses:
-
-```text
-codex --ask-for-approval never exec -C <project_root> --sandbox read-only -
-```
-
-This lets Codex answer normal chat messages without creating or modifying application skills.
-
-## Web Search
-
-`PERSONAL_AGENT_CODEX_ENABLE_SEARCH=auto` enables Codex CLI web search during generation only when the approved generation plan includes requested network domains or package dependencies.
-
-This is build-time research access only. It does not grant generated skills runtime network access. Runtime network execution remains blocked until the app can enforce domain-level network sandboxing.
-
-## Do Not Use
-
-Do not use these for this project integration:
+Do not use:
 
 ```text
 --dangerously-bypass-approvals-and-sandbox
 --sandbox danger-full-access
 ```
-
-The app's security model depends on Codex writing only proposed skill files and on the app separately validating, approving, installing, and running skills.
