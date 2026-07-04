@@ -40,11 +40,13 @@ def test_product_manager_creates_blueprint_and_milestones(db_session: Session) -
     assert agent_run.current_milestone == "core_skill"
     assert building_skill.status == "building"
     assert agent_run.blueprint_json["milestones"][0]["name"] == "core_skill"
-    assert [step.step_name for step in agent_run.steps] == ["product_manager"]
-    assert agent_run.steps[0].output_json["decision_json"]["decision"] == "request_permission"
-    assert agent_run.steps[0].output_json["blueprint_json"]["skill_name"] == building_skill.name
-    assert agent_run.steps[0].output_json["permission_path"].endswith("permissions.json")
-    assert agent_run.steps[0].output_json["milestone_paths"][0].endswith("milestones/core_skill.json")
+    steps = sorted(agent_run.steps, key=lambda step: step.id)
+    assert [step.step_name for step in steps] == ["product_manager", "product_manager"]
+    assert steps[0].output_json["decision_json"]["decision"] == "build_next_milestone"
+    assert steps[1].output_json["decision_json"]["decision"] == "request_permission"
+    assert steps[1].output_json["blueprint_json"]["skill_name"] == building_skill.name
+    assert steps[1].output_json["permission_path"].endswith("permissions.json")
+    assert steps[1].output_json["milestone_paths"][0].endswith("milestones/core_skill.json")
 
 
 def test_product_manager_uses_codex_adapter_for_blueprint_and_summary(tmp_path: Path, db_session: Session) -> None:
@@ -53,22 +55,36 @@ def test_product_manager_uses_codex_adapter_for_blueprint_and_summary(tmp_path: 
     class RecordingAdapter(FakeCodexAdapter):
         def __init__(self) -> None:
             self.tasks: list[str] = []
+            self.plans: list[dict] = []
 
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             task = plan.get("codex_task")
             if task:
                 self.tasks.append(task)
+                self.plans.append(dict(plan))
             return super().generate(prompt, output_dir, plan)
 
     adapter = RecordingAdapter()
-    AgentWorkflowService(
+    agent_run = AgentWorkflowService(
         db_session,
         codex_service=CodexService(db_session, adapter=adapter, project_root=tmp_path),
         project_root=tmp_path,
     ).create_build_run(generation_request)
 
+    assert "product_manager_build_review" in adapter.tasks
     assert "product_manager_build_blueprint" in adapter.tasks
     assert "product_manager_summary" in adapter.tasks
+    assert "product_manager_summary" not in agent_run.blueprint_json
+    build_summary_plan = next(
+        plan
+        for plan in adapter.plans
+        if plan.get("codex_task") == "product_manager_summary" and plan.get("summary_type") == "build_time"
+    )
+    context = build_summary_plan["context"]
+    assert context["user_request"] == generation_request.user_message
+    assert context["permission_plan"]["runtime"]["permissions"]["shell"] is False
+    assert context["blueprint_path"].endswith("blueprint.json")
+    assert context["approval_boundary"]["approval_means"] == "Codex may generate proposed skill files only."
 
 
 def test_approval_updates_waiting_product_manager_permission_step(db_session: Session) -> None:
@@ -79,7 +95,7 @@ def test_approval_updates_waiting_product_manager_permission_step(db_session: Se
 
     agent_run = AgentWorkflowService(db_session).latest_run_for_generation(response["generation_request"].id)
     db_session.refresh(response["generation_request"])
-    pm_step = [step for step in agent_run.steps if step.step_name == "product_manager"][0]
+    pm_step = [step for step in agent_run.steps if (step.output_json or {}).get("permission_request_id")][0]
     assert pm_step.status == "succeeded"
     assert pm_step.output_json["status"] == "approved"
     assert agent_run.status == "pending"
@@ -146,9 +162,9 @@ def test_approved_build_uses_pm_builder_tester_and_permission_artifacts(tmp_path
         "builder",
         "tester",
     }
-    first_pm_step = [step for step in agent_run.steps if step.step_name == "product_manager"][0]
-    assert first_pm_step.status == "succeeded"
-    assert "Approved by local user" in first_pm_step.logs
+    approval_pm_step = [step for step in agent_run.steps if (step.output_json or {}).get("permission_request_id")][0]
+    assert approval_pm_step.status == "succeeded"
+    assert "Approved by local user" in approval_pm_step.logs
     runtime_artifact = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "runtime_permissions.json"
     assert runtime_artifact.is_file()
     assert json.loads(runtime_artifact.read_text(encoding="utf-8"))["skill_id"] == skill.id

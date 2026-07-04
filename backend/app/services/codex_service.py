@@ -109,7 +109,21 @@ class FakeCodexAdapter:
                         "blueprint": blueprint,
                         "permission_plan": blueprint["permission_plan"],
                         "decision": "request_permission",
-                        "summary": f"Build {blueprint['skill_name']} as a reusable skill.",
+                    }
+                ),
+                stderr="",
+            )
+        if task == "product_manager_build_review":
+            return subprocess.CompletedProcess(
+                args=["fake-codex-product-manager-review"],
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "decision": "build_next_milestone",
+                        "summary": "The request is reusable, bounded, and ready for blueprinting.",
+                        "reason": "Fake Codex review accepts the project request for local tests.",
+                        "user_prompt": None,
+                        "optional_projects": [],
                     }
                 ),
                 stderr="",
@@ -493,11 +507,31 @@ class CodexService:
         blueprint = self._sanitize_blueprint(parsed.get("blueprint"), fallback)
         permission_plan = self._sanitize_permission_plan(parsed.get("permission_plan"), generation_request.plan_json)
         blueprint["permission_plan"] = permission_plan
-        if isinstance(parsed.get("summary"), str):
-            blueprint["product_manager_summary"] = str(parsed["summary"]).strip()
         if isinstance(parsed.get("decision"), str):
             blueprint["decision"] = str(parsed["decision"]).strip()
         return blueprint
+
+    def product_manager_build_review(self, generation_request: SkillGenerationRequest) -> dict[str, object]:
+        payload = {
+            "codex_task": "product_manager_build_review",
+            "user_message": generation_request.user_message,
+            "project_conversation": generation_request.plan_json.get("project_conversation", []),
+            "pending_user_prompt": generation_request.plan_json.get("pending_user_prompt"),
+        }
+        fallback = {
+            "decision": "build_next_milestone",
+            "summary": "The request is reusable, bounded, and ready for blueprinting.",
+            "reason": "The request appears plausible for a local application skill.",
+            "user_prompt": None,
+            "optional_projects": [],
+        }
+        result = self.adapter.generate(
+            self.build_product_manager_prompt("build_review", payload),
+            self._product_manager_workspace(),
+            payload,
+        )
+        parsed = self._parse_product_manager_json(result, fallback=fallback)
+        return self._sanitize_build_review(parsed, fallback)
 
     def product_manager_repair_blueprint(self, skill: Skill, user_request: str | None) -> dict[str, object]:
         payload = {
@@ -827,6 +861,11 @@ Application skill definition:
 - Instruction skills contain reusable instructions only.
 - Automation skills contain executable Python automation.
 - Hybrid skills contain both instructions and executable Python automation.
+- interface_type is one of chat, tool, hidden.
+- Chat skills are primarily used through chat.
+- Tool skills are installed enabled automation/hybrid skills exposed as manual forms in the Tools UI.
+- Hidden skills are not shown as a normal user-facing entry point.
+- Tool UI work is declarative manifest work: tool_ui_schema, input/output schemas, labels, fields, options, and result rendering hints. Do not generate frontend app code.
 
 Write files only inside this exact folder:
 {output_dir}
@@ -938,6 +977,7 @@ Current draft files:
     def build_product_manager_prompt(self, task: str, payload: dict[str, object]) -> str:
         instruction_by_task = {
             "build_blueprint": "product_manager_build.md",
+            "build_review": "product_manager_plausibility_review.md",
             "repair_blueprint": "product_manager_repair.md",
             "update_review": "product_manager_update.md",
             "summary": "product_manager_summary.md",
@@ -1103,6 +1143,36 @@ Payload:
         blueprint["interface_type"] = skill.interface_type
         blueprint["suggestion"] = suggestion
         return {"decision": decision, "summary": summary, "blueprint": blueprint}
+
+    def _sanitize_build_review(
+        self,
+        parsed: dict[str, object],
+        fallback: dict[str, object],
+    ) -> dict[str, object]:
+        allowed = {"build_next_milestone", "ask_user_for_input", "stop_unsupported"}
+        decision = parsed.get("decision")
+        if decision not in allowed:
+            decision = fallback["decision"]
+        summary = parsed.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            summary = fallback["summary"]
+        reason = parsed.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            reason = fallback["reason"]
+        user_prompt = parsed.get("user_prompt")
+        if not isinstance(user_prompt, str) or not user_prompt.strip():
+            user_prompt = None
+        optional_projects = parsed.get("optional_projects")
+        if not isinstance(optional_projects, list):
+            optional_projects = fallback["optional_projects"]
+        optional_projects = [str(item) for item in optional_projects if str(item).strip()]
+        return {
+            "decision": decision,
+            "summary": summary.strip(),
+            "reason": reason.strip(),
+            "user_prompt": user_prompt.strip() if user_prompt else None,
+            "optional_projects": optional_projects,
+        }
 
     def _product_manager_workspace(self) -> Path:
         workspace = self.project_root / "runtime" / "product_manager"

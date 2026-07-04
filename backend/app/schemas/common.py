@@ -30,6 +30,7 @@ ChatIntent = Literal[
 ]
 GenerationRequestStatus = Literal[
     "planned",
+    "needs_input",
     "awaiting_approval",
     "approved",
     "generating",

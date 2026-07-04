@@ -13,6 +13,8 @@ from app.schemas.agent_run import AgentRunRead
 class ChatRequest(BaseModel):
     message: str
     mode: Literal["chat", "project"] = "chat"
+    generation_request_id: int | None = None
+    conversation_id: str | None = None
 
 
 class SkillGenerationRequestRead(BaseModel):
@@ -58,6 +60,14 @@ class ProjectNotPlausibleResponse(BaseModel):
     optional_projects: list[str]
 
 
+class ProjectNeedsInputResponse(BaseModel):
+    type: Literal["project_needs_input"]
+    message: str
+    question: str
+    generation_request: SkillGenerationRequestRead
+    agent_run: AgentRunRead
+
+
 class SkillGenerationApprovalResponse(BaseModel):
     generation_request: SkillGenerationRequestRead
     permission_request: ApprovalRequestRead | None = None
@@ -67,4 +77,10 @@ class SkillGenerationApprovalResponse(BaseModel):
     runtime_permission_request: ApprovalRequestRead | None = None
 
 
-ChatResponse = DirectChatResponse | SkillGenerationPlanResponse | UnsafeChatResponse | ProjectNotPlausibleResponse
+ChatResponse = (
+    DirectChatResponse
+    | SkillGenerationPlanResponse
+    | UnsafeChatResponse
+    | ProjectNotPlausibleResponse
+    | ProjectNeedsInputResponse
+)

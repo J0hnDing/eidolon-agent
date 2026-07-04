@@ -248,7 +248,7 @@ export interface SkillGenerationRequest {
   requested_dependencies_json: string[];
   requested_network_domains_json: string[];
   risk_level: RiskLevel;
-  status: "planned" | "awaiting_approval" | "approved" | "generating" | "generated" | "failed" | "cancelled";
+  status: "planned" | "needs_input" | "awaiting_approval" | "approved" | "generating" | "generated" | "failed" | "cancelled";
   proposed_skill_id: number | null;
   created_at: string;
   updated_at: string;
@@ -295,6 +295,13 @@ export type ChatResponse =
       message: string;
       reason: string;
       optional_projects: string[];
+    }
+  | {
+      type: "project_needs_input";
+      message: string;
+      question: string;
+      generation_request: SkillGenerationRequest;
+      agent_run: AgentRun;
     };
 
 export interface SkillGenerationApprovalResponse {
@@ -357,10 +364,15 @@ function formatApiError(raw: string): string {
 }
 
 export const api = {
-  sendChatMessage: (message: string, mode: ChatMode) =>
+  sendChatMessage: (message: string, mode: ChatMode, generationRequestId?: number, conversationId?: string) =>
     request<ChatResponse>("/chat", {
       method: "POST",
-      body: JSON.stringify({ message, mode }),
+      body: JSON.stringify({
+        message,
+        mode,
+        generation_request_id: generationRequestId,
+        conversation_id: conversationId,
+      }),
     }),
   approveSkillGeneration: (id: number) =>
     request<SkillGenerationApprovalResponse>(`/skill-generation-requests/${id}/approve-generation`, {

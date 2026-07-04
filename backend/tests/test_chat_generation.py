@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import SkillGenerationRequest
+from app.models import AgentRun, SkillGenerationRequest
 from app.schemas.skill_generation import ChatResponse
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.codex_service import CodexService, FakeCodexAdapter, RealCodexAdapter, default_codex_adapter
@@ -37,6 +37,11 @@ def db_session() -> Generator[Session, None, None]:
     finally:
         session.close()
         Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture(autouse=True)
+def use_fake_codex_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PERSONAL_AGENT_CODEX_MODE", "fake")
 
 
 class RecordingCodexAdapter:
@@ -210,13 +215,6 @@ def test_chat_mode_does_not_create_skill_proposal_from_reusable_request(db_sessi
 
 
 def test_project_mode_creates_skill_proposal(db_session: Session) -> None:
-    plausibility_adapter = FixedPlausibilityAdapter(
-        ProjectPlausibilityResult(
-            plausible=True,
-            reason="This is reusable and bounded.",
-            optional_projects=[],
-        )
-    )
     plan_adapter = FixedSkillPlanAdapter(
         skill_plan(
             skill_name="ai_infra_news_digest",
@@ -235,7 +233,6 @@ def test_project_mode_creates_skill_proposal(db_session: Session) -> None:
     )
     response = ChatOrchestrator(
         db_session,
-        plausibility_service=ProjectPlausibilityService(adapter=plausibility_adapter),
         skill_plan_service=SkillPlanService(adapter=plan_adapter),
     ).handle_message(
         "Create a reusable skill that summarizes AI chip news from Nvidia and AMD.",
@@ -274,50 +271,133 @@ def test_chat_response_model_serializes_generation_request_fields(db_session: Se
     assert isinstance(data["permission_request"]["id"], int)
 
 
-def test_project_mode_uses_plausibility_review_before_plan(db_session: Session) -> None:
-    plausibility_adapter = FixedPlausibilityAdapter(
-        ProjectPlausibilityResult(
-            plausible=True,
-            reason="This is plausible as a reusable skill.",
-            optional_projects=[],
-        )
-    )
+def test_project_mode_uses_product_manager_review_before_blueprint(db_session: Session) -> None:
     plan_adapter = FixedSkillPlanAdapter()
+    codex_adapter = FakeCodexAdapter()
+    tasks: list[str] = []
+    prompts: dict[str, str] = {}
+
+    class RecordingAdapter(FakeCodexAdapter):
+        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            task = str(plan.get("codex_task"))
+            tasks.append(task)
+            prompts[task] = prompt
+            return codex_adapter.generate(prompt, output_dir, plan)
+
     response = ChatOrchestrator(
         db_session,
-        plausibility_service=ProjectPlausibilityService(adapter=plausibility_adapter),
         skill_plan_service=SkillPlanService(adapter=plan_adapter),
+        codex_service=CodexService(db_session, adapter=RecordingAdapter()),
     ).handle_message(
         "Create a reusable skill that summarizes AI chip news from Nvidia and AMD.",
         mode="project",
     )
 
     generation_request = response["generation_request"]
-    assert plausibility_adapter.called is True
     assert plan_adapter.called is True
-    assert generation_request.plan_json["plausibility_review"]["reason"] == "This is plausible as a reusable skill."
+    assert tasks[:2] == ["product_manager_build_review", "product_manager_build_blueprint"]
+    assert "performing Phase 1 intent and plausibility review" in prompts["product_manager_build_review"]
+    assert '"blueprint"' not in prompts["product_manager_build_review"]
+    assert "Write a concise blueprint file" in prompts["product_manager_build_blueprint"]
+    agent_run = db_session.query(AgentRun).filter_by(generation_request_id=generation_request.id).one()
+    steps = sorted(agent_run.steps, key=lambda step: step.id)
+    assert [step.output_json["decision_json"]["decision"] for step in steps[:2]] == [
+        "build_next_milestone",
+        "request_permission",
+    ]
+    assert "plausibility_review" not in generation_request.plan_json
 
 
-def test_implausible_project_reports_reason_and_does_not_create_generation_request(db_session: Session) -> None:
-    adapter = FixedPlausibilityAdapter(
-        ProjectPlausibilityResult(
-            plausible=False,
-            reason="This is a one-off question, not a reusable project.",
-            optional_projects=["Create a reusable instruction for answering this class of question."],
-        )
-    )
+def test_unsupported_project_reports_pm_reason_without_artifacts(db_session: Session, tmp_path: Path) -> None:
+    class UnsupportedAdapter(FakeCodexAdapter):
+        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            if plan.get("codex_task") == "product_manager_build_review":
+                return subprocess.CompletedProcess(
+                    args=["fake"],
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "decision": "stop_unsupported",
+                            "summary": "This requires unsupported file deletion automation.",
+                            "reason": "File deletion is blocked in the MVP.",
+                            "user_prompt": None,
+                            "optional_projects": ["Create an instruction skill that explains safe cleanup steps."],
+                        }
+                    ),
+                    stderr="",
+                )
+            return super().generate(prompt, output_dir, plan)
+
     response = ChatOrchestrator(
         db_session,
-        plausibility_service=ProjectPlausibilityService(adapter=adapter),
-    ).handle_message("What is inflation?", mode="project")
+        codex_service=CodexService(db_session, adapter=UnsupportedAdapter(), project_root=tmp_path),
+    ).handle_message("Make a skill that deletes files automatically.", mode="project")
 
     assert response == {
         "type": "project_not_plausible",
         "message": "I would not turn that into a skill yet.",
-        "reason": "This is a one-off question, not a reusable project.",
-        "optional_projects": ["Create a reusable instruction for answering this class of question."],
+        "reason": "This requires unsupported file deletion automation.",
+        "optional_projects": ["Create an instruction skill that explains safe cleanup steps."],
     }
-    assert db_session.query(SkillGenerationRequest).count() == 0
+    generation_request = db_session.query(SkillGenerationRequest).one()
+    assert generation_request.status == "failed"
+    assert not (tmp_path / "runtime" / "agent_runs" / "run_1" / "blueprint.json").exists()
+
+
+def test_unclear_project_asks_for_input_then_same_chat_reply_builds_plan(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    class ClarifyingAdapter(FakeCodexAdapter):
+        def __init__(self) -> None:
+            self.review_calls = 0
+
+        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            if plan.get("codex_task") == "product_manager_build_review":
+                self.review_calls += 1
+                if self.review_calls == 1:
+                    return subprocess.CompletedProcess(
+                        args=["fake"],
+                        returncode=0,
+                        stdout=json.dumps(
+                            {
+                                "decision": "ask_user_for_input",
+                                "summary": "ProductManager needs the intended repeated workflow.",
+                                "reason": "The request is too vague to blueprint safely.",
+                                "user_prompt": "What repeated task should this skill help with?",
+                                "optional_projects": [],
+                            }
+                        ),
+                        stderr="",
+                    )
+            return super().generate(prompt, output_dir, plan)
+
+    codex_adapter = ClarifyingAdapter()
+    orchestrator = ChatOrchestrator(
+        db_session,
+        codex_service=CodexService(db_session, adapter=codex_adapter, project_root=tmp_path),
+    )
+    first_response = orchestrator.handle_message("Build me something useful.", mode="project", conversation_id="chat-1")
+
+    assert first_response["type"] == "project_needs_input"
+    generation_request = first_response["generation_request"]
+    assert generation_request.status == "needs_input"
+    assert not (tmp_path / "runtime" / "agent_runs" / f"run_{first_response['agent_run'].id}" / "blueprint.json").exists()
+
+    second_response = orchestrator.handle_message(
+        "Make it summarize recurring local meeting notes into action items.",
+        mode="project",
+        generation_request_id=generation_request.id,
+        conversation_id="chat-1",
+    )
+
+    assert second_response["type"] == "skill_generation_plan"
+    db_session.refresh(generation_request)
+    assert generation_request.status == "awaiting_approval"
+    assert codex_adapter.review_calls == 2
+    assert "Make it summarize recurring local meeting notes" in generation_request.user_message
+    agent_run = db_session.query(AgentRun).filter_by(generation_request_id=generation_request.id).one()
+    assert (tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "blueprint.json").is_file()
 
 
 def test_project_mode_does_not_use_backend_unsafe_keyword_heuristic(db_session: Session) -> None:

@@ -3,25 +3,27 @@
 ## Build Flow
 
 1. User sends a Project-mode request.
-2. Backend evaluates project plausibility through Codex-backed review.
-3. Skill generation request is created.
-4. ProductManager creates:
+2. Backend creates a generation request and ProductManager performs Phase 1 intent/plausibility review.
+3. If the request is unclear, ProductManager asks a clarification question in the same chat and stops before artifact creation. The user's next Project-mode reply is appended to the same generation request, and ProductManager repeats Phase 1 with the full request context.
+4. If the request is unsupported, ProductManager explains why and stops before artifact creation.
+5. If the request is plausible, ProductManager continues to Phase 2.
+6. ProductManager creates:
    - blueprint;
    - permission plan;
    - one or more milestones.
-5. Backend writes workflow artifacts under `runtime/agent_runs/run_<id>/`.
-6. Backend creates a build-time approval request.
-7. User approves generation.
-8. Backend resumes the agent run.
-9. For each milestone:
-   - Builder implements that milestone only.
-   - Tester writes/updates tests and validates.
-   - If tests fail, Builder repairs the same milestone.
-   - After repeated failures, ProductManager stops the workflow.
-10. After all milestones pass, ProductManager verifies the complete proposed package.
-11. Backend creates runtime permission review from the actual manifest.
-12. Chat shows completion summary and runtime approval.
-13. Skill remains proposed until the user installs or rejects it.
+7. Backend writes workflow artifacts under `runtime/agent_runs/run_<id>/`.
+8. Backend creates a build-time approval request.
+9. User approves generation.
+10. Backend resumes the agent run.
+11. For each milestone:
+    - Builder implements that milestone only.
+    - Tester writes/updates tests and validates.
+    - If tests fail, Builder repairs the same milestone.
+    - After repeated failures, ProductManager stops the workflow.
+12. After all milestones pass, ProductManager verifies the complete proposed package.
+13. Backend creates runtime permission review from the actual manifest.
+14. Chat shows completion summary and runtime approval.
+15. Skill remains proposed until the user installs or rejects it.
 
 ## Repair Flow
 

@@ -26,11 +26,11 @@ Routes are defined in `frontend/src/App.tsx`:
 Chat supports explicit modes:
 
 - `chat`: direct conversation only.
-- `project`: may create a skill generation plan and build-time approval request.
+- `project`: starts ProductManager review for a reusable skill request. ProductManager may ask a clarification question before any blueprint or permission artifacts are created; the next reply in the same chat continues the same generation request.
 
 Build-time and runtime approvals are rendered inline in the chat transcript. Approval messages must remain in chat history when the user navigates away and returns.
 
-Chat persistence is local frontend storage managed by `frontend/src/lib/chatStore.ts`.
+Chat persistence is local frontend storage managed by `frontend/src/lib/chatStore.ts`. Project conversations also store the pending generation request id while ProductManager is waiting for clarification so the user's next reply stays attached to the same request.
 
 ## Skills Page
 

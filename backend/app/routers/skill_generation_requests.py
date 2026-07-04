@@ -40,6 +40,11 @@ def approve_generation_request(
     generation_request = db.get(SkillGenerationRequest, request_id)
     if generation_request is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generation request not found")
+    if generation_request.status in {"planned", "needs_input"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ProductManager has not finished the build blueprint and permission plan yet.",
+        )
     permission_service = PermissionService(db)
     permission_request = permission_service.create_build_time_request(generation_request)
     try:
@@ -85,6 +90,11 @@ def deny_generation_request(request_id: int, db: Session = Depends(get_db)) -> S
     generation_request = db.get(SkillGenerationRequest, request_id)
     if generation_request is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generation request not found")
+    if generation_request.status in {"planned", "needs_input"}:
+        generation_request.status = "cancelled"
+        db.commit()
+        db.refresh(generation_request)
+        return generation_request
     permission_service = PermissionService(db)
     permission_request = permission_service.create_build_time_request(generation_request)
     try:

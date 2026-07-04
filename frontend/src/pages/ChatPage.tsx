@@ -157,7 +157,7 @@ export default function ChatPage() {
       {
         id: thinkingId,
         role: "assistant",
-        content: mode === "project" ? "ProductManager is preparing the blueprint and permission file..." : "Codex is thinking...",
+        content: mode === "project" ? "ProductManager is reviewing the project..." : "Codex is thinking...",
         kind: "thinking",
       },
     ]);
@@ -165,11 +165,21 @@ export default function ChatPage() {
     setIsSending(true);
     setError(null);
     try {
-      const response = await api.sendChatMessage(content, mode);
+      const response = await api.sendChatMessage(
+        content,
+        mode,
+        activeConversation?.pendingGenerationRequestId,
+        conversationId,
+      );
       removeMessageFromConversation(conversationId, thinkingId);
       if (response.type === "direct_answer" || response.type === "unsafe_or_unsupported") {
         appendMessagesToConversation(conversationId, [{ id: nextId + 2, role: "assistant", content: response.message }]);
       } else if (response.type === "project_not_plausible") {
+        updateConversation(conversationId, (conversation) => ({
+          ...conversation,
+          pendingGenerationRequestId: undefined,
+          updatedAt: new Date().toISOString(),
+        }));
         const optionalProjects = response.optional_projects.length
           ? `\n\nOptional projects:\n${response.optional_projects.map((project) => `- ${project}`).join("\n")}`
           : "";
@@ -180,11 +190,29 @@ export default function ChatPage() {
             content: `${response.message}\n\n${response.reason}${optionalProjects}`,
           },
         ]);
+      } else if (response.type === "project_needs_input") {
+        updateConversation(conversationId, (conversation) => ({
+          ...conversation,
+          pendingGenerationRequestId: response.generation_request.id,
+          updatedAt: new Date().toISOString(),
+        }));
+        appendMessagesToConversation(conversationId, [
+          {
+            id: nextId + 2,
+            role: "assistant",
+            content: response.question || response.message,
+          },
+        ]);
       } else {
         const generationRequest = response.generation_request;
         if (!generationRequest || typeof generationRequest.id !== "number") {
           throw new Error("The backend returned an invalid skill generation plan. Please refresh and try again.");
         }
+        updateConversation(conversationId, (conversation) => ({
+          ...conversation,
+          pendingGenerationRequestId: undefined,
+          updatedAt: new Date().toISOString(),
+        }));
         setApprovalResult(null);
         const displayName =
           generationRequest.proposed_display_name || generationRequest.proposed_skill_name || "this skill";

@@ -21,6 +21,8 @@ Builder reads:
 
 Builder implements the current milestone only. It must not jump ahead unless the milestone explicitly requires shared setup.
 
+When `interface_type = "tool"`, Builder implements the ProductManager UI-schema milestone as declarative skill metadata only: `tool_ui_schema`, matching input/output schemas where useful, field labels, options/defaults, and result rendering hints. Builder must not generate React, HTML, JavaScript, or application frontend files for a tool skill.
+
 ## Repair Mode
 
 Builder reads Tester failure output and repairs the current milestone. It should fix implementation bugs, not bypass tests.

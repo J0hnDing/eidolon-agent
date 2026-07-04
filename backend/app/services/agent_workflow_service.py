@@ -47,26 +47,139 @@ class AgentWorkflowService:
         existing = self.latest_run_for_generation(generation_request.id)
         if existing and existing.status in {"pending", "running", "waiting_for_approval", "succeeded"}:
             return existing
+        if (
+            existing
+            and existing.status == "blocked"
+            and (existing.final_summary_json or {}).get("decision_json", {}).get("decision") == "ask_user_for_input"
+        ):
+            return self._review_build_intent(generation_request, existing)
 
+        agent_run = AgentRun(
+            run_type="build_skill",
+            status="running",
+            generation_request_id=generation_request.id,
+            user_request=generation_request.user_message,
+            current_step="product_manager",
+            failure_count_json={},
+            summary="ProductManager is reviewing whether the project is clear and plausible.",
+        )
+        self.db.add(agent_run)
+        self.db.commit()
+        self.db.refresh(agent_run)
+        return self._review_build_intent(generation_request, agent_run)
+
+    def _review_build_intent(self, generation_request: SkillGenerationRequest, agent_run: AgentRun) -> AgentRun:
+        agent_run.status = "running"
+        agent_run.completed_at = None
+        agent_run.error_message = None
+        agent_run.user_request = generation_request.user_message
+        self.db.commit()
+
+        review = self.codex_service.product_manager_build_review(generation_request)
+        decision = str(review["decision"])
+        summary = str(review["summary"])
+        reason = str(review["reason"])
+        user_prompt = review.get("user_prompt")
+        step = self._start_step(
+            agent_run,
+            "product_manager",
+            input_json={
+                "phase": "intent_plausibility_review",
+                "user_request": generation_request.user_message,
+                "project_conversation": generation_request.plan_json.get("project_conversation", []),
+            },
+            logs="ProductManager reviewed intent, clarity, plausibility, and MVP support before artifact creation.",
+        )
+
+        if decision == "ask_user_for_input":
+            prompt = str(user_prompt or summary)
+            self._record_pending_product_manager_question(generation_request, prompt)
+            self._finish_step(
+                agent_run,
+                step,
+                "blocked",
+                output_json={
+                    "decision_json": {"decision": "ask_user_for_input", "reason": reason},
+                    "user_summary": summary,
+                    "user_prompt": prompt,
+                },
+                logs=summary,
+            )
+            generation_request.status = "needs_input"
+            generation_request.error_message = prompt
+            agent_run.status = "blocked"
+            agent_run.current_step = "product_manager"
+            agent_run.current_milestone = None
+            agent_run.summary = prompt
+            agent_run.final_summary_json = {
+                "decision_json": {"decision": "ask_user_for_input", "reason": reason},
+                "user_summary": summary,
+                "user_prompt": prompt,
+            }
+            self.db.commit()
+            self.db.refresh(agent_run)
+            return agent_run
+
+        if decision == "stop_unsupported":
+            self._finish_step(
+                agent_run,
+                step,
+                "blocked",
+                output_json={
+                    "decision_json": {"decision": "stop_unsupported", "reason": reason},
+                    "user_summary": summary,
+                    "optional_projects": review.get("optional_projects", []),
+                },
+                logs=summary,
+            )
+            generation_request.status = "failed"
+            generation_request.error_message = summary
+            agent_run.status = "blocked"
+            agent_run.current_step = "product_manager"
+            agent_run.current_milestone = None
+            agent_run.summary = summary
+            agent_run.final_summary_json = {
+                "decision_json": {"decision": "stop_unsupported", "reason": reason},
+                "user_summary": summary,
+                "optional_projects": review.get("optional_projects", []),
+            }
+            agent_run.completed_at = utc_now()
+            self.db.commit()
+            self.db.refresh(agent_run)
+            return agent_run
+
+        self._finish_step(
+            agent_run,
+            step,
+            "succeeded",
+            output_json={
+                "decision_json": {"decision": "build_next_milestone", "reason": reason},
+                "user_summary": summary,
+            },
+            logs=summary,
+        )
+        return self._create_build_artifacts_after_review(generation_request, agent_run)
+
+    def _create_build_artifacts_after_review(
+        self,
+        generation_request: SkillGenerationRequest,
+        agent_run: AgentRun,
+    ) -> AgentRun:
         blueprint = self.codex_service.product_manager_build_blueprint(generation_request)
         permission_plan = self._apply_blueprint_permission_plan(generation_request, blueprint)
         milestones = self._milestones_from_blueprint(blueprint)
         first_milestone = milestones[0]["name"]
         building_skill = self._create_or_update_building_skill(generation_request, blueprint)
         generation_request.proposed_skill_id = building_skill.id
-        agent_run = AgentRun(
-            run_type="build_skill",
-            status="running",
-            skill_id=building_skill.id,
-            generation_request_id=generation_request.id,
-            user_request=generation_request.user_message,
-            current_milestone=first_milestone,
-            current_step="product_manager",
-            failure_count_json={milestone["name"]: 0 for milestone in milestones},
-            blueprint_json=blueprint,
-            summary="ProductManager created the skill blueprint.",
-        )
-        self.db.add(agent_run)
+        generation_request.status = "awaiting_approval"
+        generation_request.error_message = None
+        agent_run.skill_id = building_skill.id
+        agent_run.user_request = generation_request.user_message
+        agent_run.current_milestone = first_milestone
+        agent_run.current_step = "product_manager"
+        agent_run.failure_count_json = {milestone["name"]: 0 for milestone in milestones}
+        agent_run.blueprint_json = blueprint
+        agent_run.summary = "ProductManager created the skill blueprint."
         self.db.commit()
         self.db.refresh(agent_run)
         blueprint_path = self._write_json_artifact(agent_run, "blueprint.json", blueprint)
@@ -76,11 +189,25 @@ class AgentWorkflowService:
         pm_summary = self.codex_service.product_manager_summary(
             "build_time",
             {
+                "user_request": generation_request.user_message,
                 "blueprint_json": blueprint,
                 "permission_plan": permission_plan,
+                "milestones": milestones,
+                "blueprint_path": blueprint_path,
+                "permission_path": permission_path,
+                "milestone_paths": milestone_paths,
                 "generation_request_id": generation_request.id,
+                "approval_boundary": {
+                    "approval_means": "Codex may generate proposed skill files only.",
+                    "approval_does_not_mean": [
+                        "installing the skill",
+                        "running the skill",
+                        "installing packages",
+                        "approving runtime permissions",
+                    ],
+                },
             },
-            str(blueprint.get("product_manager_summary") or "") or self._pm_build_time_summary(blueprint),
+            self._pm_build_time_summary(blueprint),
         )
         permission_request = PermissionService(self.db, project_root=self.project_root).create_build_time_request(
             generation_request
@@ -1288,6 +1415,23 @@ class AgentWorkflowService:
         self.db.commit()
         self.db.refresh(generation_request)
         return permission_plan
+
+    def _record_pending_product_manager_question(
+        self,
+        generation_request: SkillGenerationRequest,
+        prompt: str,
+    ) -> None:
+        plan = dict(generation_request.plan_json or {})
+        conversation = list(plan.get("project_conversation") or [])
+        if not conversation:
+            conversation.append({"role": "user", "content": generation_request.user_message})
+        if not conversation or conversation[-1] != {"role": "assistant", "content": prompt}:
+            conversation.append({"role": "assistant", "content": prompt})
+        plan["project_conversation"] = conversation
+        plan["pending_user_prompt"] = prompt
+        generation_request.plan_json = plan
+        self.db.commit()
+        self.db.refresh(generation_request)
 
     def _permission_build_time_summary(self, plan: dict[str, Any], permission_request: Any) -> str:
         permissions = plan.get("requested_permissions", {})

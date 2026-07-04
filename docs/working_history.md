@@ -31,4 +31,10 @@ Use this template for future entries:
 
 ## Current Entries
 
-No prior working history has been imported.
+## 2026-07-04 13:09 America/Toronto - Two-Phase ProductManager Build Review
+
+- Area: ProductManager build workflow, chat Project mode, agent instructions, frontend chat state.
+- Intention: Ensure ProductManager reviews intent and plausibility before blueprint/permission artifacts are created, while allowing unclear requests to continue in the same chat.
+- Changed: Added PM build review before artifact creation, a separate `product_manager_plausibility_review.md` instruction file, `needs_input` generation requests, same-chat clarification continuation, tool UI milestone guidance, chat UI pending request tracking, and build-time summaries generated only through `product_manager_summary.md`.
+- Verification: `..\.venv\Scripts\python.exe -m pytest` from `backend`; `npm run build` from `frontend` with the documented Vite/esbuild sandbox escalation.
+- Follow-up: Consider a durable backend conversation table if multi-device chat continuity becomes a requirement.

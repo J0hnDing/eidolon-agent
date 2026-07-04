@@ -33,6 +33,7 @@ export type ChatConversation = {
   title: string;
   mode: ChatMode;
   draft: string;
+  pendingGenerationRequestId?: number;
   messages: ChatMessage[];
   createdAt: string;
   updatedAt: string;
@@ -49,6 +50,7 @@ export function createConversation(): ChatConversation {
     title: "New chat",
     mode: "chat",
     draft: "",
+    pendingGenerationRequestId: undefined,
     messages: initialMessages,
     createdAt: now,
     updatedAt: now,
@@ -145,6 +147,8 @@ function normalizeStoredConversation(conversation: ChatConversation): ChatConver
     ...conversation,
     mode: conversation.mode === "project" ? "project" : "chat",
     draft: typeof conversation.draft === "string" ? conversation.draft : "",
+    pendingGenerationRequestId:
+      typeof conversation.pendingGenerationRequestId === "number" ? conversation.pendingGenerationRequestId : undefined,
   };
 }
 

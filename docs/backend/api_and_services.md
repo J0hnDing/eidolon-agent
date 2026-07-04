@@ -17,7 +17,7 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 
 ### ChatOrchestrator
 
-Coordinates chat requests. Chat mode returns direct answers. Project mode creates generation requests and starts build-time approval planning. Backend keyword heuristics must not silently create or block skills.
+Coordinates chat requests. Chat mode returns direct answers. Project mode creates generation requests, sends them through ProductManager intent/plausibility review, and starts build-time approval planning only after ProductManager decides the request is ready to blueprint. If ProductManager asks for clarification, the next Project-mode chat reply is appended to the same generation request. Backend keyword heuristics must not silently create or block skills.
 
 ### SkillPlanService and ProjectPlausibilityService
 
@@ -25,7 +25,7 @@ Use Codex adapters when available to classify project plausibility and generate 
 
 ### AgentWorkflowService
 
-Coordinates bounded agent workflows for build, repair, and update. It creates `agent_runs`, writes artifacts, starts steps, resumes after approval, loops through build milestones, handles repair attempts, and records final summaries.
+Coordinates bounded agent workflows for build, repair, and update. For builds, it records a ProductManager review step before blueprint artifacts exist, pauses unclear requests with `needs_input`, writes artifacts only after a plausible review, starts steps, resumes after approval, loops through build milestones, handles repair attempts, and records final summaries.
 
 ### CodexService
 
