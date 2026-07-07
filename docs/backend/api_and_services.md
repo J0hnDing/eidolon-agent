@@ -17,7 +17,7 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 
 ### ChatOrchestrator
 
-Coordinates chat requests. Chat mode returns direct answers. Project mode creates generation requests, sends them through ProductManager intent/plausibility review, and starts build-time approval planning only after ProductManager decides the request is ready to blueprint. If ProductManager asks for clarification, the next Project-mode chat reply is appended to the same generation request. Backend keyword heuristics must not silently create or block skills.
+Coordinates chat requests. Chat mode returns direct answers. Project mode creates generation requests, sends them through ProductManager intent refinement and plausibility review, and starts build-time approval planning only after ProductManager decides the request is ready to blueprint. If ProductManager asks for clarification, the next Project-mode chat reply is appended to the same generation request. Backend keyword heuristics must not silently create or block skills.
 
 ### SkillPlanService and ProjectPlausibilityService
 
@@ -25,11 +25,13 @@ Use Codex adapters when available to classify project plausibility and generate 
 
 ### AgentWorkflowService
 
-Coordinates bounded agent workflows for build, repair, and update. For builds, it records a ProductManager review step before blueprint artifacts exist, pauses unclear requests with `needs_input`, writes artifacts only after a plausible review, starts steps, resumes after approval, loops through build milestones, handles repair attempts, and records final summaries.
+Coordinates bounded agent workflows for build, repair, and update. For builds, it records ProductManager intent refinement and plausibility steps before blueprint artifacts exist, pauses unclear requests with `needs_input`, writes `blueprint.json` and `permissions.json` only after a plausible review, requests deterministic build-time approval, writes `task_dag.json` only after approval, validates the DAG, schedules ready task nodes, starts Builder/Tester steps for each node, handles node fix loops, runs the final end-to-end Tester step, handles final fix loops, and records blocked summaries when needed.
+
+The build scheduler should be modular and called by the backend with the generation request, selected memory facts, approval state, project paths, Codex adapter, permission service, and proposed skill service. It should not be a generic workflow engine for unrelated applications.
 
 ### CodexService
 
-Builds prompts from instruction files and calls Codex adapters. It owns real/fake Codex integration, proposed skill generation, milestone builds, repairs, update edits, and Tester test-writing calls.
+Builds prompts from instruction files and calls Codex adapters. It owns real/fake Codex integration, ProductManager intent refinement, plausibility review, blueprint writing, permission-plan writing, task DAG writing, proposed skill task-node builds, task-node repairs, final end-to-end repairs, update edits, and Tester test-writing calls.
 
 ### PermissionService
 

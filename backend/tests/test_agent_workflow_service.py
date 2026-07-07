@@ -55,17 +55,15 @@ def test_product_manager_uses_codex_adapter_for_blueprint_and_summary(tmp_path: 
     class RecordingAdapter(FakeCodexAdapter):
         def __init__(self) -> None:
             self.tasks: list[str] = []
-            self.plans: list[dict] = []
 
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             task = plan.get("codex_task")
             if task:
                 self.tasks.append(task)
-                self.plans.append(dict(plan))
             return super().generate(prompt, output_dir, plan)
 
     adapter = RecordingAdapter()
-    agent_run = AgentWorkflowService(
+    AgentWorkflowService(
         db_session,
         codex_service=CodexService(db_session, adapter=adapter, project_root=tmp_path),
         project_root=tmp_path,
@@ -74,17 +72,6 @@ def test_product_manager_uses_codex_adapter_for_blueprint_and_summary(tmp_path: 
     assert "product_manager_build_review" in adapter.tasks
     assert "product_manager_build_blueprint" in adapter.tasks
     assert "product_manager_summary" in adapter.tasks
-    assert "product_manager_summary" not in agent_run.blueprint_json
-    build_summary_plan = next(
-        plan
-        for plan in adapter.plans
-        if plan.get("codex_task") == "product_manager_summary" and plan.get("summary_type") == "build_time"
-    )
-    context = build_summary_plan["context"]
-    assert context["user_request"] == generation_request.user_message
-    assert context["permission_plan"]["runtime"]["permissions"]["shell"] is False
-    assert context["blueprint_path"].endswith("blueprint.json")
-    assert context["approval_boundary"]["approval_means"] == "Codex may generate proposed skill files only."
 
 
 def test_approval_updates_waiting_product_manager_permission_step(db_session: Session) -> None:

@@ -67,5 +67,6 @@ Required JSON shape:
       "reason": "string"
     }
   },
-  "decision": "request_permission|ask_user_for_input|stop_unsupported"
+  "decision": "request_permission|ask_user_for_input|stop_unsupported",
+  "summary": "short user-facing summary"
 }

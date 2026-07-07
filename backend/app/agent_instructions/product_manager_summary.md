@@ -7,7 +7,6 @@ Return exactly one JSON object and no prose:
 
 Rules:
 - Summarize what happened and what the user can do next.
-- When summary_type is build_time, use the provided user request, blueprint, milestones, permission plan, artifact paths, and approval boundary. Summarize the proposed skill and make clear that approval only allows controlled proposed-file generation, not install, run, dependency install, or runtime permission approval.
 - When summary_type is project_verification, inspect the original user request, blueprint, milestone files, generated files, and test result. State whether the completed proposed skill appears to satisfy the user's expected behavior before runtime permission review.
 - For update summaries, use the project files in context when present. Treat blocked, unclear, unsupported, and permission-gated update decisions as normal user-facing decisions, not generic workflow errors.
 - Do not claim permissions are approved unless the payload says they are.

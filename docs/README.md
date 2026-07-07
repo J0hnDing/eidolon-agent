@@ -23,7 +23,7 @@ This folder contains the detailed functionality documentation for the local-firs
 - [BuilderAgent](agents/builder.md)
 - [TesterAgent](agents/tester.md)
 - [Instruction files](agents/instruction_files.md)
-- [Build and repair workflow](workflows/agent_build_repair.md)
+- [Project build workflow](workflows/project_build_workflow.md)
 - [Update workflow](workflows/update_workflow.md)
 
 ## Safety and Runtime

@@ -1,6 +1,6 @@
 # Skill Update Workflow
 
-Updates are version-safe and do not use the build milestone-file loop in the MVP.
+Updates are version-safe and do not use the new skill DAG build workflow in the MVP unless a future update explicitly opts into a small task DAG.
 
 ## Flow
 

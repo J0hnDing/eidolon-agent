@@ -35,6 +35,6 @@ Use this template for future entries:
 
 - Area: ProductManager build workflow, chat Project mode, agent instructions, frontend chat state.
 - Intention: Ensure ProductManager reviews intent and plausibility before blueprint/permission artifacts are created, while allowing unclear requests to continue in the same chat.
-- Changed: Added PM build review before artifact creation, a separate `product_manager_plausibility_review.md` instruction file, `needs_input` generation requests, same-chat clarification continuation, tool UI milestone guidance, chat UI pending request tracking, and build-time summaries generated only through `product_manager_summary.md`.
+- Changed: Added PM build review before artifact creation, a separate `product_manager_plausibility_review.md` instruction file, `needs_input` generation requests, same-chat clarification continuation, tool UI milestone guidance, and chat UI pending request tracking.
 - Verification: `..\.venv\Scripts\python.exe -m pytest` from `backend`; `npm run build` from `frontend` with the documented Vite/esbuild sandbox escalation.
 - Follow-up: Consider a durable backend conversation table if multi-device chat continuity becomes a requirement.

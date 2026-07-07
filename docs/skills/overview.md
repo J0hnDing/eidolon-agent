@@ -45,4 +45,4 @@ Instruction and hybrid skills need an instructions file referenced by `instructi
 
 Automation and hybrid skills need an executable Python entrypoint referenced by `entrypoint`, usually `skill.py`, and tests written/maintained by TesterAgent.
 
-ProductManager controls the product structure beyond these platform minimums. Workflow artifacts such as `blueprint.json`, `permissions.json`, and `milestones/*.json` are platform artifacts, not skill package files.
+ProductManager controls the product structure beyond these platform minimums. Workflow artifacts such as `intent_prompt.json`, `decision.json`, `blueprint.json`, `permissions.json`, `task_dag.json`, `tasks/*.json`, and task `interface_artifact.json` files are platform artifacts, not skill package files.

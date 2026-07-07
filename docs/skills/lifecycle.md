@@ -14,15 +14,21 @@ installed -> disabled
 ## Proposed Skill Workflow
 
 1. Project mode creates a generation request.
-2. ProductManager creates blueprint and permission artifacts.
-3. The app creates a build-time approval request.
-4. User approves generation.
-5. Builder writes files inside `skills/proposed/<skill_name>/`.
-6. Tester writes/runs tests.
-7. ProductManager verifies completion.
-8. Runtime permission review is created from actual `manifest.json`.
-9. User inspects files and approvals.
-10. User installs or rejects.
+2. ProductManager refines intent and writes a plausibility decision.
+3. If the request needs clarification, the same Project-mode chat continues the same generation request and ProductManager repeats intent/plausibility review.
+4. If the request is plausible, ProductManager writes blueprint and permission artifacts.
+5. The app creates a build-time approval request from the blueprint summary and permission plan.
+6. User approves generation.
+7. ProductManager writes a task DAG.
+8. Backend validates the DAG and schedules ready task nodes.
+9. Builder writes files inside `skills/proposed/<skill_name>/` for each task node.
+10. Tester writes/runs node tests immediately after task builds that require tests.
+11. Builder fixes failed task nodes until tests pass or failure limits block the workflow.
+12. Tester writes and runs one final end-to-end test after all task nodes are done.
+13. Builder fixes final end-to-end failures until tests pass or failure limits block the workflow.
+14. Runtime permission review is created from actual `manifest.json`.
+15. User inspects files and approvals.
+16. User installs or rejects.
 
 Generated skills are not installed or run automatically.
 

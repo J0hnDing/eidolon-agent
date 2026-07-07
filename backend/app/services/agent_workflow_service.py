@@ -189,25 +189,11 @@ class AgentWorkflowService:
         pm_summary = self.codex_service.product_manager_summary(
             "build_time",
             {
-                "user_request": generation_request.user_message,
                 "blueprint_json": blueprint,
                 "permission_plan": permission_plan,
-                "milestones": milestones,
-                "blueprint_path": blueprint_path,
-                "permission_path": permission_path,
-                "milestone_paths": milestone_paths,
                 "generation_request_id": generation_request.id,
-                "approval_boundary": {
-                    "approval_means": "Codex may generate proposed skill files only.",
-                    "approval_does_not_mean": [
-                        "installing the skill",
-                        "running the skill",
-                        "installing packages",
-                        "approving runtime permissions",
-                    ],
-                },
             },
-            self._pm_build_time_summary(blueprint),
+            str(blueprint.get("product_manager_summary") or "") or self._pm_build_time_summary(blueprint),
         )
         permission_request = PermissionService(self.db, project_root=self.project_root).create_build_time_request(
             generation_request

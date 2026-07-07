@@ -71,7 +71,7 @@ Read the relevant files under `docs/` before making non-trivial changes. Start a
 - Frontend behavior: [docs/frontend/ui.md](docs/frontend/ui.md)
 - Skill concept and manifest: [docs/skills/overview.md](docs/skills/overview.md), [docs/skills/manifest.md](docs/skills/manifest.md)
 - Skill lifecycle and versioning: [docs/skills/lifecycle.md](docs/skills/lifecycle.md), [docs/skills/versioning.md](docs/skills/versioning.md)
-- Agent workflows: [docs/agents/overview.md](docs/agents/overview.md), [docs/workflows/agent_build_repair.md](docs/workflows/agent_build_repair.md), [docs/workflows/update_workflow.md](docs/workflows/update_workflow.md)
+- Agent workflows: [docs/agents/overview.md](docs/agents/overview.md), [docs/workflows/project_build_workflow.md](docs/workflows/project_build_workflow.md), [docs/workflows/update_workflow.md](docs/workflows/update_workflow.md)
 - Permissions and sandboxing: [docs/security/permissions.md](docs/security/permissions.md), [docs/security/sandbox_execution.md](docs/security/sandbox_execution.md)
 - Scheduling and tools: [docs/runtime/scheduling.md](docs/runtime/scheduling.md), [docs/runtime/tools.md](docs/runtime/tools.md)
 - Codex CLI integration: [docs/integrations/codex_cli.md](docs/integrations/codex_cli.md)

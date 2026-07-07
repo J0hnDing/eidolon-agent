@@ -109,6 +109,7 @@ class FakeCodexAdapter:
                         "blueprint": blueprint,
                         "permission_plan": blueprint["permission_plan"],
                         "decision": "request_permission",
+                        "summary": f"Build {blueprint['skill_name']} as a reusable skill.",
                     }
                 ),
                 stderr="",
@@ -507,6 +508,8 @@ class CodexService:
         blueprint = self._sanitize_blueprint(parsed.get("blueprint"), fallback)
         permission_plan = self._sanitize_permission_plan(parsed.get("permission_plan"), generation_request.plan_json)
         blueprint["permission_plan"] = permission_plan
+        if isinstance(parsed.get("summary"), str):
+            blueprint["product_manager_summary"] = str(parsed["summary"]).strip()
         if isinstance(parsed.get("decision"), str):
             blueprint["decision"] = str(parsed["decision"]).strip()
         return blueprint

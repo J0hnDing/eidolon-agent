@@ -61,6 +61,19 @@ Stores Project-mode skill generation requests and the initial/updated generation
 
 Store bounded agent workflows and role-specific steps. Agent communication is persisted as structured artifacts rather than free-form hidden agent chat.
 
+DAG build runs should persist:
+
+- the refined intent prompt;
+- plausibility `decision_json`;
+- `blueprint_json`;
+- `permission_plan_json`;
+- `task_dag_json`;
+- current task node id instead of current milestone;
+- per-task failure counts;
+- final end-to-end failure count.
+
+Agent run steps should identify the explicit action being performed and the task node id when applicable. During migration from the linear milestone workflow, existing names such as `current_milestone` and `milestone_name` may be treated as compatibility aliases for `current_task_id` and `task_node_id`, but new code should use task-node terminology.
+
 ## Status Values
 
 Skill statuses:
@@ -91,4 +104,10 @@ Agent run statuses:
 
 ```text
 pending, running, waiting_for_approval, succeeded, failed, cancelled, blocked
+```
+
+DAG task node statuses:
+
+```text
+pending, ready, building, testing, fixing, done, failed, blocked
 ```

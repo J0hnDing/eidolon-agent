@@ -4,7 +4,7 @@ This is a short compatibility page for the original Codex CLI setup notes. The m
 
 - [Codex CLI Integration](integrations/codex_cli.md)
 - [Agent Workflow](agents/overview.md)
-- [Agent Build and Repair Workflow](workflows/agent_build_repair.md)
+- [Project Build Workflow](workflows/project_build_workflow.md)
 
 ## Defaults
 

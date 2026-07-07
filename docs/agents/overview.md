@@ -16,15 +16,21 @@ Agents communicate through platform artifacts:
 
 - `agent_runs`
 - `agent_run_steps`
+- `intent_prompt.json`
+- `decision.json`
+- `decision_json`
 - `blueprint_json`
 - `runtime/agent_runs/run_<id>/blueprint.json`
 - `runtime/agent_runs/run_<id>/permissions.json`
-- `runtime/agent_runs/run_<id>/milestones/<name>.json`
-- `decision_json`
+- `runtime/agent_runs/run_<id>/task_dag.json`
+- `runtime/agent_runs/run_<id>/tasks/<task_id>.json`
+- `runtime/agent_runs/run_<id>/tasks/<task_id>/interface_artifact.json`
 - `test_result_json`
 - `failure_log`
 - `runtime_permissions.json`
 - `user_summary`
+
+Build workflows use task-node artifacts instead of linear milestone artifacts. Each agent action should be visible as an `agent_run_steps` row with the action name, task node id when applicable, structured inputs, structured outputs, logs, and status.
 
 ## Codex Integration
 
@@ -47,4 +53,4 @@ Agents must not:
 
 ## Failure Policy
 
-For build and repair workflows, one milestone can fail and repair up to three times. After repeated failures, ProductManager stops the workflow and writes a user-facing stuck summary.
+For project build workflows, one task node can fail and repair up to three times. The final end-to-end test loop also has its own three-failure limit. After repeated failures, ProductManager stops the workflow and writes a user-facing stuck summary.

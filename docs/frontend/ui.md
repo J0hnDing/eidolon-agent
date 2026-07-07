@@ -26,7 +26,7 @@ Routes are defined in `frontend/src/App.tsx`:
 Chat supports explicit modes:
 
 - `chat`: direct conversation only.
-- `project`: starts ProductManager review for a reusable skill request. ProductManager may ask a clarification question before any blueprint or permission artifacts are created; the next reply in the same chat continues the same generation request.
+- `project`: starts ProductManager intent refinement and plausibility review for a reusable skill request. ProductManager may ask a clarification question before any blueprint, permission, or task DAG artifacts are created; the next reply in the same chat continues the same generation request.
 
 Build-time and runtime approvals are rendered inline in the chat transcript. Approval messages must remain in chat history when the user navigates away and returns.
 
@@ -59,7 +59,7 @@ Installed executable skills may be run manually only when backend checks pass.
 
 ## Agent Runs Pages
 
-Agent Runs list and detail pages show run status, current milestone, current step, step logs, structured inputs/outputs, and retry/cancel controls.
+Agent Runs list and detail pages show run status, current task node or parallel active nodes, current step, step logs, structured inputs/outputs, DAG progress, node failures, and retry/cancel controls.
 
 ## Targeted Polling
 

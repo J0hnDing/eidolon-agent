@@ -1,6 +1,6 @@
 # BuilderAgent
 
-BuilderAgent writes and repairs generated skill files inside controlled skill folders.
+BuilderAgent writes and repairs generated skill files inside controlled skill folders, one DAG task node at a time.
 
 ## Modes
 
@@ -16,16 +16,22 @@ Builder reads:
 
 - blueprint artifact;
 - permission artifact;
-- current milestone artifact;
+- task DAG artifact;
+- current task node artifact;
+- interface artifacts from all parent task nodes;
 - existing generated files when applicable.
 
-Builder implements the current milestone only. It must not jump ahead unless the milestone explicitly requires shared setup.
+Builder implements the current task node only. It must not jump ahead to child nodes unless the current node explicitly defines shared setup as part of its acceptance criteria.
 
-When `interface_type = "tool"`, Builder implements the ProductManager UI-schema milestone as declarative skill metadata only: `tool_ui_schema`, matching input/output schemas where useful, field labels, options/defaults, and result rendering hints. Builder must not generate React, HTML, JavaScript, or application frontend files for a tool skill.
+After each successful task build, Builder writes an interface artifact for child nodes. The artifact must name created/updated paths, schemas, entrypoints, functions, data contracts, and known limitations relevant to downstream work.
+
+When `interface_type = "tool"`, Builder implements ProductManager UI-schema task nodes as declarative skill metadata only: `tool_ui_schema`, matching input/output schemas where useful, field labels, options/defaults, and result rendering hints. Builder must not generate React, HTML, JavaScript, or application frontend files for a tool skill.
 
 ## Repair Mode
 
-Builder reads Tester failure output and repairs the current milestone. It should fix implementation bugs, not bypass tests.
+Builder reads Tester failure output and repairs the current task node. It should fix implementation bugs, not bypass tests.
+
+For final end-to-end failures, Builder reads the full blueprint, task DAG, all node interface artifacts, all generated files, and the final failure log. This mode may repair cross-node integration issues, but it must still stay inside the generated skill folder and must not edit Tester-owned tests.
 
 If a blocker requires user action, Builder must return a user-action-required report with:
 
