@@ -90,10 +90,10 @@ export default function AgentRunDetailPage() {
     setIsWorking(true);
     setError(null);
     try {
-      await api.retryCurrentMilestone(run.id);
+      await api.retryCurrentTask(run.id);
       await loadRun();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not retry current milestone");
+      setError(err instanceof Error ? err.message : "Could not retry current task");
     } finally {
       setIsWorking(false);
     }
@@ -149,8 +149,8 @@ export default function AgentRunDetailPage() {
             <dd>{run.current_step ?? "none"}</dd>
           </div>
           <div>
-            <dt>Current Milestone</dt>
-            <dd>{run.current_milestone ?? "none"}</dd>
+            <dt>Current Task Node</dt>
+            <dd>{run.current_task_id ?? run.current_milestone ?? "none"}</dd>
           </div>
           <div>
             <dt>Skill</dt>
@@ -185,7 +185,7 @@ export default function AgentRunDetailPage() {
             onClick={handleRetryCurrentMilestone}
             disabled={isWorking || !["failed", "blocked"].includes(run.status)}
           >
-            Retry Current Milestone
+            Retry Current Task
           </button>
           <button
             type="button"
@@ -227,7 +227,7 @@ export default function AgentRunDetailPage() {
                 <div>
                   <h3>{step.step_name}</h3>
                   <p className="muted">
-                    {step.milestone_name ? `${step.milestone_name} / ` : ""}
+                    {(step.task_node_id ?? step.milestone_name) ? `${step.task_node_id ?? step.milestone_name} / ` : ""}
                     {formatTimestamp(step.started_at, "not started")} - {formatTimestamp(step.ended_at, "not ended")}
                   </p>
                 </div>
@@ -246,7 +246,7 @@ export default function AgentRunDetailPage() {
               {(step.status === "failed" || step.status === "blocked") && (
                 <div className="button-row">
                   <button type="button" onClick={() => handleRetry(step.id)} disabled={isWorking}>
-                    Retry Current Milestone
+                    Retry Current Task
                   </button>
                 </div>
               )}

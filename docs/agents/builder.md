@@ -16,12 +16,15 @@ Builder reads:
 
 - blueprint artifact;
 - permission artifact;
-- task DAG artifact;
-- current task node artifact;
+- current task node fields needed for the task;
 - interface artifacts from all parent task nodes;
 - existing generated files when applicable.
 
+Builder should not be prompted with backend bookkeeping fields such as artifact paths, task indexes, task status, generation request ids, or the entire task DAG for ordinary node work.
+
 Builder implements the current task node only. It must not jump ahead to child nodes unless the current node explicitly defines shared setup as part of its acceptance criteria.
+
+For new build workflows, the backend may create a skeleton `manifest.json` before the first Builder step from the approved blueprint and permission plan. Builder should preserve that manifest shape and complete only the current node's package details.
 
 After each successful task build, Builder writes an interface artifact for child nodes. The artifact must name created/updated paths, schemas, entrypoints, functions, data contracts, and known limitations relevant to downstream work.
 

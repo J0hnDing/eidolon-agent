@@ -2,6 +2,8 @@
 
 `manifest.json` is the source of truth for a skill package.
 
+For new Project-mode builds, the backend derives an initial skeleton `manifest.json` from the approved `blueprint.json` and `permissions.json` before Builder writes implementation files. Builder may complete task-owned details, and the backend later fills missing manifest fields deterministically when possible before final validation and runtime permission review.
+
 ## Core Fields
 
 ```json
@@ -42,12 +44,14 @@ Instruction skills:
 Automation skills:
 
 - require `entrypoint`;
+- require the declared entrypoint file to exist;
 - require tests;
 - may request supported runtime permissions.
 
 Hybrid skills:
 
 - require both `instructions_path` and `entrypoint`;
+- require the declared instruction and entrypoint files to exist;
 - require tests;
 - may request supported runtime permissions.
 

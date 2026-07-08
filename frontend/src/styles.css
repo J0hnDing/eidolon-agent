@@ -482,7 +482,14 @@ th {
   gap: 8px;
 }
 
-.chat-thread-list button {
+.chat-thread-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.chat-thread-select {
   display: grid;
   gap: 4px;
   width: 100%;
@@ -494,9 +501,22 @@ th {
   padding: 10px;
 }
 
-.chat-thread-list button.active {
+.chat-thread-row.active .chat-thread-select {
   background: #e8f0ff;
   border-color: #9db7e8;
+}
+
+.chat-thread-delete {
+  min-height: 0;
+  align-self: stretch;
+  background: #ffffff;
+  border-color: #efb5ae;
+  color: #8d2f29;
+  padding: 0 10px;
+}
+
+.chat-thread-delete:hover:not(:disabled) {
+  background: #fff1ef;
 }
 
 .chat-thread-list span {

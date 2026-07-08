@@ -139,16 +139,20 @@ Backend validation must reject the graph when:
 
 The `file_write_claims` field is added so the backend can parallelize independent nodes without allowing two builders to edit the same generated file at the same time.
 
+Task `expected_output_paths` and `file_write_claims` are Builder-owned skill package paths only. They must not include Tester-owned files such as `tests/test_skill.py` or `tests/test_<task_id>.py`; the backend sanitizes those paths out of ProductManager DAG output before validation.
+
 ## Task Node Execution
 
 After approval and DAG validation, the backend builds the DAG data structure and repeatedly executes ready nodes:
 
-1. A node is ready when all `depends_on` nodes are `done`.
-2. The backend may run multiple ready nodes in parallel when their `file_write_claims` do not overlap.
-3. Each active node creates one Builder step.
-4. If `requires_tests` is true, the Builder step is followed immediately by a Tester step for the same node.
-5. A node is `done` only after Builder succeeds, its `interface_artifact.json` is written and valid, and required tests pass.
-6. A node with `requires_tests = false` is still subject to deterministic package validation before it can be marked `done`.
+1. Before the first Builder step, the backend derives a skeleton `manifest.json` in the proposed skill folder from `blueprint.json` and `permissions.json`.
+2. A node is ready when all `depends_on` nodes are `done`.
+3. The backend may run multiple ready nodes in parallel when their `file_write_claims` do not overlap.
+4. Each active node creates one Builder step.
+5. After each Builder step, the backend deterministically fills missing manifest fields from the approved blueprint and permission plan when possible.
+6. If `requires_tests` is true, the Builder step is followed immediately by a Tester step for the same node.
+7. A node is `done` only after Builder succeeds, its `interface_artifact.json` is written and valid, and required tests pass.
+8. A node with `requires_tests = false` is still subject to deterministic package validation before it can be marked `done`.
 
 Node statuses:
 
@@ -162,18 +166,20 @@ pending, ready, building, testing, fixing, done, failed, blocked
 
 Inputs:
 
-- `blueprint.json`;
+- `blueprint.json`, excluding duplicated permission-plan data;
 - `permissions.json`;
-- `task_dag.json`;
-- the current node file `tasks/<task_id>.json`;
+- the current task node fields needed to build the node;
 - all direct and transitive parent `interface_artifact.json` files;
-- existing generated files needed by the current node.
+- generated skill files needed by the current node.
+
+The Builder prompt must not include backend bookkeeping fields such as `generation_request_id`, `blueprint_path`, `permission_path`, `task_dag_path`, `task_path`, task `index`, or task `status`. It should not receive the entire task DAG for a normal node build; dependency contracts come from parent interface artifacts.
 
 Behavior:
 
 - build only the current task node;
 - write only inside the controlled proposed skill folder;
 - respect `file_write_claims` unless the backend grants an explicit serialized exception;
+- treat the backend-seeded `manifest.json` as the package contract starting point instead of inventing a separate manifest shape;
 - produce or update skill package files for the node;
 - write `runtime/agent_runs/run_<id>/tasks/<task_id>/interface_artifact.json`.
 
@@ -218,8 +224,8 @@ Inputs:
 
 - `blueprint.json`;
 - `permissions.json`;
-- `task_dag.json`;
-- all task node files;
+- final end-to-end expectations from `task_dag.json`;
+- concise task summaries;
 - all interface artifacts;
 - final end-to-end failure output;
 - all generated skill package files.
@@ -243,7 +249,9 @@ Inputs:
 - `permissions.json`;
 - the current task node;
 - parent interface artifacts;
-- Builder-created files for the node.
+- Builder-created files needed to test the node.
+
+The Tester prompt for a node must not include the entire task DAG, task artifact paths, task status, task index, or other backend-only bookkeeping. It should receive `test_file` so it writes only the node-specific test file.
 
 Behavior:
 
@@ -260,10 +268,10 @@ Runs after every task node is `done`.
 Inputs:
 
 - original user request;
-- `intent_prompt.json`;
 - `blueprint.json`;
 - `permissions.json`;
-- `task_dag.json`;
+- final end-to-end expectations from `task_dag.json`;
+- concise task summaries;
 - all interface artifacts;
 - all generated skill package files.
 
@@ -285,11 +293,12 @@ The final end-to-end loop has a separate failure counter. After more than three 
 
 After all task nodes and the final end-to-end test pass:
 
-1. Backend validates the actual `manifest.json`.
-2. Backend creates runtime permission review from the actual manifest and dependencies.
-3. ProductManager does not write a completion summary unless the workflow is blocked or needs user input.
-4. Chat tells the user only that the project is finished and surfaces any runtime permission approval needed before install.
-5. The skill remains proposed until the user explicitly installs or rejects it.
+1. Backend deterministically finalizes any missing fields in the actual `manifest.json` from the approved blueprint and permission plan.
+2. Backend validates the actual `manifest.json`, declared package files, and tests.
+3. Backend creates runtime permission review from the actual manifest and dependencies.
+4. ProductManager does not write a completion summary unless the workflow is blocked or needs user input.
+5. Chat tells the user only that the project is finished and surfaces any runtime permission approval needed before install.
+6. The skill remains proposed until the user explicitly installs or rejects it.
 
 ## Project Repair Flow
 
@@ -313,3 +322,4 @@ Repair uses the same task-node contracts:
 - Per-node `file_write_claims` enables safe parallel Builder/Tester execution.
 - Builder must write `interface_artifact.json` for every node so child nodes have explicit contracts instead of relying on hidden context.
 - Tester writes node-specific test files and one final end-to-end test file instead of sharing one test file across all build work.
+- Backend seeds `manifest.json` from `blueprint.json` and `permissions.json`, and later fills missing manifest fields deterministically when possible.

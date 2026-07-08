@@ -4,13 +4,15 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from pydantic import TypeAdapter
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import AgentRun, SkillGenerationRequest
-from app.schemas.skill_generation import ChatResponse
+from app.models import AgentRun, MemoryFact, Message, SkillGenerationRequest
+from app.routers import chat as chat_router
+from app.schemas.skill_generation import ChatRequest, ChatResponse
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.codex_service import CodexService, FakeCodexAdapter, RealCodexAdapter, default_codex_adapter
 from app.services.direct_chat_service import DirectChatService, RealDirectChatAdapter
@@ -23,7 +25,7 @@ from app.services.project_plausibility import (
     default_project_plausibility_adapter,
 )
 from app.services.proposed_skill_service import ProposedSkillService
-from app.services.skill_plan_service import RealSkillPlanAdapter, SkillPlanService
+from app.services.skill_plan_service import RealSkillPlanAdapter, SkillPlanError, SkillPlanService, parse_json_object
 
 
 @pytest.fixture
@@ -295,14 +297,24 @@ def test_project_mode_uses_product_manager_review_before_blueprint(db_session: S
 
     generation_request = response["generation_request"]
     assert plan_adapter.called is True
-    assert tasks[:2] == ["product_manager_build_review", "product_manager_build_blueprint"]
+    assert tasks[:4] == [
+        "product_manager_refine_intent",
+        "product_manager_build_review",
+        "product_manager_write_blueprint",
+        "product_manager_write_permissions",
+    ]
     assert "performing Phase 1 intent and plausibility review" in prompts["product_manager_build_review"]
     assert '"blueprint"' not in prompts["product_manager_build_review"]
-    assert "Write a concise blueprint file" in prompts["product_manager_build_blueprint"]
+    assert "For `write_blueprint`, return" in prompts["product_manager_write_blueprint"]
     agent_run = db_session.query(AgentRun).filter_by(generation_request_id=generation_request.id).one()
     steps = sorted(agent_run.steps, key=lambda step: step.id)
-    assert [step.output_json["decision_json"]["decision"] for step in steps[:2]] == [
-        "build_next_milestone",
+    decisions = [
+        step.output_json["decision_json"]["decision"]
+        for step in steps
+        if (step.output_json or {}).get("decision_json")
+    ]
+    assert decisions[:2] == [
+        "proceed_to_blueprint",
         "request_permission",
     ]
     assert "plausibility_review" not in generation_request.plan_json
@@ -932,6 +944,38 @@ def test_real_codex_adapter_auto_enables_search_for_network_plans(
     assert command.index("--search") < command.index("exec")
 
 
+def test_real_codex_adapter_auto_search_honors_permission_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("app.services.codex_service.subprocess.run", fake_run)
+
+    RealCodexAdapter(command="codex", timeout_seconds=10, enable_search="auto").generate(
+        "Generate a proposed skill.",
+        tmp_path / "generated",
+        {
+            "requested_network_domains": ["wttr.in"],
+            "requested_dependencies": ["requests"],
+            "permission_plan": {
+                "build_time": {
+                    "codex_generation": True,
+                    "internet_research": False,
+                    "dependencies": ["requests"],
+                    "reason": "No live research needed.",
+                }
+            },
+        },
+    )
+
+    assert "--search" not in captured["command"]
+
+
 def test_real_project_plausibility_adapter_uses_read_only_codex_exec(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1021,6 +1065,53 @@ def test_real_skill_plan_adapter_uses_read_only_codex_exec(
     assert command[-1] == "-"
     assert captured["kwargs"]["input"] == "Return a plan."
     assert captured["kwargs"]["encoding"] == "utf-8"
+
+
+def test_skill_plan_parser_wraps_malformed_json() -> None:
+    with pytest.raises(SkillPlanError, match="malformed JSON"):
+        parse_json_object('noise {"goal": "Build", "skill_name": "bad" trailing} noise')
+
+
+def test_chat_route_returns_400_for_skill_plan_error(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+) -> None:
+    def raise_plan_error(self, *args, **kwargs):
+        raise SkillPlanError("Codex returned malformed JSON for the skill generation plan")
+
+    monkeypatch.setattr("app.services.chat_orchestrator.ChatOrchestrator.handle_message", raise_plan_error)
+
+    with pytest.raises(HTTPException) as exc_info:
+        chat_router.chat(ChatRequest(message="Build a wordle game", mode="project"), db_session)
+
+    assert exc_info.value.status_code == 400
+    assert "Could not create a project plan" in exc_info.value.detail
+    assert "malformed JSON" in exc_info.value.detail
+
+
+def test_delete_chat_conversation_removes_history_and_clears_memory_source(db_session: Session) -> None:
+    deleted_message = Message(role="user", content="Remember my formatter preference.", conversation_id="chat-1")
+    kept_message = Message(role="user", content="Keep this message.", conversation_id="chat-2")
+    db_session.add_all([deleted_message, kept_message])
+    db_session.commit()
+    db_session.refresh(deleted_message)
+    db_session.refresh(kept_message)
+    memory_fact = MemoryFact(
+        key="formatter",
+        value="Use the repo formatter.",
+        category="preferences",
+        source_message_id=deleted_message.id,
+    )
+    db_session.add(memory_fact)
+    db_session.commit()
+
+    response = chat_router.delete_chat_conversation("chat-1", db_session)
+
+    assert response.status_code == 204
+    assert db_session.query(Message).filter_by(conversation_id="chat-1").count() == 0
+    assert db_session.query(Message).filter_by(conversation_id="chat-2").count() == 1
+    db_session.refresh(memory_fact)
+    assert memory_fact.source_message_id is None
 
 
 def test_default_codex_mode_uses_real_when_cli_is_available(monkeypatch: pytest.MonkeyPatch) -> None:

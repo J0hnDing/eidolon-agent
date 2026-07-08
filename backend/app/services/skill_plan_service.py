@@ -321,12 +321,15 @@ def parse_json_object(stdout: str) -> dict[str, Any]:
     text = stdout.strip()
     try:
         data = json.loads(text)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
         start = text.find("{")
         end = text.rfind("}")
         if start < 0 or end < start:
-            raise SkillPlanError("Codex returned an unreadable skill generation plan")
-        data = json.loads(text[start : end + 1])
+            raise SkillPlanError("Codex returned an unreadable skill generation plan") from exc
+        try:
+            data = json.loads(text[start : end + 1])
+        except json.JSONDecodeError as nested_exc:
+            raise SkillPlanError("Codex returned malformed JSON for the skill generation plan") from nested_exc
     if not isinstance(data, dict):
         raise SkillPlanError("Codex skill generation plan must be a JSON object")
     return data

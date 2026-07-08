@@ -1,0 +1,136 @@
+{
+  "name": "wordle_game",
+  "description": "Play a local six-attempt five-letter Wordle-style guessing game.",
+  "skill_type": "automation",
+  "interface_type": "tool",
+  "risk_level": "low",
+  "entrypoint": "skill.py",
+  "permissions": {
+    "network": [],
+    "filesystem_read": [],
+    "filesystem_write": [
+      "./cache"
+    ],
+    "secrets": [],
+    "shell": false
+  },
+  "created_by": "builder_agent",
+  "enabled": false,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "guess": {
+        "type": "string",
+        "description": "A five-letter alphabetic Wordle guess.",
+        "minLength": 5,
+        "maxLength": 5,
+        "pattern": "^[A-Za-z]{5}$"
+      },
+      "new_game": {
+        "type": "boolean",
+        "description": "Start a fresh game and clear the current cached game state.",
+        "default": false
+      }
+    },
+    "required": [
+      "guess"
+    ],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "status": {
+        "type": "string",
+        "enum": [
+          "in_progress",
+          "won",
+          "lost",
+          "reset",
+          "error"
+        ]
+      },
+      "result": {
+        "type": "string"
+      },
+      "attempts_used": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 6
+      },
+      "attempts_remaining": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 6
+      },
+      "feedback": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "letter": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "correct",
+                "present",
+                "absent"
+              ]
+            }
+          },
+          "required": [
+            "letter",
+            "state"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "history": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      }
+    },
+    "required": [
+      "status",
+      "result",
+      "attempts_used",
+      "attempts_remaining",
+      "feedback",
+      "history"
+    ],
+    "additionalProperties": false
+  },
+  "tool_ui_schema": {
+    "title": "Wordle Game",
+    "description": "Play a local six-attempt five-letter word guessing game.",
+    "submit_label": "Submit Guess",
+    "fields": [
+      {
+        "name": "guess",
+        "label": "Guess",
+        "type": "text",
+        "placeholder": "CRANE",
+        "help_text": "Enter exactly five letters.",
+        "required": true,
+        "default": ""
+      },
+      {
+        "name": "new_game",
+        "label": "Start New Game",
+        "type": "checkbox",
+        "placeholder": "",
+        "help_text": "Reset the current saved Wordle game before applying this guess.",
+        "required": false,
+        "default": false
+      }
+    ],
+    "result_template": {
+      "primary_field": "result",
+      "primary_label": "Result"
+    }
+  }
+}

@@ -12,6 +12,7 @@ class AgentRunStepRead(BaseModel):
     id: int
     agent_run_id: int
     step_name: AgentStepName
+    task_node_id: str | None
     milestone_name: str | None
     status: AgentRunStepStatus
     input_json: dict[str, Any] | None
@@ -32,6 +33,7 @@ class AgentRunRead(BaseModel):
     generation_request_id: int | None
     user_request: str
     summary: str | None
+    current_task_id: str | None
     current_milestone: str | None
     current_step: str | None
     failure_count_json: dict[str, Any]

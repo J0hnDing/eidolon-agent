@@ -92,6 +92,11 @@ class RealCodexAdapter:
             return True
         if mode in {"0", "false", "no", "off"}:
             return False
+        permission_plan = plan.get("permission_plan")
+        if isinstance(permission_plan, dict):
+            build_time = permission_plan.get("build_time")
+            if isinstance(build_time, dict) and "internet_research" in build_time:
+                return bool(build_time.get("internet_research"))
         return bool(plan.get("requested_network_domains") or plan.get("requested_dependencies"))
 
 
@@ -99,7 +104,23 @@ class FakeCodexAdapter:
     def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
         output_dir.mkdir(parents=True, exist_ok=True)
         task = plan.get("codex_task")
-        if task == "product_manager_build_blueprint":
+        if task == "product_manager_refine_intent":
+            return subprocess.CompletedProcess(
+                args=["fake-codex-product-manager-intent"],
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "intent_prompt": {
+                            "schema_version": 1,
+                            "original_user_request": plan.get("user_message", ""),
+                            "refined_prompt": plan.get("user_message", ""),
+                            "selected_memory_facts": plan.get("selected_memory_facts", []),
+                        }
+                    }
+                ),
+                stderr="",
+            )
+        if task == "product_manager_build_blueprint" or task == "product_manager_write_blueprint":
             blueprint = self._build_blueprint_from_plan(plan["generation_plan"], plan.get("user_message", ""))
             return subprocess.CompletedProcess(
                 args=["fake-codex-product-manager"],
@@ -107,11 +128,32 @@ class FakeCodexAdapter:
                 stdout=json.dumps(
                     {
                         "blueprint": blueprint,
-                        "permission_plan": blueprint["permission_plan"],
                         "decision": "request_permission",
                         "summary": f"Build {blueprint['skill_name']} as a reusable skill.",
                     }
                 ),
+                stderr="",
+            )
+        if task == "product_manager_write_permissions":
+            permission_plan = self._permission_plan_from_generation_plan(plan.get("generation_plan", {}))
+            blueprint_permission_plan = plan.get("blueprint_json", {}).get("permission_plan")
+            if isinstance(blueprint_permission_plan, dict):
+                runtime = blueprint_permission_plan.get("runtime")
+                permissions = runtime.get("permissions") if isinstance(runtime, dict) else None
+                if isinstance(permissions, dict) and any(permissions.get(key) for key in ("network", "filesystem_read", "filesystem_write", "secrets", "shell")):
+                    permission_plan = blueprint_permission_plan
+            return subprocess.CompletedProcess(
+                args=["fake-codex-product-manager-permissions"],
+                returncode=0,
+                stdout=json.dumps({"permission_plan": permission_plan}),
+                stderr="",
+            )
+        if task == "product_manager_write_task_dag":
+            dag = self._build_task_dag_from_plan(plan.get("blueprint_json", {}), plan.get("generation_plan", {}))
+            return subprocess.CompletedProcess(
+                args=["fake-codex-product-manager-task-dag"],
+                returncode=0,
+                stdout=json.dumps({"task_dag": dag}),
                 stderr="",
             )
         if task == "product_manager_build_review":
@@ -120,7 +162,7 @@ class FakeCodexAdapter:
                 returncode=0,
                 stdout=json.dumps(
                     {
-                        "decision": "build_next_milestone",
+                        "decision": "proceed_to_blueprint",
                         "summary": "The request is reusable, bounded, and ready for blueprinting.",
                         "reason": "Fake Codex review accepts the project request for local tests.",
                         "user_prompt": None,
@@ -259,16 +301,8 @@ class FakeCodexAdapter:
                 )
         return subprocess.CompletedProcess(args=["fake-codex"], returncode=0, stdout="fake generation complete", stderr="")
 
-    def _build_blueprint_from_plan(self, plan: dict, user_message: str) -> dict:
-        acceptance_criteria = [
-            "manifest.json is valid",
-            "required skill files exist",
-            "automation or hybrid tests pass",
-            "executable skills use JSON stdin/stdout",
-        ]
-        if plan.get("interface_type") == "tool":
-            acceptance_criteria.append("tool_ui_schema is present so the Tools page can render a user-friendly UI")
-        permission_plan = {
+    def _permission_plan_from_generation_plan(self, plan: dict) -> dict:
+        return {
             "build_time": {
                 "codex_generation": True,
                 "internet_research": bool(plan.get("requested_network_domains") or plan.get("requested_dependencies")),
@@ -285,22 +319,87 @@ class FakeCodexAdapter:
                 "reason": "Runtime permissions expected by the proposed skill design.",
             },
         }
+
+    def _build_blueprint_from_plan(self, plan: dict, user_message: str) -> dict:
+        acceptance_criteria = [
+            "manifest.json is valid",
+            "required skill files exist",
+            "automation or hybrid tests pass",
+            "executable skills use JSON stdin/stdout",
+        ]
+        if plan.get("interface_type") == "tool":
+            acceptance_criteria.append("tool_ui_schema is present so the Tools page can render a user-friendly UI")
         return {
             "goal": plan.get("goal") or user_message,
             "skill_name": plan.get("skill_name"),
             "skill_type": plan.get("skill_type"),
             "interface_type": plan.get("interface_type", "chat"),
-            "expected_files": plan.get("files_to_generate", []),
+            "expected_files": self._skill_package_files(plan.get("files_to_generate", [])),
             "expected_behavior": plan.get("expected_output", {}),
-            "permission_plan": permission_plan,
-            "milestones": [
-                {
-                    "name": "core_skill",
-                    "summary": "Create the core proposed skill package.",
-                    "acceptance_criteria": acceptance_criteria,
-                }
+            "acceptance_criteria": acceptance_criteria,
+        }
+
+    def _build_task_dag_from_plan(self, blueprint: dict, plan: dict) -> dict:
+        skill_type = blueprint.get("skill_type") or plan.get("skill_type")
+        expected_files = self._skill_package_files(
+            blueprint.get("expected_files") or plan.get("files_to_generate") or ["manifest.json", "README.md"]
+        )
+        if "manifest.json" not in expected_files:
+            expected_files.insert(0, "manifest.json")
+        if "README.md" not in expected_files:
+            expected_files.insert(1, "README.md")
+        requires_tests = skill_type in {"automation", "hybrid"}
+        node = {
+            "id": "core_skill",
+            "title": "Core skill package",
+            "summary": "Create the core proposed skill package.",
+            "depends_on": [],
+            "difficulty": "easy",
+            "requires_tests": requires_tests,
+            "parallel_safe": True,
+            "expected_inputs": ["blueprint.json", "permissions.json"],
+            "parent_interface_artifacts": [],
+            "expected_output_paths": expected_files,
+            "file_write_claims": expected_files,
+            "acceptance_criteria": list(
+                blueprint.get("acceptance_criteria")
+                or [
+                    "manifest.json is valid",
+                    "required skill files exist",
+                    "automation or hybrid tests pass",
+                    "executable skills use JSON stdin/stdout",
+                ]
+            ),
+            "test_expectations": ["validate manifest and generated skill behavior"] if requires_tests else [],
+            "interface_artifact_expectations": ["declare generated files and exposed entrypoints"],
+        }
+        return {
+            "schema_version": 1,
+            "graph_id": f"{blueprint.get('skill_name') or plan.get('skill_name') or 'skill'}_build",
+            "root_task_ids": [node["id"]],
+            "nodes": [node],
+            "edges": [],
+            "final_e2e_expectations": [
+                "the generated package satisfies the blueprint end to end",
+                "runtime manifest permissions match or narrow the approved plan",
             ],
         }
+
+    def _skill_package_files(self, value: object) -> list[str]:
+        raw_files = value if isinstance(value, list) else []
+        blocked_names = {"intent_prompt.json", "decision.json", "blueprint.json", "permissions.json", "task_dag.json"}
+        files: list[str] = []
+        for item in raw_files:
+            path = str(item).replace("\\", "/").strip()
+            if not path:
+                continue
+            if path in blocked_names or path.startswith("tasks/") or path.startswith("milestones/"):
+                continue
+            if path.startswith("tests/") or "/test_" in path or path.endswith("_test.py"):
+                continue
+            if path not in files:
+                files.append(path)
+        return files
 
     def _product_manager_update_decision(self, plan: dict) -> dict:
         suggestion = str(plan.get("suggestion", "")).strip()
@@ -367,7 +466,17 @@ class FakeCodexAdapter:
 
         tests_dir = output_dir / "tests"
         tests_dir.mkdir(exist_ok=True)
-        (tests_dir / "test_skill.py").write_text(
+        task_id = str(plan.get("task_id") or (plan.get("task_node") or {}).get("id") or "").strip()
+        requested_test_file = str(plan.get("test_file") or "").strip()
+        if requested_test_file:
+            test_relative_path = requested_test_file
+        elif task_id:
+            test_relative_path = f"tests/test_{task_id}.py"
+        else:
+            test_relative_path = "tests/test_skill.py"
+        test_path = output_dir / test_relative_path
+        test_path.parent.mkdir(exist_ok=True)
+        test_path.write_text(
             "import json\n"
             "import subprocess\n"
             "import sys\n"
@@ -492,27 +601,106 @@ class CodexService:
         self.proposed_service = ProposedSkillService(self.db, project_root=self.project_root)
 
     def product_manager_build_blueprint(self, generation_request: SkillGenerationRequest) -> dict[str, object]:
+        return self.product_manager_write_blueprint(generation_request, intent_prompt={})
+
+    def product_manager_refine_intent(
+        self,
+        generation_request: SkillGenerationRequest,
+        selected_memory_facts: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        payload = {
+            "codex_task": "product_manager_refine_intent",
+            "user_message": generation_request.user_message,
+            "project_conversation": generation_request.plan_json.get("project_conversation", []),
+            "selected_memory_facts": selected_memory_facts or [],
+        }
+        fallback = {
+            "schema_version": 1,
+            "original_user_request": generation_request.user_message,
+            "refined_prompt": generation_request.user_message,
+            "selected_memory_facts": selected_memory_facts or [],
+        }
+        result = self.adapter.generate(
+            self.build_product_manager_prompt("refine_intent", payload),
+            self._product_manager_workspace(),
+            payload,
+        )
+        parsed = self._parse_product_manager_json(result, fallback={"intent_prompt": fallback})
+        intent_prompt = parsed.get("intent_prompt")
+        return dict(intent_prompt) if isinstance(intent_prompt, dict) else fallback
+
+    def product_manager_write_blueprint(
+        self,
+        generation_request: SkillGenerationRequest,
+        intent_prompt: dict[str, object],
+    ) -> dict[str, object]:
         plan = generation_request.plan_json
         payload = {
-            "codex_task": "product_manager_build_blueprint",
+            "codex_task": "product_manager_write_blueprint",
             "user_message": generation_request.user_message,
+            "intent_prompt": intent_prompt,
             "generation_plan": plan,
         }
         fallback = self._fallback_build_blueprint(generation_request)
         result = self.adapter.generate(
-            self.build_product_manager_prompt("build_blueprint", payload),
+            self.build_product_manager_prompt("write_blueprint", payload),
             self._product_manager_workspace(),
             payload,
         )
         parsed = self._parse_product_manager_json(result, fallback={"blueprint": fallback})
         blueprint = self._sanitize_blueprint(parsed.get("blueprint"), fallback)
-        permission_plan = self._sanitize_permission_plan(parsed.get("permission_plan"), generation_request.plan_json)
-        blueprint["permission_plan"] = permission_plan
         if isinstance(parsed.get("summary"), str):
             blueprint["product_manager_summary"] = str(parsed["summary"]).strip()
         if isinstance(parsed.get("decision"), str):
             blueprint["decision"] = str(parsed["decision"]).strip()
+        blueprint.pop("permission_plan", None)
         return blueprint
+
+    def product_manager_write_permissions(
+        self,
+        generation_request: SkillGenerationRequest,
+        intent_prompt: dict[str, object],
+        blueprint: dict[str, object],
+    ) -> dict[str, object]:
+        payload = {
+            "codex_task": "product_manager_write_permissions",
+            "user_message": generation_request.user_message,
+            "intent_prompt": intent_prompt,
+            "blueprint_json": blueprint,
+            "generation_plan": generation_request.plan_json,
+        }
+        fallback = self._sanitize_permission_plan(blueprint.get("permission_plan"), generation_request.plan_json)
+        result = self.adapter.generate(
+            self.build_product_manager_prompt("write_permissions", payload),
+            self._product_manager_workspace(),
+            payload,
+        )
+        parsed = self._parse_product_manager_json(result, fallback={"permission_plan": fallback})
+        return self._sanitize_permission_plan(parsed.get("permission_plan"), generation_request.plan_json)
+
+    def product_manager_write_task_dag(
+        self,
+        generation_request: SkillGenerationRequest,
+        intent_prompt: dict[str, object],
+        blueprint: dict[str, object],
+        permission_plan: dict[str, object],
+    ) -> dict[str, object]:
+        payload = {
+            "codex_task": "product_manager_write_task_dag",
+            "user_message": generation_request.user_message,
+            "intent_prompt": intent_prompt,
+            "blueprint_json": blueprint,
+            "permission_plan": permission_plan,
+            "generation_plan": generation_request.plan_json,
+        }
+        fallback = self._fallback_task_dag(generation_request, blueprint)
+        result = self.adapter.generate(
+            self.build_product_manager_prompt("write_task_dag", payload),
+            self._product_manager_workspace(),
+            payload,
+        )
+        parsed = self._parse_product_manager_json(result, fallback={"task_dag": fallback})
+        return self._sanitize_task_dag(parsed.get("task_dag"), fallback, blueprint)
 
     def product_manager_build_review(self, generation_request: SkillGenerationRequest) -> dict[str, object]:
         payload = {
@@ -522,7 +710,7 @@ class CodexService:
             "pending_user_prompt": generation_request.plan_json.get("pending_user_prompt"),
         }
         fallback = {
-            "decision": "build_next_milestone",
+            "decision": "proceed_to_blueprint",
             "summary": "The request is reusable, bounded, and ready for blueprinting.",
             "reason": "The request appears plausible for a local application skill.",
             "user_prompt": None,
@@ -615,6 +803,7 @@ class CodexService:
         if proposed_dir.exists():
             shutil.rmtree(proposed_dir)
         proposed_dir.mkdir(parents=True)
+        self._write_manifest_skeleton(proposed_dir, plan, milestone_context)
 
         generation_request.status = "generating"
         self.db.commit()
@@ -629,6 +818,7 @@ class CodexService:
             generation_request.error_message = result.stderr or "Codex generation failed"
             self.db.commit()
             raise CodexGenerationError(generation_request.error_message)
+        self.finalize_manifest(proposed_dir, plan, milestone_context)
 
         skill = self.create_or_update_skill_record(plan, proposed_dir, status=initial_skill_status)
         validation = self.proposed_service.validate_proposed_skill(skill)
@@ -662,6 +852,7 @@ class CodexService:
         result = self.adapter.generate(prompt, skill_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex milestone build failed")
+        self.finalize_manifest(skill_dir, generation_request.plan_json, milestone_context)
         validation = self.proposed_service.validate_proposed_skill(skill)
         if validation.manifest_valid:
             self.update_skill_record_from_manifest(skill, skill_dir)
@@ -728,7 +919,14 @@ class CodexService:
             **self.plan_from_skill(skill, tester_context),
             "codex_task": "tester_write_tests",
             "blueprint_json": tester_context.get("blueprint_json", {}),
+            "permission_plan": tester_context.get("permission_plan", {}),
             "milestone": tester_context.get("milestone", {}),
+            "task_node": tester_context.get("task_node", {}),
+            "task_id": tester_context.get("task_id"),
+            "test_file": tester_context.get("test_file"),
+            "final_e2e_expectations": tester_context.get("final_e2e_expectations", []),
+            "task_summaries": tester_context.get("task_summaries", []),
+            "interface_artifacts": tester_context.get("interface_artifacts", []),
             "code_files": tester_context.get("code_files", {}),
             "input_schema": skill.input_schema_json,
             "output_schema": skill.output_schema_json,
@@ -756,7 +954,14 @@ class CodexService:
             "mode": "update",
             "version_id": version.id,
             "blueprint_json": tester_context.get("blueprint_json", {}),
+            "permission_plan": tester_context.get("permission_plan", {}),
             "milestone": tester_context.get("milestone", {}),
+            "task_node": tester_context.get("task_node", {}),
+            "task_id": tester_context.get("task_id"),
+            "test_file": tester_context.get("test_file"),
+            "final_e2e_expectations": tester_context.get("final_e2e_expectations", []),
+            "task_summaries": tester_context.get("task_summaries", []),
+            "interface_artifacts": tester_context.get("interface_artifacts", []),
             "code_files": tester_context.get("code_files", {}),
             "input_schema": skill.input_schema_json,
             "output_schema": skill.output_schema_json,
@@ -802,7 +1007,11 @@ class CodexService:
 
     def _read_files_from_dir(self, root: Path) -> dict[str, str]:
         files: dict[str, str] = {}
-        for relative_path in ("manifest.json", "README.md", "SKILL.md", "skill.py", "tests/test_skill.py"):
+        readable_paths = ["manifest.json", "README.md", "SKILL.md", "skill.py"]
+        tests_dir = root / "tests"
+        if tests_dir.is_dir():
+            readable_paths.extend(path.relative_to(root).as_posix() for path in sorted(tests_dir.rglob("test_*.py")))
+        for relative_path in readable_paths:
             path = root / relative_path
             if path.is_file():
                 files[relative_path] = path.read_text(encoding="utf-8")[:12000]
@@ -848,6 +1057,130 @@ class CodexService:
         self.db.refresh(skill)
         return skill
 
+    def _write_manifest_skeleton(
+        self,
+        proposed_dir: Path,
+        plan: dict,
+        milestone_context: dict[str, object] | None,
+    ) -> None:
+        manifest_path = proposed_dir / "manifest.json"
+        if manifest_path.exists():
+            return
+        manifest_path.write_text(
+            json.dumps(self._manifest_skeleton(plan, milestone_context), indent=2),
+            encoding="utf-8",
+        )
+
+    def finalize_manifest(
+        self,
+        skill_dir: Path,
+        plan: dict,
+        milestone_context: dict[str, object] | None = None,
+    ) -> None:
+        manifest_path = skill_dir / "manifest.json"
+        skeleton = self._manifest_skeleton(plan, milestone_context)
+        if not manifest_path.exists():
+            manifest = skeleton
+        else:
+            try:
+                raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                return
+            if not isinstance(raw, dict):
+                return
+            manifest = dict(raw)
+            for key, value in skeleton.items():
+                if key not in manifest:
+                    manifest[key] = value
+            permissions = manifest.get("permissions")
+            if not isinstance(permissions, dict):
+                manifest["permissions"] = skeleton["permissions"]
+            else:
+                for key, value in skeleton["permissions"].items():
+                    permissions.setdefault(key, value)
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    def _manifest_skeleton(
+        self,
+        plan: dict,
+        milestone_context: dict[str, object] | None,
+    ) -> dict[str, object]:
+        blueprint = self._context_blueprint(plan, milestone_context)
+        permission_plan = self._context_permission_plan(plan, milestone_context)
+        runtime = permission_plan.get("runtime") if isinstance(permission_plan.get("runtime"), dict) else {}
+        permissions = runtime.get("permissions") if isinstance(runtime.get("permissions"), dict) else {}
+        sanitized_permission_plan = self._sanitize_permission_plan(
+            {"runtime": {"permissions": permissions, "dependencies": runtime.get("dependencies", [])}},
+            plan,
+        )
+        sanitized_permissions = sanitized_permission_plan["runtime"]["permissions"]
+        skill_type = str(blueprint.get("skill_type") or plan.get("skill_type") or "automation")
+        interface_type = str(blueprint.get("interface_type") or plan.get("interface_type") or "chat")
+        dependencies = list(
+            (runtime.get("dependencies") if isinstance(runtime, dict) else None)
+            or plan.get("requested_dependencies", [])
+            or []
+        )
+        manifest = {
+            "name": str(blueprint.get("skill_name") or plan.get("skill_name")),
+            "display_name": plan.get("display_name"),
+            "description": str(blueprint.get("goal") or plan.get("goal") or plan.get("skill_name")),
+            "skill_type": skill_type,
+            "interface_type": interface_type,
+            "entrypoint": "skill.py" if skill_type in {"automation", "hybrid"} else None,
+            "instructions_path": "SKILL.md" if skill_type in {"instruction", "hybrid"} else None,
+            "input_schema": plan.get("input_schema"),
+            "output_schema": plan.get("output_schema"),
+            "tool_ui_schema": plan.get("tool_ui_schema"),
+            "dependencies": dependencies,
+            "risk_level": str(plan.get("risk_level") or self._risk_level_for_permissions(sanitized_permissions)),
+            "permissions": sanitized_permissions,
+            "schedule": None,
+            "created_by": "codex",
+            "enabled": False,
+        }
+        if manifest["display_name"] is None:
+            manifest.pop("display_name")
+        return manifest
+
+    def _risk_level_for_permissions(self, permissions: dict[str, object]) -> str:
+        if permissions.get("shell") or permissions.get("secrets"):
+            return "high"
+        read_paths = {
+            str(path).replace("\\", "/").removeprefix("./").rstrip("/")
+            for path in permissions.get("filesystem_read", []) or []
+        }
+        write_paths = {
+            str(path).replace("\\", "/").removeprefix("./").rstrip("/")
+            for path in permissions.get("filesystem_write", []) or []
+        }
+        if read_paths - {"cache"} or write_paths - {"cache"}:
+            return "medium"
+        return "low"
+
+    def _context_blueprint(
+        self,
+        plan: dict,
+        milestone_context: dict[str, object] | None,
+    ) -> dict[str, object]:
+        if milestone_context and isinstance(milestone_context.get("blueprint_json"), dict):
+            return dict(milestone_context["blueprint_json"])  # type: ignore[arg-type]
+        return {
+            "goal": plan.get("goal"),
+            "skill_name": plan.get("skill_name"),
+            "skill_type": plan.get("skill_type"),
+            "interface_type": plan.get("interface_type", "chat"),
+        }
+
+    def _context_permission_plan(
+        self,
+        plan: dict,
+        milestone_context: dict[str, object] | None,
+    ) -> dict[str, object]:
+        if milestone_context and isinstance(milestone_context.get("permission_plan"), dict):
+            return dict(milestone_context["permission_plan"])  # type: ignore[arg-type]
+        return self._sanitize_permission_plan(None, plan)
+
     def build_prompt(self, plan: dict, output_dir: Path, *, builder_writes_tests: bool = True) -> str:
         instruction = self._instruction("builder_instruction_build.md")
         test_requirement = (
@@ -877,14 +1210,18 @@ Generation plan:
 {json.dumps(plan, indent=2)}
 
 Product structure:
-- Follow the ProductManager blueprint, expected_files, and current milestone.
-- Do not write blueprint.json, permissions.json, milestone JSON files, or runtime/agent_runs artifacts; those are platform workflow artifacts.
+- Follow the ProductManager blueprint, permissions, task_dag.json, and current task node.
+- Build only the current task node and respect its file_write_claims.
+- Do not write blueprint.json, permissions.json, task_dag.json, task JSON files, or other runtime/agent_runs artifacts; those are platform workflow artifacts.
+- The backend may seed manifest.json from the approved blueprint and permissions before Builder runs. Preserve that schema shape and complete only fields owned by the current task node.
 - Platform validation still requires manifest.json and README.md in every skill package.
 - Instruction and hybrid skills need the manifest instructions_path to point to an instructions file such as SKILL.md.
 - Automation and hybrid skills need the manifest entrypoint to point to executable Python code such as skill.py.
 - TesterAgent owns test files in this workflow unless builder_writes_tests is explicitly true.
 
 Manifest requirements:
+- manifest.json must include these top-level fields: name, description, skill_type, interface_type, risk_level, permissions, dependencies, schedule, created_by, and enabled.
+- Automation and hybrid manifests must include entrypoint pointing to a Python file. Instruction and hybrid manifests must include instructions_path pointing to an instructions file.
 - Use the plan skill_name, skill_type, risk_level, and requested_permissions exactly.
 - Use the plan interface_type exactly.
 - Include dependencies from requested_dependencies exactly. Use [] when no packages are needed.
@@ -925,7 +1262,7 @@ Controlled skill folder:
 Failure context:
 {json.dumps(failure_context, indent=2)}
 
-Repair the current milestone using the provided Tester failure context so validation can be rerun.
+Repair the current task node or final end-to-end failure using the provided Tester failure context so validation can be rerun.
 """.strip()
 
     def build_tester_prompt(self, skill: Skill, output_dir: Path, tester_context: dict) -> str:
@@ -981,6 +1318,10 @@ Current draft files:
         instruction_by_task = {
             "build_blueprint": "product_manager_build.md",
             "build_review": "product_manager_plausibility_review.md",
+            "refine_intent": "product_manager_plausibility_review.md",
+            "write_blueprint": "product_manager_build.md",
+            "write_permissions": "product_manager_build.md",
+            "write_task_dag": "product_manager_build.md",
             "repair_blueprint": "product_manager_repair.md",
             "update_review": "product_manager_update.md",
             "summary": "product_manager_summary.md",
@@ -1022,10 +1363,11 @@ Payload:
             if not blueprint.get(key):
                 blueprint[key] = fallback.get(key)
         blueprint["interface_type"] = blueprint.get("interface_type") or fallback.get("interface_type", "chat")
+        blueprint["expected_files"] = self._skill_package_files(
+            blueprint.get("expected_files") or fallback.get("expected_files") or []
+        )
         milestones = blueprint.get("milestones")
-        if not isinstance(milestones, list) or not milestones:
-            blueprint["milestones"] = fallback.get("milestones", [])
-        else:
+        if isinstance(milestones, list) and milestones:
             sanitized_milestones = []
             for milestone in milestones:
                 if not isinstance(milestone, dict):
@@ -1039,9 +1381,16 @@ Payload:
                     }
                 )
             blueprint["milestones"] = sanitized_milestones or fallback.get("milestones", [])
+        elif isinstance(fallback.get("milestones"), list) and fallback.get("milestones"):
+            blueprint["milestones"] = fallback.get("milestones", [])
+        else:
+            blueprint.pop("milestones", None)
+        criteria = blueprint.get("acceptance_criteria")
+        if not isinstance(criteria, list):
+            blueprint["acceptance_criteria"] = list(fallback.get("acceptance_criteria", []) or [])
         if blueprint.get("interface_type") == "tool":
-            criteria = blueprint["milestones"][0].setdefault("acceptance_criteria", [])
-            if "tool_ui_schema is present so the Tools page can render a user-friendly UI" not in criteria:
+            criteria = blueprint.setdefault("acceptance_criteria", [])
+            if isinstance(criteria, list) and "tool_ui_schema is present so the Tools page can render a user-friendly UI" not in criteria:
                 criteria.append("tool_ui_schema is present so the Tools page can render a user-friendly UI")
         permission_source: object = blueprint.get("permission_plan")
         if not isinstance(permission_source, dict) and any(
@@ -1152,10 +1501,14 @@ Payload:
         parsed: dict[str, object],
         fallback: dict[str, object],
     ) -> dict[str, object]:
-        allowed = {"build_next_milestone", "ask_user_for_input", "stop_unsupported"}
+        allowed = {"proceed_to_blueprint", "ask_user_for_input", "stop_inplausible", "stop_unsupported", "build_next_milestone"}
         decision = parsed.get("decision")
         if decision not in allowed:
             decision = fallback["decision"]
+        if decision == "build_next_milestone":
+            decision = "proceed_to_blueprint"
+        if decision == "stop_unsupported":
+            decision = "stop_inplausible"
         summary = parsed.get("summary")
         if not isinstance(summary, str) or not summary.strip():
             summary = fallback["summary"]
@@ -1175,6 +1528,78 @@ Payload:
             "reason": reason.strip(),
             "user_prompt": user_prompt.strip() if user_prompt else None,
             "optional_projects": optional_projects,
+        }
+
+    def _sanitize_task_dag(self, value: object, fallback: dict[str, object], blueprint: dict[str, object]) -> dict[str, object]:
+        if not isinstance(value, dict):
+            value = fallback
+        dag = dict(value)
+        nodes = dag.get("nodes")
+        if not isinstance(nodes, list) or not nodes:
+            return fallback
+        sanitized_nodes = []
+        for raw in nodes:
+            if not isinstance(raw, dict):
+                continue
+            node_id = str(raw.get("id") or "").strip()
+            if not node_id:
+                continue
+            expected_paths = raw.get("expected_output_paths")
+            claims = raw.get("file_write_claims")
+            criteria = raw.get("acceptance_criteria")
+            sanitized_expected_paths = self._skill_package_files(expected_paths if isinstance(expected_paths, list) else [])
+            sanitized_claims = self._skill_package_files(claims if isinstance(claims, list) else [])
+            if not sanitized_claims:
+                sanitized_claims = list(sanitized_expected_paths)
+            sanitized_nodes.append(
+                {
+                    "id": node_id,
+                    "title": str(raw.get("title") or node_id.replace("_", " ").title()),
+                    "summary": str(raw.get("summary") or "Build this task node."),
+                    "depends_on": [str(item) for item in raw.get("depends_on", []) if str(item).strip()]
+                    if isinstance(raw.get("depends_on"), list)
+                    else [],
+                    "difficulty": str(raw.get("difficulty") or "medium"),
+                    "requires_tests": bool(raw.get("requires_tests", False)),
+                    "parallel_safe": bool(raw.get("parallel_safe", True)),
+                    "expected_inputs": [str(item) for item in raw.get("expected_inputs", [])]
+                    if isinstance(raw.get("expected_inputs"), list)
+                    else [],
+                    "parent_interface_artifacts": [str(item) for item in raw.get("parent_interface_artifacts", [])]
+                    if isinstance(raw.get("parent_interface_artifacts"), list)
+                    else [],
+                    "expected_output_paths": sanitized_expected_paths,
+                    "file_write_claims": sanitized_claims,
+                    "acceptance_criteria": [str(item) for item in criteria]
+                    if isinstance(criteria, list)
+                    else [],
+                    "test_expectations": [str(item) for item in raw.get("test_expectations", [])]
+                    if isinstance(raw.get("test_expectations"), list)
+                    else [],
+                    "interface_artifact_expectations": [
+                        str(item) for item in raw.get("interface_artifact_expectations", [])
+                    ]
+                    if isinstance(raw.get("interface_artifact_expectations"), list)
+                    else [],
+                }
+            )
+        if not sanitized_nodes:
+            return fallback
+        root_task_ids = dag.get("root_task_ids")
+        return {
+            "schema_version": 1,
+            "graph_id": str(dag.get("graph_id") or f"{blueprint.get('skill_name', 'skill')}_build"),
+            "root_task_ids": [str(item) for item in root_task_ids] if isinstance(root_task_ids, list) else [],
+            "nodes": sanitized_nodes,
+            "edges": [edge for edge in dag.get("edges", []) if isinstance(edge, dict)]
+            if isinstance(dag.get("edges"), list)
+            else [],
+            "final_e2e_expectations": [str(item) for item in dag.get("final_e2e_expectations", [])]
+            if isinstance(dag.get("final_e2e_expectations"), list)
+            else [
+                "the generated package satisfies the blueprint end to end",
+                "runtime manifest permissions match or narrow the approved plan",
+            ],
         }
 
     def _product_manager_workspace(self) -> Path:
@@ -1214,17 +1639,78 @@ Payload:
             "skill_name": plan.get("skill_name"),
             "skill_type": plan.get("skill_type"),
             "interface_type": plan.get("interface_type", "chat"),
-            "expected_files": plan.get("files_to_generate", []),
+            "expected_files": self._skill_package_files(plan.get("files_to_generate", [])),
             "expected_behavior": plan.get("expected_output", {}),
             "permission_plan": permission_plan,
-            "milestones": [
-                {
-                    "name": "core_skill",
-                    "summary": "Create the core proposed skill package.",
-                    "acceptance_criteria": acceptance_criteria,
-                }
+            "acceptance_criteria": acceptance_criteria,
+        }
+
+    def _fallback_task_dag(
+        self,
+        generation_request: SkillGenerationRequest,
+        blueprint: dict[str, object],
+    ) -> dict[str, object]:
+        plan = generation_request.plan_json
+        skill_type = blueprint.get("skill_type") or plan.get("skill_type")
+        expected_files = self._skill_package_files(
+            blueprint.get("expected_files") or plan.get("files_to_generate") or ["manifest.json", "README.md"]
+        )
+        if "manifest.json" not in expected_files:
+            expected_files.insert(0, "manifest.json")
+        if "README.md" not in expected_files:
+            expected_files.insert(1, "README.md")
+        requires_tests = skill_type in {"automation", "hybrid"}
+        node = {
+            "id": "core_skill",
+            "title": "Core skill package",
+            "summary": "Create the core proposed skill package.",
+            "depends_on": [],
+            "difficulty": "easy",
+            "requires_tests": requires_tests,
+            "parallel_safe": True,
+            "expected_inputs": ["blueprint.json", "permissions.json"],
+            "parent_interface_artifacts": [],
+            "expected_output_paths": expected_files,
+            "file_write_claims": expected_files,
+            "acceptance_criteria": list(
+                blueprint.get("acceptance_criteria")
+                or [
+                    "manifest.json is valid",
+                    "required skill files exist",
+                    "automation or hybrid tests pass",
+                    "executable skills use JSON stdin/stdout",
+                ]
+            ),
+            "test_expectations": ["validate manifest and generated skill behavior"] if requires_tests else [],
+            "interface_artifact_expectations": ["declare generated files and exposed entrypoints"],
+        }
+        return {
+            "schema_version": 1,
+            "graph_id": f"{blueprint.get('skill_name') or plan.get('skill_name') or 'skill'}_build",
+            "root_task_ids": [node["id"]],
+            "nodes": [node],
+            "edges": [],
+            "final_e2e_expectations": [
+                "the generated package satisfies the blueprint end to end",
+                "runtime manifest permissions match or narrow the approved plan",
             ],
         }
+
+    def _skill_package_files(self, value: object) -> list[str]:
+        raw_files = value if isinstance(value, list) else []
+        blocked_names = {"intent_prompt.json", "decision.json", "blueprint.json", "permissions.json", "task_dag.json"}
+        files: list[str] = []
+        for item in raw_files:
+            path = str(item).replace("\\", "/").strip()
+            if not path:
+                continue
+            if path in blocked_names or path.startswith("tasks/") or path.startswith("milestones/"):
+                continue
+            if path.startswith("tests/") or "/test_" in path or path.endswith("_test.py"):
+                continue
+            if path not in files:
+                files.append(path)
+        return files
 
     def _fallback_repair_blueprint(self, skill: Skill, user_request: str | None) -> dict[str, object]:
         return {

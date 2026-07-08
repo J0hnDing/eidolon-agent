@@ -14,6 +14,7 @@ ProductManagerAgent owns project judgment, intent refinement, blueprinting, perm
 - Draft build-time and expected runtime permission intent in a separate permission file.
 - Define a task DAG for new skill builds after build-time approval.
 - For each task node, define dependencies, difficulty, whether tests are required, expected inputs/outputs, file write claims, interface artifact expectations, and acceptance criteria.
+- Keep tightly coupled implementation work together when separate nodes would repeatedly edit the same code file without a meaningful interface boundary.
 - Summarize approval checkpoints.
 - Write stuck summaries when a node or final end-to-end loop exceeds failure limits.
 - Stop workflows that are unsafe, unsupported, unclear, or repeatedly failing.
@@ -45,6 +46,7 @@ Backend state enforces this split:
 - After `proceed_to_blueprint`, ProductManager writes `blueprint.json` and `permissions.json`.
 - Backend performs deterministic build-time permission review and waits for user approval.
 - Only after approval does ProductManager write `task_dag.json`.
+- Backend derives the initial package `manifest.json` from `blueprint.json` and `permissions.json`; ProductManager does not write generated skill files directly.
 
 Task node files describe product work only. They should not contain backend bookkeeping paths such as `blueprint_path`, `permission_path`, or artifact directory paths.
 

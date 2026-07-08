@@ -141,6 +141,7 @@ export interface AgentRunStep {
   id: number;
   agent_run_id: number;
   step_name: string;
+  task_node_id: string | null;
   milestone_name: string | null;
   status: AgentRunStepStatus;
   input_json: Record<string, unknown> | null;
@@ -159,6 +160,7 @@ export interface AgentRun {
   generation_request_id: number | null;
   user_request: string;
   summary: string | null;
+  current_task_id: string | null;
   current_milestone: string | null;
   current_step: string | null;
   failure_count_json: Record<string, number>;
@@ -374,6 +376,10 @@ export const api = {
         conversation_id: conversationId,
       }),
     }),
+  deleteChatConversation: (conversationId: string) =>
+    request<void>(`/chat/conversations/${encodeURIComponent(conversationId)}`, {
+      method: "DELETE",
+    }),
   approveSkillGeneration: (id: number) =>
     request<SkillGenerationApprovalResponse>(`/skill-generation-requests/${id}/approve-generation`, {
       method: "POST",
@@ -438,6 +444,10 @@ export const api = {
     }),
   retryCurrentMilestone: (id: number) =>
     request<AgentRun>(`/agent-runs/${id}/retry-current-milestone`, {
+      method: "POST",
+    }),
+  retryCurrentTask: (id: number) =>
+    request<AgentRun>(`/agent-runs/${id}/retry-current-task`, {
       method: "POST",
     }),
   retryAgentRunStep: (agentRunId: number, stepId: number) =>

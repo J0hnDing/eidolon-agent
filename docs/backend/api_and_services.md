@@ -4,7 +4,7 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 
 ## Main Routers
 
-- `/chat`: normal chat and project-mode entry point.
+- `/chat`: normal chat and project-mode entry point, plus conversation history cleanup by frontend conversation id.
 - `/memory-facts`: explicit user memory CRUD.
 - `/skills`: skill CRUD, proposed skill workflow, runs, validation, install/reject, files, versions, schedules, repair, runtime permissions.
 - `/tools`: installed enabled tool skills and tool runs.

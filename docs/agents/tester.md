@@ -8,6 +8,7 @@ TesterAgent validates whether generated or updated skill code satisfies the blue
 - Read the current build task node for DAG build workflows.
 - Read parent interface artifacts when validating a task node.
 - Inspect Builder-created files.
+- Avoid backend-only bookkeeping context such as task artifact paths, full task DAGs for node tests, task indexes, and task status.
 - Write rich but not overly complicated pytest tests for task nodes that require tests.
 - Write one final end-to-end pytest file after all task nodes are done.
 - Validate manifest schema.

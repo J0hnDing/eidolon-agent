@@ -54,7 +54,7 @@ class ChatOrchestrator:
                     "generation_request": generation_request,
                     "agent_run": agent_run,
                 }
-            if decision == "stop_unsupported":
+            if decision in {"stop_inplausible", "stop_unsupported"}:
                 return {
                     "type": "project_not_plausible",
                     "message": "I would not turn that into a skill yet.",

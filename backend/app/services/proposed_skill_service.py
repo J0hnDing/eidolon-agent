@@ -178,7 +178,7 @@ class ProposedSkillService:
         skill_dir = self.skill_dir_for_record(skill)
         try:
             manifest = validate_manifest_file(skill_dir / "manifest.json")
-            self._validate_declared_files(skill_dir, manifest.skill_type, manifest.instructions_path)
+            self._validate_declared_files(skill_dir, manifest)
         except (ManifestValidationError, ProposedSkillError, FileNotFoundError) as exc:
             return ProposedSkillValidationRead(
                 ok=False,
@@ -518,13 +518,19 @@ class ProposedSkillService:
     def _validate_declared_files(
         self,
         skill_dir: Path,
-        skill_type: SkillType,
-        instructions_path: str | None,
+        manifest: object,
     ) -> None:
+        skill_type = getattr(manifest, "skill_type")
+        instructions_path = getattr(manifest, "instructions_path")
         if skill_type in {"instruction", "hybrid"}:
             if instructions_path is None:
                 raise ProposedSkillError(f"{skill_type} skills require instructions_path")
             self._resolve_declared_file(skill_dir, instructions_path)
+        if skill_type in {"automation", "hybrid"}:
+            entrypoint = getattr(manifest, "entrypoint")
+            if entrypoint is None:
+                raise ProposedSkillError(f"{skill_type} skills require entrypoint")
+            self._resolve_declared_file(skill_dir, entrypoint)
 
     def _resolve_declared_file(self, skill_dir: Path, relative_path: str) -> Path:
         path = (skill_dir / relative_path).resolve()

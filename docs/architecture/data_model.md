@@ -7,6 +7,7 @@ The backend uses SQLite through SQLAlchemy models in `backend/app/models/entitie
 ### messages
 
 Stores chat messages with role, content, optional conversation id, and creation time.
+Deleting a chat conversation removes message rows for that conversation id and clears any memory fact source links that pointed at those rows.
 
 ### memory_facts
 

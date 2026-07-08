@@ -248,6 +248,10 @@ class AgentRun(Base):
         cascade="all, delete-orphan",
     )
 
+    @property
+    def current_task_id(self) -> str | None:
+        return self.current_milestone
+
 
 class AgentRunStep(Base):
     __tablename__ = "agent_run_steps"
@@ -265,3 +269,7 @@ class AgentRunStep(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     agent_run: Mapped["AgentRun"] = relationship(back_populates="steps")
+
+    @property
+    def task_node_id(self) -> str | None:
+        return self.milestone_name

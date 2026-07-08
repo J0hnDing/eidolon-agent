@@ -1,0 +1,574 @@
+You are TesterAgent validating one DAG task node or the final end-to-end behavior of an application skill.
+
+Read the ProductManager blueprint, current task node, task acceptance criteria, parent interface artifacts, and Builder-created files. Then write rich but not overly complicated pytest tests for the current task node or final E2E validation.
+
+Rules:
+- Write only the test file named in Tester context, such as tests/test_<task_id>.py or tests/test_final_e2e.py.
+- Do not edit manifest.json, README.md, SKILL.md, skill.py, cache files, app source code, project metadata, or git files.
+- Use only Python standard library and pytest.
+- Prefer 3 to 6 focused tests.
+- Test the manifest contract, representative successful input, JSON stdin/stdout behavior for executable skills, and one or two important edge cases from the blueprint.
+- Include checks that correspond to the current task node acceptance criteria or final DAG expectations.
+- If interface_type is tool, verify manifest.json has a declarative tool_ui_schema with fields.
+- Do not require network, secrets, shell commands, package installation, browser automation, email/calendar/finance actions, public posting, purchases, trading, or file deletion.
+- Use subprocess inside pytest only for executable JSON stdin/stdout checks.
+
+Return no prose. Write files only.
+
+Controlled skill folder:
+C:\Users\John\personal-agent\skills\proposed\weather_outfit_planner
+
+Skill:
+- name: weather_outfit_planner
+- skill_type: automation
+- interface_type: tool
+
+Tester context:
+{
+  "skill_id": 3,
+  "action": "tester_final_e2e",
+  "original_user_request": "Build a medium-complexity tool skill named weather_outfit_planner. It should use the Python requests package and runtime internet access to wttr.in to fetch current weather for a user-provided city, then return a concise outfit recommendation, umbrella and jacket flags, temperature, condition, and a short commute note. Render it as a Tools-page form with city text input and units select. Include tests that mock network responses so validation does not require live internet.",
+  "intent_prompt": {
+    "schema_version": 1,
+    "original_user_request": "Build a medium-complexity tool skill named weather_outfit_planner. It should use the Python requests package and runtime internet access to wttr.in to fetch current weather for a user-provided city, then return a concise outfit recommendation, umbrella and jacket flags, temperature, condition, and a short commute note. Render it as a Tools-page form with city text input and units select. Include tests that mock network responses so validation does not require live internet.",
+    "refined_prompt": "Build a medium-complexity tool skill named weather_outfit_planner. It should use the Python requests package and runtime internet access to wttr.in to fetch current weather for a user-provided city, then return a concise outfit recommendation, umbrella and jacket flags, temperature, condition, and a short commute note. Render it as a Tools-page form with city text input and units select. Include tests that mock network responses so validation does not require live internet.",
+    "selected_memory_facts": []
+  },
+  "blueprint_json": {
+    "goal": "Create a Tools-page automation skill that accepts a city and unit system, fetches current weather from wttr.in using Python requests, and returns concise commute-oriented outfit guidance.",
+    "skill_name": "weather_outfit_planner",
+    "skill_type": "automation",
+    "interface_type": "tool",
+    "expected_files": [
+      "manifest.json",
+      "README.md",
+      "skill.py"
+    ],
+    "expected_behavior": {
+      "inputs": {
+        "city": "Non-empty city name, max 120 characters.",
+        "units": "Either metric or imperial."
+      },
+      "runtime_behavior": "Call wttr.in for current weather for the provided city, parse temperature and condition, and derive practical outfit guidance.",
+      "outputs": {
+        "recommendation": "Concise outfit recommendation.",
+        "umbrella": "Boolean flag indicating whether an umbrella is recommended.",
+        "jacket": "Boolean flag indicating whether a jacket is recommended.",
+        "temperature": "Numeric current temperature in the selected unit system.",
+        "condition": "Short weather condition string.",
+        "commute_note": "Brief commute-oriented note."
+      },
+      "tool_ui_schema": {
+        "required": true,
+        "description": "Declarative Tools-page form with a city text input, units select, submit label, result primary field, and rendering hints for the returned recommendation and flags."
+      }
+    },
+    "acceptance_criteria": [
+      "Skill is an automation tool named weather_outfit_planner and is not treated as a separate skill type for tool UI purposes.",
+      "Manifest declares Python requests as a build/runtime dependency and requests runtime network access only for wttr.in.",
+      "Runtime behavior uses wttr.in for current weather and does not require secrets, shell access, browser automation, filesystem access, public posting, purchases, trading, or file deletion.",
+      "Input schema requires city and units, rejects extra properties, and supports metric and imperial units.",
+      "Output schema returns recommendation, umbrella, jacket, temperature, condition, and commute_note with stable types.",
+      "Manifest includes declarative tool_ui_schema for Tools-page rendering with city text input, units select, submit label, labels/help text, and result rendering hints.",
+      "Generated implementation keeps recommendations concise and deterministic from parsed weather conditions and temperature.",
+      "tool_ui_schema is present so the Tools page can render a user-friendly UI"
+    ],
+    "product_manager_summary": "Blueprint requests approval to generate a medium-complexity automation tool that uses requests and runtime network access limited to wttr.in.",
+    "decision": "request_permission"
+  },
+  "permission_plan": {
+    "build_time": {
+      "codex_generation": true,
+      "internet_research": false,
+      "dependencies": [
+        "requests"
+      ],
+      "reason": "BuilderAgent may generate the automation skill files, manifest dependency declaration, declarative tool_ui_schema, and mocked-network tests without live internet research."
+    },
+    "runtime": {
+      "permissions": {
+        "network": [
+          "wttr.in"
+        ],
+        "filesystem_read": [],
+        "filesystem_write": [],
+        "secrets": [],
+        "shell": false
+      },
+      "network_domains": [
+        "wttr.in"
+      ],
+      "dependencies": [
+        "requests"
+      ],
+      "reason": "The skill needs Python requests and runtime network access limited to wttr.in to fetch current weather for the user-provided city. It does not need secrets, shell access, filesystem access, browser automation, public posting, purchases, trading, or file deletion."
+    }
+  },
+  "task_dag_json": {
+    "schema_version": 1,
+    "graph_id": "weather_outfit_planner_build",
+    "root_task_ids": [
+      "weather_manifest_contract"
+    ],
+    "nodes": [
+      {
+        "id": "weather_manifest_contract",
+        "title": "Manifest Contract",
+        "summary": "Create the skill manifest for the weather_outfit_planner automation tool, declaring the tool interface, Python requests dependency, runtime network access limited to wttr.in, input schema, output schema, and no unsupported permissions.",
+        "depends_on": [],
+        "difficulty": "medium",
+        "requires_tests": true,
+        "parallel_safe": false,
+        "expected_inputs": [
+          "blueprint.json",
+          "permissions.json"
+        ],
+        "parent_interface_artifacts": [],
+        "expected_output_paths": [
+          "manifest.json"
+        ],
+        "file_write_claims": [
+          "manifest.json"
+        ],
+        "acceptance_criteria": [
+          "manifest.json names the skill weather_outfit_planner and declares skill_type automation with interface_type tool.",
+          "Manifest declares requests as the only external Python dependency required by the skill.",
+          "Manifest requests runtime network access only for wttr.in and does not request secrets, shell, filesystem read, filesystem write, browser automation, public posting, purchases, trading, or file deletion.",
+          "Input schema requires city and units, rejects additional properties, constrains city to a non-empty string up to 120 characters, and constrains units to metric or imperial.",
+          "Output schema requires recommendation, umbrella, jacket, temperature, condition, and commute_note with stable JSON types."
+        ],
+        "test_expectations": [
+          "TesterAgent should validate manifest schema correctness and confirm requested permissions match permissions.json.",
+          "TesterAgent should confirm unsupported permissions are absent from the manifest."
+        ],
+        "interface_artifact_expectations": [
+          "Manifest must expose the tool as a Tools-page form through declarative metadata, not frontend code."
+        ]
+      },
+      {
+        "id": "weather_fetch_logic",
+        "title": "Weather Fetch Logic",
+        "summary": "Implement skill.py with validated input handling, wttr.in current-weather request logic using requests, response parsing, unit handling, deterministic outfit recommendation rules, and clear error handling for failed or malformed weather responses.",
+        "depends_on": [
+          "weather_manifest_contract"
+        ],
+        "difficulty": "medium",
+        "requires_tests": true,
+        "parallel_safe": false,
+        "expected_inputs": [
+          "blueprint.json",
+          "permissions.json",
+          "manifest.json"
+        ],
+        "parent_interface_artifacts": [],
+        "expected_output_paths": [
+          "skill.py"
+        ],
+        "file_write_claims": [
+          "skill.py"
+        ],
+        "acceptance_criteria": [
+          "skill.py accepts city and units inputs matching the manifest schema and normalizes whitespace without broadening accepted values.",
+          "Runtime request targets wttr.in for the user-provided city and selects metric or imperial temperature according to the units input.",
+          "Implementation parses current temperature and condition from the mocked wttr.in-style response shape expected by tests.",
+          "Recommendation, umbrella, jacket, and commute_note are concise and deterministic from parsed temperature and condition.",
+          "Network failures, non-success responses, missing fields, and invalid response payloads produce controlled user-facing errors rather than raw tracebacks.",
+          "Implementation does not read or write files, use shell commands, access secrets, automate browsers, post publicly, purchase, trade, or delete files."
+        ],
+        "test_expectations": [
+          "TesterAgent should mock requests calls for rainy, cold, warm, and clear conditions and verify output fields and types.",
+          "TesterAgent should mock request failure and malformed wttr.in responses and verify controlled errors without live internet.",
+          "TesterAgent should verify both metric and imperial unit paths use the correct temperature field or conversion behavior documented by the implementation."
+        ],
+        "interface_artifact_expectations": []
+      },
+      {
+        "id": "weather_tool_ui_schema",
+        "title": "Tool UI Schema",
+        "summary": "Add the declarative tool_ui_schema needed for Tools-page rendering, including city text input, units select, submit label, labels, help text, defaults, and result rendering hints for the recommendation and flags.",
+        "depends_on": [
+          "weather_manifest_contract"
+        ],
+        "difficulty": "easy",
+        "requires_tests": true,
+        "parallel_safe": true,
+        "expected_inputs": [
+          "blueprint.json",
+          "permissions.json",
+          "manifest.json"
+        ],
+        "parent_interface_artifacts": [
+          "input_schema",
+          "output_schema"
+        ],
+        "expected_output_paths": [
+          "manifest.json"
+        ],
+        "file_write_claims": [
+          "manifest.json"
+        ],
+        "acceptance_criteria": [
+          "tool_ui_schema is declarative JSON inside manifest.json and does not require React, HTML, JavaScript, or frontend application code.",
+          "tool_ui_schema includes title Weather Outfit Planner, a concise description, and submit_label Plan Outfit.",
+          "tool_ui_schema defines a required city text field with label, placeholder, help text, and default value.",
+          "tool_ui_schema defines a required units select field with metric and imperial options and default metric.",
+          "tool_ui_schema provides result rendering hints with recommendation as the primary result and visible handling for umbrella, jacket, temperature, condition, and commute_note.",
+          "Tool UI schema field names align exactly with the input schema, and result hints align exactly with the output schema."
+        ],
+        "test_expectations": [
+          "TesterAgent should inspect manifest.json and verify the Tools page can derive form fields from tool_ui_schema without custom frontend files.",
+          "TesterAgent should verify all tool_ui_schema field names are present in input_schema and result fields are present in output_schema."
+        ],
+        "interface_artifact_expectations": [
+          "The tool UI artifact must be declarative only and sufficient for the existing Tools page renderer to show city input, units select, submit action, and returned recommendation details."
+        ]
+      },
+      {
+        "id": "weather_readme_usage",
+        "title": "README Usage",
+        "summary": "Write README.md documenting what the tool does, its inputs and outputs, wttr.in runtime network dependency, requests dependency, permission boundaries, and the fact that validation tests mock network responses.",
+        "depends_on": [
+          "weather_fetch_logic",
+          "weather_tool_ui_schema"
+        ],
+        "difficulty": "easy",
+        "requires_tests": false,
+        "parallel_safe": true,
+        "expected_inputs": [
+          "blueprint.json",
+          "permissions.json",
+          "manifest.json",
+          "skill.py"
+        ],
+        "parent_interface_artifacts": [
+          "tool_ui_schema"
+        ],
+        "expected_output_paths": [
+          "README.md"
+        ],
+        "file_write_claims": [
+          "README.md"
+        ],
+        "acceptance_criteria": [
+          "README.md describes the Weather Outfit Planner tool, expected city and units inputs, and all returned fields.",
+          "README.md states that runtime weather data comes from wttr.in using requests and requires approved network access to wttr.in.",
+          "README.md states that tests should mock network responses and should not require live internet.",
+          "README.md does not imply the skill is installed, enabled, automatically scheduled, or approved to run."
+        ],
+        "test_expectations": [],
+        "interface_artifact_expectations": []
+      }
+    ],
+    "edges": [
+      {
+        "from": "weather_manifest_contract",
+        "to": "weather_fetch_logic"
+      },
+      {
+        "from": "weather_manifest_contract",
+        "to": "weather_tool_ui_schema"
+      },
+      {
+        "from": "weather_fetch_logic",
+        "to": "weather_readme_usage"
+      },
+      {
+        "from": "weather_tool_ui_schema",
+        "to": "weather_readme_usage"
+      }
+    ],
+    "final_e2e_expectations": [
+      "Generated files are limited to manifest.json, skill.py, and README.md; workflow artifacts and test files are not produced by BuilderAgent.",
+      "Automation tool can be validated with mocked wttr.in responses and does not require live internet during tests.",
+      "Manifest, implementation, and README agree on inputs, outputs, requests dependency, wttr.in runtime network permission, and unsupported permission absence.",
+      "The existing Tools page can render the skill from declarative tool_ui_schema without custom frontend code.",
+      "Approval to generate remains separate from installing, enabling, running, scheduling, or approving runtime permissions."
+    ]
+  },
+  "interface_artifacts": [
+    {
+      "task_id": "weather_manifest_contract",
+      "created_paths": [
+        "manifest.json"
+      ],
+      "updated_paths": [],
+      "interfaces": {
+        "entrypoint": null,
+        "input_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "city",
+            "units"
+          ],
+          "properties": {
+            "city": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "description": "City name to check weather for."
+            },
+            "units": {
+              "type": "string",
+              "enum": [
+                "metric",
+                "imperial"
+              ],
+              "description": "Temperature unit system."
+            }
+          }
+        },
+        "output_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "recommendation",
+            "umbrella",
+            "jacket",
+            "temperature",
+            "condition",
+            "commute_note"
+          ],
+          "properties": {
+            "recommendation": {
+              "type": "string"
+            },
+            "umbrella": {
+              "type": "boolean"
+            },
+            "jacket": {
+              "type": "boolean"
+            },
+            "temperature": {
+              "type": "number"
+            },
+            "condition": {
+              "type": "string"
+            },
+            "commute_note": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "contracts_for_children": [
+        "Manifest must expose the tool as a Tools-page form through declarative metadata, not frontend code."
+      ],
+      "known_limitations": []
+    },
+    {
+      "task_id": "weather_fetch_logic",
+      "created_paths": [
+        "skill.py"
+      ],
+      "updated_paths": [],
+      "interfaces": {
+        "entrypoint": "skill.py",
+        "input_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "city",
+            "units"
+          ],
+          "properties": {
+            "city": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "description": "City name to check weather for."
+            },
+            "units": {
+              "type": "string",
+              "enum": [
+                "metric",
+                "imperial"
+              ],
+              "description": "Temperature unit system."
+            }
+          }
+        },
+        "output_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "recommendation",
+            "umbrella",
+            "jacket",
+            "temperature",
+            "condition",
+            "commute_note"
+          ],
+          "properties": {
+            "recommendation": {
+              "type": "string"
+            },
+            "umbrella": {
+              "type": "boolean"
+            },
+            "jacket": {
+              "type": "boolean"
+            },
+            "temperature": {
+              "type": "number"
+            },
+            "condition": {
+              "type": "string"
+            },
+            "commute_note": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "contracts_for_children": [],
+      "known_limitations": []
+    },
+    {
+      "task_id": "weather_tool_ui_schema",
+      "created_paths": [
+        "manifest.json"
+      ],
+      "updated_paths": [],
+      "interfaces": {
+        "entrypoint": "skill.py",
+        "input_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "city",
+            "units"
+          ],
+          "properties": {
+            "city": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "description": "City name to check weather for."
+            },
+            "units": {
+              "type": "string",
+              "enum": [
+                "metric",
+                "imperial"
+              ],
+              "description": "Temperature unit system."
+            }
+          }
+        },
+        "output_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "recommendation",
+            "umbrella",
+            "jacket",
+            "temperature",
+            "condition",
+            "commute_note"
+          ],
+          "properties": {
+            "recommendation": {
+              "type": "string"
+            },
+            "umbrella": {
+              "type": "boolean"
+            },
+            "jacket": {
+              "type": "boolean"
+            },
+            "temperature": {
+              "type": "number"
+            },
+            "condition": {
+              "type": "string"
+            },
+            "commute_note": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "contracts_for_children": [
+        "The tool UI artifact must be declarative only and sufficient for the existing Tools page renderer to show city input, units select, submit action, and returned recommendation details."
+      ],
+      "known_limitations": []
+    },
+    {
+      "task_id": "weather_readme_usage",
+      "created_paths": [
+        "README.md"
+      ],
+      "updated_paths": [],
+      "interfaces": {
+        "entrypoint": "skill.py",
+        "input_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "city",
+            "units"
+          ],
+          "properties": {
+            "city": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "description": "City name to check weather for."
+            },
+            "units": {
+              "type": "string",
+              "enum": [
+                "metric",
+                "imperial"
+              ],
+              "description": "Temperature unit system."
+            }
+          }
+        },
+        "output_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "recommendation",
+            "umbrella",
+            "jacket",
+            "temperature",
+            "condition",
+            "commute_note"
+          ],
+          "properties": {
+            "recommendation": {
+              "type": "string"
+            },
+            "umbrella": {
+              "type": "boolean"
+            },
+            "jacket": {
+              "type": "boolean"
+            },
+            "temperature": {
+              "type": "number"
+            },
+            "condition": {
+              "type": "string"
+            },
+            "commute_note": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "contracts_for_children": [],
+      "known_limitations": []
+    }
+  ],
+  "task_id": "final_e2e",
+  "test_file": "tests/test_final_e2e.py",
+  "code_files": {
+    "manifest.json": "{\n  \"name\": \"weather_outfit_planner\",\n  \"display_name\": \"Weather Outfit Planner\",\n  \"description\": \"Fetches current weather from wttr.in for a user-provided city and returns concise outfit guidance with commute flags.\",\n  \"skill_type\": \"automation\",\n  \"interface_type\": \"tool\",\n  \"entrypoint\": \"skill.py\",\n  \"instructions_path\": null,\n  \"input_schema\": {\n    \"type\": \"object\",\n    \"additionalProperties\": false,\n    \"required\": [\n      \"city\",\n      \"units\"\n    ],\n    \"properties\": {\n      \"city\": {\n        \"type\": \"string\",\n        \"minLength\": 1,\n        \"maxLength\": 120,\n        \"description\": \"City name to check weather for.\"\n      },\n      \"units\": {\n        \"type\": \"string\",\n        \"enum\": [\n          \"metric\",\n          \"imperial\"\n        ],\n        \"description\": \"Temperature unit system.\"\n      }\n    }\n  },\n  \"output_schema\": {\n    \"type\": \"object\",\n    \"additionalProperties\": false,\n    \"required\": [\n      \"recommendation\",\n      \"umbrella\",\n      \"jacket\",\n      \"temperature\",\n      \"condition\",\n      \"commute_note\"\n    ],\n    \"properties\": {\n      \"recommendation\": {\n        \"type\": \"string\"\n      },\n      \"umbrella\": {\n        \"type\": \"boolean\"\n      },\n      \"jacket\": {\n        \"type\": \"boolean\"\n      },\n      \"temperature\": {\n        \"type\": \"number\"\n      },\n      \"condition\": {\n        \"type\": \"string\"\n      },\n      \"commute_note\": {\n        \"type\": \"string\"\n      }\n    }\n  },\n  \"tool_ui_schema\": {\n    \"title\": \"Weather Outfit Planner\",\n    \"description\": \"Fetches current weather for a city and suggests what to wear for a commute.\",\n    \"submit_label\": \"Plan Outfit\",\n    \"fields\": [\n      {\n        \"name\": \"city\",\n        \"label\": \"City\",\n        \"type\": \"text\",\n        \"placeholder\": \"Toronto\",\n        \"help_text\": \"Enter a city name supported by wttr.in.\",\n        \"required\": true,\n        \"default\": \"\"\n      },\n      {\n        \"name\": \"units\",\n        \"label\": \"Units\",\n        \"type\": \"select\",\n        \"placeholder\": \"\",\n        \"help_text\": \"Choose how temperatures should be shown.\",\n        \"required\": true,\n        \"default\": \"metric\",\n        \"options\": [\n          \"metric\",\n          \"imperial\"\n        ]\n      }\n    ],\n    \"result_template\": {\n      \"primary_field\": \"recommendation\",\n      \"primary_label\": \"Outfit Recommendation\",\n      \"secondary_fields\": [\n        {\n          \"field\": \"commute_note\",\n          \"label\": \"Commute Note\"\n        },\n        {\n          \"field\": \"temperature\",\n          \"label\": \"Temperature\"\n        },\n        {\n          \"field\": \"condition\",\n          \"label\": \"Condition\"\n        },\n        {\n          \"field\": \"umbrella\",\n          \"label\": \"Umbrella\"\n        },\n        {\n          \"field\": \"jacket\",\n          \"label\": \"Jacket\"\n        }\n      ]\n    }\n  },\n  \"dependencies\": [\n    \"requests\"\n  ],\n  \"risk_level\": \"medium\",\n  \"permissions\": {\n    \"network\": [\n      \"wttr.in\"\n    ],\n    \"filesystem_read\": [],\n    \"filesystem_write\": [],\n    \"secrets\": [],\n    \"shell\": false\n  },\n  \"schedule\": null,\n  \"created_by\": \"codex\",\n  \"enabled\": false\n}\n",
+    "README.md": "# Weather Outfit Planner\n\nWeather Outfit Planner is an automation tool skill for the Tools page. It accepts a city and unit system, fetches current weather from wttr.in, and returns concise commute-oriented outfit guidance.\n\n## Inputs\n\n- `city`: Required city name supported by wttr.in. The value must be a non-empty string and no more than 120 characters.\n- `units`: Required temperature unit system. Supported values are `metric` and `imperial`.\n\n## Outputs\n\nThe tool writes a JSON object with these fields:\n\n- `recommendation`: Concise outfit recommendation for the current weather.\n- `umbrella`: Boolean flag for whether an umbrella is recommended.\n- `jacket`: Boolean flag for whether a jacket is recommended.\n- `temperature`: Current temperature in the requested unit system.\n- `condition`: Short current weather condition.\n- `commute_note`: Brief commute-oriented note for the weather.\n\n## Runtime Dependencies\n\nRuntime weather data comes from `wttr.in` using the Python `requests` package. Running the skill requires approved network access to the explicit domain `wttr.in`.\n\nThe skill does not require secrets, shell access, browser automation, filesystem access, public posting, purchases, trading, file deletion, or automatic scheduling.\n\n## Validation\n\nValidation tests should mock wttr.in responses and should not require live internet access. Tests should verify input handling, output fields, permission declarations, and deterministic recommendation behavior from mocked weather data.\n\nThis proposed skill is not installed, enabled, approved to run, or scheduled automatically by the files in this package.\n",
+    "skill.py": "import json\nimport sys\nfrom typing import Any, Dict\nfrom urllib.parse import quote\n\nimport requests\n\n\nWTTR_BASE_URL = \"https://wttr.in\"\nTIMEOUT_SECONDS = 10\n\n\nclass SkillError(Exception):\n    \"\"\"Controlled user-facing skill error.\"\"\"\n\n\ndef _error(message: str) -> Dict[str, str]:\n    return {\"error\": message}\n\n\ndef _validate_input(payload: Any) -> Dict[str, str]:\n    if not isinstance(payload, dict):\n        raise SkillError(\"Input must be a JSON object.\")\n\n    if set(payload) != {\"city\", \"units\"}:\n        raise SkillError(\"Input must contain only city and units.\")\n\n    city = payload.get(\"city\")\n    units = payload.get(\"units\")\n\n    if not isinstance(city, str):\n        raise SkillError(\"City must be a string.\")\n\n    city = city.strip()\n    if not city:\n        raise SkillError(\"City is required.\")\n    if len(city) > 120:\n        raise SkillError(\"City must be 120 characters or fewer.\")\n\n    if units not in {\"metric\", \"imperial\"}:\n        raise SkillError(\"Units must be either metric or imperial.\")\n\n    return {\"city\": city, \"units\": units}\n\n\ndef _fetch_weather(city: str) -> Dict[str, Any]:\n    url = f\"{WTTR_BASE_URL}/{quote(city)}\"\n    try:\n        response = requests.get(\n            url,\n            params={\"format\": \"j1\"},\n            timeout=TIMEOUT_SECONDS,\n            headers={\"Accept\": \"application/json\"},\n        )\n    except requests.RequestException as exc:\n        raise SkillError(\"Could not reach wttr.in for the current weather.\") from exc\n\n    if response.status_code < 200 or response.status_code >= 300:\n        raise SkillError(\"wttr.in returned an unsuccessful weather response.\")\n\n    try:\n        data = response.json()\n    except ValueError as exc:\n        raise SkillError(\"wttr.in returned invalid weather data.\") from exc\n\n    if not isinstance(data, dict):\n        raise SkillError(\"wttr.in returned malformed weather data.\")\n\n    return data\n\n\ndef _first_condition(current: Dict[str, Any]) -> str:\n    desc = current.get(\"weatherDesc\")\n    if isinstance(desc, list) and desc:\n        first = desc[0]\n        if isinstance(first, dict):\n            value = first.get(\"value\")\n            if isinstance(value, str) and value.strip():\n                return value.strip()\n\n    code = current.get(\"weatherCode\")\n    if isinstance(code, str) and code.strip():\n        return f\"Weather code {code.strip()}\"\n\n    raise SkillError(\"Weather response is missing the current condition.\")\n\n\ndef _parse_temperature(current: Dict[str, Any], units: str) -> float:\n    field_name = \"temp_C\" if units == \"metric\" else \"temp_F\"\n    value = current.get(field_name)\n\n    if value is None and units == \"imperial\":\n        metric_value = _number(current.get(\"temp_C\"))\n        return round((metric_value * 9 / 5) + 32, 1)\n\n    return _number(value)\n\n\ndef _number(value: Any) -> float:\n    try:\n        return float(value)\n    except (TypeError, ValueError) as exc:\n        raise SkillError(\"Weather response is missing a valid current temperature.\") from exc\n\n\ndef _current_weather(data: Dict[str, Any], units: str) -> Dict[str, Any]:\n    current_list = data.get(\"current_condition\")\n    if not isinstance(current_list, list) or not current_list:\n        raise SkillError(\"Weather response is missing current conditions.\")\n\n    current = current_list[0]\n    if not isinstance(current, dict):\n        raise SkillError(\"Weather response has malformed current conditions.\")\n\n    return {\n        \"temperature\": _parse_temperature(current, units),\n        \"condition\": _first_condition(current),\n    }\n\n\ndef _condition_flags(condition: str) -> Dict[str, bool]:\n    text = condition.lower()\n    umbrella_words = (\n        \"rain\",\n        \"shower\",\n        \"drizzle\",\n        \"thunder\",\n        \"sleet\",\n        \"snow\",\n        \"hail\",\n    )\n    severe_words = (\"thunder\", \"storm\", \"snow\", \"sleet\", \"ice\", \"freezing\", \"hail\")\n    return {\n        \"umbrella\": any(word in text for word in umbrella_words),\n        \"severe\": any(word in text for word in severe_words),\n    }\n\n\ndef _build_guidance(temperature: float, condition: str, units: str) -> Dict[str, Any]:\n    flags = _condition_flags(condition)\n    temp_c = temperature if units == \"metric\" else (temperature - 32) * 5 / 9\n\n    jacket = temp_c < 18 or flags[\"severe\"] or \"wind\" in condition.lower()\n\n    if temp_c < 0:\n        clothing = \"Wear a winter coat, warm layers, and weather-safe shoes.\"\n    elif temp_c < 10:\n        clothing = \"Wear a warm jacket, layers, and comfortable shoes.\"\n    elif temp_c < 18:\n        clothing = \"Wear a light jacket or sweater with comfortable shoes.\"\n    elif temp_c > 27:\n        clothing = \"Wear breathable clothing and comfortable shoes.\"\n    else:\n        clothing = \"Wear comfortable layers and everyday shoes.\"\n\n    if flags[\"umbrella\"] and \"umbrella\" not in clothing.lower():\n        recommendation = f\"{clothing} Bring an umbrella.\"\n    else:\n        recommendation = clothing\n\n    if flags[\"severe\"]:\n        commute_note = \"Allow extra commute time and watch for slippery or stormy conditions.\"\n    elif flags[\"umbrella\"]:\n        commute_note = \"Allow extra time and bring an umbrella for the commute.\"\n    elif temp_c > 27:\n        commute_note = \"Stay hydrated and choose a cooler route if possible.\"\n    elif temp_c < 0:\n        commute_note = \"Leave extra time and watch for icy spots during the commute.\"\n    else:\n        commute_note = \"Normal commute conditions; dress for the current temperature.\"\n\n    return {\n        \"recommendation\": recommendation,\n        \"umbrella\": flags[\"umbrella\"],\n        \"jacket\": jacket,\n        \"commute_note\": commute_note,\n    }\n\n\ndef run(payload: Any) -> Dict[str, Any]:\n    inputs = _validate_input(payload)\n    weather_data = _fetch_weather(inputs[\"city\"])\n    current = _current_weather(weather_data, inputs[\"units\"])\n    guidance = _build_guidance(\n        current[\"temperature\"],\n        current[\"condition\"],\n        inputs[\"units\"],\n    )\n\n    temperature = current[\"temperature\"]\n    if temperature.is_integer():\n        temperature = int(temperature)\n\n    return {\n        \"recommendation\": guidance[\"recommendation\"],\n        \"umbrella\": guidance[\"umbrella\"],\n        \"jacket\": guidance[\"jacket\"],\n        \"temperature\": temperature,\n        \"condition\": current[\"condition\"],\n        \"commute_note\": guidance[\"commute_note\"],\n    }\n\n\ndef main() -> None:\n    try:\n        raw_input = sys.stdin.read()\n        payload = json.loads(raw_input) if raw_input.strip() else {}\n        result = run(payload)\n    except json.JSONDecodeError:\n        result = _error(\"Input must be valid JSON.\")\n    except SkillError as exc:\n        result = _error(str(exc))\n    except Exception:\n        result = _error(\"Weather outfit planning failed unexpectedly.\")\n\n    print(json.dumps(result, separators=(\",\", \":\")))\n\n\nif __name__ == \"__main__\":\n    main()\n"
+  },
+  "responsibility": "Tester writes one final end-to-end test and validates the complete proposed skill."
+}

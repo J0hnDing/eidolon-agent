@@ -80,6 +80,17 @@ def retry_current_milestone(agent_run_id: int, db: Session = Depends(get_db)) ->
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
+@router.post("/{agent_run_id}/retry-current-task", response_model=AgentRunRead)
+def retry_current_task(agent_run_id: int, db: Session = Depends(get_db)) -> AgentRun:
+    agent_run = db.get(AgentRun, agent_run_id)
+    if agent_run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent run not found")
+    try:
+        return AgentWorkflowService(db).retry_current_task(agent_run)
+    except AgentWorkflowError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
 @router.post("/{agent_run_id}/retry-step/{step_id}", response_model=AgentRunRead)
 def retry_agent_run_step(agent_run_id: int, step_id: int, db: Session = Depends(get_db)) -> AgentRun:
     agent_run = db.get(AgentRun, agent_run_id)

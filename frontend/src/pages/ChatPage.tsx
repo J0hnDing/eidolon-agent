@@ -100,6 +100,28 @@ export default function ChatPage() {
     setActiveConversationId(conversationId);
   }
 
+  async function handleDeleteConversation(conversationId: string) {
+    const nextConversations = updateStoredConversations((current) => {
+      const remaining = current.filter((conversation) => conversation.id !== conversationId);
+      return remaining.length ? remaining : [createConversation()];
+    });
+    setConversations(nextConversations);
+    if (conversationId === activeConversationId || !nextConversations.some((conversation) => conversation.id === activeConversationId)) {
+      const nextActiveId = nextConversations[0].id;
+      saveActiveConversationId(nextActiveId);
+      setActiveConversationId(nextActiveId);
+      setApprovalResult(null);
+    }
+    setError(null);
+
+    try {
+      await api.deleteChatConversation(conversationId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not clean up backend chat history";
+      setError(`Deleted the local chat, but backend history cleanup failed: ${message}`);
+    }
+  }
+
   function updateDraft(value: string) {
     updateActiveConversation((conversation) => ({
       ...conversation,
@@ -379,15 +401,29 @@ export default function ChatPage() {
           </button>
           <div className="chat-thread-list">
             {conversations.map((conversation) => (
-              <button
+              <div
                 key={conversation.id}
-                type="button"
-                className={conversation.id === activeConversationId ? "active" : ""}
-                onClick={() => selectConversation(conversation.id)}
+                className={`chat-thread-row ${conversation.id === activeConversationId ? "active" : ""}`}
               >
-                <strong>{conversation.title}</strong>
-                <span>{new Date(conversation.updatedAt).toLocaleString()}</span>
-              </button>
+                <button
+                  type="button"
+                  className="chat-thread-select"
+                  onClick={() => selectConversation(conversation.id)}
+                >
+                  <strong>{conversation.title}</strong>
+                  <span>{new Date(conversation.updatedAt).toLocaleString()}</span>
+                </button>
+                <button
+                  type="button"
+                  className="chat-thread-delete"
+                  onClick={() => handleDeleteConversation(conversation.id)}
+                  disabled={isBusy}
+                  aria-label={`Delete chat ${conversation.title}`}
+                  title="Delete chat"
+                >
+                  Delete
+                </button>
+              </div>
             ))}
           </div>
         </aside>

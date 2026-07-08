@@ -55,11 +55,14 @@ AgentRunStepStatus = Literal[
 ]
 ProductManagerDecision = Literal[
     "request_permission",
+    "proceed_to_blueprint",
+    "run_ready_task_nodes",
     "build_next_milestone",
     "run_tests",
     "repair_current_milestone",
     "ask_user_for_input",
     "finish_ready_for_review",
     "stop_failed",
+    "stop_inplausible",
     "stop_unsupported",
 ]
