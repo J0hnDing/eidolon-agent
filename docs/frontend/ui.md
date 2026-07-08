@@ -56,11 +56,11 @@ Installed executable skills may be run manually only when backend checks pass.
 
 ## Tools Pages
 
-`ToolsPage` lists installed enabled automation/hybrid skills with `interface_type = "tool"`. `ToolDetailPage` renders a form from declarative `tool_ui_schema` when present, otherwise it falls back to JSON input. Tool runs use the same backend runner and permission checks as skill runs.
+`ToolsPage` lists installed enabled automation skills with `interface_type = "tool"`. `ToolDetailPage` renders a form from declarative `tool_ui_schema` when present, otherwise it falls back to JSON input. Tool runs use the same backend runner and permission checks as skill runs.
 
 ## Agent Runs Pages
 
-Agent Runs list and detail pages show run status, current task node or parallel active nodes, current step, step logs, structured inputs/outputs, DAG progress, node failures, and retry/cancel controls.
+Agent Runs list and detail pages show run status, current task node or parallel active nodes, current step, step logs, structured inputs/outputs, DAG progress, node failures, and retry/cancel controls. The detail page renders the recorded task DAG explicitly with graph id, roots, edges, task node status, dependencies, expected output paths, file write claims, and backend API ids.
 
 ## Targeted Polling
 

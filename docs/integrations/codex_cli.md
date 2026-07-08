@@ -10,6 +10,7 @@ PERSONAL_AGENT_CODEX_COMMAND=codex
 PERSONAL_AGENT_CODEX_SANDBOX=workspace-write
 PERSONAL_AGENT_CODEX_PLAUSIBILITY_SANDBOX=read-only
 PERSONAL_AGENT_CODEX_CHAT_SANDBOX=read-only
+PERSONAL_AGENT_CODEX_SKILL_SANDBOX=read-only
 PERSONAL_AGENT_CODEX_APPROVAL_POLICY=never
 PERSONAL_AGENT_CODEX_ENABLE_SEARCH=auto
 ```
@@ -35,8 +36,19 @@ $env:PERSONAL_AGENT_CODEX_TIMEOUT_SECONDS = "300"
 
 - Chat and plausibility: read-only project root.
 - Skill generation/build/update: writable controlled skill directory.
+- Backend-mediated skill Codex calls: read-only runtime workspace.
 
 Codex must not modify backend/frontend app source when generating application skills.
+
+## Skill Runtime Calls
+
+Skills must not shell out to the Codex CLI. Installed enabled executable skills may call the backend Skill Codex Call API:
+
+```text
+POST /skills/{skill_id}/codex
+```
+
+The runner sets `PERSONAL_AGENT_SKILL_ID` and `PERSONAL_AGENT_BACKEND_URL` for generated skill code. The backend validates runtime approval and manifest `permissions.codex` before invoking Codex. `codex_permissions.internet_access=true` is accepted only when runtime network domains were approved for the skill.
 
 ## Web Search
 

@@ -17,12 +17,15 @@ Builder reads:
 - blueprint artifact;
 - permission artifact;
 - current task node fields needed for the task;
+- backend API context for API ids selected by ProductManager on the current task node;
 - interface artifacts from all parent task nodes;
 - existing generated files when applicable.
 
 Builder should not be prompted with backend bookkeeping fields such as artifact paths, task indexes, task status, generation request ids, or the entire task DAG for ordinary node work.
 
 Builder implements the current task node only. It must not jump ahead to child nodes unless the current node explicitly defines shared setup as part of its acceptance criteria.
+
+When backend API context is present, Builder may use only those documented backend APIs. Generated skill code must call the backend Skill Codex Call API for Codex responses and must not invoke the Codex CLI, shell commands, or arbitrary subprocesses.
 
 For new build workflows, the backend may create a skeleton `manifest.json` before the first Builder step from the approved blueprint and permission plan. Builder should preserve that manifest shape and complete only the current node's package details.
 
@@ -57,4 +60,5 @@ Builder modifies only the copied draft version folder. It must never modify the 
 - Approve permissions.
 - Grant itself permissions without deterministic permission review.
 - Set `shell=true`.
+- Invoke Codex through shell or subprocess instead of the backend Skill Codex Call API.
 - Add secrets, broad filesystem access, unrestricted network access, browser automation, email/calendar/finance actions, purchases, public posting, trading, file deletion, or arbitrary command execution.

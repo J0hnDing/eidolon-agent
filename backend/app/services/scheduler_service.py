@@ -79,8 +79,14 @@ class SchedulerService:
         for schedule in self.db.scalars(select(SkillSchedule).where(SkillSchedule.status == "active")).all():
             self.register_job(schedule)
 
-    def create_schedule(self, skill: Skill, payload: ScheduleCreate) -> tuple[SkillSchedule, ApprovalRequest]:
-        self._validate_skill_can_be_scheduled(skill)
+    def create_schedule(
+        self,
+        skill: Skill,
+        payload: ScheduleCreate,
+        *,
+        allow_disabled: bool = False,
+    ) -> tuple[SkillSchedule, ApprovalRequest]:
+        self._validate_skill_can_be_scheduled(skill, allow_disabled=allow_disabled)
         schedule_data = self._validated_schedule(payload.schedule)
         schedule = SkillSchedule(
             skill_id=skill.id,
@@ -99,18 +105,18 @@ class SchedulerService:
         return schedule, approval
 
     def create_from_manifest_if_present(self, skill: Skill) -> tuple[SkillSchedule, ApprovalRequest] | None:
-        self._validate_skill_can_be_scheduled(skill)
         skill_dir = self.proposed_service.skill_dir_for_record(skill)
         from app.services.manifest_validator import validate_manifest_file
 
         manifest = validate_manifest_file(skill_dir / "manifest.json")
         if manifest.schedule is None:
             return None
+        self._validate_skill_can_be_scheduled(skill, allow_disabled=True)
         payload = ScheduleCreate(
             name=f"{skill.name} declared schedule",
             schedule=SchedulePayload(**manifest.schedule.model_dump()),
         )
-        return self.create_schedule(skill, payload)
+        return self.create_schedule(skill, payload, allow_disabled=True)
 
     def approve_schedule(self, schedule: SkillSchedule) -> SkillSchedule:
         approval = self._latest_schedule_approval(schedule)
@@ -283,10 +289,10 @@ class SchedulerService:
         self.db.refresh(run)
         return run
 
-    def _validate_skill_can_be_scheduled(self, skill: Skill) -> None:
+    def _validate_skill_can_be_scheduled(self, skill: Skill, *, allow_disabled: bool = False) -> None:
         if skill.status != "installed":
             raise ScheduleError("Only installed skills can be scheduled")
-        if not skill.enabled:
+        if not skill.enabled and not allow_disabled:
             raise ScheduleError("Disabled skills cannot be scheduled")
         if skill.skill_type == "instruction":
             raise ScheduleError("Instruction skills cannot be scheduled for execution")

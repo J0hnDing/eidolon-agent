@@ -77,7 +77,7 @@ def write_installed_skill(
         "description": "Scheduled test skill",
         "skill_type": skill_type,
         "entrypoint": "skill.py" if skill_type != "instruction" else None,
-        "instructions_path": "SKILL.md" if skill_type in {"instruction", "hybrid"} else None,
+        "instructions_path": "SKILL.md" if skill_type == "instruction" else None,
         "risk_level": "low",
         "permissions": permissions
         or {
@@ -96,7 +96,7 @@ def write_installed_skill(
     (skill_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     (skill_dir / "skill.py").write_text("print('{\"ok\": true}')\n", encoding="utf-8")
     (skill_dir / "tests" / "test_skill.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
-    if skill_type in {"instruction", "hybrid"}:
+    if skill_type == "instruction":
         (skill_dir / "SKILL.md").write_text("Instructions", encoding="utf-8")
     return skill_dir
 

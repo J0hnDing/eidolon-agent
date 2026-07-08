@@ -290,6 +290,16 @@ class PermissionService:
                 expansion[key] = added
         if actual_permissions.get("shell") and not planned.get("shell"):
             expansion["shell"] = True
+        actual_codex = actual_permissions.get("codex")
+        planned_codex = planned.get("codex") if isinstance(planned, dict) else None
+        actual_codex_internet = bool(actual_codex.get("internet_access")) if isinstance(actual_codex, dict) else False
+        planned_codex_internet = (
+            bool(planned_codex.get("internet_access"))
+            if isinstance(planned_codex, dict)
+            else bool(planned.get("network"))
+        )
+        if actual_codex_internet and not planned_codex_internet:
+            expansion["codex"] = {"internet_access": True}
         return expansion
 
     def detect_dependency_expansion(self, skill: Skill, actual_dependencies: list[str]) -> list[str]:
@@ -394,7 +404,35 @@ class PermissionService:
         writes = [path for path in permissions.get("filesystem_write", []) if self._normalize_path(path) != "./cache"]
         if writes:
             reasons.append("Filesystem writes outside ./cache are not supported.")
+        codex_permissions = permissions.get("codex", {"call_response": True, "internet_access": bool(permissions.get("network"))})
+        if not isinstance(codex_permissions, dict):
+            reasons.append("Codex permissions must be an object.")
+        else:
+            unsupported_codex_keys = sorted(set(codex_permissions) - {"call_response", "internet_access"})
+            if unsupported_codex_keys:
+                reasons.append("Codex permissions other than call_response and internet_access are not supported.")
+            if codex_permissions.get("call_response") is False:
+                reasons.append("Codex call/response permission is required.")
+            if codex_permissions.get("internet_access") and not permissions.get("network"):
+                reasons.append("Codex internet access requires runtime network permission.")
         return reasons
+
+    def _normalize_codex_permissions(
+        self,
+        raw_permissions: dict[str, Any],
+        network: list[str],
+    ) -> dict[str, bool]:
+        raw_codex = raw_permissions.get("codex")
+        if not isinstance(raw_codex, dict):
+            raw_codex = {}
+        normalized = {
+            "call_response": bool(raw_codex.get("call_response", True)),
+            "internet_access": bool(raw_codex.get("internet_access", bool(network))),
+        }
+        for key, value in raw_codex.items():
+            if key not in normalized:
+                normalized[str(key)] = bool(value)
+        return normalized
 
     def _latest_request(
         self,
@@ -441,6 +479,7 @@ class PermissionService:
         }
         dependencies = list(runtime.get("dependencies", plan.get("requested_dependencies", [])) or [])
         network = list(runtime.get("network_domains", plan.get("requested_network_domains", permissions["network"])) or [])
+        permissions["codex"] = self._normalize_codex_permissions(raw_permissions, network)
         return {
             "build_time": {
                 "codex_generation": bool(build_time.get("codex_generation", True)),
@@ -484,9 +523,23 @@ class PermissionService:
             blocked.append("Secrets access is blocked in this milestone.")
         if permissions.get("shell"):
             blocked.append("Shell access is blocked in this milestone.")
+        codex_permissions = permissions.get("codex", {"call_response": True, "internet_access": bool(network)})
+        if not isinstance(codex_permissions, dict):
+            blocked.append("Codex permissions must be an object.")
+            codex_permissions = {}
+        unsupported_codex_keys = sorted(set(codex_permissions) - {"call_response", "internet_access"})
+        if unsupported_codex_keys:
+            blocked.append(
+                "Codex permissions other than call_response and internet_access are blocked: "
+                + ", ".join(unsupported_codex_keys)
+            )
+        if codex_permissions.get("call_response") is False:
+            blocked.append("Codex call/response cannot be disabled for generated skills in this milestone.")
+        if codex_permissions.get("internet_access") and not network:
+            blocked.append("Codex internet access requires approved runtime network domains.")
         if blocked:
             return "blocked", blocked
-        if network or dependencies:
+        if network or dependencies or codex_permissions.get("internet_access"):
             return "medium", []
         if permissions.get("filesystem_write"):
             return "low", []

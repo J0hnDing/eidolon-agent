@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import MemoryFact, Message
 from app.schemas.skill_generation import ChatRequest, ChatResponse
+from app.services.agent_workflow_service import AgentWorkflowError
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.skill_plan_service import SkillPlanError
 
@@ -25,6 +26,8 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)):
             status_code=400,
             detail=f"Could not create a project plan from that request. {exc}",
         ) from exc
+    except AgentWorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.delete("/chat/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)

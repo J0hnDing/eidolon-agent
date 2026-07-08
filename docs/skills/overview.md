@@ -6,7 +6,7 @@ A skill is a reusable capability package managed by the local assistant.
 
 - `instruction`: reusable instructions only, no executable code.
 - `automation`: executable Python automation.
-- `hybrid`: reusable instructions plus executable Python automation.
+- Automation skills may optionally include `SKILL.md` reusable instructions.
 
 ## Interface Types
 
@@ -41,8 +41,10 @@ Every skill package needs:
 - `manifest.json`
 - `README.md`
 
-Instruction and hybrid skills need an instructions file referenced by `instructions_path`, usually `SKILL.md`.
+Instruction skills need an instructions file referenced by `instructions_path`, usually `SKILL.md`.
 
-Automation and hybrid skills need an executable Python entrypoint referenced by `entrypoint`, usually `skill.py`, and tests written/maintained by TesterAgent.
+Automation skills may also include optional reusable instructions. When they do, `instructions_path` should reference that file, usually `SKILL.md`.
+
+Automation skills need an executable Python entrypoint referenced by `entrypoint`, usually `skill.py`, and tests written/maintained by TesterAgent.
 
 ProductManager controls the product structure beyond these platform minimums. Workflow artifacts such as `intent_prompt.json`, `decision.json`, `blueprint.json`, `permissions.json`, `task_dag.json`, `tasks/*.json`, and task `interface_artifact.json` files are platform artifacts, not skill package files.

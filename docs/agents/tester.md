@@ -19,7 +19,7 @@ TesterAgent validates whether generated or updated skill code satisfies the blue
 
 ## Test Scope
 
-Automation and hybrid skills should have tests for:
+Automation skills should have tests for:
 
 - manifest contract;
 - representative successful input;

@@ -6,6 +6,29 @@ import { usePolling } from "../lib/usePolling";
 
 const LIVE_RUN_STATUSES = new Set(["pending", "running", "waiting_for_approval"]);
 
+interface TaskDagNode {
+  id: string;
+  title?: string;
+  summary?: string;
+  depends_on?: string[];
+  expected_output_paths?: string[];
+  file_write_claims?: string[];
+  backend_api_ids?: number[];
+}
+
+interface TaskDagEdge {
+  from?: string;
+  to?: string;
+  reason?: string;
+}
+
+interface TaskDag {
+  graph_id?: string;
+  root_task_ids?: string[];
+  nodes?: TaskDagNode[];
+  edges?: TaskDagEdge[];
+}
+
 export default function AgentRunDetailPage() {
   const { agentRunId } = useParams();
   const navigate = useNavigate();
@@ -123,6 +146,9 @@ export default function AgentRunDetailPage() {
     );
   }
 
+  const taskDag = extractTaskDag(run);
+  const taskStatuses = extractTaskStatuses(run);
+
   return (
     <section className="page stack">
       <header className="page-header">
@@ -211,6 +237,15 @@ export default function AgentRunDetailPage() {
         <pre>{JSON.stringify(run.failure_count_json ?? {}, null, 2)}</pre>
       </section>
 
+      <section className="detail-panel">
+        <h2>Task DAG</h2>
+        {taskDag ? (
+          <TaskDagView dag={taskDag} statuses={taskStatuses} currentTaskId={run.current_task_id ?? run.current_milestone} />
+        ) : (
+          <p className="muted">No task DAG recorded yet.</p>
+        )}
+      </section>
+
       {run.final_summary_json && (
         <section className="detail-panel">
           <h2>Final Summary</h2>
@@ -256,6 +291,104 @@ export default function AgentRunDetailPage() {
       </section>
     </section>
   );
+}
+
+function TaskDagView({
+  dag,
+  statuses,
+  currentTaskId,
+}: {
+  dag: TaskDag;
+  statuses: Record<string, string>;
+  currentTaskId: string | null;
+}) {
+  const nodes = Array.isArray(dag.nodes) ? dag.nodes : [];
+  const explicitEdges = Array.isArray(dag.edges) ? dag.edges : [];
+  const dependencyEdges = nodes.flatMap((node) =>
+    Array.isArray(node.depends_on)
+      ? node.depends_on.map((dependency) => ({ from: dependency, to: node.id, reason: "dependency" }))
+      : [],
+  );
+  const edges = explicitEdges.length > 0 ? explicitEdges : dependencyEdges;
+
+  return (
+    <div className="task-dag">
+      <div className="task-dag-meta">
+        <span>Graph: {dag.graph_id ?? "unnamed"}</span>
+        <span>Roots: {Array.isArray(dag.root_task_ids) && dag.root_task_ids.length ? dag.root_task_ids.join(", ") : "none"}</span>
+      </div>
+      {edges.length > 0 && (
+        <div className="task-dag-edges">
+          {edges.map((edge, index) => (
+            <span key={`${edge.from ?? "unknown"}-${edge.to ?? "unknown"}-${index}`}>
+              {edge.from ?? "unknown"} {"->"} {edge.to ?? "unknown"}
+              {edge.reason ? ` (${edge.reason})` : ""}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="task-dag-nodes">
+        {nodes.map((node) => {
+          const status = statuses[node.id] ?? (node.id === currentTaskId ? "active" : "pending");
+          return (
+            <article className="task-dag-node" key={node.id}>
+              <header>
+                <div>
+                  <h3>{node.title || node.id}</h3>
+                  <p className="muted">{node.id}</p>
+                </div>
+                <span className={`badge status-${status}`}>{status}</span>
+              </header>
+              {node.summary && <p>{node.summary}</p>}
+              <dl className="compact-grid detail-grid">
+                <div>
+                  <dt>Depends On</dt>
+                  <dd>{formatList(node.depends_on)}</dd>
+                </div>
+                <div>
+                  <dt>Output Paths</dt>
+                  <dd>{formatList(node.expected_output_paths)}</dd>
+                </div>
+                <div>
+                  <dt>Write Claims</dt>
+                  <dd>{formatList(node.file_write_claims)}</dd>
+                </div>
+                <div>
+                  <dt>Backend APIs</dt>
+                  <dd>{formatList((node.backend_api_ids ?? []).map(String))}</dd>
+                </div>
+              </dl>
+            </article>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function extractTaskDag(run: AgentRunDetail): TaskDag | null {
+  for (const step of run.steps) {
+    const output = step.output_json;
+    const taskDag = output?.task_dag_json;
+    if (isTaskDag(taskDag)) return taskDag;
+  }
+  return null;
+}
+
+function extractTaskStatuses(run: AgentRunDetail): Record<string, string> {
+  const taskStatuses = run.final_summary_json?.task_statuses;
+  if (!taskStatuses || typeof taskStatuses !== "object" || Array.isArray(taskStatuses)) return {};
+  return Object.fromEntries(
+    Object.entries(taskStatuses).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
+}
+
+function isTaskDag(value: unknown): value is TaskDag {
+  return Boolean(value && typeof value === "object" && Array.isArray((value as TaskDag).nodes));
+}
+
+function formatList(value: string[] | undefined): string {
+  return value && value.length ? value.join(", ") : "none";
 }
 
 function formatTimestamp(value: string | null, fallback: string): string {

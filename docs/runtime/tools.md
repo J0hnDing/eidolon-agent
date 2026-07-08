@@ -8,7 +8,7 @@ A skill appears in Tools when:
 
 - status is `installed`;
 - enabled is true;
-- `skill_type` is `automation` or `hybrid`;
+- `skill_type` is `automation`;
 - `interface_type` is `tool`.
 
 Tool is not a separate `skill_type`.

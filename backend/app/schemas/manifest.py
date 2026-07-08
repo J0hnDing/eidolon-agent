@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 RiskLevel = Literal["low", "medium", "high"]
-SkillType = Literal["instruction", "automation", "hybrid"]
+SkillType = Literal["instruction", "automation"]
 InterfaceType = Literal["chat", "tool", "hidden"]
 ScheduleType = Literal["daily", "weekly", "interval"]
 IntervalUnit = Literal["minutes", "hours", "days"]
@@ -20,6 +20,13 @@ KNOWN_TIMEZONES = {
 }
 
 
+class ManifestCodexPermissions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    call_response: bool = True
+    internet_access: bool = False
+
+
 class ManifestPermissions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -28,6 +35,7 @@ class ManifestPermissions(BaseModel):
     filesystem_write: list[str]
     secrets: list[str]
     shell: bool
+    codex: ManifestCodexPermissions = Field(default_factory=ManifestCodexPermissions)
 
     @field_validator("network")
     @classmethod
@@ -179,14 +187,6 @@ class SkillManifest(BaseModel):
             if not self.entrypoint.endswith(".py"):
                 raise ValueError("entrypoint must point to a Python file")
 
-        if self.skill_type == "hybrid":
-            if not self.instructions_path:
-                raise ValueError("hybrid skills require instructions_path")
-            if not self.entrypoint:
-                raise ValueError("hybrid skills require entrypoint")
-            if not self.entrypoint.endswith(".py"):
-                raise ValueError("entrypoint must point to a Python file")
-
         required_risk = classify_permission_risk(self.permissions)
         if risk_rank(self.risk_level) < risk_rank(required_risk):
             raise ValueError(f"risk_level must be at least {required_risk} for requested permissions")
@@ -204,6 +204,8 @@ def has_no_permissions(permissions: ManifestPermissions) -> bool:
         and permissions.filesystem_write == []
         and permissions.secrets == []
         and permissions.shell is False
+        and permissions.codex.call_response is True
+        and permissions.codex.internet_access is False
     )
 
 

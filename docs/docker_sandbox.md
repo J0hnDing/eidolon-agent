@@ -7,7 +7,7 @@ This is a short compatibility page for the Milestone 8 Docker runner notes. The 
 
 ## Current Behavior
 
-Installed automation and hybrid skills run through the selected runner mode:
+Installed automation skills run through the selected runner mode:
 
 ```powershell
 $env:PERSONAL_AGENT_RUNNER_MODE = "auto"   # auto, docker, local, or dev
@@ -39,6 +39,6 @@ Important limitation: approved domains are currently a policy record, not a Dock
 
 1. Start the backend with `PERSONAL_AGENT_RUNNER_MODE=auto` or `docker`.
 2. Confirm Docker is running.
-3. Open an installed, enabled automation or hybrid skill with approved runtime permissions.
+3. Open an installed, enabled automation skill with approved runtime permissions.
 4. Run it from Skill Detail or Tools.
 5. Inspect run history, stdout, stderr, output JSON, and sandbox/image status.

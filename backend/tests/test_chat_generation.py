@@ -13,6 +13,7 @@ from app.db import Base
 from app.models import AgentRun, MemoryFact, Message, SkillGenerationRequest
 from app.routers import chat as chat_router
 from app.schemas.skill_generation import ChatRequest, ChatResponse
+from app.services.agent_workflow_service import AgentWorkflowError
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.codex_service import CodexService, FakeCodexAdapter, RealCodexAdapter, default_codex_adapter
 from app.services.direct_chat_service import DirectChatService, RealDirectChatAdapter
@@ -25,7 +26,13 @@ from app.services.project_plausibility import (
     default_project_plausibility_adapter,
 )
 from app.services.proposed_skill_service import ProposedSkillService
-from app.services.skill_plan_service import RealSkillPlanAdapter, SkillPlanError, SkillPlanService, parse_json_object
+from app.services.skill_plan_service import (
+    FakeSkillPlanAdapter,
+    RealSkillPlanAdapter,
+    SkillPlanError,
+    SkillPlanService,
+    parse_json_object,
+)
 
 
 @pytest.fixture
@@ -52,11 +59,13 @@ class RecordingCodexAdapter:
         skill_type: str = "automation",
         network: list[str] | None = None,
         shell: bool = False,
+        include_instructions: bool = False,
     ) -> None:
         self.called = False
         self.skill_type = skill_type
         self.network = network
         self.shell = shell
+        self.include_instructions = include_instructions
 
     def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
         self.called = True
@@ -78,8 +87,8 @@ class RecordingCodexAdapter:
             "name": plan["skill_name"],
             "description": plan["goal"],
             "skill_type": skill_type,
-            "entrypoint": "skill.py" if skill_type in {"automation", "hybrid"} else None,
-            "instructions_path": "SKILL.md" if skill_type in {"instruction", "hybrid"} else None,
+            "entrypoint": "skill.py" if skill_type == "automation" else None,
+            "instructions_path": "SKILL.md" if skill_type == "instruction" or self.include_instructions else None,
             "risk_level": "high" if permissions["shell"] else "medium" if permissions["network"] else "low",
             "permissions": permissions,
             "schedule": None,
@@ -88,9 +97,9 @@ class RecordingCodexAdapter:
         }
         (output_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         (output_dir / "README.md").write_text("# Generated Skill\n", encoding="utf-8")
-        if skill_type in {"instruction", "hybrid"}:
+        if skill_type == "instruction" or self.include_instructions:
             (output_dir / "SKILL.md").write_text("# Instructions\n", encoding="utf-8")
-        if skill_type in {"automation", "hybrid"}:
+        if skill_type == "automation":
             (output_dir / "skill.py").write_text(
                 "from pathlib import Path\n"
                 "Path('task_executed.txt').write_text('executed', encoding='utf-8')\n",
@@ -174,7 +183,7 @@ def skill_plan(**overrides) -> dict:
         "validation_steps": [
             "validate manifest.json",
             "inspect generated files",
-            "run tests for automation or hybrid skills",
+            "run tests for automation skills",
         ],
         "risk_level": "low",
         "automatic_actions_blocked": [
@@ -185,6 +194,22 @@ def skill_plan(**overrides) -> dict:
     }
     plan.update(overrides)
     return plan
+
+
+def test_fake_skill_plan_names_github_trending_request_and_keeps_weekly_schedule() -> None:
+    plan = SkillPlanService(adapter=FakeSkillPlanAdapter()).build_generation_plan(
+        "Build a weekly ran automation skill that parse top 10 trending github projects and let codex analyze each of them."
+    )
+
+    assert plan["skill_name"] == "weekly_github_trending_insights"
+    assert plan["display_name"] == "Weekly GitHub Trending Insights"
+    assert plan["schedule"] == {
+        "type": "weekly",
+        "day": "monday",
+        "time": "09:00",
+        "timezone": "America/Toronto",
+        "input": {},
+    }
 
 
 def test_chat_mode_returns_direct_answer(db_session: Session) -> None:
@@ -303,6 +328,8 @@ def test_project_mode_uses_product_manager_review_before_blueprint(db_session: S
         "product_manager_write_blueprint",
         "product_manager_write_permissions",
     ]
+    assert "performing intent refinement" in prompts["product_manager_refine_intent"]
+    assert "performing Phase 1 intent and plausibility review" not in prompts["product_manager_refine_intent"]
     assert "performing Phase 1 intent and plausibility review" in prompts["product_manager_build_review"]
     assert '"blueprint"' not in prompts["product_manager_build_review"]
     assert "For `write_blueprint`, return" in prompts["product_manager_write_blueprint"]
@@ -806,23 +833,26 @@ def test_generated_skill_is_not_installed_or_run_automatically(tmp_path: Path, d
     assert not (skill_dir / "task_executed.txt").exists()
 
 
-def test_generated_hybrid_validation_runs_tests_but_not_skill_task(
+def test_generated_automation_with_optional_instructions_runs_tests_but_not_skill_task(
     tmp_path: Path,
     db_session: Session,
 ) -> None:
     generation_request = ChatOrchestrator(db_session).create_generation_request(
-        "Create a reusable instruction and automation workflow skill."
+        "Create an automation workflow skill with reusable instructions."
     )
-    generation_request.plan_json["skill_type"] = "hybrid"
+    generation_request.plan_json["files_to_generate"].append("SKILL.md")
     approve_build_time_permissions(db_session, generation_request)
 
     skill, validation = CodexService(
         db_session,
-        adapter=RecordingCodexAdapter(skill_type="hybrid"),
+        adapter=RecordingCodexAdapter(include_instructions=True),
         project_root=tmp_path,
     ).generate_from_request(generation_request)
 
     skill_dir = ProposedSkillService(db_session, project_root=tmp_path).skill_dir_for_record(skill)
+    assert skill.skill_type == "automation"
+    assert skill.instructions_path == "SKILL.md"
+    assert (skill_dir / "SKILL.md").is_file()
     assert validation.tests_run is True
     assert validation.tests_passed is True
     assert not (skill_dir / "task_executed.txt").exists()
@@ -1087,6 +1117,22 @@ def test_chat_route_returns_400_for_skill_plan_error(
     assert exc_info.value.status_code == 400
     assert "Could not create a project plan" in exc_info.value.detail
     assert "malformed JSON" in exc_info.value.detail
+
+
+def test_chat_route_returns_400_for_agent_workflow_error(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+) -> None:
+    def raise_workflow_error(self, *args, **kwargs):
+        raise AgentWorkflowError("Proposed skill already exists: generated_skill")
+
+    monkeypatch.setattr("app.services.chat_orchestrator.ChatOrchestrator.handle_message", raise_workflow_error)
+
+    with pytest.raises(HTTPException) as exc_info:
+        chat_router.chat(ChatRequest(message="Build a weekly report skill", mode="project"), db_session)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Proposed skill already exists: generated_skill"
 
 
 def test_delete_chat_conversation_removes_history_and_clears_memory_source(db_session: Session) -> None:

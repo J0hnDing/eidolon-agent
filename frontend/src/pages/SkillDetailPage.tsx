@@ -500,7 +500,7 @@ export default function SkillDetailPage() {
     );
   }
 
-  const isExecutable = skill.skill_type === "automation" || skill.skill_type === "hybrid";
+  const isExecutable = skill.skill_type === "automation";
   const isInstalledExecutable = skill.status === "installed" && isExecutable;
   const runtimeApproved = runtimePermission?.status === "approved";
   const canRun = isInstalledExecutable && skill.enabled && runtimeApproved;
@@ -869,7 +869,7 @@ export default function SkillDetailPage() {
             </div>
           </form>
         ) : (
-          <p className="muted">Only installed automation or hybrid skills can request schedules.</p>
+          <p className="muted">Only installed automation skills can request schedules.</p>
         )}
       </section>
 

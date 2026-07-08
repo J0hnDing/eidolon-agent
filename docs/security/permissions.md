@@ -40,7 +40,11 @@ Allowed:
   "filesystem_read": ["./cache"],
   "filesystem_write": ["./cache"],
   "secrets": [],
-  "shell": false
+  "shell": false,
+  "codex": {
+    "call_response": true,
+    "internet_access": false
+  }
 }
 ```
 
@@ -56,6 +60,8 @@ Blocked:
 - absolute paths or parent traversal;
 - secrets;
 - shell;
+- Codex permissions other than `call_response` and `internet_access`;
+- Codex internet access without approved runtime network domains;
 - browser automation;
 - email/calendar/finance actions;
 - purchases;
@@ -66,3 +72,5 @@ Blocked:
 ## Permission Expansion
 
 Runtime permission review compares actual manifest permissions/dependencies against the approved build-time plan. Meaningful expansion requires explicit runtime review. Empty expansion should not be displayed as a warning.
+
+Default Codex call/response is not treated as a permission expansion. New `codex.internet_access=true` is expansion unless it was already planned through runtime network access.

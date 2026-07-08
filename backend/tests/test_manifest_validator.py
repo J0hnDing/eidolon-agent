@@ -38,6 +38,8 @@ def test_valid_low_risk_manifest_passes() -> None:
     assert manifest.skill_type == "automation"
     assert manifest.interface_type == "chat"
     assert manifest.permissions.network == ["reuters.com", "apnews.com"]
+    assert manifest.permissions.codex.call_response is True
+    assert manifest.permissions.codex.internet_access is False
 
 
 def test_manifest_accepts_optional_display_name() -> None:
@@ -113,6 +115,24 @@ def test_manifest_rejects_url_network_permissions() -> None:
     data["permissions"]["network"] = ["https://example.com/feed"]
 
     with pytest.raises(ManifestValidationError, match="domains"):
+        validate_manifest(data)
+
+
+def test_manifest_accepts_codex_internet_permission() -> None:
+    data = valid_manifest()
+    data["permissions"]["codex"] = {"call_response": True, "internet_access": True}
+
+    manifest = validate_manifest(data)
+
+    assert manifest.permissions.codex.call_response is True
+    assert manifest.permissions.codex.internet_access is True
+
+
+def test_manifest_rejects_unknown_codex_permission() -> None:
+    data = valid_manifest()
+    data["permissions"]["codex"] = {"call_response": True, "filesystem_read": True}
+
+    with pytest.raises(ManifestValidationError, match="filesystem_read"):
         validate_manifest(data)
 
 
@@ -219,6 +239,16 @@ def test_automation_manifest_requires_entrypoint() -> None:
         validate_manifest(data)
 
 
+def test_automation_manifest_allows_optional_instructions_path() -> None:
+    data = valid_manifest()
+    data["instructions_path"] = "SKILL.md"
+
+    manifest = validate_manifest(data)
+
+    assert manifest.skill_type == "automation"
+    assert manifest.instructions_path == "SKILL.md"
+
+
 def test_automation_manifest_file_requires_tests_directory(tmp_path: Path) -> None:
     skill_dir = tmp_path / "automation_without_tests"
     skill_dir.mkdir()
@@ -228,34 +258,28 @@ def test_automation_manifest_file_requires_tests_directory(tmp_path: Path) -> No
         validate_manifest_file(skill_dir / "manifest.json")
 
 
-def test_hybrid_manifest_requires_instructions_path() -> None:
-    data = valid_manifest()
-    data["skill_type"] = "hybrid"
-
-    with pytest.raises(ManifestValidationError, match="hybrid skills require instructions_path"):
-        validate_manifest(data)
-
-
-def test_hybrid_manifest_requires_entrypoint() -> None:
-    data = valid_manifest()
-    data["skill_type"] = "hybrid"
-    data["entrypoint"] = None
-    data["instructions_path"] = "README.md"
-
-    with pytest.raises(ManifestValidationError, match="hybrid skills require entrypoint"):
-        validate_manifest(data)
-
-
-def test_hybrid_manifest_file_requires_tests_directory(tmp_path: Path) -> None:
-    skill_dir = tmp_path / "hybrid_without_tests"
+def test_automation_manifest_file_accepts_declared_instructions_file(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "automation_with_instructions"
     skill_dir.mkdir()
+    (skill_dir / "tests").mkdir()
+    data = valid_manifest()
+    data["instructions_path"] = "SKILL.md"
+    (skill_dir / "manifest.json").write_text(json.dumps(data), encoding="utf-8")
+    (skill_dir / "skill.py").write_text("print('{}')\n", encoding="utf-8")
+    (skill_dir / "SKILL.md").write_text("Instructions\n", encoding="utf-8")
+    (skill_dir / "tests" / "test_skill.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+    manifest = validate_manifest_file(skill_dir / "manifest.json")
+
+    assert manifest.instructions_path == "SKILL.md"
+
+
+def test_manifest_rejects_removed_hybrid_skill_type() -> None:
     data = valid_manifest()
     data["skill_type"] = "hybrid"
-    data["instructions_path"] = "README.md"
-    (skill_dir / "manifest.json").write_text(json.dumps(data), encoding="utf-8")
 
-    with pytest.raises(ManifestValidationError, match="hybrid skills require tests"):
-        validate_manifest_file(skill_dir / "manifest.json")
+    with pytest.raises(ManifestValidationError, match="skill_type"):
+        validate_manifest(data)
 
 
 def no_permissions() -> dict:

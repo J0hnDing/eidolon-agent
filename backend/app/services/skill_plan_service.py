@@ -37,6 +37,7 @@ class SkillGenerationPlan(BaseModel):
     requested_permissions: ManifestPermissions
     requested_network_domains: list[str]
     requested_dependencies: list[str]
+    schedule: dict[str, Any] | None = None
     tests_required: bool
     validation_steps: list[str]
     risk_level: RiskLevel
@@ -64,16 +65,16 @@ class SkillGenerationPlan(BaseModel):
     @model_validator(mode="after")
     def validate_plan_contract(self) -> "SkillGenerationPlan":
         required_files = {"manifest.json", "README.md"}
-        if self.skill_type in {"instruction", "hybrid"}:
+        if self.skill_type == "instruction":
             required_files.add("SKILL.md")
-        if self.skill_type in {"automation", "hybrid"}:
+        if self.skill_type == "automation":
             required_files.update({"skill.py", "tests/test_skill.py"})
         missing = required_files - set(self.files_to_generate)
         if missing:
             raise ValueError(f"files_to_generate missing required files: {sorted(missing)}")
         if self.skill_type == "instruction" and self.tests_required:
             raise ValueError("instruction skill plans must not require tests")
-        if self.skill_type in {"automation", "hybrid"} and not self.tests_required:
+        if self.skill_type == "automation" and not self.tests_required:
             raise ValueError(f"{self.skill_type} skill plans must require tests")
         if self.skill_type == "instruction":
             if not (
@@ -98,15 +99,22 @@ class SkillPlanAdapter(Protocol):
 
 class FakeSkillPlanAdapter:
     def build_plan(self, prompt: str, message: str) -> dict[str, Any]:
+        identity = _infer_skill_identity(message)
+        schedule = _infer_schedule(message)
         return {
             "goal": message,
-            "skill_name": "generated_skill",
-            "display_name": "Generated Skill",
+            "skill_name": identity["skill_name"],
+            "display_name": identity["display_name"],
             "skill_type": "automation",
             "interface_type": "chat",
             "files_to_generate": ["manifest.json", "README.md", "skill.py", "tests/test_skill.py"],
             "expected_input": {"input": "object"},
-            "expected_output": {"title": "string", "items": [], "warnings": []},
+            "expected_output": {
+                "title": "string",
+                "items": [],
+                "warnings": [],
+                "schedule": schedule,
+            },
             "input_schema": None,
             "output_schema": None,
             "tool_ui_schema": None,
@@ -123,7 +131,7 @@ class FakeSkillPlanAdapter:
             "validation_steps": [
                 "validate manifest.json",
                 "inspect generated files",
-                "run tests for automation or hybrid skills",
+                "run tests for automation skills",
             ],
             "risk_level": "low",
             "automatic_actions_blocked": [
@@ -131,6 +139,7 @@ class FakeSkillPlanAdapter:
                 "running the skill",
                 "installing packages without approval",
             ],
+            "schedule": schedule,
         }
 
 
@@ -225,12 +234,12 @@ Return only one JSON object. Do not write files. Do not install packages. Do not
 
 Definitions:
 - A skill is a reusable capability package.
-- skill_type must be exactly one of: instruction, automation, hybrid.
+- skill_type must be exactly one of: instruction, automation.
 - instruction: reusable instructions only, no executable code.
 - automation: executable Python automation.
-- hybrid: both instructions and executable Python automation.
+- Automation skills may include SKILL.md for reusable instructions or operating notes, but SKILL.md is optional for automation.
 - interface_type must be exactly one of: chat, tool, hidden.
-- interface_type=tool means an installed runnable automation/hybrid skill should appear on the Tools page as a manual form/tool. It is not a new skill_type.
+- interface_type=tool means an installed runnable automation skill should appear on the Tools page as a manual form/tool. It is not a new skill_type.
 - interface_type=chat means the skill is primarily used through chat.
 - interface_type=hidden means it should not be user-facing by default.
 - Tool UIs must be declarative JSON in tool_ui_schema. Do not generate React, HTML, JavaScript, or frontend app code.
@@ -241,7 +250,7 @@ Safety requirements:
 - shell must be false.
 - secrets must be [].
 - instruction skills must request no permissions and cannot use interface_type=tool.
-- automation and hybrid skills must include tests/test_skill.py.
+- automation skills must include tests/test_skill.py.
 - Use filesystem_write ["./cache"] only when useful; otherwise [].
 - Use explicit network domains only when the user request genuinely needs future runtime network access.
 - Do not request package dependencies unless genuinely needed.
@@ -256,13 +265,18 @@ Choose all skill properties yourself based on the request:
 - input_schema and output_schema as JSON Schema objects when useful; otherwise null.
 - tool_ui_schema for interface_type=tool; otherwise null.
 - permissions, dependencies, risk level, expected input/output, files, and validation steps.
+- If the user asks for recurring execution, include schedule as manifest intent. Otherwise set schedule to null.
+- Supported schedule shapes:
+  - {{"type": "daily", "time": "HH:MM", "timezone": "IANA timezone", "input": {{}}}}
+  - {{"type": "weekly", "day": "weekday", "time": "HH:MM", "timezone": "IANA timezone", "input": {{}}}}
+  - {{"type": "interval", "every": 1, "unit": "minutes|hours|days", "timezone": "IANA timezone", "input": {{}}}}
 
 Return JSON with exactly this shape:
 {{
   "goal": "string",
   "skill_name": "safe_name",
   "display_name": "Display Name",
-  "skill_type": "instruction | automation | hybrid",
+  "skill_type": "instruction | automation",
   "interface_type": "chat | tool | hidden",
   "files_to_generate": ["manifest.json", "README.md"],
   "expected_input": {{}},
@@ -279,6 +293,7 @@ Return JSON with exactly this shape:
   }},
   "requested_network_domains": [],
   "requested_dependencies": ["Python package names only, no URLs, no git refs, no local paths"],
+  "schedule": null,
   "tests_required": false,
   "validation_steps": ["validate manifest.json", "inspect generated files"],
   "risk_level": "low | medium | high",
@@ -333,6 +348,87 @@ def parse_json_object(stdout: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise SkillPlanError("Codex skill generation plan must be a JSON object")
     return data
+
+
+def _infer_skill_identity(message: str) -> dict[str, str]:
+    lowered = message.lower()
+    if "github" in lowered and "trending" in lowered:
+        if "weekly" in lowered:
+            return {
+                "skill_name": "weekly_github_trending_insights",
+                "display_name": "Weekly GitHub Trending Insights",
+            }
+        return {
+            "skill_name": "github_trending_insights",
+            "display_name": "GitHub Trending Insights",
+        }
+
+    words = re.findall(r"[a-z0-9]+", lowered)
+    stopwords = {
+        "a",
+        "an",
+        "and",
+        "app",
+        "automation",
+        "build",
+        "can",
+        "create",
+        "for",
+        "from",
+        "generate",
+        "i",
+        "in",
+        "into",
+        "make",
+        "my",
+        "of",
+        "on",
+        "project",
+        "run",
+        "runs",
+        "skill",
+        "that",
+        "the",
+        "to",
+        "tool",
+        "use",
+        "with",
+    }
+    chosen: list[str] = []
+    for word in words:
+        if word in stopwords or len(word) < 3:
+            continue
+        if word not in chosen:
+            chosen.append(word)
+        if len(chosen) == 4:
+            break
+    if not chosen:
+        chosen = ["generated", "skill"]
+    safe_name = "_".join(chosen)[:80].strip("_") or "generated_skill"
+    return {
+        "skill_name": safe_name,
+        "display_name": safe_name.replace("_", " ").title(),
+    }
+
+
+def _infer_schedule(message: str) -> dict[str, Any] | None:
+    lowered = message.lower()
+    if "weekly" in lowered:
+        return {
+            "type": "weekly",
+            "day": "monday",
+            "time": "09:00",
+            "timezone": "America/Toronto",
+            "input": {},
+        }
+    if "daily" in lowered:
+        return {
+            "type": "daily",
+            "time": "09:00",
+            "timezone": "America/Toronto",
+            "input": {},
+        }
+    return None
 
 
 def _env_int(name: str, default: int) -> int:

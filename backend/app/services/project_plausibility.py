@@ -143,7 +143,7 @@ Application skill definition:
 - A skill is a reusable capability package.
 - instruction skills are reusable instructions only.
 - automation skills contain executable Python automation.
-- hybrid skills contain both reusable instructions and executable Python automation.
+- automation skills may include optional SKILL.md reusable instructions.
 
 Evaluate only plausibility and fit. Do not generate files. Do not install packages. Do not run code.
 

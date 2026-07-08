@@ -6,18 +6,25 @@ Agent behavior is defined by Markdown instruction files in:
 backend/app/agent_instructions/
 ```
 
-Current files:
+Instruction files are grouped by agent role:
 
-- `product_manager_plausibility_review.md`
-- `product_manager_build.md`
-- `product_manager_repair.md`
-- `product_manager_update.md`
-- `product_manager_summary.md`
-- `builder_instruction_build.md`
-- `builder_instruction_repair.md`
-- `builder_instruction_update.md`
-- `tester_instruction_build.md`
-- `tester_instruction_update.md`
+```text
+backend/app/agent_instructions/
+  product_manager/
+    refine_intent.md
+    plausibility_review.md
+    build.md
+    repair.md
+    update.md
+    summary.md
+  builder/
+    build.md
+    repair.md
+    update.md
+  tester/
+    build.md
+    update.md
+```
 
 The DAG build refactor should either update these build instruction files or split them into action-specific files:
 
@@ -31,9 +38,11 @@ The DAG build refactor should either update these build instruction files or spl
 
 Instruction files should define role behavior and constraints. Backend code should coordinate state, validate outputs, and enforce safety.
 
-`product_manager_plausibility_review.md` is used for the build plausibility action and returns only an intent/plausibility decision. It must not receive blueprint instructions or return blueprint, permission, or task DAG artifacts.
+`product_manager/refine_intent.md` is used for `pm_refine_intent` and returns only `intent_prompt.json`. It must not make plausibility decisions, ask clarification questions, or return blueprint, permission, or task DAG artifacts.
 
-`product_manager_build.md` currently covers multiple post-review build responsibilities. In the DAG workflow, those responsibilities are logically separate: blueprint creation, permission planning, and task DAG creation. Backend steps should keep those outputs separate even if one instruction file temporarily implements more than one action during migration.
+`product_manager/plausibility_review.md` is used for the build plausibility action and returns only an intent/plausibility decision. It must not receive blueprint instructions or return blueprint, permission, or task DAG artifacts.
+
+`product_manager/build.md` currently covers multiple post-review build responsibilities. In the DAG workflow, those responsibilities are logically separate: blueprint creation, permission planning, and task DAG creation. Backend steps should keep those outputs separate even if one instruction file temporarily implements more than one action during migration.
 
 ## Editing Rule
 

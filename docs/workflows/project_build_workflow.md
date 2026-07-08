@@ -64,9 +64,10 @@ Every ProductManager action is a distinct backend-invoked step with a structured
 
 6. `pm_write_task_dag`
    - Runs only after build-time approval.
-   - Inputs: `intent_prompt.json`, `blueprint.json`, `permissions.json`, and approval result.
+   - Inputs: `intent_prompt.json`, `blueprint.json`, `permissions.json`, approval result, and a backend API index containing id, title, and description for supported backend APIs.
    - Output: `task_dag.json`.
-   - Purpose: split the project into explicit task nodes with dependencies, difficulty, test requirements, I/O expectations, file write claims, and interface artifact expectations.
+   - Purpose: split the project into explicit task nodes with dependencies, difficulty, test requirements, I/O expectations, file write claims, interface artifact expectations, and any required backend API ids.
+   - Scheduling is not a backend API id. If the user requested recurring execution, ProductManager records intended schedule metadata in the blueprint so the backend carries it into `manifest.json`.
    - Must not include separate "test-only" task nodes. Tester actions are attached to the build nodes that require tests.
 
 ## Task DAG Schema
@@ -110,7 +111,8 @@ Every ProductManager action is a distinct backend-invoked step with a structured
       "interface_artifact_expectations": [
         "declare manifest fields created",
         "declare schemas or entrypoints exposed to child tasks"
-      ]
+      ],
+      "backend_api_ids": []
     }
   ],
   "edges": [
@@ -134,7 +136,8 @@ Backend validation must reject the graph when:
 - a dependency references a missing node;
 - a node id is not a safe path segment;
 - a node omits acceptance criteria or expected output paths;
-- an executable or hybrid skill has no tested node;
+- a node references a backend API id that is not in the backend API catalog;
+- an automation skill has no tested node;
 - two simultaneously ready nodes have overlapping `file_write_claims` without an explicit dependency ordering them.
 
 The `file_write_claims` field is added so the backend can parallelize independent nodes without allowing two builders to edit the same generated file at the same time.
@@ -170,6 +173,7 @@ Inputs:
 - `permissions.json`;
 - the current task node fields needed to build the node;
 - all direct and transitive parent `interface_artifact.json` files;
+- backend API context for ids listed in the current task node's `backend_api_ids`;
 - generated skill files needed by the current node.
 
 The Builder prompt must not include backend bookkeeping fields such as `generation_request_id`, `blueprint_path`, `permission_path`, `task_dag_path`, `task_path`, task `index`, or task `status`. It should not receive the entire task DAG for a normal node build; dependency contracts come from parent interface artifacts.
@@ -182,6 +186,7 @@ Behavior:
 - treat the backend-seeded `manifest.json` as the package contract starting point instead of inventing a separate manifest shape;
 - produce or update skill package files for the node;
 - write `runtime/agent_runs/run_<id>/tasks/<task_id>/interface_artifact.json`.
+- call Codex from generated skill code only through the backend Skill Codex Call API when that API context is provided; never shell out to the Codex CLI.
 
 Interface artifact shape:
 

@@ -19,7 +19,7 @@ The central skill record. Important fields:
 
 - `name`
 - `description`
-- `skill_type`: `instruction`, `automation`, or `hybrid`
+- `skill_type`: `instruction` or `automation`
 - `interface_type`: `chat`, `tool`, or `hidden`
 - `status`: `building`, `proposed`, `installed`, `disabled`, `failed`, or `deleted`
 - `risk_level`

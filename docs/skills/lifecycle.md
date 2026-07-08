@@ -28,9 +28,9 @@ installed -> disabled
 13. Builder fixes final end-to-end failures until tests pass or failure limits block the workflow.
 14. Runtime permission review is created from actual `manifest.json`.
 15. User inspects files and approvals.
-16. User installs or rejects.
+16. User installs or rejects. If the installed manifest declares a schedule, the backend registers it as a pending schedule record during install.
 
-Generated skills are not installed or run automatically.
+Generated skills are not installed or run automatically. Manifest-declared schedules are not activated automatically; schedule approval is still separate from install approval.
 
 ## Installation
 
@@ -44,6 +44,8 @@ Installing a proposed skill requires:
 
 Installed skills use versioned folders under `skills/installed/<skill_name>/versions/vN/`.
 
+If `manifest.json` contains `schedule`, install reads the installed manifest copy and creates a pending schedule plus schedule approval request. The backend does not ask Builder to write schedules through a separate backend API.
+
 ## Rejection and Deletion
 
 Rejected proposed skills are hard-deleted in the local MVP: controlled folder removed and database record removed. Deleted skills should not remain visible in the normal Skills list.
@@ -52,7 +54,7 @@ Installed skill deletion is also a controlled hard delete and must respect opera
 
 ## Manual Runs
 
-Installed enabled automation/hybrid skills may run manually if:
+Installed enabled automation skills may run manually if:
 
 - status is `installed`;
 - `enabled` is true;

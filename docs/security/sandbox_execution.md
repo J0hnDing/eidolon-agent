@@ -1,6 +1,6 @@
 # Sandbox Execution
 
-Installed automation and hybrid skills execute through the selected skill runner.
+Installed automation skills execute through the selected skill runner.
 
 ## Runner Selection
 
@@ -24,6 +24,7 @@ The Docker runner:
 - enforces timeout, CPU, and memory limits;
 - captures stdout, stderr, exit code, start/end time;
 - requires JSON stdout for successful runs.
+- exposes `PERSONAL_AGENT_SKILL_ID` and `PERSONAL_AGENT_BACKEND_URL` so approved skill code can call backend APIs.
 
 Generated skills cannot provide Dockerfiles, image names, build contexts, or build args.
 
@@ -32,6 +33,8 @@ Generated skills cannot provide Dockerfiles, image names, build contexts, or bui
 Network domains may be approved, and Docker runtime can enable network for approved networked skills. Domain-level egress filtering is not implemented yet.
 
 Wildcard or unrestricted network remains blocked.
+
+Backend-mediated Codex calls use the same runtime permission boundary: call/response is allowed by default, while Codex internet access is allowed only when the skill has approved runtime network domains.
 
 ## Local Runner
 
@@ -43,7 +46,7 @@ Executable skill runs require:
 
 - installed status;
 - enabled skill;
-- automation or hybrid type;
+- automation type;
 - runtime permissions approved;
 - runtime permissions supported;
 - operation lock available;

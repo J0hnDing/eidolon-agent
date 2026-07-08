@@ -42,6 +42,8 @@ class ProposedSkillService:
 
     def create_sample(self, name: str, skill_type: SkillType) -> Skill:
         safe_name = self.validate_skill_name(name)
+        if skill_type not in {"instruction", "automation"}:
+            raise ProposedSkillError("Skill type must be instruction or automation")
         proposed_dir = self.proposed_dir(safe_name)
         installed_dir = self.installed_dir(safe_name)
         if installed_dir.exists():
@@ -60,7 +62,7 @@ class ProposedSkillService:
             "status": "proposed",
             "risk_level": "low",
             "manifest_path": self._relative_path(proposed_dir / "manifest.json"),
-            "instructions_path": "SKILL.md" if skill_type in {"instruction", "hybrid"} else None,
+            "instructions_path": "SKILL.md" if skill_type == "instruction" else None,
             "input_schema_json": None,
             "output_schema_json": None,
             "tool_ui_schema_json": None,
@@ -272,7 +274,7 @@ class ProposedSkillService:
             changelog="Initial installed version.",
             created_by="system",
             permission_fingerprint=self._permission_fingerprint(manifest_json),
-            test_status="passed" if manifest.skill_type in {"automation", "hybrid"} else "not_required",
+            test_status="passed" if manifest.skill_type == "automation" else "not_required",
             validation_status="passed",
         )
         self.db.add(version)
@@ -291,6 +293,7 @@ class ProposedSkillService:
         skill.enabled = manifest.skill_type == "instruction"
         self.db.commit()
         self.db.refresh(skill)
+        self._register_manifest_schedule(skill)
         return skill
 
     def reject_proposed_skill(self, skill: Skill) -> None:
@@ -367,13 +370,18 @@ class ProposedSkillService:
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
+    def _register_manifest_schedule(self, skill: Skill) -> None:
+        from app.services.scheduler_service import SchedulerService
+
+        SchedulerService(self.db, project_root=self.project_root).create_from_manifest_if_present(skill)
+
     def _write_sample_files(self, skill_dir: Path, name: str, skill_type: SkillType) -> None:
         manifest = self._sample_manifest(name, skill_type)
         (skill_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         (skill_dir / "README.md").write_text(self._sample_readme(name, skill_type), encoding="utf-8")
-        if skill_type in {"instruction", "hybrid"}:
+        if skill_type == "instruction":
             (skill_dir / "SKILL.md").write_text(self._sample_instructions(name), encoding="utf-8")
-        if skill_type in {"automation", "hybrid"}:
+        if skill_type == "automation":
             (skill_dir / "skill.py").write_text(self._sample_skill_py(), encoding="utf-8")
             tests_dir = skill_dir / "tests"
             tests_dir.mkdir()
@@ -385,8 +393,8 @@ class ProposedSkillService:
             "description": f"Sample {skill_type} skill for the proposed skill workflow.",
             "skill_type": skill_type,
             "interface_type": "chat",
-            "entrypoint": "skill.py" if skill_type in {"automation", "hybrid"} else None,
-            "instructions_path": "SKILL.md" if skill_type in {"instruction", "hybrid"} else None,
+            "entrypoint": "skill.py" if skill_type == "automation" else None,
+            "instructions_path": "SKILL.md" if skill_type == "instruction" else None,
             "input_schema": None,
             "output_schema": None,
             "tool_ui_schema": None,
@@ -394,7 +402,7 @@ class ProposedSkillService:
             "permissions": {
                 "network": [],
                 "filesystem_read": [],
-                "filesystem_write": ["./cache"] if skill_type in {"automation", "hybrid"} else [],
+                "filesystem_write": ["./cache"] if skill_type == "automation" else [],
                 "secrets": [],
                 "shell": False,
             },
@@ -408,7 +416,7 @@ class ProposedSkillService:
             f"# {name}\n\n"
             f"Sample `{skill_type}` skill created by the local proposed skill workflow.\n"
         )
-        if skill_type in {"automation", "hybrid"}:
+        if skill_type == "automation":
             readme += (
                 "\n## Input\n\n"
                 "Send a JSON object. The friendliest input is:\n\n"
@@ -522,11 +530,13 @@ class ProposedSkillService:
     ) -> None:
         skill_type = getattr(manifest, "skill_type")
         instructions_path = getattr(manifest, "instructions_path")
-        if skill_type in {"instruction", "hybrid"}:
+        if skill_type == "instruction":
             if instructions_path is None:
                 raise ProposedSkillError(f"{skill_type} skills require instructions_path")
             self._resolve_declared_file(skill_dir, instructions_path)
-        if skill_type in {"automation", "hybrid"}:
+        elif instructions_path is not None:
+            self._resolve_declared_file(skill_dir, instructions_path)
+        if skill_type == "automation":
             entrypoint = getattr(manifest, "entrypoint")
             if entrypoint is None:
                 raise ProposedSkillError(f"{skill_type} skills require entrypoint")

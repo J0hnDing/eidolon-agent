@@ -35,8 +35,8 @@ def validate_manifest_file(path: Path) -> SkillManifest:
 
 
 def validate_manifest_package(skill_dir: Path, manifest: SkillManifest) -> None:
-    if manifest.skill_type in {"automation", "hybrid"} and not (skill_dir / "tests").is_dir():
-        raise ManifestValidationError(f"{manifest.skill_type} skills require tests/")
+    if manifest.skill_type == "automation" and not (skill_dir / "tests").is_dir():
+        raise ManifestValidationError("automation skills require tests/")
 
 
 __all__ = [

@@ -31,6 +31,30 @@ Use this template for future entries:
 
 ## Current Entries
 
+## 2026-07-08 15:06 America/Toronto - Remove Hybrid Skill Type
+
+- Area: Skill schema, Project Build planning, frontend skill UI, docs.
+- Intention: Collapse executable skills into `automation` only while allowing automation packages to optionally include `SKILL.md`.
+- Changed: Removed `hybrid` from shared skill type literals, manifest validation, planner prompts, generated-agent instructions, tool filtering, frontend type choices, and docs. Automation still requires `entrypoint` and tests; `instructions_path` is optional for automation and validated when present.
+- Verification: `..\.venv\Scripts\python.exe -m pytest tests\test_manifest_validator.py tests\test_proposed_skill_service.py tests\test_chat_generation.py tests\test_scheduler_service.py tests\test_tools.py --basetemp C:\Users\John\personal-agent\runtime\pytest-no-hybrid-focused` passed from `backend`; `..\.venv\Scripts\python.exe -m pytest tests\test_agent_workflow_service.py tests\test_skill_version_service.py tests\test_skill_runner.py tests\test_docker_skill_runner.py --basetemp C:\Users\John\personal-agent\runtime\pytest-no-hybrid-workflow` passed from `backend`; `npm run build` passed from `frontend`.
+- Follow-up: Existing persisted records or generated manifests with `skill_type = "hybrid"` will now fail validation until migrated or regenerated as `automation`.
+
+## 2026-07-08 02:34 America/Toronto - Manifest Schedule Registration
+
+- Area: Project Build planning, backend API catalog, install-time scheduling.
+- Intention: Make schedule intent ProductManager-owned manifest metadata instead of a Builder backend API, and register manifest schedules when skills are installed.
+- Changed: Removed the PM-visible Scheduling API catalog entry, preserved schedule intent from plan/blueprint into `manifest.json`, registered manifest-declared schedules as pending records during install, and improved fake planning names for GitHub trending weekly skills.
+- Verification: Focused schedule/planning tests passed, then full backend suite passed with `..\.venv\Scripts\python.exe -m pytest --basetemp C:\Users\John\personal-agent\runtime\pytest-full-schedule-change` from `backend`.
+- Follow-up: Existing proposed skills generated before this change are not renamed in place.
+
+## 2026-07-08 01:52 America/Toronto - Skill Codex API And DAG API Context
+
+- Area: Runtime permissions, backend skill APIs, Project Build DAG workflow, Agent Runs UI.
+- Intention: Allow skills to ask the backend to call Codex without granting shell access, and give Builder only the backend API context selected by ProductManager task nodes.
+- Changed: Added manifest `permissions.codex`, `POST /skills/{skill_id}/codex`, backend API catalog ids for Codex and Tool UI schema, task-node `backend_api_ids`, Builder `backend_api_context`, runner backend URL env vars, and an explicit DAG view in Agent Run detail.
+- Verification: Full backend suite passed with `..\.venv\Scripts\python.exe -m pytest --basetemp C:\Users\John\personal-agent\runtime\pytest-full-final-codex-api` from `backend`; frontend build passed with `npm run build` from `frontend`; Chrome UI E2E submitted the requested Project prompt, approved generation, and verified Agent Run #11 showed the explicit task DAG with `core_skill` status `done`.
+- Follow-up: Future backend API candidates inferred but not added: runtime cache helper API, runtime permission status API, skill run metadata API, and memory lookup API.
+
 ## 2026-07-07 21:43 America/Toronto - Backend Manifest Skeletons
 
 - Area: Project-mode DAG build workflow, manifest validation, Builder/ProductManager instructions.

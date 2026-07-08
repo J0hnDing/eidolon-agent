@@ -24,13 +24,25 @@ For new Project-mode builds, the backend derives an initial skeleton `manifest.j
     "filesystem_read": [],
     "filesystem_write": ["./cache"],
     "secrets": [],
-    "shell": false
+    "shell": false,
+    "codex": {
+      "call_response": true,
+      "internet_access": false
+    }
   },
   "schedule": null,
   "created_by": "codex",
   "enabled": false
 }
 ```
+
+`schedule` is ProductManager-owned manifest intent for recurring execution. Use `null` when no recurring run was requested. Supported executable schedule forms are:
+
+- `{"type": "daily", "time": "HH:MM", "timezone": "America/Toronto", "input": {}}`;
+- `{"type": "weekly", "day": "monday", "time": "HH:MM", "timezone": "America/Toronto", "input": {}}`;
+- `{"type": "interval", "every": 1, "unit": "hours", "timezone": "America/Toronto", "input": {}}`.
+
+On install, the backend registers a manifest-declared schedule as a pending schedule record and creates a schedule approval request. It does not activate the schedule automatically.
 
 ## Skill Type Rules
 
@@ -48,12 +60,11 @@ Automation skills:
 - require tests;
 - may request supported runtime permissions.
 
-Hybrid skills:
+Automation skills may optionally include reusable instructions:
 
-- require both `instructions_path` and `entrypoint`;
-- require the declared instruction and entrypoint files to exist;
-- require tests;
-- may request supported runtime permissions.
+- set `instructions_path` only when an instructions file is present;
+- usually use `SKILL.md` for that optional instructions file;
+- still require `entrypoint`, tests, and supported runtime permissions review.
 
 ## Interface Type Rules
 
@@ -78,7 +89,14 @@ Low-risk examples:
 - no network;
 - explicit public network domains;
 - read/write to the skill's own `./cache`;
+- backend-mediated Codex call/response without Codex internet access;
 - summarize public text.
+
+Codex permissions:
+
+- `call_response` defaults to `true` for all skills. It allows a skill to ask the backend for a Codex text response through `POST /skills/{skill_id}/codex`.
+- `internet_access` may be `true` only when the skill also has approved runtime network domains. Runtime network access and Codex internet access are treated as equivalent for approval.
+- Any other Codex permission field is blocked in this milestone.
 
 Blocked in MVP:
 

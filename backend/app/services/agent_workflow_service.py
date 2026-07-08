@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models import AgentRun, AgentRunStep, ApprovalRequest, MemoryFact, Skill, SkillGenerationRequest
 from app.schemas.proposed_skill import ProposedSkillValidationRead
+from app.services.backend_api_catalog import backend_api_context, valid_backend_api_ids
 from app.services.codex_service import CodexGenerationError, CodexService
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
@@ -1288,6 +1289,7 @@ class AgentWorkflowService:
                     "The skill remains proposed and was not installed or run automatically."
                 ),
             )
+        previous_final_summary = dict(agent_run.final_summary_json or {})
         final_summary = {
             "skill_id": skill.id,
             "skill_name": skill.name,
@@ -1295,6 +1297,8 @@ class AgentWorkflowService:
             "runtime_permission_status": runtime_status,
             "user_summary": summary,
         }
+        if "task_statuses" in previous_final_summary:
+            final_summary["task_statuses"] = previous_final_summary["task_statuses"]
         self._finish_step(
             agent_run,
             self._start_step(
@@ -1485,7 +1489,7 @@ class AgentWorkflowService:
         acceptance_criteria = [
             "manifest.json is valid",
             "required skill files exist",
-            "automation or hybrid tests pass",
+            "automation tests pass",
             "executable skills use JSON stdin/stdout",
         ]
         if plan.get("interface_type") == "tool":
@@ -1522,7 +1526,7 @@ class AgentWorkflowService:
             "status": "building",
             "risk_level": plan["risk_level"],
             "manifest_path": self.proposed_service._relative_path(proposed_dir / "manifest.json"),
-            "instructions_path": "SKILL.md" if plan["skill_type"] in {"instruction", "hybrid"} else None,
+            "instructions_path": self._planned_instructions_path(plan),
             "input_schema_json": plan.get("input_schema"),
             "output_schema_json": plan.get("output_schema"),
             "tool_ui_schema_json": plan.get("tool_ui_schema"),
@@ -1544,6 +1548,14 @@ class AgentWorkflowService:
         self.db.commit()
         self.db.refresh(skill)
         return skill
+
+    def _planned_instructions_path(self, plan: dict[str, Any]) -> str | None:
+        if plan.get("skill_type") == "instruction":
+            return "SKILL.md"
+        files = plan.get("files_to_generate")
+        if isinstance(files, list) and any(str(path).replace("\\", "/") == "SKILL.md" for path in files):
+            return "SKILL.md"
+        return None
 
     def _blueprint_for_repair(self, skill: Skill, user_request: str | None) -> dict[str, Any]:
         return {
@@ -1896,6 +1908,13 @@ class AgentWorkflowService:
                 raise AgentWorkflowError(f"Task node {node_id} must include acceptance criteria")
             if not node.get("expected_output_paths"):
                 raise AgentWorkflowError(f"Task node {node_id} must include expected output paths")
+            for api_id in node.get("backend_api_ids", []) or []:
+                try:
+                    normalized_api_id = int(api_id)
+                except (TypeError, ValueError):
+                    raise AgentWorkflowError(f"Task node {node_id} references invalid backend API id: {api_id}") from None
+                if normalized_api_id not in valid_backend_api_ids():
+                    raise AgentWorkflowError(f"Task node {node_id} references unknown backend API id: {api_id}")
             node_by_id[node_id] = node
         for root_id in root_task_ids:
             if root_id not in node_by_id:
@@ -1905,8 +1924,8 @@ class AgentWorkflowService:
                 if dep not in node_by_id:
                     raise AgentWorkflowError(f"Task node {node['id']} depends on missing node {dep}")
         self._topological_task_nodes(task_dag)
-        if blueprint.get("skill_type") in {"automation", "hybrid"} and not any(node.get("requires_tests") for node in nodes):
-            raise AgentWorkflowError("Executable or hybrid skill DAG must include at least one tested node")
+        if blueprint.get("skill_type") == "automation" and not any(node.get("requires_tests") for node in nodes):
+            raise AgentWorkflowError("Automation skill DAG must include at least one tested node")
         for left in nodes:
             for right in nodes:
                 if left["id"] >= right["id"]:
@@ -2006,6 +2025,7 @@ class AgentWorkflowService:
             "acceptance_criteria",
             "test_expectations",
             "interface_artifact_expectations",
+            "backend_api_ids",
         ]
         return {key: task_node[key] for key in useful_fields if key in task_node}
 
@@ -2016,6 +2036,7 @@ class AgentWorkflowService:
             "permission_plan": self._permission_plan(agent_run),
             "manifest_requirements": self._manifest_requirements(),
             "task_node": self._agent_task_node(task_node),
+            "backend_api_context": backend_api_context(task_node.get("backend_api_ids", [])),
             "parent_interface_artifacts": self._parent_interface_artifacts(agent_run, task_node),
         }
 
@@ -2033,7 +2054,8 @@ class AgentWorkflowService:
             ],
             "automation_fields": ["entrypoint"],
             "instruction_fields": ["instructions_path"],
-            "permission_fields": ["network", "filesystem_read", "filesystem_write", "secrets", "shell"],
+            "permission_fields": ["network", "filesystem_read", "filesystem_write", "secrets", "shell", "codex"],
+            "codex_permission_fields": ["call_response", "internet_access"],
             "defaults": {"schedule": None, "dependencies": []},
         }
 

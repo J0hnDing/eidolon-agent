@@ -12,7 +12,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import ApprovalRequest, Skill, SkillGenerationRequest
+from app.models import ApprovalRequest, Skill, SkillGenerationRequest, SkillSchedule
 from app.routers.skills import run_skill as run_skill_route
 from app.schemas.skill_run import SkillRunRequest
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
@@ -58,29 +58,38 @@ def test_create_proposed_automation_skill(service: ProposedSkillService) -> None
     assert (skill_dir / "tests" / "test_skill.py").is_file()
 
 
-def test_create_proposed_hybrid_skill(service: ProposedSkillService) -> None:
-    skill = service.create_sample("sample_hybrid", "hybrid")
-    skill_dir = service.proposed_dir("sample_hybrid")
-
-    assert skill.status == "proposed"
-    assert skill.skill_type == "hybrid"
-    assert (skill_dir / "SKILL.md").is_file()
-    assert (skill_dir / "skill.py").is_file()
-    assert (skill_dir / "tests" / "test_skill.py").is_file()
-
-
 def test_rejects_unsafe_skill_name(service: ProposedSkillService) -> None:
     with pytest.raises(ProposedSkillError, match="Skill name must match"):
         service.create_sample("../unsafe", "instruction")
 
 
+def test_rejects_removed_hybrid_sample_type(service: ProposedSkillService) -> None:
+    with pytest.raises(ProposedSkillError, match="instruction or automation"):
+        service.create_sample("sample_hybrid", "hybrid")
+
+
 def test_reads_allowed_proposed_skill_files(service: ProposedSkillService) -> None:
-    skill = service.create_sample("readable_skill", "hybrid")
+    skill = service.create_sample("readable_skill", "automation")
 
     files = service.read_skill_files(skill)
     paths = {file.path for file in files}
 
-    assert paths == {"manifest.json", "README.md", "SKILL.md", "skill.py", "tests/test_skill.py"}
+    assert paths == {"manifest.json", "README.md", "skill.py", "tests/test_skill.py"}
+
+
+def test_validates_automation_with_optional_instructions_file(service: ProposedSkillService) -> None:
+    skill = service.create_sample("automation_with_instructions", "automation")
+    skill_dir = service.proposed_dir("automation_with_instructions")
+    manifest_path = skill_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["instructions_path"] = "SKILL.md"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    (skill_dir / "SKILL.md").write_text("# Optional instructions\n", encoding="utf-8")
+
+    result = service.validate_proposed_skill(skill)
+
+    assert result.ok is True
+    assert result.skill_type == "automation"
 
 
 def test_blocks_reads_outside_skill_directory(service: ProposedSkillService) -> None:
@@ -242,6 +251,41 @@ def test_installs_valid_proposed_automation_skill(service: ProposedSkillService)
     assert (service.installed_dir("install_automation") / "versions" / "v1").is_dir()
     assert installed.active_version_id is not None
     assert not service.proposed_dir("install_automation").exists()
+
+
+def test_install_registers_manifest_declared_schedule(
+    service: ProposedSkillService,
+    db_session: Session,
+) -> None:
+    skill = service.create_sample("install_scheduled", "automation")
+    skill_dir = service.proposed_dir("install_scheduled")
+    manifest_path = skill_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schedule"] = {
+        "type": "weekly",
+        "day": "monday",
+        "time": "09:00",
+        "timezone": "America/Toronto",
+        "input": {"limit": 10},
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    installed = service.install_proposed_skill(skill)
+
+    schedule = db_session.scalar(select(SkillSchedule).where(SkillSchedule.skill_id == installed.id))
+    assert schedule is not None
+    assert schedule.status == "pending"
+    assert schedule.schedule_type == "weekly"
+    assert schedule.schedule_json["day"] == "monday"
+    assert schedule.input_json == {"limit": 10}
+    approval = db_session.scalar(
+        select(ApprovalRequest)
+        .where(ApprovalRequest.skill_id == installed.id)
+        .where(ApprovalRequest.schedule_id == schedule.id)
+        .where(ApprovalRequest.request_type == "schedule")
+    )
+    assert approval is not None
+    assert approval.status == "pending"
 
 
 def test_refuses_to_install_invalid_manifest(service: ProposedSkillService) -> None:

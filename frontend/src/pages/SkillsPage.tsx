@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { Skill, SkillType, api } from "../api/client";
 import { usePolling } from "../lib/usePolling";
 
-const skillTypes: SkillType[] = ["instruction", "automation", "hybrid"];
+const skillTypes: SkillType[] = ["instruction", "automation"];
 
 export default function SkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([]);

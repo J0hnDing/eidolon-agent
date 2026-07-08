@@ -22,6 +22,8 @@ DEFAULT_DOCKER_MEMORY = "256m"
 DEFAULT_DOCKER_CPUS = "1.0"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RUNTIME_ROOT = PROJECT_ROOT / "runtime" / "skill_cache"
+DEFAULT_LOCAL_BACKEND_URL = "http://127.0.0.1:8000"
+DEFAULT_DOCKER_BACKEND_URL = "http://host.docker.internal:8000"
 
 
 class UnsupportedSkillPermissionError(ValueError):
@@ -264,7 +266,7 @@ class LocalSkillRunner:
             cwd=skill_dir,
             capture_output=True,
             text=True,
-            env=self._skill_env(skill_dir),
+            env=self._skill_env(skill_dir, run.skill_id),
             timeout=self.timeout_seconds,
             shell=False,
         )
@@ -292,7 +294,7 @@ class LocalSkillRunner:
             input=json.dumps(input_json),
             capture_output=True,
             text=True,
-            env=self._skill_env(skill_dir),
+            env=self._skill_env(skill_dir, run.skill_id),
             timeout=self.timeout_seconds,
             shell=False,
         )
@@ -365,8 +367,10 @@ class LocalSkillRunner:
         run.ended_at = utc_now()
         self.db.commit()
 
-    def _skill_env(self, skill_dir: Path) -> dict[str, str]:
+    def _skill_env(self, skill_dir: Path, skill_id: int) -> dict[str, str]:
         env = os.environ.copy()
+        env.setdefault("PERSONAL_AGENT_SKILL_ID", str(skill_id))
+        env.setdefault("PERSONAL_AGENT_BACKEND_URL", os.getenv("PERSONAL_AGENT_BACKEND_URL", DEFAULT_LOCAL_BACKEND_URL))
         deps_dir = skill_dir / ".deps"
         if deps_dir.is_dir():
             existing = env.get("PYTHONPATH")
@@ -442,9 +446,15 @@ class DockerSkillRunner:
         self.db.refresh(run)
         return run
 
-    def build_base_docker_command(self, skill_dir: Path, cache_dir: Path, manifest: SkillManifest | None = None) -> list[str]:
+    def build_base_docker_command(
+        self,
+        skill_dir: Path,
+        cache_dir: Path,
+        manifest: SkillManifest | None = None,
+        skill_id: int | None = None,
+    ) -> list[str]:
         network_mode = "bridge" if manifest is not None and manifest.permissions.network else "none"
-        return [
+        command = [
             "docker",
             "run",
             "--rm",
@@ -461,6 +471,10 @@ class DockerSkillRunner:
             "PYTEST_ADDOPTS=-p no:cacheprovider",
             "-e",
             "PYTHONPATH=/skill/.deps",
+            "-e",
+            "PERSONAL_AGENT_BACKEND_URL="
+            + os.getenv("PERSONAL_AGENT_DOCKER_BACKEND_URL", os.getenv("PERSONAL_AGENT_BACKEND_URL", DEFAULT_DOCKER_BACKEND_URL)),
+            *(["-e", f"PERSONAL_AGENT_SKILL_ID={skill_id}"] if skill_id is not None else []),
             "-v",
             f"{skill_dir.resolve()}:/skill:ro",
             "-v",
@@ -469,9 +483,16 @@ class DockerSkillRunner:
             "/skill",
             self.config.docker_image,
         ]
+        return command
 
-    def build_pytest_command(self, skill_dir: Path, cache_dir: Path, manifest: SkillManifest | None = None) -> list[str]:
-        return self.build_base_docker_command(skill_dir, cache_dir, manifest) + ["python", "-m", "pytest", "/skill/tests"]
+    def build_pytest_command(
+        self,
+        skill_dir: Path,
+        cache_dir: Path,
+        manifest: SkillManifest | None = None,
+        skill_id: int | None = None,
+    ) -> list[str]:
+        return self.build_base_docker_command(skill_dir, cache_dir, manifest, skill_id) + ["python", "-m", "pytest", "/skill/tests"]
 
     def build_entrypoint_command(
         self,
@@ -479,9 +500,10 @@ class DockerSkillRunner:
         cache_dir: Path,
         entrypoint: Path,
         manifest: SkillManifest | None = None,
+        skill_id: int | None = None,
     ) -> list[str]:
         relative_entrypoint = entrypoint.relative_to(skill_dir).as_posix()
-        return self.build_base_docker_command(skill_dir, cache_dir, manifest) + ["python", f"/skill/{relative_entrypoint}"]
+        return self.build_base_docker_command(skill_dir, cache_dir, manifest, skill_id) + ["python", f"/skill/{relative_entrypoint}"]
 
     def _load_manifest(self, skill_dir: Path) -> SkillManifest:
         manifest_path = skill_dir / "manifest.json"
@@ -521,7 +543,7 @@ class DockerSkillRunner:
             raise RunAlreadyFinalized("Skill tests directory is missing")
 
         result = self.docker_runner(
-            self.build_pytest_command(skill_dir, cache_dir, manifest),
+            self.build_pytest_command(skill_dir, cache_dir, manifest, run.skill_id),
             capture_output=True,
             text=True,
             timeout=self.timeout_seconds,
@@ -548,7 +570,7 @@ class DockerSkillRunner:
         run: SkillRun,
     ) -> None:
         result = self.docker_runner(
-            self.build_entrypoint_command(skill_dir, cache_dir, entrypoint, manifest),
+            self.build_entrypoint_command(skill_dir, cache_dir, entrypoint, manifest, run.skill_id),
             input=json.dumps(input_json),
             capture_output=True,
             text=True,

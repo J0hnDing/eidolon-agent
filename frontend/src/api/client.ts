@@ -11,7 +11,7 @@ export type MemoryCategory =
   | "risk_tolerance";
 
 export type RiskLevel = "low" | "medium" | "high" | "blocked";
-export type SkillType = "instruction" | "automation" | "hybrid";
+export type SkillType = "instruction" | "automation";
 export type InterfaceType = "chat" | "tool" | "hidden";
 export type SkillStatus = "building" | "proposed" | "installed" | "disabled" | "failed" | "deleted";
 export type ChatMode = "chat" | "project";

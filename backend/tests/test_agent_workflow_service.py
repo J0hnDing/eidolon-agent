@@ -263,6 +263,36 @@ def test_backend_seeds_and_finalizes_manifest_json(tmp_path: Path, db_session: S
     assert final_manifest["enabled"] is False
 
 
+def test_backend_seeds_manifest_schedule_from_product_manager_blueprint(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    generation_request = create_generation_request(db_session)
+    generation_request.plan_json = {
+        **generation_request.plan_json,
+        "schedule": {
+            "type": "weekly",
+            "day": "monday",
+            "time": "09:00",
+            "timezone": "America/Toronto",
+            "input": {},
+        },
+    }
+    db_session.commit()
+    AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
+    approve_generation(db_session, generation_request, tmp_path)
+
+    _agent_run, skill, validation = AgentWorkflowService(
+        db_session,
+        codex_service=CodexService(db_session, adapter=FakeCodexAdapter(), project_root=tmp_path),
+        project_root=tmp_path,
+    ).continue_build_after_approval(generation_request)
+
+    assert validation.ok is True
+    manifest = json.loads((tmp_path / "skills" / "proposed" / skill.name / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schedule"] == generation_request.plan_json["schedule"]
+
+
 def test_build_workflow_executes_pm_task_dag_in_dependency_order(tmp_path: Path, db_session: Session) -> None:
     generation_request = create_generation_request(db_session)
 
@@ -335,6 +365,7 @@ def test_build_workflow_executes_pm_task_dag_in_dependency_order(tmp_path: Path,
     assert validation.ok is True
     assert agent_run.status == "succeeded"
     assert agent_run.failure_count_json == {"scaffold": 0, "edge_cases": 0}
+    assert agent_run.final_summary_json["task_statuses"] == {"scaffold": "done", "edge_cases": "done"}
     assert [step.milestone_name for step in agent_run.steps if step.step_name == "builder"] == ["scaffold", "edge_cases"]
     assert [step.milestone_name for step in agent_run.steps if step.step_name == "tester"][:2] == ["scaffold", "edge_cases"]
     scaffold_file = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "tasks" / "scaffold.json"
@@ -352,6 +383,34 @@ def test_build_workflow_executes_pm_task_dag_in_dependency_order(tmp_path: Path,
     tester_steps = [step for step in agent_run.steps if step.step_name == "tester"]
     assert "task_dag_json" not in tester_steps[0].input_json
     assert "task_path" not in tester_steps[0].input_json
+
+
+def test_builder_receives_backend_api_context_for_task_node(tmp_path: Path, db_session: Session) -> None:
+    generation_request = create_generation_request(db_session)
+
+    class ApiTaskAdapter(FakeCodexAdapter):
+        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            result = super().generate(prompt, output_dir, plan)
+            if plan.get("codex_task") == "product_manager_write_task_dag":
+                payload = json.loads(result.stdout)
+                payload["task_dag"]["nodes"][0]["backend_api_ids"] = [1]
+                return subprocess.CompletedProcess(args=result.args, returncode=0, stdout=json.dumps(payload), stderr="")
+            return result
+
+    service = AgentWorkflowService(
+        db_session,
+        codex_service=CodexService(db_session, adapter=ApiTaskAdapter(), project_root=tmp_path),
+        project_root=tmp_path,
+    )
+    agent_run = service.create_build_run(generation_request)
+    approve_generation(db_session, generation_request, tmp_path)
+
+    agent_run, _skill, validation = service.continue_build_after_approval(generation_request)
+
+    assert validation.ok is True
+    builder_step = next(step for step in agent_run.steps if step.step_name == "builder")
+    assert builder_step.input_json["task_node"]["backend_api_ids"] == [1]
+    assert builder_step.input_json["backend_api_context"][0]["title"] == "Skill Codex Call API"
 
 
 def test_interface_artifact_fallback_distinguishes_created_and_updated_paths(

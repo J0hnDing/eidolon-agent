@@ -383,6 +383,11 @@ textarea {
   color: #2458a6;
 }
 
+.status-active {
+  background: #e8f0ff;
+  color: #2458a6;
+}
+
 .status-waiting_for_approval {
   background: #fff4dd;
   color: #8a5a00;
@@ -906,6 +911,54 @@ pre {
 
 .agent-step h3,
 .agent-step p {
+  margin: 0;
+}
+
+.task-dag {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.task-dag-meta,
+.task-dag-edges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-dag-meta span,
+.task-dag-edges span {
+  border: 1px solid #dfe3ea;
+  border-radius: 6px;
+  background: #f7f9fc;
+  color: #344054;
+  font-size: 0.88rem;
+  padding: 6px 9px;
+}
+
+.task-dag-nodes {
+  display: grid;
+  gap: 10px;
+}
+
+.task-dag-node {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #e6eaf0;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.task-dag-node header {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.task-dag-node h3,
+.task-dag-node p {
   margin: 0;
 }
 

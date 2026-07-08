@@ -10,9 +10,9 @@ Skill types:
 
 - `instruction`: reusable instructions only, no executable code.
 - `automation`: executable Python automation code.
-- `hybrid`: reusable instructions plus executable Python automation.
+- Automation skills may optionally include `SKILL.md` reusable instructions.
 
-User-facing tools are not a separate skill type. A tool is an installed, enabled automation or hybrid skill with `interface_type = "tool"` and optional declarative `tool_ui_schema`.
+User-facing tools are not a separate skill type. A tool is an installed, enabled automation skill with `interface_type = "tool"` and optional declarative `tool_ui_schema`.
 
 ## Current Stack
 
@@ -143,7 +143,7 @@ Reading and writing a skill's own `./cache` directory is allowed as low-risk loc
 
 ### Test Before Install
 
-Automation and hybrid skills must include tests. Proposed executable skills cannot be installed unless their manifest validates, permissions are understood, tests pass, and required approvals are satisfied.
+Automation skills must include tests. Proposed executable skills cannot be installed unless their manifest validates, permissions are understood, tests pass, and required approvals are satisfied.
 
 ### Version Safety
 

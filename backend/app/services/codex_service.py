@@ -10,6 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Skill, SkillGenerationRequest, SkillVersion
+from app.schemas.skill_codex import SkillCodexRequest
+from app.services.backend_api_catalog import backend_api_index
 from app.services.manifest_validator import validate_manifest_file
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
@@ -247,6 +249,13 @@ class FakeCodexAdapter:
                 stdout="fake update repair complete",
                 stderr="",
             )
+        if task == "skill_runtime_codex":
+            return subprocess.CompletedProcess(
+                args=["fake-codex-skill-runtime"],
+                returncode=0,
+                stdout=json.dumps({"response": "Fake Codex response.", "notes": []}),
+                stderr="",
+            )
         skill_type = plan["skill_type"]
         permissions = plan["requested_permissions"]
         manifest = {
@@ -254,26 +263,26 @@ class FakeCodexAdapter:
             "description": plan["goal"],
             "skill_type": skill_type,
             "interface_type": plan.get("interface_type", "chat"),
-            "entrypoint": "skill.py" if skill_type in {"automation", "hybrid"} else None,
-            "instructions_path": "SKILL.md" if skill_type in {"instruction", "hybrid"} else None,
+            "entrypoint": "skill.py" if skill_type == "automation" else None,
+            "instructions_path": self._instructions_path_for_plan(plan, skill_type),
             "input_schema": plan.get("input_schema"),
             "output_schema": plan.get("output_schema"),
             "tool_ui_schema": plan.get("tool_ui_schema"),
             "dependencies": plan.get("requested_dependencies", []),
             "risk_level": plan["risk_level"],
             "permissions": permissions,
-            "schedule": None,
+            "schedule": plan.get("schedule"),
             "created_by": "codex",
             "enabled": False,
         }
         (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         (output_dir / "README.md").write_text(f"# {plan['display_name']}\n\n{plan['goal']}\n", encoding="utf-8")
-        if skill_type in {"instruction", "hybrid"}:
+        if manifest["instructions_path"]:
             (output_dir / "SKILL.md").write_text(
                 "# Instructions\n\nUse this reusable capability with care. Do not perform unsafe actions.\n",
                 encoding="utf-8",
             )
-        if skill_type in {"automation", "hybrid"}:
+        if skill_type == "automation":
             (output_dir / "skill.py").write_text(
                 "import json\n"
                 "import sys\n\n"
@@ -324,7 +333,7 @@ class FakeCodexAdapter:
         acceptance_criteria = [
             "manifest.json is valid",
             "required skill files exist",
-            "automation or hybrid tests pass",
+            "automation tests pass",
             "executable skills use JSON stdin/stdout",
         ]
         if plan.get("interface_type") == "tool":
@@ -336,6 +345,7 @@ class FakeCodexAdapter:
             "interface_type": plan.get("interface_type", "chat"),
             "expected_files": self._skill_package_files(plan.get("files_to_generate", [])),
             "expected_behavior": plan.get("expected_output", {}),
+            "schedule": plan.get("schedule"),
             "acceptance_criteria": acceptance_criteria,
         }
 
@@ -348,7 +358,7 @@ class FakeCodexAdapter:
             expected_files.insert(0, "manifest.json")
         if "README.md" not in expected_files:
             expected_files.insert(1, "README.md")
-        requires_tests = skill_type in {"automation", "hybrid"}
+        requires_tests = skill_type == "automation"
         node = {
             "id": "core_skill",
             "title": "Core skill package",
@@ -366,7 +376,7 @@ class FakeCodexAdapter:
                 or [
                     "manifest.json is valid",
                     "required skill files exist",
-                    "automation or hybrid tests pass",
+                    "automation tests pass",
                     "executable skills use JSON stdin/stdout",
                 ]
             ),
@@ -400,6 +410,14 @@ class FakeCodexAdapter:
             if path not in files:
                 files.append(path)
         return files
+
+    def _instructions_path_for_plan(self, plan: dict, skill_type: str) -> str | None:
+        if skill_type == "instruction":
+            return "SKILL.md"
+        files = plan.get("files_to_generate")
+        if isinstance(files, list) and any(str(path).replace("\\", "/") == "SKILL.md" for path in files):
+            return "SKILL.md"
+        return None
 
     def _product_manager_update_decision(self, plan: dict) -> dict:
         suggestion = str(plan.get("suggestion", "")).strip()
@@ -454,7 +472,7 @@ class FakeCodexAdapter:
 
     def _write_tester_tests(self, output_dir: Path, plan: dict) -> None:
         skill_type = plan.get("skill_type")
-        if skill_type not in {"automation", "hybrid"}:
+        if skill_type not in {"automation"}:
             return
 
         input_schema = plan.get("input_schema")
@@ -692,6 +710,7 @@ class CodexService:
             "blueprint_json": blueprint,
             "permission_plan": permission_plan,
             "generation_plan": generation_request.plan_json,
+            "backend_api_index": backend_api_index(),
         }
         fallback = self._fallback_task_dag(generation_request, blueprint)
         result = self.adapter.generate(
@@ -777,6 +796,57 @@ class CodexService:
         if isinstance(summary, str) and summary.strip():
             return summary.strip()
         return fallback_summary
+
+    def skill_runtime_codex_call(
+        self,
+        skill: Skill,
+        payload: SkillCodexRequest,
+        *,
+        internet_access: bool,
+    ) -> dict[str, object]:
+        workspace = self.project_root / "runtime" / "skill_codex" / f"skill_{skill.id}"
+        plan = {
+            "codex_task": "skill_runtime_codex",
+            "skill_id": skill.id,
+            "skill_name": skill.name,
+            "model": payload.model,
+            "permission_plan": {
+                "build_time": {
+                    "internet_research": internet_access,
+                }
+            },
+            "requested_network_domains": ["runtime-approved-network"] if internet_access else [],
+        }
+        prompt = (
+            "You are Codex responding to an installed local skill through the backend Skill Codex Call API.\n"
+            "Return exactly one JSON object with this shape: {\"response\": \"string\", \"notes\": []}.\n"
+            "Do not perform shell actions, filesystem changes, browser automation, purchases, posting, or secrets access.\n\n"
+            f"Skill: {skill.name}\n"
+            f"Requested model: {payload.model or 'default'}\n"
+            f"Internet access allowed: {internet_access}\n\n"
+            f"Skill context:\n{json.dumps(payload.context, indent=2)}\n\n"
+            f"Prompt:\n{payload.prompt}"
+        )
+        adapter = self.adapter
+        if isinstance(adapter, RealCodexAdapter) and payload.model:
+            adapter = RealCodexAdapter(
+                command=adapter.command,
+                timeout_seconds=adapter.timeout_seconds,
+                sandbox_mode=os.getenv("PERSONAL_AGENT_CODEX_SKILL_SANDBOX", "read-only"),
+                approval_policy=adapter.approval_policy,
+                enable_search="true" if internet_access else "false",
+                model=payload.model,
+            )
+        result = adapter.generate(prompt, workspace, plan)
+        if result.returncode != 0:
+            raise CodexGenerationError(result.stderr.strip() or "Codex skill call failed")
+        parsed = self._parse_product_manager_json(result, fallback={"response": result.stdout.strip(), "notes": []})
+        response = parsed.get("response")
+        return {
+            "response": response.strip() if isinstance(response, str) and response.strip() else result.stdout.strip(),
+            "model": payload.model,
+            "internet_access": internet_access,
+        }
 
     def generate_from_request(
         self,
@@ -988,7 +1058,7 @@ class CodexService:
                 {
                     "network": [],
                     "filesystem_read": [],
-                    "filesystem_write": ["./cache"] if skill.skill_type in {"automation", "hybrid"} else [],
+                    "filesystem_write": ["./cache"] if skill.skill_type == "automation" else [],
                     "secrets": [],
                     "shell": False,
                 },
@@ -1040,7 +1110,7 @@ class CodexService:
             "status": status,
             "risk_level": plan["risk_level"],
             "manifest_path": self.relative_path(proposed_dir / "manifest.json"),
-            "instructions_path": "SKILL.md" if plan["skill_type"] in {"instruction", "hybrid"} else None,
+            "instructions_path": self._planned_instructions_path(plan),
             "input_schema_json": plan.get("input_schema"),
             "output_schema_json": plan.get("output_schema"),
             "tool_ui_schema_json": plan.get("tool_ui_schema"),
@@ -1127,15 +1197,15 @@ class CodexService:
             "description": str(blueprint.get("goal") or plan.get("goal") or plan.get("skill_name")),
             "skill_type": skill_type,
             "interface_type": interface_type,
-            "entrypoint": "skill.py" if skill_type in {"automation", "hybrid"} else None,
-            "instructions_path": "SKILL.md" if skill_type in {"instruction", "hybrid"} else None,
+            "entrypoint": "skill.py" if skill_type == "automation" else None,
+            "instructions_path": self._planned_instructions_path(plan, skill_type),
             "input_schema": plan.get("input_schema"),
             "output_schema": plan.get("output_schema"),
             "tool_ui_schema": plan.get("tool_ui_schema"),
             "dependencies": dependencies,
             "risk_level": str(plan.get("risk_level") or self._risk_level_for_permissions(sanitized_permissions)),
             "permissions": sanitized_permissions,
-            "schedule": None,
+            "schedule": blueprint.get("schedule") if isinstance(blueprint.get("schedule"), dict) else plan.get("schedule"),
             "created_by": "codex",
             "enabled": False,
         }
@@ -1157,6 +1227,28 @@ class CodexService:
         if read_paths - {"cache"} or write_paths - {"cache"}:
             return "medium"
         return "low"
+
+    def _planned_instructions_path(self, plan: dict, skill_type: str | None = None) -> str | None:
+        resolved_skill_type = skill_type or str(plan.get("skill_type") or "")
+        if resolved_skill_type == "instruction":
+            return "SKILL.md"
+        files = plan.get("files_to_generate")
+        if isinstance(files, list) and any(str(path).replace("\\", "/") == "SKILL.md" for path in files):
+            return "SKILL.md"
+        return None
+
+    def _sanitize_codex_permissions(self, permissions: dict[str, object], network_domains: list[str]) -> dict[str, bool]:
+        raw_codex = permissions.get("codex")
+        if not isinstance(raw_codex, dict):
+            raw_codex = {}
+        sanitized = {
+            "call_response": bool(raw_codex.get("call_response", True)),
+            "internet_access": bool(raw_codex.get("internet_access", bool(network_domains))),
+        }
+        for key, value in raw_codex.items():
+            if key not in sanitized:
+                sanitized[str(key)] = bool(value)
+        return sanitized
 
     def _context_blueprint(
         self,
@@ -1182,7 +1274,7 @@ class CodexService:
         return self._sanitize_permission_plan(None, plan)
 
     def build_prompt(self, plan: dict, output_dir: Path, *, builder_writes_tests: bool = True) -> str:
-        instruction = self._instruction("builder_instruction_build.md")
+        instruction = self._instruction("builder/build.md")
         test_requirement = (
             "- tests must not require installing packages"
             if builder_writes_tests
@@ -1193,13 +1285,13 @@ class CodexService:
 
 Application skill definition:
 - A skill is a reusable capability package.
-- skill_type is one of instruction, automation, hybrid.
+- skill_type is one of instruction, automation.
 - Instruction skills contain reusable instructions only.
 - Automation skills contain executable Python automation.
-- Hybrid skills contain both instructions and executable Python automation.
+- Automation skills may include SKILL.md for reusable instructions or operating notes, but SKILL.md is optional for automation.
 - interface_type is one of chat, tool, hidden.
 - Chat skills are primarily used through chat.
-- Tool skills are installed enabled automation/hybrid skills exposed as manual forms in the Tools UI.
+- Tool skills are installed enabled automation skills exposed as manual forms in the Tools UI.
 - Hidden skills are not shown as a normal user-facing entry point.
 - Tool UI work is declarative manifest work: tool_ui_schema, input/output schemas, labels, fields, options, and result rendering hints. Do not generate frontend app code.
 
@@ -1215,13 +1307,14 @@ Product structure:
 - Do not write blueprint.json, permissions.json, task_dag.json, task JSON files, or other runtime/agent_runs artifacts; those are platform workflow artifacts.
 - The backend may seed manifest.json from the approved blueprint and permissions before Builder runs. Preserve that schema shape and complete only fields owned by the current task node.
 - Platform validation still requires manifest.json and README.md in every skill package.
-- Instruction and hybrid skills need the manifest instructions_path to point to an instructions file such as SKILL.md.
-- Automation and hybrid skills need the manifest entrypoint to point to executable Python code such as skill.py.
+- Instruction skills need the manifest instructions_path to point to an instructions file such as SKILL.md.
+- Automation skills may set instructions_path to SKILL.md when they include optional reusable instructions.
+- Automation skills need the manifest entrypoint to point to executable Python code such as skill.py.
 - TesterAgent owns test files in this workflow unless builder_writes_tests is explicitly true.
 
 Manifest requirements:
 - manifest.json must include these top-level fields: name, description, skill_type, interface_type, risk_level, permissions, dependencies, schedule, created_by, and enabled.
-- Automation and hybrid manifests must include entrypoint pointing to a Python file. Instruction and hybrid manifests must include instructions_path pointing to an instructions file.
+- Automation manifests must include entrypoint pointing to a Python file. Instruction manifests must include instructions_path pointing to an instructions file.
 - Use the plan skill_name, skill_type, risk_level, and requested_permissions exactly.
 - Use the plan interface_type exactly.
 - Include dependencies from requested_dependencies exactly. Use [] when no packages are needed.
@@ -1231,7 +1324,9 @@ Manifest requirements:
 - Network permissions must be explicit domains only; no wildcard permissions.
 - shell must be false.
 - secrets must be [].
-- schedule must be null.
+- permissions.codex.call_response defaults to true for backend-mediated Codex responses.
+- permissions.codex.internet_access must be true only when runtime network domains are requested and approved.
+- schedule must preserve ProductManager manifest intent when present. Use null only when no recurring run was requested.
 
 Executable skill requirements:
 - read JSON from stdin
@@ -1247,7 +1342,7 @@ Instruction skill requirements:
 """.strip()
 
     def build_repair_prompt(self, skill: Skill, output_dir: Path, failure_context: dict) -> str:
-        instruction = self._instruction("builder_instruction_repair.md")
+        instruction = self._instruction("builder/repair.md")
         return f"""
 {instruction}
 
@@ -1266,7 +1361,7 @@ Repair the current task node or final end-to-end failure using the provided Test
 """.strip()
 
     def build_tester_prompt(self, skill: Skill, output_dir: Path, tester_context: dict) -> str:
-        instruction_name = "tester_instruction_update.md" if tester_context.get("mode") == "update" else "tester_instruction_build.md"
+        instruction_name = "tester/update.md" if tester_context.get("mode") == "update" else "tester/build.md"
         instruction = self._instruction(instruction_name)
         return f"""
 {instruction}
@@ -1291,7 +1386,7 @@ Tester context:
         suggestion: str,
         blueprint: dict[str, object],
     ) -> str:
-        instruction = self._instruction("builder_instruction_update.md")
+        instruction = self._instruction("builder/update.md")
         return f"""
 {instruction}
 
@@ -1316,17 +1411,17 @@ Current draft files:
 
     def build_product_manager_prompt(self, task: str, payload: dict[str, object]) -> str:
         instruction_by_task = {
-            "build_blueprint": "product_manager_build.md",
-            "build_review": "product_manager_plausibility_review.md",
-            "refine_intent": "product_manager_plausibility_review.md",
-            "write_blueprint": "product_manager_build.md",
-            "write_permissions": "product_manager_build.md",
-            "write_task_dag": "product_manager_build.md",
-            "repair_blueprint": "product_manager_repair.md",
-            "update_review": "product_manager_update.md",
-            "summary": "product_manager_summary.md",
+            "build_blueprint": "product_manager/build.md",
+            "build_review": "product_manager/plausibility_review.md",
+            "refine_intent": "product_manager/refine_intent.md",
+            "write_blueprint": "product_manager/build.md",
+            "write_permissions": "product_manager/build.md",
+            "write_task_dag": "product_manager/build.md",
+            "repair_blueprint": "product_manager/repair.md",
+            "update_review": "product_manager/update.md",
+            "summary": "product_manager/summary.md",
         }
-        instruction = self._instruction(instruction_by_task.get(task, "product_manager_summary.md"))
+        instruction = self._instruction(instruction_by_task.get(task, "product_manager/summary.md"))
         return f"""
 {instruction}
 
@@ -1363,6 +1458,9 @@ Payload:
             if not blueprint.get(key):
                 blueprint[key] = fallback.get(key)
         blueprint["interface_type"] = blueprint.get("interface_type") or fallback.get("interface_type", "chat")
+        if not isinstance(blueprint.get("schedule"), dict):
+            fallback_schedule = fallback.get("schedule")
+            blueprint["schedule"] = fallback_schedule if isinstance(fallback_schedule, dict) else None
         blueprint["expected_files"] = self._skill_package_files(
             blueprint.get("expected_files") or fallback.get("expected_files") or []
         )
@@ -1450,6 +1548,7 @@ Payload:
             "shell": bool(permissions.get("shell", False)),
         }
         network_domains = list(runtime.get("network_domains", sanitized_permissions["network"]) or [])
+        sanitized_permissions["codex"] = self._sanitize_codex_permissions(permissions, network_domains)
         dependencies = list(runtime.get("dependencies", default_dependencies) or [])
         return {
             "build_time": {
@@ -1581,6 +1680,13 @@ Payload:
                     ]
                     if isinstance(raw.get("interface_artifact_expectations"), list)
                     else [],
+                    "backend_api_ids": [
+                        int(item)
+                        for item in raw.get("backend_api_ids", [])
+                        if str(item).strip().isdigit()
+                    ]
+                    if isinstance(raw.get("backend_api_ids"), list)
+                    else [],
                 }
             )
         if not sanitized_nodes:
@@ -1612,7 +1718,7 @@ Payload:
         acceptance_criteria = [
             "manifest.json is valid",
             "required skill files exist",
-            "automation or hybrid tests pass",
+            "automation tests pass",
             "executable skills use JSON stdin/stdout",
         ]
         if plan.get("interface_type") == "tool":
@@ -1642,6 +1748,7 @@ Payload:
             "expected_files": self._skill_package_files(plan.get("files_to_generate", [])),
             "expected_behavior": plan.get("expected_output", {}),
             "permission_plan": permission_plan,
+            "schedule": plan.get("schedule"),
             "acceptance_criteria": acceptance_criteria,
         }
 
@@ -1659,7 +1766,7 @@ Payload:
             expected_files.insert(0, "manifest.json")
         if "README.md" not in expected_files:
             expected_files.insert(1, "README.md")
-        requires_tests = skill_type in {"automation", "hybrid"}
+        requires_tests = skill_type == "automation"
         node = {
             "id": "core_skill",
             "title": "Core skill package",
@@ -1677,7 +1784,7 @@ Payload:
                 or [
                     "manifest.json is valid",
                     "required skill files exist",
-                    "automation or hybrid tests pass",
+                    "automation tests pass",
                     "executable skills use JSON stdin/stdout",
                 ]
             ),
@@ -1782,9 +1889,12 @@ Payload:
     def relative_path(self, path: Path) -> str:
         return path.resolve().relative_to(self.project_root).as_posix()
 
-    def _instruction(self, filename: str) -> str:
-        path = self.instruction_dir / filename
+    def _instruction(self, relative_path: str) -> str:
+        instruction_path = Path(relative_path)
+        if instruction_path.is_absolute() or ".." in instruction_path.parts:
+            raise CodexGenerationError(f"Invalid agent instruction path: {relative_path}")
+        path = self.instruction_dir / instruction_path
         try:
             return path.read_text(encoding="utf-8").strip()
         except FileNotFoundError:
-            raise CodexGenerationError(f"Missing agent instruction file: {filename}") from None
+            raise CodexGenerationError(f"Missing agent instruction file: {relative_path}") from None

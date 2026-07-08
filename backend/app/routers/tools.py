@@ -27,7 +27,7 @@ def list_tools(db: Session = Depends(get_db)) -> list[ToolRead]:
             select(Skill)
             .where(Skill.status == "installed")
             .where(Skill.enabled.is_(True))
-            .where(Skill.skill_type.in_(["automation", "hybrid"]))
+            .where(Skill.skill_type == "automation")
             .where(Skill.interface_type == "tool")
             .order_by(Skill.name.asc())
         ).all()
