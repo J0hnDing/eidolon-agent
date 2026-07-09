@@ -27,15 +27,17 @@ runtime/agent_runs/run_<id>/
 ## ProductManager Actions
 
 Every ProductManager action is a distinct backend-invoked step with a structured output.
+The actuall input to Codex_cli also includes corresponding instructions.
+Output for PM does NOT mean agent writes files directly, instead backend receives the response in json and writes it.
 
 1. `pm_refine_intent`
-   - Inputs: latest Project-mode user message, prior clarification turns for the same generation request, and explicit user memory facts selected by the backend.
+   - Inputs: latest Project-mode user message, prior clarification turns for the same generation request, and explicit user memory facts, this is currently default to none until memory system implemented.
    - Output: `intent_prompt.json`.
    - Purpose: rewrite the request into a clearer build prompt for downstream PM actions.
    - Must not create a blueprint, permissions, task graph, or generated skill files.
 
 2. `pm_review_plausibility`
-   - Inputs: `intent_prompt.json`, original user request, and clarification history.
+   - Inputs: `intent_prompt.json`.
    - Output: `decision.json`.
    - Decisions:
      - `stop_inplausible`: the request is infeasible, unsafe, unsupported, or not a reusable local skill. The output includes the user-facing chat response and the workflow stops before artifact creation.
@@ -43,31 +45,24 @@ Every ProductManager action is a distinct backend-invoked step with a structured
      - `proceed_to_blueprint`: the request is plausible and clear enough to continue.
    - Must not create blueprint, permission, or DAG artifacts.
 
-3. `pm_write_blueprint`
-   - Inputs: `intent_prompt.json`, `decision.json`, original user request, and relevant project constraints.
-   - Output: `blueprint.json`.
-   - Purpose: describe the skill goal, skill type, interface type, expected user behavior, package expectations, and high-level acceptance criteria.
+3. `pm_write_blueprint_and_permissions`
+   - Inputs: `intent_prompt.json`.
+   - Output: one structured response that the backend writes as `blueprint.json` and `permissions.json`.
+   - Purpose: describe the skill goal, skill type, interface type, expected user behavior, package expectations, and high-level acceptance criteria. draft both build-time needs and expected runtime permissions/dependencies.
    - Must not include task nodes, dependencies between tasks, or test files.
-
-4. `pm_write_permissions`
-   - Inputs: `intent_prompt.json`, `blueprint.json`, and project permission rules.
-   - Output: `permissions.json`.
-   - Purpose: draft both build-time needs and expected runtime permissions/dependencies.
-   - Must include unsupported or blocked items as blocked instead of requesting approval for them.
    - Must not approve permissions.
 
-5. Backend deterministic permission review
-   - Inputs: `blueprint.json`, `permissions.json`, and permission policy.
-   - Output: build-time approval request in chat.
-   - Purpose: ask the user to approve Codex generation with a summary of the blueprint and build/runtime permission intent.
+4. Backend deterministic permission review
+   - Inputs: `blueprint.json`, `permissions.json`.
+   - Output: if approval required, build-time approval request in chat, otherwise proceed automatically.
+   - Purpose: Manage permissions safely.
    - Approval to generate does not install, run, schedule, or approve runtime permissions.
+   - Also writes a `manifest.json` from `blueprint.json`, `permissions.json`.
 
-6. `pm_write_task_dag`
-   - Runs only after build-time approval.
-   - Inputs: `intent_prompt.json`, `blueprint.json`, `permissions.json`, approval result, and a backend API index containing id, title, and description for supported backend APIs.
+5. `pm_write_task_dag`
+   - Inputs: `blueprint.json`, `permissions.json`, and the static backend API index file at `backend/app/static/backend_api_index.json`.
    - Output: `task_dag.json`.
    - Purpose: split the project into explicit task nodes with dependencies, difficulty, test requirements, I/O expectations, file write claims, interface artifact expectations, and any required backend API ids.
-   - Scheduling is not a backend API id. If the user requested recurring execution, ProductManager records intended schedule metadata in the blueprint so the backend carries it into `manifest.json`.
    - Must not include separate "test-only" task nodes. Tester actions are attached to the build nodes that require tests.
 
 ## Task DAG Schema
@@ -177,6 +172,8 @@ Inputs:
 - generated skill files needed by the current node.
 
 The Builder prompt must not include backend bookkeeping fields such as `generation_request_id`, `blueprint_path`, `permission_path`, `task_dag_path`, `task_path`, task `index`, or task `status`. It should not receive the entire task DAG for a normal node build; dependency contracts come from parent interface artifacts.
+
+The full backend API context is loaded from the static file at `backend/app/static/backend_api_context.json`. ProductManager sees only the index file; Builder receives only the context entries selected by the current task node's `backend_api_ids`.
 
 Behavior:
 

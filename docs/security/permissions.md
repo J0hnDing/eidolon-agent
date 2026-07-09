@@ -8,7 +8,7 @@ The permission system is deterministic backend logic. It is intentionally not de
 
 Build-time approval lets Codex generate proposed files or draft update files. It does not approve installation, runtime permissions, package installation at runtime, schedules, or automatic execution.
 
-For DAG builds, ProductManager writes build-time intent and expected runtime intent into `permissions.json` after `blueprint.json` exists and before the task DAG is created. The backend reads `blueprint.json` and `permissions.json`, performs deterministic review, and presents one build-time approval prompt with the blueprint summary plus permission summary. ProductManager must not create `task_dag.json` until this approval is granted.
+For DAG builds, ProductManager returns build-time intent and expected runtime intent as structured JSON after `blueprint.json` exists and before the task DAG is created. The backend writes `permissions.json`, reads `blueprint.json` and `permissions.json`, performs deterministic review, and presents one build-time approval prompt with the blueprint summary plus permission summary. ProductManager must not return task DAG JSON until this approval is granted; the backend writes `task_dag.json` after approval.
 
 ### Runtime
 

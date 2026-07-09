@@ -35,7 +35,8 @@ $env:PERSONAL_AGENT_CODEX_TIMEOUT_SECONDS = "300"
 ## Sandbox Modes
 
 - Chat and plausibility: read-only project root.
-- Skill generation/build/update: writable controlled skill directory.
+- ProductManager workflow actions: read-only `runtime/product_manager` workspace. ProductManager returns structured JSON on stdout; the backend parses it and writes workflow artifacts such as `blueprint.json`, `permissions.json`, and `task_dag.json`.
+- Builder/Tester skill generation, build, repair, and update: `workspace-write` scoped to the controlled skill or draft-version directory passed with `-C`.
 - Backend-mediated skill Codex calls: read-only runtime workspace.
 
 Codex must not modify backend/frontend app source when generating application skills.
@@ -48,11 +49,11 @@ Skills must not shell out to the Codex CLI. Installed enabled executable skills 
 POST /skills/{skill_id}/codex
 ```
 
-The runner sets `PERSONAL_AGENT_SKILL_ID` and `PERSONAL_AGENT_BACKEND_URL` for generated skill code. The backend validates runtime approval and manifest `permissions.codex` before invoking Codex. `codex_permissions.internet_access=true` is accepted only when runtime network domains were approved for the skill.
+The runner sets `PERSONAL_AGENT_SKILL_ID` and `PERSONAL_AGENT_BACKEND_URL` for generated skill code. The backend validates runtime approval and manifest `permissions.codex` before invoking Codex. `codex_permissions.internet_access=true` is accepted only when runtime `network` entries were approved for the skill.
 
 ## Web Search
 
-Build-time Codex search may be enabled when the approved plan requests network domains or package dependencies. This is for generation research only. It does not grant runtime access to generated skills.
+Build-time Codex search may be enabled when the approved plan requests runtime `network` entries or package dependencies. This is for generation research only. It does not grant runtime access to generated skills.
 
 ## Prohibited CLI Options
 

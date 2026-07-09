@@ -32,7 +32,7 @@ ProductManagerAgent owns project judgment, intent refinement, blueprinting, perm
 
 ## Build Artifacts
 
-For build workflows, ProductManager emits these artifacts in order:
+For build workflows, ProductManager returns structured JSON for these artifacts in order. The backend parses that JSON and writes the artifact files under `runtime/agent_runs/run_<id>/`:
 
 ```text
 intent_prompt.json
@@ -45,9 +45,9 @@ task_dag.json
 Backend state enforces this split:
 
 - Before `proceed_to_blueprint`, `AgentWorkflowService` does not create a building skill and does not write `blueprint.json`, `permissions.json`, or `task_dag.json`.
-- After `proceed_to_blueprint`, ProductManager writes `blueprint.json` and `permissions.json`.
+- After `proceed_to_blueprint`, ProductManager returns one response containing blueprint and permission-plan JSON; the backend writes `blueprint.json` and `permissions.json`.
 - Backend performs deterministic build-time permission review and waits for user approval.
-- Only after approval does ProductManager write `task_dag.json`.
+- Only after approval does ProductManager return task DAG JSON; the backend writes `task_dag.json`.
 - Backend derives the initial package `manifest.json` from `blueprint.json` and `permissions.json`; ProductManager does not write generated skill files directly. If ProductManager included schedule intent in the blueprint, the manifest skeleton carries it into `manifest.json`.
 
 Schedule intent in `blueprint.json` uses the manifest schedule shape. Use `null` when the user did not request recurrence. For recurrence, use one of:

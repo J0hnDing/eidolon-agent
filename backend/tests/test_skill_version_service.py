@@ -309,7 +309,7 @@ def test_update_product_manager_review_uses_codex_adapter(tmp_path: Path, db_ses
     ).create_update_run(skill, "Add a clearer README explanation")
 
     assert "product_manager_update_review" in adapter.tasks
-    assert "product_manager_summary" in adapter.tasks
+    assert "product_manager_summary" not in adapter.tasks
 
 
 def test_update_request_permission_waits_and_resumes_after_approval(tmp_path: Path, db_session: Session) -> None:

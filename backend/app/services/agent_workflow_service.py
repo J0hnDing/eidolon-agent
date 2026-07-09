@@ -10,7 +10,13 @@ from sqlalchemy.orm import Session
 
 from app.models import AgentRun, AgentRunStep, ApprovalRequest, MemoryFact, Skill, SkillGenerationRequest
 from app.schemas.proposed_skill import ProposedSkillValidationRead
-from app.services.backend_api_catalog import backend_api_context, valid_backend_api_ids
+from app.services.backend_api_catalog import (
+    backend_api_context,
+    backend_api_context_file,
+    backend_api_index,
+    backend_api_index_file,
+    valid_backend_api_ids,
+)
 from app.services.codex_service import CodexGenerationError, CodexService
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
@@ -101,7 +107,7 @@ class AgentWorkflowService:
             logs="ProductManager wrote intent_prompt.json.",
         )
 
-        review = self.codex_service.product_manager_build_review(generation_request)
+        review = self.codex_service.product_manager_build_review(generation_request, intent_prompt)
         decision = str(review["decision"])
         summary = str(review["summary"])
         reason = str(review["reason"])
@@ -207,29 +213,15 @@ class AgentWorkflowService:
         agent_run: AgentRun,
         intent_prompt: dict[str, Any],
     ) -> AgentRun:
-        blueprint = self.codex_service.product_manager_write_blueprint(generation_request, intent_prompt)
-        blueprint_path = self._write_json_artifact(agent_run, "blueprint.json", blueprint)
-        self._finish_step(
-            agent_run,
-            self._start_step(
-                agent_run,
-                "product_manager",
-                input_json={
-                    "action": "pm_write_blueprint",
-                    "intent_prompt": intent_prompt,
-                    "decision_json": self._read_json_artifact(agent_run, "decision.json"),
-                    "user_request": generation_request.user_message,
-                },
-                logs="ProductManager wrote the skill blueprint.",
-            ),
-            "succeeded",
-            output_json={"blueprint_json": blueprint, "blueprint_path": blueprint_path},
-            logs="ProductManager wrote blueprint.json without task nodes or tests.",
+        blueprint, raw_permission_plan = self.codex_service.product_manager_write_blueprint_and_permissions(
+            generation_request,
+            intent_prompt,
         )
-
-        permission_plan = self.codex_service.product_manager_write_permissions(generation_request, intent_prompt, blueprint)
-        blueprint_with_permissions = {**blueprint, "permission_plan": permission_plan}
-        permission_plan = self._apply_blueprint_permission_plan(generation_request, blueprint_with_permissions)
+        blueprint_path = self._write_json_artifact(agent_run, "blueprint.json", blueprint)
+        permission_plan = self._apply_blueprint_permission_plan(
+            generation_request,
+            {**blueprint, "permission_plan": raw_permission_plan},
+        )
         permission_path = self._write_json_artifact(agent_run, "permissions.json", permission_plan)
         self._finish_step(
             agent_run,
@@ -237,16 +229,21 @@ class AgentWorkflowService:
                 agent_run,
                 "product_manager",
                 input_json={
-                    "action": "pm_write_permissions",
+                    "action": "pm_write_blueprint_and_permissions",
                     "intent_prompt": intent_prompt,
-                    "blueprint_path": blueprint_path,
-                    "blueprint_json": blueprint,
+                    "decision_json": self._read_json_artifact(agent_run, "decision.json"),
+                    "user_request": generation_request.user_message,
                 },
-                logs="ProductManager wrote the build-time and expected runtime permission plan.",
+                logs="ProductManager wrote the skill blueprint and permission plan.",
             ),
             "succeeded",
-            output_json={"permission_plan": permission_plan, "permission_path": permission_path},
-            logs="ProductManager wrote permissions.json. Permissions were not approved.",
+            output_json={
+                "blueprint_json": blueprint,
+                "permission_plan": permission_plan,
+                "blueprint_path": blueprint_path,
+                "permission_path": permission_path,
+            },
+            logs="ProductManager wrote blueprint.json and permissions.json without task nodes or tests. Permissions were not approved.",
         )
 
         building_skill = self._create_or_update_building_skill(generation_request, blueprint)
@@ -335,11 +332,13 @@ class AgentWorkflowService:
         self._mark_waiting_permission_steps_approved(agent_run)
         intent_prompt = self._read_json_artifact(agent_run, "intent_prompt.json")
         permission_plan = self._read_json_artifact(agent_run, "permissions.json")
+        api_index = backend_api_index()
         task_dag = self.codex_service.product_manager_write_task_dag(
             generation_request,
             intent_prompt,
             agent_run.blueprint_json or {},
             permission_plan,
+            api_index,
         )
         self._validate_task_dag(task_dag, agent_run.blueprint_json or {})
         task_dag_path = self._write_json_artifact(agent_run, "task_dag.json", task_dag)
@@ -359,6 +358,8 @@ class AgentWorkflowService:
                     "intent_prompt": intent_prompt,
                     "blueprint_json": agent_run.blueprint_json,
                     "permission_plan": permission_plan,
+                    "backend_api_index": api_index,
+                    "backend_api_index_file": backend_api_index_file().as_posix(),
                 },
                 logs="ProductManager wrote task_dag.json after build-time approval.",
             ),
@@ -1607,27 +1608,25 @@ class AgentWorkflowService:
         if not isinstance(value, dict):
             value = {}
         runtime = value.get("runtime") if isinstance(value.get("runtime"), dict) else {}
-        permissions = runtime.get("permissions") if isinstance(runtime.get("permissions"), dict) else {}
         permissions = {
-            "network": list(permissions.get("network", []) or []),
-            "filesystem_read": list(permissions.get("filesystem_read", []) or []),
-            "filesystem_write": list(permissions.get("filesystem_write", []) or []),
-            "secrets": list(permissions.get("secrets", []) or []),
-            "shell": bool(permissions.get("shell", False)),
+            "network": list(runtime.get("network", []) or []),
+            "filesystem_read": list(runtime.get("filesystem_read", []) or []),
+            "filesystem_write": list(runtime.get("filesystem_write", []) or []),
+            "secrets": list(runtime.get("secrets", []) or []),
+            "shell": bool(runtime.get("shell", False)),
+            "codex": runtime.get("codex", {"call_response": True, "internet_access": bool(runtime.get("network"))}),
         }
-        network_domains = list(runtime.get("network_domains", permissions["network"]) or [])
         dependencies = list(runtime.get("dependencies", []) or [])
         build_time = value.get("build_time") if isinstance(value.get("build_time"), dict) else {}
         return {
             "build_time": {
                 "codex_generation": bool(build_time.get("codex_generation", True)),
-                "internet_research": bool(build_time.get("internet_research", bool(network_domains or dependencies))),
+                "internet_research": bool(build_time.get("internet_research", bool(permissions["network"] or dependencies))),
                 "dependencies": list(build_time.get("dependencies", dependencies) or []),
                 "reason": str(build_time.get("reason") or "Codex needs to generate controlled skill files."),
             },
             "runtime": {
-                "permissions": permissions,
-                "network_domains": network_domains,
+                **permissions,
                 "dependencies": dependencies,
                 "reason": str(runtime.get("reason") or "Expected runtime permissions for this skill."),
             },
@@ -1643,18 +1642,30 @@ class AgentWorkflowService:
         plan = dict(generation_request.plan_json or {})
         plan["blueprint_json"] = blueprint
         plan["permission_plan"] = permission_plan
-        plan["requested_permissions"] = runtime["permissions"]
-        plan["requested_network_domains"] = runtime["network_domains"]
+        runtime_permissions = self._runtime_permissions_from_plan(permission_plan)
+        plan["requested_permissions"] = runtime_permissions
+        plan["requested_network_domains"] = runtime_permissions["network"]
         plan["requested_dependencies"] = runtime["dependencies"]
         if "expected_files" in blueprint:
             plan["files_to_generate"] = blueprint.get("expected_files") or plan.get("files_to_generate", [])
         generation_request.plan_json = plan
-        generation_request.requested_permissions_json = runtime["permissions"]
+        generation_request.requested_permissions_json = runtime_permissions
         generation_request.requested_dependencies_json = runtime["dependencies"]
-        generation_request.requested_network_domains_json = runtime["network_domains"]
+        generation_request.requested_network_domains_json = runtime_permissions["network"]
         self.db.commit()
         self.db.refresh(generation_request)
         return permission_plan
+
+    def _runtime_permissions_from_plan(self, permission_plan: dict[str, Any]) -> dict[str, Any]:
+        runtime = permission_plan.get("runtime") if isinstance(permission_plan.get("runtime"), dict) else {}
+        return {
+            "network": list(runtime.get("network", []) or []),
+            "filesystem_read": list(runtime.get("filesystem_read", []) or []),
+            "filesystem_write": list(runtime.get("filesystem_write", []) or []),
+            "secrets": list(runtime.get("secrets", []) or []),
+            "shell": bool(runtime.get("shell", False)),
+            "codex": runtime.get("codex", {"call_response": True, "internet_access": bool(runtime.get("network"))}),
+        }
 
     def _record_pending_product_manager_question(
         self,
@@ -2037,6 +2048,7 @@ class AgentWorkflowService:
             "manifest_requirements": self._manifest_requirements(),
             "task_node": self._agent_task_node(task_node),
             "backend_api_context": backend_api_context(task_node.get("backend_api_ids", [])),
+            "backend_api_context_file": backend_api_context_file().as_posix(),
             "parent_interface_artifacts": self._parent_interface_artifacts(agent_run, task_node),
         }
 

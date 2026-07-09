@@ -25,19 +25,19 @@ Use Codex adapters when available to classify project plausibility and generate 
 
 ### AgentWorkflowService
 
-Coordinates bounded agent workflows for build, repair, and update. For builds, it records ProductManager intent refinement and plausibility steps before blueprint artifacts exist, pauses unclear requests with `needs_input`, writes `blueprint.json` and `permissions.json` only after a plausible review, requests deterministic build-time approval, writes `task_dag.json` only after approval, validates the DAG, schedules ready task nodes, starts Builder/Tester steps for each node, handles node fix loops, runs the final end-to-end Tester step, handles final fix loops, and records blocked summaries when needed.
+Coordinates bounded agent workflows for build, repair, and update. For builds, it records ProductManager intent refinement and plausibility steps before blueprint artifacts exist, pauses unclear requests with `needs_input`, invokes ProductManager in a read-only Codex workspace, parses ProductManager JSON, writes `blueprint.json` and `permissions.json` only after a plausible review, requests deterministic build-time approval, writes `task_dag.json` only after approval, validates the DAG, schedules ready task nodes, starts Builder/Tester steps for each node in controlled skill workspaces, handles node fix loops, runs the final end-to-end Tester step, handles final fix loops, and records blocked summaries when needed.
 
-When ProductManager writes `task_dag.json`, the backend exposes a small backend API index containing id, title, and description only. ProductManager may add `backend_api_ids` to a task node. Before Builder runs that node, the backend resolves those ids into full API context and appends it to Builder input as `backend_api_context`. Scheduling is not a Builder backend API; recurring intent belongs in `manifest.json` schedule metadata.
+When ProductManager returns task DAG JSON, the backend exposes the static `backend/app/static/backend_api_index.json` file containing id, title, and description only. ProductManager may add `backend_api_ids` to a task node. Before Builder runs that node, the backend resolves those ids from the static `backend/app/static/backend_api_context.json` file and appends only the selected entries to Builder input as `backend_api_context`. Scheduling is not a Builder backend API; recurring intent belongs in `manifest.json` schedule metadata.
 
 The build scheduler should be modular and called by the backend with the generation request, selected memory facts, approval state, project paths, Codex adapter, permission service, and proposed skill service. It should not be a generic workflow engine for unrelated applications.
 
 ### CodexService
 
-Builds prompts from instruction files and calls Codex adapters. It owns real/fake Codex integration, ProductManager intent refinement, plausibility review, blueprint writing, permission-plan writing, task DAG writing, proposed skill task-node builds, task-node repairs, final end-to-end repairs, update edits, Tester test-writing calls, and backend-mediated skill Codex calls.
+Builds prompts from instruction files and calls Codex adapters. It owns real/fake Codex integration, ProductManager intent refinement, plausibility review, blueprint JSON parsing, permission-plan JSON parsing, task DAG JSON parsing, proposed skill task-node builds, task-node repairs, final end-to-end repairs, update edits, Tester test-writing calls, and backend-mediated skill Codex calls. ProductManager Codex calls are forced to `read-only`; writable Builder/Tester calls are forced to `workspace-write` and scoped to controlled skill or draft-version directories.
 
 ### PermissionService
 
-Deterministically reviews permissions and dependencies. It creates approval requests, refreshes stale pending requests, approves/denies requests, detects permission expansion, checks install/run eligibility, and syncs waiting agent steps. Runtime `permissions.codex.call_response` is granted by default. Runtime `permissions.codex.internet_access` is supported only when the skill also has approved runtime network domains. Other Codex permission fields are blocked in this milestone.
+Deterministically reviews permissions and dependencies. It creates approval requests, refreshes stale pending requests, approves/denies requests, detects permission expansion, checks install/run eligibility, and syncs waiting agent steps. Runtime `permissions.codex.call_response` is granted by default. Runtime `permissions.codex.internet_access` is supported only when the skill also has approved runtime `network` entries. Other Codex permission fields are blocked in this milestone.
 
 ### ProposedSkillService
 
@@ -69,7 +69,7 @@ Request body:
 }
 ```
 
-Backend checks installed/enabled status, runtime approval, manifest validity, `permissions.codex.call_response`, and whether requested Codex internet access is backed by approved runtime network domains. Shell access remains prohibited; skills must not call the Codex CLI directly.
+Backend checks installed/enabled status, runtime approval, manifest validity, `permissions.codex.call_response`, and whether requested Codex internet access is backed by approved runtime `network` entries. Shell access remains prohibited; skills must not call the Codex CLI directly.
 
 Current PM-visible backend API catalog entries:
 

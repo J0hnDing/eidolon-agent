@@ -31,6 +31,14 @@ Use this template for future entries:
 
 ## Current Entries
 
+## 2026-07-09 00:50 America/Toronto - ProductManager Build Instruction Split
+
+- Area: ProductManager build workflow, permission-plan schema, agent instructions, backend permission parsing, docs, tests.
+- Intention: Make blueprint and permissions one ProductManager action, keep task DAG planning as a separate post-approval phase, and use a flat runtime permission syntax where domains live in `runtime.network`.
+- Changed: Added active `product_manager/blueprint_and_permissions.md` and lowercase `product_manager/task_dag.md`, left `product_manager/build.md` as legacy, removed PM summary Codex calls in favor of fallback summaries, removed `approval_summary`, removed unsupported DAG-phase block/ask language, changed `permissions.json` to use flat `runtime.network`/filesystem/codex fields instead of `runtime.permissions` plus `runtime.network_domains`, and updated `CodexService`, `AgentWorkflowService`, `PermissionService`, tests, and docs to parse and preserve that shape.
+- Verification: Focused PM/schema tests passed with `.\.venv\Scripts\python.exe -m pytest --basetemp "$env:TEMP\pa-pytest-codex-pm-schema" ...` from the repo root; full backend suite passed with `.\.venv\Scripts\python.exe -m pytest --basetemp "$env:TEMP\pa-pytest-codex-full-schema" backend\tests` from the repo root, `190 passed`.
+- Follow-up: Existing DB/API fields named `requested_network_domains_json` remain for compatibility and are populated from `permission_plan.runtime.network`; unrelated generated files under `skills/proposed/weekly_github_trend_analyzer/` remain untracked.
+
 ## 2026-07-08 15:06 America/Toronto - Remove Hybrid Skill Type
 
 - Area: Skill schema, Project Build planning, frontend skill UI, docs.

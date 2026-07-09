@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db import Base
 from app.models import AgentRunStep, MemoryFact, Skill, SkillGenerationRequest, SkillRun
 from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
+from app.services.backend_api_catalog import backend_api_context_file, backend_api_index_file
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.codex_service import CodexService, FakeCodexAdapter
 from app.services.permission_service import PermissionService
@@ -43,30 +44,33 @@ def test_product_manager_creates_blueprint_and_permissions_before_task_dag(tmp_p
     assert building_skill.status == "building"
     assert "milestones" not in agent_run.blueprint_json
     steps = sorted(agent_run.steps, key=lambda step: step.id)
-    assert [step.step_name for step in steps] == ["product_manager"] * 5
+    assert [step.step_name for step in steps] == ["product_manager"] * 4
     assert [step.input_json["action"] for step in steps] == [
         "pm_refine_intent",
         "pm_review_plausibility",
-        "pm_write_blueprint",
-        "pm_write_permissions",
+        "pm_write_blueprint_and_permissions",
         "backend_build_time_permission_review",
     ]
     assert steps[0].output_json["intent_prompt_path"].endswith("intent_prompt.json")
     assert steps[1].output_json["decision_json"]["decision"] == "proceed_to_blueprint"
     assert steps[2].output_json["blueprint_json"]["skill_name"] == building_skill.name
-    assert steps[3].output_json["permission_path"].endswith("permissions.json")
-    assert steps[4].output_json["decision_json"]["decision"] == "request_permission"
-    assert "task_dag_path" not in steps[4].output_json
+    assert steps[2].output_json["permission_path"].endswith("permissions.json")
+    assert steps[3].output_json["decision_json"]["decision"] == "request_permission"
+    assert "task_dag_path" not in steps[3].output_json
     assert (run_dir / "intent_prompt.json").is_file()
     assert (run_dir / "decision.json").is_file()
     assert (run_dir / "blueprint.json").is_file()
     assert (run_dir / "permissions.json").is_file()
+    permission_plan = json.loads((run_dir / "permissions.json").read_text(encoding="utf-8"))
+    assert "permissions" not in permission_plan["runtime"]
+    assert "network_domains" not in permission_plan["runtime"]
+    assert isinstance(permission_plan["runtime"]["network"], list)
     assert not (run_dir / "task_dag.json").exists()
     assert not (run_dir / "tasks").exists()
     assert all(not path.startswith("tests/") for path in agent_run.blueprint_json["expected_files"])
 
 
-def test_product_manager_uses_codex_adapter_for_blueprint_and_summary(tmp_path: Path, db_session: Session) -> None:
+def test_product_manager_uses_codex_adapter_for_blueprint_and_permissions(tmp_path: Path, db_session: Session) -> None:
     generation_request = create_generation_request(db_session)
 
     class RecordingAdapter(FakeCodexAdapter):
@@ -108,10 +112,12 @@ def test_product_manager_uses_codex_adapter_for_blueprint_and_summary(tmp_path: 
 
     assert "product_manager_build_review" in adapter.tasks
     assert "product_manager_refine_intent" in adapter.tasks
-    assert "product_manager_write_blueprint" in adapter.tasks
-    assert "product_manager_write_permissions" in adapter.tasks
-    assert "product_manager_summary" in adapter.tasks
+    assert "product_manager_write_blueprint_and_permissions" in adapter.tasks
+    assert "product_manager_write_permissions" not in adapter.tasks
+    assert "product_manager_summary" not in adapter.tasks
     refine_plan = next(plan for plan in adapter.plans if plan.get("codex_task") == "product_manager_refine_intent")
+    review_plan = next(plan for plan in adapter.plans if plan.get("codex_task") == "product_manager_build_review")
+    assert review_plan["intent_prompt"]["refined_prompt"]
     assert refine_plan["selected_memory_facts"] == [
         {
             "id": selected_fact.id,
@@ -212,6 +218,14 @@ def test_approved_build_uses_pm_builder_tester_and_permission_artifacts(tmp_path
     task_artifact = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "tasks" / "core_skill.json"
     interface_artifact = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "tasks" / "core_skill" / "interface_artifact.json"
     assert task_dag_artifact.is_file()
+    assert backend_api_index_file().is_file()
+    assert not (tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "backend_api_index.json").exists()
+    dag_step = next(
+        step
+        for step in agent_run.steps
+        if step.step_name == "product_manager" and step.input_json.get("action") == "pm_write_task_dag"
+    )
+    assert dag_step.input_json["backend_api_index_file"] == backend_api_index_file().as_posix()
     assert task_artifact.is_file()
     assert interface_artifact.is_file()
     test_file = tmp_path / "skills" / "proposed" / skill.name / "tests" / "test_core_skill.py"
@@ -411,6 +425,7 @@ def test_builder_receives_backend_api_context_for_task_node(tmp_path: Path, db_s
     builder_step = next(step for step in agent_run.steps if step.step_name == "builder")
     assert builder_step.input_json["task_node"]["backend_api_ids"] == [1]
     assert builder_step.input_json["backend_api_context"][0]["title"] == "Skill Codex Call API"
+    assert builder_step.input_json["backend_api_context_file"] == backend_api_context_file().as_posix()
 
 
 def test_interface_artifact_fallback_distinguishes_created_and_updated_paths(

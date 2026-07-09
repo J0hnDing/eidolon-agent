@@ -14,12 +14,12 @@ installed -> disabled
 ## Proposed Skill Workflow
 
 1. Project mode creates a generation request.
-2. ProductManager refines intent and writes a plausibility decision.
+2. ProductManager refines intent and returns a plausibility decision; the backend writes the decision artifact.
 3. If the request needs clarification, the same Project-mode chat continues the same generation request and ProductManager repeats intent/plausibility review.
-4. If the request is plausible, ProductManager writes blueprint and permission artifacts.
+4. If the request is plausible, ProductManager returns blueprint and permission JSON; the backend writes the artifacts.
 5. The app creates a build-time approval request from the blueprint summary and permission plan.
 6. User approves generation.
-7. ProductManager writes a task DAG.
+7. ProductManager returns task DAG JSON; the backend writes `task_dag.json`.
 8. Backend validates the DAG and schedules ready task nodes.
 9. Builder writes files inside `skills/proposed/<skill_name>/` for each task node.
 10. Tester writes/runs node tests immediately after task builds that require tests.

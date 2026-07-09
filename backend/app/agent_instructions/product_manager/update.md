@@ -43,14 +43,15 @@ Required JSON shape:
         "reason": "string"
       },
       "runtime": {
-        "permissions": {
-          "network": [],
-          "filesystem_read": [],
-          "filesystem_write": [],
-          "secrets": [],
-          "shell": false
+        "network": [],
+        "filesystem_read": [],
+        "filesystem_write": [],
+        "secrets": [],
+        "shell": false,
+        "codex": {
+          "call_response": true,
+          "internet_access": false
         },
-        "network_domains": [],
         "dependencies": [],
         "reason": "string"
       }

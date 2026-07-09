@@ -47,9 +47,9 @@ class PermissionService:
         permission_plan = self._permission_plan_from_plan(plan)
         runtime_plan = permission_plan["runtime"]
         build_time_plan = permission_plan["build_time"]
-        future_permissions = runtime_plan["permissions"]
+        future_permissions = self._runtime_permissions(runtime_plan)
         dependencies = list(runtime_plan["dependencies"])
-        network = list(runtime_plan["network_domains"])
+        network = list(future_permissions["network"])
         permissions = {
             "codex_generation": bool(build_time_plan.get("codex_generation", True)),
             "internet_research": bool(build_time_plan.get("internet_research", bool(network or dependencies))),
@@ -103,9 +103,9 @@ class PermissionService:
         permission_plan = self._permission_plan_from_plan(plan)
         runtime_plan = permission_plan["runtime"]
         build_time_plan = permission_plan["build_time"]
-        future_permissions = runtime_plan["permissions"]
+        future_permissions = self._runtime_permissions(runtime_plan)
         dependencies = list(runtime_plan["dependencies"])
-        network = list(runtime_plan["network_domains"])
+        network = list(future_permissions["network"])
         permissions = {
             "codex_generation": bool(build_time_plan.get("codex_generation", True)),
             "internet_research": bool(build_time_plan.get("internet_research", bool(network or dependencies))),
@@ -174,9 +174,9 @@ class PermissionService:
                 return existing
 
         permission_plan = self._permission_plan_from_plan(blueprint)
-        future_permissions = permission_plan["runtime"]["permissions"]
+        future_permissions = self._runtime_permissions(permission_plan["runtime"])
         dependencies = list(permission_plan["runtime"]["dependencies"])
-        network = list(permission_plan["runtime"]["network_domains"])
+        network = list(future_permissions["network"])
         filesystem = {
             "filesystem_read": future_permissions.get("filesystem_read", []),
             "filesystem_write": future_permissions.get("filesystem_write", []),
@@ -469,7 +469,7 @@ class PermissionService:
                 "secrets": [],
                 "shell": False,
             }
-        raw_permissions = runtime.get("permissions") if isinstance(runtime.get("permissions"), dict) else fallback_permissions
+        raw_permissions = runtime.get("permissions") if isinstance(runtime.get("permissions"), dict) else {**fallback_permissions, **runtime}
         permissions = {
             "network": list(raw_permissions.get("network", []) or []),
             "filesystem_read": list(raw_permissions.get("filesystem_read", []) or []),
@@ -478,7 +478,7 @@ class PermissionService:
             "shell": bool(raw_permissions.get("shell", False)),
         }
         dependencies = list(runtime.get("dependencies", plan.get("requested_dependencies", [])) or [])
-        network = list(runtime.get("network_domains", plan.get("requested_network_domains", permissions["network"])) or [])
+        network = list(permissions["network"] or plan.get("requested_network_domains", []) or [])
         permissions["codex"] = self._normalize_codex_permissions(raw_permissions, network)
         return {
             "build_time": {
@@ -488,11 +488,23 @@ class PermissionService:
                 "reason": str(build_time.get("reason") or "Codex needs to generate controlled skill files."),
             },
             "runtime": {
-                "permissions": permissions,
-                "network_domains": network,
+                **permissions,
                 "dependencies": dependencies,
                 "reason": str(runtime.get("reason") or "Expected runtime permissions for this skill."),
             },
+        }
+
+    def _runtime_permissions(self, runtime_plan: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "network": list(runtime_plan.get("network", []) or []),
+            "filesystem_read": list(runtime_plan.get("filesystem_read", []) or []),
+            "filesystem_write": list(runtime_plan.get("filesystem_write", []) or []),
+            "secrets": list(runtime_plan.get("secrets", []) or []),
+            "shell": bool(runtime_plan.get("shell", False)),
+            "codex": runtime_plan.get(
+                "codex",
+                {"call_response": True, "internet_access": bool(runtime_plan.get("network"))},
+            ),
         }
 
     def _risk_for_permissions(

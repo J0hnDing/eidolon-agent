@@ -21,6 +21,10 @@ class CodexGenerationError(RuntimeError):
     pass
 
 
+PRODUCT_MANAGER_SANDBOX = "read-only"
+WRITABLE_SKILL_SANDBOX = "workspace-write"
+
+
 class CodexAdapter(Protocol):
     def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
         pass
@@ -101,6 +105,16 @@ class RealCodexAdapter:
                 return bool(build_time.get("internet_research"))
         return bool(plan.get("requested_network_domains") or plan.get("requested_dependencies"))
 
+    def with_sandbox(self, sandbox_mode: str) -> "RealCodexAdapter":
+        return RealCodexAdapter(
+            command=self.command,
+            timeout_seconds=self.timeout_seconds,
+            sandbox_mode=sandbox_mode,
+            approval_policy=self.approval_policy,
+            enable_search=self.enable_search,
+            model=self.model,
+        )
+
 
 class FakeCodexAdapter:
     def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
@@ -136,18 +150,19 @@ class FakeCodexAdapter:
                 ),
                 stderr="",
             )
-        if task == "product_manager_write_permissions":
+        if task == "product_manager_write_blueprint_and_permissions":
+            blueprint = self._build_blueprint_from_plan(plan["generation_plan"], plan.get("user_message", ""))
             permission_plan = self._permission_plan_from_generation_plan(plan.get("generation_plan", {}))
-            blueprint_permission_plan = plan.get("blueprint_json", {}).get("permission_plan")
-            if isinstance(blueprint_permission_plan, dict):
-                runtime = blueprint_permission_plan.get("runtime")
-                permissions = runtime.get("permissions") if isinstance(runtime, dict) else None
-                if isinstance(permissions, dict) and any(permissions.get(key) for key in ("network", "filesystem_read", "filesystem_write", "secrets", "shell")):
-                    permission_plan = blueprint_permission_plan
             return subprocess.CompletedProcess(
-                args=["fake-codex-product-manager-permissions"],
+                args=["fake-codex-product-manager-blueprint-permissions"],
                 returncode=0,
-                stdout=json.dumps({"permission_plan": permission_plan}),
+                stdout=json.dumps(
+                    {
+                        "blueprint": blueprint,
+                        "permission_plan": permission_plan,
+                        "summary": f"Build {blueprint['skill_name']} as a reusable skill.",
+                    }
+                ),
                 stderr="",
             )
         if task == "product_manager_write_task_dag":
@@ -319,14 +334,38 @@ class FakeCodexAdapter:
                 "reason": "Codex needs to generate proposed skill files.",
             },
             "runtime": {
-                "permissions": plan.get(
-                    "requested_permissions",
-                    {"network": [], "filesystem_read": [], "filesystem_write": [], "secrets": [], "shell": False},
-                ),
-                "network_domains": plan.get("requested_network_domains", []),
+                **self._flat_runtime_permissions(plan),
                 "dependencies": plan.get("requested_dependencies", []),
                 "reason": "Runtime permissions expected by the proposed skill design.",
             },
+        }
+
+    def _flat_runtime_permissions(self, plan: dict) -> dict:
+        permissions = plan.get(
+            "requested_permissions",
+            {"network": [], "filesystem_read": [], "filesystem_write": [], "secrets": [], "shell": False},
+        )
+        if not isinstance(permissions, dict):
+            permissions = {"network": [], "filesystem_read": [], "filesystem_write": [], "secrets": [], "shell": False}
+        network = list(permissions.get("network", plan.get("requested_network_domains", [])) or [])
+        if not network:
+            network = list(plan.get("requested_network_domains", []) or [])
+        return {
+            "network": network,
+            "filesystem_read": list(permissions.get("filesystem_read", []) or []),
+            "filesystem_write": list(permissions.get("filesystem_write", []) or []),
+            "secrets": list(permissions.get("secrets", []) or []),
+            "shell": bool(permissions.get("shell", False)),
+            "codex": self._fake_codex_permissions(permissions, network),
+        }
+
+    def _fake_codex_permissions(self, permissions: dict, network: list[str]) -> dict[str, bool]:
+        raw_codex = permissions.get("codex")
+        if not isinstance(raw_codex, dict):
+            raw_codex = {}
+        return {
+            "call_response": bool(raw_codex.get("call_response", True)),
+            "internet_access": bool(raw_codex.get("internet_access", bool(network))),
         }
 
     def _build_blueprint_from_plan(self, plan: dict, user_message: str) -> dict:
@@ -441,14 +480,12 @@ class FakeCodexAdapter:
                     "reason": "Codex needs to create a draft version for this update.",
                 },
                 "runtime": {
-                    "permissions": {
-                        "network": requested_network_domains,
-                        "filesystem_read": [],
-                        "filesystem_write": ["./cache"] if requested_network_domains else [],
-                        "secrets": [],
-                        "shell": False,
-                    },
-                    "network_domains": requested_network_domains,
+                    "network": requested_network_domains,
+                    "filesystem_read": [],
+                    "filesystem_write": ["./cache"] if requested_network_domains else [],
+                    "secrets": [],
+                    "shell": False,
+                    "codex": {"call_response": True, "internet_access": bool(requested_network_domains)},
                     "dependencies": requested_dependencies,
                     "reason": "Expected runtime permissions for the updated skill design.",
                 },
@@ -618,6 +655,47 @@ class CodexService:
             self.adapter = default_codex_adapter()
         self.proposed_service = ProposedSkillService(self.db, project_root=self.project_root)
 
+    def _generate_product_manager(
+        self,
+        prompt: str,
+        payload: dict[str, object],
+    ) -> subprocess.CompletedProcess[str]:
+        adapter = self.adapter
+        if isinstance(adapter, RealCodexAdapter):
+            adapter = adapter.with_sandbox(PRODUCT_MANAGER_SANDBOX)
+        return adapter.generate(prompt, self._product_manager_workspace(), payload)
+
+    def _generate_writable_skill(
+        self,
+        prompt: str,
+        output_dir: Path,
+        plan: dict,
+    ) -> subprocess.CompletedProcess[str]:
+        self._assert_writable_skill_workspace(output_dir)
+        adapter = self.adapter
+        if isinstance(adapter, RealCodexAdapter):
+            adapter = adapter.with_sandbox(WRITABLE_SKILL_SANDBOX)
+        return adapter.generate(prompt, output_dir, plan)
+
+    def _assert_proposed_skill_workspace(self, output_dir: Path) -> Path:
+        resolved = output_dir.resolve()
+        proposed_root = (self.project_root / "skills" / "proposed").resolve()
+        if resolved.parent != proposed_root:
+            raise CodexGenerationError("Generated skill workspace must be one skill folder inside skills/proposed")
+        return resolved
+
+    def _assert_writable_skill_workspace(self, output_dir: Path) -> Path:
+        resolved = output_dir.resolve()
+        proposed_root = (self.project_root / "skills" / "proposed").resolve()
+        installed_root = (self.project_root / "skills" / "installed").resolve()
+        in_proposed_skill = resolved.parent == proposed_root
+        in_installed_skill = resolved != installed_root and resolved.is_relative_to(installed_root)
+        if not in_proposed_skill and not in_installed_skill:
+            raise CodexGenerationError(
+                "Codex write workspace must be a controlled skill folder under skills/proposed or skills/installed"
+            )
+        return resolved
+
     def product_manager_build_blueprint(self, generation_request: SkillGenerationRequest) -> dict[str, object]:
         return self.product_manager_write_blueprint(generation_request, intent_prompt={})
 
@@ -638,9 +716,8 @@ class CodexService:
             "refined_prompt": generation_request.user_message,
             "selected_memory_facts": selected_memory_facts or [],
         }
-        result = self.adapter.generate(
+        result = self._generate_product_manager(
             self.build_product_manager_prompt("refine_intent", payload),
-            self._product_manager_workspace(),
             payload,
         )
         parsed = self._parse_product_manager_json(result, fallback={"intent_prompt": fallback})
@@ -652,49 +729,39 @@ class CodexService:
         generation_request: SkillGenerationRequest,
         intent_prompt: dict[str, object],
     ) -> dict[str, object]:
+        blueprint, _permission_plan = self.product_manager_write_blueprint_and_permissions(generation_request, intent_prompt)
+        return blueprint
+
+    def product_manager_write_blueprint_and_permissions(
+        self,
+        generation_request: SkillGenerationRequest,
+        intent_prompt: dict[str, object],
+    ) -> tuple[dict[str, object], dict[str, object]]:
         plan = generation_request.plan_json
         payload = {
-            "codex_task": "product_manager_write_blueprint",
+            "codex_task": "product_manager_write_blueprint_and_permissions",
             "user_message": generation_request.user_message,
             "intent_prompt": intent_prompt,
             "generation_plan": plan,
         }
         fallback = self._fallback_build_blueprint(generation_request)
-        result = self.adapter.generate(
-            self.build_product_manager_prompt("write_blueprint", payload),
-            self._product_manager_workspace(),
+        fallback_permission_plan = self._sanitize_permission_plan(fallback.get("permission_plan"), generation_request.plan_json)
+        result = self._generate_product_manager(
+            self.build_product_manager_prompt("write_blueprint_and_permissions", payload),
             payload,
         )
-        parsed = self._parse_product_manager_json(result, fallback={"blueprint": fallback})
+        parsed = self._parse_product_manager_json(
+            result,
+            fallback={"blueprint": fallback, "permission_plan": fallback_permission_plan},
+        )
         blueprint = self._sanitize_blueprint(parsed.get("blueprint"), fallback)
         if isinstance(parsed.get("summary"), str):
             blueprint["product_manager_summary"] = str(parsed["summary"]).strip()
         if isinstance(parsed.get("decision"), str):
             blueprint["decision"] = str(parsed["decision"]).strip()
         blueprint.pop("permission_plan", None)
-        return blueprint
-
-    def product_manager_write_permissions(
-        self,
-        generation_request: SkillGenerationRequest,
-        intent_prompt: dict[str, object],
-        blueprint: dict[str, object],
-    ) -> dict[str, object]:
-        payload = {
-            "codex_task": "product_manager_write_permissions",
-            "user_message": generation_request.user_message,
-            "intent_prompt": intent_prompt,
-            "blueprint_json": blueprint,
-            "generation_plan": generation_request.plan_json,
-        }
-        fallback = self._sanitize_permission_plan(blueprint.get("permission_plan"), generation_request.plan_json)
-        result = self.adapter.generate(
-            self.build_product_manager_prompt("write_permissions", payload),
-            self._product_manager_workspace(),
-            payload,
-        )
-        parsed = self._parse_product_manager_json(result, fallback={"permission_plan": fallback})
-        return self._sanitize_permission_plan(parsed.get("permission_plan"), generation_request.plan_json)
+        permission_plan = self._sanitize_permission_plan(parsed.get("permission_plan"), generation_request.plan_json)
+        return blueprint, permission_plan
 
     def product_manager_write_task_dag(
         self,
@@ -702,6 +769,7 @@ class CodexService:
         intent_prompt: dict[str, object],
         blueprint: dict[str, object],
         permission_plan: dict[str, object],
+        backend_api_index_payload: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
         payload = {
             "codex_task": "product_manager_write_task_dag",
@@ -710,21 +778,25 @@ class CodexService:
             "blueprint_json": blueprint,
             "permission_plan": permission_plan,
             "generation_plan": generation_request.plan_json,
-            "backend_api_index": backend_api_index(),
+            "backend_api_index": backend_api_index_payload or backend_api_index(),
         }
         fallback = self._fallback_task_dag(generation_request, blueprint)
-        result = self.adapter.generate(
+        result = self._generate_product_manager(
             self.build_product_manager_prompt("write_task_dag", payload),
-            self._product_manager_workspace(),
             payload,
         )
         parsed = self._parse_product_manager_json(result, fallback={"task_dag": fallback})
         return self._sanitize_task_dag(parsed.get("task_dag"), fallback, blueprint)
 
-    def product_manager_build_review(self, generation_request: SkillGenerationRequest) -> dict[str, object]:
+    def product_manager_build_review(
+        self,
+        generation_request: SkillGenerationRequest,
+        intent_prompt: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         payload = {
             "codex_task": "product_manager_build_review",
             "user_message": generation_request.user_message,
+            "intent_prompt": intent_prompt or {},
             "project_conversation": generation_request.plan_json.get("project_conversation", []),
             "pending_user_prompt": generation_request.plan_json.get("pending_user_prompt"),
         }
@@ -735,9 +807,8 @@ class CodexService:
             "user_prompt": None,
             "optional_projects": [],
         }
-        result = self.adapter.generate(
+        result = self._generate_product_manager(
             self.build_product_manager_prompt("build_review", payload),
-            self._product_manager_workspace(),
             payload,
         )
         parsed = self._parse_product_manager_json(result, fallback=fallback)
@@ -752,9 +823,8 @@ class CodexService:
             "user_request": user_request or f"Repair skill {skill.name}.",
         }
         fallback = self._fallback_repair_blueprint(skill, user_request)
-        result = self.adapter.generate(
+        result = self._generate_product_manager(
             self.build_product_manager_prompt("repair_blueprint", payload),
-            self._product_manager_workspace(),
             payload,
         )
         parsed = self._parse_product_manager_json(result, fallback={"blueprint": fallback})
@@ -771,30 +841,14 @@ class CodexService:
             "project_files": self._read_skill_files(skill),
         }
         fallback = self._fallback_update_review(skill, suggestion)
-        result = self.adapter.generate(
+        result = self._generate_product_manager(
             self.build_product_manager_prompt("update_review", payload),
-            self._product_manager_workspace(),
             payload,
         )
         parsed = self._parse_product_manager_json(result, fallback=fallback)
         return self._sanitize_update_review(skill, suggestion, parsed, fallback)
 
     def product_manager_summary(self, summary_type: str, context: dict[str, object], fallback_summary: str) -> str:
-        payload = {
-            "codex_task": "product_manager_summary",
-            "summary_type": summary_type,
-            "context": context,
-            "fallback_summary": fallback_summary,
-        }
-        result = self.adapter.generate(
-            self.build_product_manager_prompt("summary", payload),
-            self._product_manager_workspace(),
-            payload,
-        )
-        parsed = self._parse_product_manager_json(result, fallback={"summary": fallback_summary})
-        summary = parsed.get("summary")
-        if isinstance(summary, str) and summary.strip():
-            return summary.strip()
         return fallback_summary
 
     def skill_runtime_codex_call(
@@ -867,6 +921,7 @@ class CodexService:
         plan = generation_request.plan_json
         skill_name = self.proposed_service.validate_skill_name(plan["skill_name"])
         proposed_dir = self.proposed_service.proposed_dir(skill_name)
+        self._assert_proposed_skill_workspace(proposed_dir)
         installed_dir = self.proposed_service.installed_dir(skill_name)
         if installed_dir.exists():
             raise CodexGenerationError(f"Installed skill already exists: {skill_name}")
@@ -882,7 +937,7 @@ class CodexService:
         if milestone_context is not None:
             plan_for_adapter["current_milestone"] = milestone_context
         prompt = self.build_prompt(plan_for_adapter, proposed_dir, builder_writes_tests=builder_writes_tests)
-        result = self.adapter.generate(prompt, proposed_dir, plan_for_adapter)
+        result = self._generate_writable_skill(prompt, proposed_dir, plan_for_adapter)
         if result.returncode != 0:
             generation_request.status = "failed"
             generation_request.error_message = result.stderr or "Codex generation failed"
@@ -911,6 +966,7 @@ class CodexService:
         milestone_context: dict[str, object],
     ) -> tuple[subprocess.CompletedProcess[str], object]:
         skill_dir = self.proposed_service.skill_dir_for_record(skill)
+        self._assert_proposed_skill_workspace(skill_dir)
         plan = {
             **generation_request.plan_json,
             "codex_task": "skill_build_milestone",
@@ -919,7 +975,7 @@ class CodexService:
             "existing_files": self._read_files_from_dir(skill_dir),
         }
         prompt = self.build_prompt(plan, skill_dir, builder_writes_tests=False)
-        result = self.adapter.generate(prompt, skill_dir, plan)
+        result = self._generate_writable_skill(prompt, skill_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex milestone build failed")
         self.finalize_manifest(skill_dir, generation_request.plan_json, milestone_context)
@@ -930,9 +986,10 @@ class CodexService:
 
     def repair_skill(self, skill: Skill, failure_context: dict) -> subprocess.CompletedProcess[str]:
         skill_dir = self.proposed_service.skill_dir_for_record(skill)
+        self._assert_proposed_skill_workspace(skill_dir)
         plan = {**self.plan_from_skill(skill, failure_context), "builder_writes_tests": False}
         prompt = self.build_repair_prompt(skill, skill_dir, failure_context)
-        result = self.adapter.generate(prompt, skill_dir, plan)
+        result = self._generate_writable_skill(prompt, skill_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex repair failed")
         return result
@@ -954,7 +1011,7 @@ class CodexService:
             "builder_writes_tests": False,
         }
         prompt = self.build_repair_prompt(skill, version_dir, failure_context)
-        result = self.adapter.generate(prompt, version_dir, plan)
+        result = self._generate_writable_skill(prompt, version_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex draft-version repair failed")
         return result
@@ -978,13 +1035,14 @@ class CodexService:
             "project_files": self._read_files_from_dir(version_dir),
         }
         prompt = self.build_update_prompt(skill, version, version_dir, suggestion, blueprint)
-        result = self.adapter.generate(prompt, version_dir, plan)
+        result = self._generate_writable_skill(prompt, version_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex update failed")
         return result
 
     def write_tests_for_skill(self, skill: Skill, tester_context: dict) -> subprocess.CompletedProcess[str]:
         skill_dir = self.proposed_service.skill_dir_for_record(skill)
+        self._assert_proposed_skill_workspace(skill_dir)
         plan = {
             **self.plan_from_skill(skill, tester_context),
             "codex_task": "tester_write_tests",
@@ -1003,7 +1061,7 @@ class CodexService:
             "tool_ui_schema": skill.tool_ui_schema_json,
         }
         prompt = self.build_tester_prompt(skill, skill_dir, tester_context)
-        result = self.adapter.generate(prompt, skill_dir, plan)
+        result = self._generate_writable_skill(prompt, skill_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex tester failed to write tests")
         return result
@@ -1038,7 +1096,7 @@ class CodexService:
             "tool_ui_schema": skill.tool_ui_schema_json,
         }
         prompt = self.build_tester_prompt(skill, version_dir, {**tester_context, "mode": "update"})
-        result = self.adapter.generate(prompt, version_dir, plan)
+        result = self._generate_writable_skill(prompt, version_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex tester failed to write draft-version tests")
         return result
@@ -1178,12 +1236,12 @@ class CodexService:
         blueprint = self._context_blueprint(plan, milestone_context)
         permission_plan = self._context_permission_plan(plan, milestone_context)
         runtime = permission_plan.get("runtime") if isinstance(permission_plan.get("runtime"), dict) else {}
-        permissions = runtime.get("permissions") if isinstance(runtime.get("permissions"), dict) else {}
+        permissions = self._runtime_permissions(runtime)
         sanitized_permission_plan = self._sanitize_permission_plan(
-            {"runtime": {"permissions": permissions, "dependencies": runtime.get("dependencies", [])}},
+            {"runtime": {**permissions, "dependencies": runtime.get("dependencies", [])}},
             plan,
         )
-        sanitized_permissions = sanitized_permission_plan["runtime"]["permissions"]
+        sanitized_permissions = self._runtime_permissions(sanitized_permission_plan["runtime"])
         skill_type = str(blueprint.get("skill_type") or plan.get("skill_type") or "automation")
         interface_type = str(blueprint.get("interface_type") or plan.get("interface_type") or "chat")
         dependencies = list(
@@ -1237,18 +1295,47 @@ class CodexService:
             return "SKILL.md"
         return None
 
-    def _sanitize_codex_permissions(self, permissions: dict[str, object], network_domains: list[str]) -> dict[str, bool]:
+    def _sanitize_codex_permissions(self, permissions: dict[str, object], network: list[str]) -> dict[str, bool]:
         raw_codex = permissions.get("codex")
         if not isinstance(raw_codex, dict):
             raw_codex = {}
         sanitized = {
             "call_response": bool(raw_codex.get("call_response", True)),
-            "internet_access": bool(raw_codex.get("internet_access", bool(network_domains))),
+            "internet_access": bool(raw_codex.get("internet_access", bool(network))),
         }
         for key, value in raw_codex.items():
             if key not in sanitized:
                 sanitized[str(key)] = bool(value)
         return sanitized
+
+    def _runtime_permissions(self, runtime: dict[str, object]) -> dict[str, object]:
+        return {
+            "network": list(runtime.get("network", []) or []),
+            "filesystem_read": list(runtime.get("filesystem_read", []) or []),
+            "filesystem_write": list(runtime.get("filesystem_write", []) or []),
+            "secrets": list(runtime.get("secrets", []) or []),
+            "shell": bool(runtime.get("shell", False)),
+            "codex": runtime.get("codex", {"call_response": True, "internet_access": bool(runtime.get("network"))}),
+        }
+
+    def _flat_runtime_permissions(self, plan: dict[str, object]) -> dict[str, object]:
+        permissions = plan.get(
+            "requested_permissions",
+            {"network": [], "filesystem_read": [], "filesystem_write": [], "secrets": [], "shell": False},
+        )
+        if not isinstance(permissions, dict):
+            permissions = {"network": [], "filesystem_read": [], "filesystem_write": [], "secrets": [], "shell": False}
+        network = list(permissions.get("network", plan.get("requested_network_domains", [])) or [])
+        if not network:
+            network = list(plan.get("requested_network_domains", []) or [])
+        return {
+            "network": network,
+            "filesystem_read": list(permissions.get("filesystem_read", []) or []),
+            "filesystem_write": list(permissions.get("filesystem_write", []) or []),
+            "secrets": list(permissions.get("secrets", []) or []),
+            "shell": bool(permissions.get("shell", False)),
+            "codex": self._sanitize_codex_permissions(permissions, network),
+        }
 
     def _context_blueprint(
         self,
@@ -1304,6 +1391,7 @@ Generation plan:
 Product structure:
 - Follow the ProductManager blueprint, permissions, task_dag.json, and current task node.
 - Build only the current task node and respect its file_write_claims.
+- Treat the folder above as the only writable workspace. Do not write by absolute path or traverse outside it.
 - Do not write blueprint.json, permissions.json, task_dag.json, task JSON files, or other runtime/agent_runs artifacts; those are platform workflow artifacts.
 - The backend may seed manifest.json from the approved blueprint and permissions before Builder runs. Preserve that schema shape and complete only fields owned by the current task node.
 - Platform validation still requires manifest.json and README.md in every skill package.
@@ -1414,14 +1502,14 @@ Current draft files:
             "build_blueprint": "product_manager/build.md",
             "build_review": "product_manager/plausibility_review.md",
             "refine_intent": "product_manager/refine_intent.md",
-            "write_blueprint": "product_manager/build.md",
-            "write_permissions": "product_manager/build.md",
-            "write_task_dag": "product_manager/build.md",
+            "write_blueprint_and_permissions": "product_manager/blueprint_and_permissions.md",
+            "write_blueprint": "product_manager/blueprint_and_permissions.md",
+            "write_permissions": "product_manager/blueprint_and_permissions.md",
+            "write_task_dag": "product_manager/task_dag.md",
             "repair_blueprint": "product_manager/repair.md",
             "update_review": "product_manager/update.md",
-            "summary": "product_manager/summary.md",
         }
-        instruction = self._instruction(instruction_by_task.get(task, "product_manager/summary.md"))
+        instruction = self._instruction(instruction_by_task.get(task, "product_manager/build.md"))
         return f"""
 {instruction}
 
@@ -1504,11 +1592,7 @@ Payload:
                     "reason": "Codex needs to generate controlled skill files.",
                 },
                 "runtime": {
-                    "permissions": blueprint.get(
-                        "requested_permissions",
-                        {"network": [], "filesystem_read": [], "filesystem_write": [], "secrets": [], "shell": False},
-                    ),
-                    "network_domains": blueprint.get("requested_network_domains", []),
+                    **self._flat_runtime_permissions(blueprint),
                     "dependencies": blueprint.get("requested_dependencies", []),
                     "reason": "Expected runtime permissions for this skill.",
                 },
@@ -1534,12 +1618,12 @@ Payload:
                 **dict(fallback_plan["requested_permissions"]),  # type: ignore[index]
             }
         default_dependencies = list(fallback_plan.get("requested_dependencies", []) or [])
-        default_network = list(fallback_plan.get("requested_network_domains", default_permissions.get("network", [])) or [])
         if not isinstance(value, dict):
             value = {}
         build_time = value.get("build_time") if isinstance(value.get("build_time"), dict) else {}
         runtime = value.get("runtime") if isinstance(value.get("runtime"), dict) else {}
-        permissions = runtime.get("permissions") if isinstance(runtime.get("permissions"), dict) else default_permissions
+        legacy_permissions = runtime.get("permissions") if isinstance(runtime.get("permissions"), dict) else None
+        permissions = legacy_permissions if legacy_permissions is not None else {**default_permissions, **runtime}
         sanitized_permissions = {
             "network": list(permissions.get("network", []) or []),
             "filesystem_read": list(permissions.get("filesystem_read", []) or []),
@@ -1547,19 +1631,18 @@ Payload:
             "secrets": list(permissions.get("secrets", []) or []),
             "shell": bool(permissions.get("shell", False)),
         }
-        network_domains = list(runtime.get("network_domains", sanitized_permissions["network"]) or [])
-        sanitized_permissions["codex"] = self._sanitize_codex_permissions(permissions, network_domains)
+        network = sanitized_permissions["network"]
+        sanitized_permissions["codex"] = self._sanitize_codex_permissions(permissions, network)
         dependencies = list(runtime.get("dependencies", default_dependencies) or [])
         return {
             "build_time": {
                 "codex_generation": bool(build_time.get("codex_generation", True)),
-                "internet_research": bool(build_time.get("internet_research", bool(network_domains or dependencies))),
+                "internet_research": bool(build_time.get("internet_research", bool(network or dependencies))),
                 "dependencies": list(build_time.get("dependencies", dependencies) or []),
                 "reason": str(build_time.get("reason") or "Codex needs to generate controlled skill files."),
             },
             "runtime": {
-                "permissions": sanitized_permissions,
-                "network_domains": network_domains or default_network,
+                **sanitized_permissions,
                 "dependencies": dependencies,
                 "reason": str(runtime.get("reason") or "Expected runtime permissions for this skill."),
             },
@@ -1731,11 +1814,7 @@ Payload:
                 "reason": "Codex needs to generate proposed skill files.",
             },
             "runtime": {
-                "permissions": plan.get(
-                    "requested_permissions",
-                    {"network": [], "filesystem_read": [], "filesystem_write": [], "secrets": [], "shell": False},
-                ),
-                "network_domains": plan.get("requested_network_domains", []),
+                **self._flat_runtime_permissions(plan),
                 "dependencies": plan.get("requested_dependencies", []),
                 "reason": "Runtime permissions expected by the proposed skill design.",
             },
@@ -1857,14 +1936,12 @@ Payload:
                     "reason": "Codex needs to create a draft version for this update.",
                 },
                 "runtime": {
-                    "permissions": {
-                        "network": requested_network_domains,
-                        "filesystem_read": [],
-                        "filesystem_write": ["./cache"] if requested_network_domains else [],
-                        "secrets": [],
-                        "shell": False,
-                    },
-                    "network_domains": requested_network_domains,
+                    "network": requested_network_domains,
+                    "filesystem_read": [],
+                    "filesystem_write": ["./cache"] if requested_network_domains else [],
+                    "secrets": [],
+                    "shell": False,
+                    "codex": {"call_response": True, "internet_access": bool(requested_network_domains)},
                     "dependencies": requested_dependencies,
                     "reason": "Expected runtime permissions for the updated skill design.",
                 },

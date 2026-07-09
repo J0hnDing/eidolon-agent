@@ -133,9 +133,6 @@ The MVP blocks or rejects:
 - unrestricted or wildcard network access,
 - browser automation,
 - email/calendar/finance actions,
-- public posting,
-- purchases,
-- trading,
 - file deletion,
 - arbitrary command execution.
 

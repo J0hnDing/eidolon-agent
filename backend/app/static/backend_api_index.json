@@ -1,0 +1,14 @@
+{
+  "backend_apis": [
+    {
+      "id": 1,
+      "title": "Skill Codex Call API",
+      "description": "Lets an installed skill ask the backend to call Codex for a bounded text response. Shell remains prohibited; Codex internet access is allowed only when the skill has runtime network access."
+    },
+    {
+      "id": 2,
+      "title": "Tool UI Schema API",
+      "description": "Declarative manifest fields for rendering an installed tool in the Tools UI. This is metadata, not app frontend code."
+    }
+  ]
+}

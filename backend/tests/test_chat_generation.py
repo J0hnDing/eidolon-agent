@@ -10,12 +10,18 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import AgentRun, MemoryFact, Message, SkillGenerationRequest
+from app.models import AgentRun, MemoryFact, Message, Skill, SkillGenerationRequest
 from app.routers import chat as chat_router
 from app.schemas.skill_generation import ChatRequest, ChatResponse
 from app.services.agent_workflow_service import AgentWorkflowError
 from app.services.chat_orchestrator import ChatOrchestrator
-from app.services.codex_service import CodexService, FakeCodexAdapter, RealCodexAdapter, default_codex_adapter
+from app.services.codex_service import (
+    CodexGenerationError,
+    CodexService,
+    FakeCodexAdapter,
+    RealCodexAdapter,
+    default_codex_adapter,
+)
 from app.services.direct_chat_service import DirectChatService, RealDirectChatAdapter
 from app.services.permission_service import PermissionService
 from app.services.project_plausibility import (
@@ -322,17 +328,17 @@ def test_project_mode_uses_product_manager_review_before_blueprint(db_session: S
 
     generation_request = response["generation_request"]
     assert plan_adapter.called is True
-    assert tasks[:4] == [
+    assert tasks[:3] == [
         "product_manager_refine_intent",
         "product_manager_build_review",
-        "product_manager_write_blueprint",
-        "product_manager_write_permissions",
+        "product_manager_write_blueprint_and_permissions",
     ]
     assert "performing intent refinement" in prompts["product_manager_refine_intent"]
-    assert "performing Phase 1 intent and plausibility review" not in prompts["product_manager_refine_intent"]
-    assert "performing Phase 1 intent and plausibility review" in prompts["product_manager_build_review"]
+    assert "performing plausibility review" not in prompts["product_manager_refine_intent"]
+    assert "performing plausibility review" in prompts["product_manager_build_review"]
     assert '"blueprint"' not in prompts["product_manager_build_review"]
-    assert "For `write_blueprint`, return" in prompts["product_manager_write_blueprint"]
+    assert "Expected JSON syntax" in prompts["product_manager_write_blueprint_and_permissions"]
+    assert "For `write_task_dag`, return" not in prompts["product_manager_write_blueprint_and_permissions"]
     agent_run = db_session.query(AgentRun).filter_by(generation_request_id=generation_request.id).one()
     steps = sorted(agent_run.steps, key=lambda step: step.id)
     decisions = [
@@ -949,6 +955,113 @@ def test_real_codex_adapter_uses_restricted_exec_command(tmp_path: Path, monkeyp
     assert captured["kwargs"]["input"] == "Generate only this proposed skill."
     assert captured["kwargs"]["encoding"] == "utf-8"
     assert (output_dir / "codex_prompt.txt").is_file()
+
+
+def test_product_manager_codex_calls_force_read_only_sandbox(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_commands: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        captured_commands.append(command)
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr("app.services.codex_service.subprocess.run", fake_run)
+
+    plan = skill_plan()
+    generation_request = SkillGenerationRequest(
+        user_message="Create a reusable local workflow skill.",
+        proposed_skill_name=plan["skill_name"],
+        proposed_display_name=plan["display_name"],
+        proposed_skill_type=plan["skill_type"],
+        plan_json=plan,
+        requested_permissions_json=plan["requested_permissions"],
+        requested_dependencies_json=plan["requested_dependencies"],
+        requested_network_domains_json=plan["requested_network_domains"],
+        risk_level=plan["risk_level"],
+        status="planned",
+    )
+    service = CodexService(
+        db_session,
+        adapter=RealCodexAdapter(command="codex", timeout_seconds=10, sandbox_mode="workspace-write"),
+        project_root=tmp_path,
+    )
+
+    intent_prompt = service.product_manager_refine_intent(generation_request)
+    decision = service.product_manager_build_review(generation_request)
+    blueprint, permission_plan = service.product_manager_write_blueprint_and_permissions(generation_request, intent_prompt)
+    service.product_manager_write_task_dag(generation_request, intent_prompt, blueprint, permission_plan)
+    assert service.product_manager_summary("build_blocked", decision, "Fallback summary.") == "Fallback summary."
+
+    assert len(captured_commands) == 4
+    for command in captured_commands:
+        assert command[command.index("-C") + 1] == str(tmp_path / "runtime" / "product_manager")
+        assert command[command.index("--sandbox") + 1] == "read-only"
+
+
+def test_skill_generation_codex_call_forces_workspace_write_inside_skill_folder(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("app.services.codex_service.subprocess.run", fake_run)
+
+    plan = skill_plan()
+    generation_request = SkillGenerationRequest(
+        user_message="Create a reusable local workflow skill.",
+        proposed_skill_name=plan["skill_name"],
+        proposed_display_name=plan["display_name"],
+        proposed_skill_type=plan["skill_type"],
+        plan_json=plan,
+        requested_permissions_json=plan["requested_permissions"],
+        requested_dependencies_json=plan["requested_dependencies"],
+        requested_network_domains_json=plan["requested_network_domains"],
+        risk_level=plan["risk_level"],
+        status="planned",
+    )
+    db_session.add(generation_request)
+    db_session.commit()
+    approve_build_time_permissions(db_session, generation_request)
+
+    CodexService(
+        db_session,
+        adapter=RealCodexAdapter(command="codex", timeout_seconds=10, sandbox_mode="danger-full-access"),
+        project_root=tmp_path,
+    ).generate_from_request(generation_request)
+
+    output_dir = tmp_path / "skills" / "proposed" / plan["skill_name"]
+    command = captured["command"]
+    assert command[command.index("-C") + 1] == str(output_dir)
+    assert command[command.index("--sandbox") + 1] == "workspace-write"
+    assert captured["kwargs"]["cwd"] == output_dir
+
+
+def test_builder_repair_rejects_non_proposed_skill_workspace(tmp_path: Path, db_session: Session) -> None:
+    skill = Skill(
+        name="installed_skill",
+        description="Installed skills are not build-repair workspaces.",
+        skill_type="automation",
+        interface_type="chat",
+        risk_level="low",
+        manifest_path="skills/installed/installed_skill/manifest.json",
+        status="installed",
+    )
+    db_session.add(skill)
+    db_session.commit()
+
+    service = CodexService(db_session, adapter=FakeCodexAdapter(), project_root=tmp_path)
+
+    with pytest.raises(CodexGenerationError, match="skills/proposed"):
+        service.repair_skill(skill, {"failure_log": "failed"})
 
 
 def test_real_codex_adapter_auto_enables_search_for_network_plans(

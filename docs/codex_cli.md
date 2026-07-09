@@ -47,9 +47,9 @@ $env:PERSONAL_AGENT_CODEX_TIMEOUT_SECONDS = "300"
 
 ## Boundaries
 
-Chat and plausibility run read-only. Skill build/update work runs in a controlled skill workspace. Codex must not modify backend or frontend app source while generating an application skill.
+Chat, plausibility, and ProductManager workflow actions run read-only. ProductManager returns structured JSON and the backend writes workflow artifact files. Builder/Tester skill build, repair, test-authoring, and update work runs with `workspace-write` scoped to the controlled skill or draft-version directory. Codex must not modify backend or frontend app source while generating an application skill.
 
-Build-time web search may be enabled when approved permissions request network domains or package dependencies. Runtime network access is separate and still requires manifest declaration, runtime approval, and runner support.
+Build-time web search may be enabled when approved permissions request runtime `network` entries or package dependencies. Runtime network access is separate and still requires manifest declaration, runtime approval, and runner support.
 
 Do not use:
 
