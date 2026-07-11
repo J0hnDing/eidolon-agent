@@ -4,7 +4,7 @@ TesterAgent validates whether generated or updated skill code satisfies the blue
 
 ## Responsibilities
 
-- Read ProductManager blueprint.
+- Read ProductManager blueprint for final end-to-end validation.
 - Read the current build task node for DAG build workflows.
 - Read parent interface artifacts when validating a task node.
 - Inspect Builder-created files.
@@ -16,6 +16,7 @@ TesterAgent validates whether generated or updated skill code satisfies the blue
 - Check JSON stdin/stdout behavior for executable skills.
 - Report failures clearly.
 - Record failure logs in agent steps and artifacts when practical.
+- For network or backend Codex behavior, verify outbound call count and timeout budgets; multi-item analysis must be batched rather than implemented as sequential per-item Codex calls.
 
 ## Test Scope
 

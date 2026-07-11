@@ -92,6 +92,10 @@ def config(tmp_path: Path) -> RunnerConfig:
     )
 
 
+def test_default_runner_timeout_supports_bounded_network_workflows() -> None:
+    assert RunnerConfig().timeout_seconds == 60
+
+
 def completed(stdout: str = "", stderr: str = "", returncode: int = 0) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=["docker"], returncode=returncode, stdout=stdout, stderr=stderr)
 

@@ -37,6 +37,7 @@ This folder contains the detailed functionality documentation for the local-firs
 
 - [Codex CLI integration](integrations/codex_cli.md)
 - [Working history file](working_history.md)
+- [TODO](todo.md)
 
 ## Documentation Rules
 

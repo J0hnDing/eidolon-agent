@@ -240,6 +240,12 @@ class AgentRun(Base):
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    total_input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_cached_input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_reasoning_output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pause_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     skill: Mapped["Skill | None"] = relationship()
     generation_request: Mapped["SkillGenerationRequest | None"] = relationship()
@@ -267,6 +273,12 @@ class AgentRunStep(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    codex_invocations_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cached_input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reasoning_output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     agent_run: Mapped["AgentRun"] = relationship(back_populates="steps")
 

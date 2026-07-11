@@ -1,0 +1,24 @@
+{
+  "default_allowed": {
+    "build_time": {
+      "dependencies": ["pytest", "requests"],
+      "project_read": ["personal-agent"]
+    },
+    "runtime": {
+      "python_standard_library": true,
+      "filesystem_read": ["./cache"],
+      "filesystem_write": ["./cache"],
+      "codex": {
+        "call_response": true
+      }
+    }
+  },
+  "banned_permissions": [
+    "DO NOT use shell access.",
+    "DO NOT use secrets.",
+    "DO NOT read or write arbitrary filesystem paths.",
+    "DO NOT use unrestricted network access.",
+    "DO NOT use browser automation.",
+    "DO NOT perform email, calendar, finance, purchase, trading, public posting, file deletion, or arbitrary command actions."
+  ]
+}

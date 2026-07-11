@@ -75,6 +75,8 @@ DAG build runs should persist:
 
 Agent run steps should identify the explicit action being performed and the task node id when applicable. During migration from the linear milestone workflow, existing names such as `current_milestone` and `milestone_name` may be treated as compatibility aliases for `current_task_id` and `task_node_id`, but new code should use task-node terminology.
 
+Agent runs also persist aggregate build-token fields and an optional usage pause reason. Each step persists an ordered `codex_invocations_json` list with action, adapter, model, and token breakdown plus aggregate token columns. These fields describe build-agent activity only; `skill_runs` and backend-mediated skill runtime Codex calls do not contribute.
+
 ## Status Values
 
 Skill statuses:
@@ -104,7 +106,7 @@ pending, approved, denied, expired, superseded
 Agent run statuses:
 
 ```text
-pending, running, waiting_for_approval, succeeded, failed, cancelled, blocked
+pending, running, waiting_for_approval, paused, succeeded, failed, cancelled, blocked
 ```
 
 DAG task node statuses:

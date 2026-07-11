@@ -194,14 +194,19 @@ export default function AgentRunDetailPage() {
             <dt>Completed</dt>
             <dd>{formatTimestamp(run.completed_at, "not completed")}</dd>
           </div>
+          <div>
+            <dt>Build Tokens</dt>
+            <dd>{formatTokens(run.total_tokens)}</dd>
+          </div>
         </dl>
         {run.summary && <p className="muted">{run.summary}</p>}
+        {run.pause_reason && <p className="error-text">{run.pause_reason}</p>}
         {run.error_message && <p className="error-text">{run.error_message}</p>}
         <div className="button-row">
           <button
             type="button"
             onClick={handleResume}
-            disabled={isWorking || !["waiting_for_approval", "pending"].includes(run.status)}
+            disabled={isWorking || !["waiting_for_approval", "pending", "paused"].includes(run.status)}
           >
             Resume
           </button>
@@ -240,7 +245,7 @@ export default function AgentRunDetailPage() {
       <section className="detail-panel">
         <h2>Task DAG</h2>
         {taskDag ? (
-          <TaskDagView dag={taskDag} statuses={taskStatuses} currentTaskId={run.current_task_id ?? run.current_milestone} />
+          <TaskDagView dag={taskDag} statuses={taskStatuses} currentTaskId={run.current_task_id ?? run.current_milestone} steps={run.steps} />
         ) : (
           <p className="muted">No task DAG recorded yet.</p>
         )}
@@ -269,6 +274,17 @@ export default function AgentRunDetailPage() {
                 <span className={`badge status-${step.status}`}>{step.status}</span>
               </header>
               {step.logs && <p>{step.logs}</p>}
+              {step.total_tokens > 0 && (
+                <p className="muted">
+                  {formatTokens(step.total_tokens)} tokens ({formatTokens(step.input_tokens)} input, {formatTokens(step.output_tokens)} output)
+                </p>
+              )}
+              {step.codex_invocations_json.length > 0 && (
+                <details>
+                  <summary>Codex invocations</summary>
+                  <pre>{JSON.stringify(step.codex_invocations_json, null, 2)}</pre>
+                </details>
+              )}
               {step.error_message && <p className="error-text">{step.error_message}</p>}
               <details>
                 <summary>Input JSON</summary>
@@ -297,10 +313,12 @@ function TaskDagView({
   dag,
   statuses,
   currentTaskId,
+  steps,
 }: {
   dag: TaskDag;
   statuses: Record<string, string>;
   currentTaskId: string | null;
+  steps: AgentRunDetail["steps"];
 }) {
   const nodes = Array.isArray(dag.nodes) ? dag.nodes : [];
   const explicitEdges = Array.isArray(dag.edges) ? dag.edges : [];
@@ -330,6 +348,9 @@ function TaskDagView({
       <div className="task-dag-nodes">
         {nodes.map((node) => {
           const status = statuses[node.id] ?? (node.id === currentTaskId ? "active" : "pending");
+          const tokens = steps
+            .filter((step) => (step.task_node_id ?? step.milestone_name) === node.id)
+            .reduce((total, step) => total + step.total_tokens, 0);
           return (
             <article className="task-dag-node" key={node.id}>
               <header>
@@ -356,6 +377,10 @@ function TaskDagView({
                 <div>
                   <dt>Backend APIs</dt>
                   <dd>{formatList((node.backend_api_ids ?? []).map(String))}</dd>
+                </div>
+                <div>
+                  <dt>Codex Tokens</dt>
+                  <dd>{formatTokens(tokens)}</dd>
                 </div>
               </dl>
             </article>
@@ -395,4 +420,8 @@ function formatTimestamp(value: string | null, fallback: string): string {
   if (!value) return fallback;
   const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(value);
   return new Date(hasTimezone ? value : `${value}Z`).toLocaleString();
+}
+
+function formatTokens(value: number): string {
+  return new Intl.NumberFormat().format(value);
 }

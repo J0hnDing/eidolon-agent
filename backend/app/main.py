@@ -5,7 +5,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import SessionLocal, create_db_and_tables
-from app.routers import agent_runs, chat, memory_facts, permission_requests, schedules, skill_generation_requests, skills, tools
+from app.routers import agent_runs, chat, memory_facts, permission_requests, schedules, skill_generation_requests, skills, tools, usage
+from app.services.codex_usage_service import codex_usage_service
 from app.services.scheduler_service import SchedulerService
 
 
@@ -16,9 +17,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     scheduler_service = SchedulerService(scheduler_db)
     scheduler_service.start()
     app.state.scheduler_service = scheduler_service
+    codex_usage_service.start()
+    app.state.codex_usage_service = codex_usage_service
     try:
         yield
     finally:
+        codex_usage_service.stop()
         scheduler_service.shutdown()
         scheduler_db.close()
 
@@ -49,6 +53,7 @@ app.include_router(chat.router)
 app.include_router(skill_generation_requests.router)
 app.include_router(permission_requests.router)
 app.include_router(schedules.router)
+app.include_router(usage.router)
 
 
 @app.get("/health")

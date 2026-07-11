@@ -395,8 +395,9 @@ class PermissionService:
 
     def unsupported_runtime_reasons(self, permissions: dict[str, Any]) -> list[str]:
         reasons = []
-        if permissions.get("filesystem_read"):
-            reasons.append("Filesystem read permissions are not supported until a safe file picker exists.")
+        reads = [path for path in permissions.get("filesystem_read", []) if self._normalize_path(path) != "./cache"]
+        if reads:
+            reasons.append("Filesystem reads outside ./cache are not supported until a safe file picker exists.")
         if permissions.get("secrets"):
             reasons.append("Secrets access is not supported in this milestone.")
         if permissions.get("shell"):
@@ -472,8 +473,16 @@ class PermissionService:
         raw_permissions = runtime.get("permissions") if isinstance(runtime.get("permissions"), dict) else {**fallback_permissions, **runtime}
         permissions = {
             "network": list(raw_permissions.get("network", []) or []),
-            "filesystem_read": list(raw_permissions.get("filesystem_read", []) or []),
-            "filesystem_write": list(raw_permissions.get("filesystem_write", []) or []),
+            "filesystem_read": [
+                path
+                for path in list(raw_permissions.get("filesystem_read", []) or [])
+                if self._normalize_path(str(path)) != "./cache"
+            ],
+            "filesystem_write": [
+                path
+                for path in list(raw_permissions.get("filesystem_write", []) or [])
+                if self._normalize_path(str(path)) != "./cache"
+            ],
             "secrets": list(raw_permissions.get("secrets", []) or []),
             "shell": bool(raw_permissions.get("shell", False)),
         }

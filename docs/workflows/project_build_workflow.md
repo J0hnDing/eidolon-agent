@@ -71,58 +71,35 @@ Output for PM does NOT mean agent writes files directly, instead backend receive
 
 ```json
 {
-  "schema_version": 1,
-  "graph_id": "safe_skill_name_build",
-  "root_task_ids": ["manifest_contract"],
-  "nodes": [
-    {
-      "id": "manifest_contract",
-      "title": "Manifest and package contract",
-      "summary": "Create the manifest and README contract for the proposed skill.",
-      "depends_on": [],
-      "difficulty": "easy",
-      "requires_tests": true,
-      "parallel_safe": true,
-      "expected_inputs": [
-        "blueprint.json",
-        "permissions.json"
-      ],
-      "parent_interface_artifacts": [],
-      "expected_output_paths": [
-        "manifest.json",
-        "README.md"
-      ],
-      "file_write_claims": [
-        "manifest.json",
-        "README.md"
-      ],
-      "acceptance_criteria": [
-        "manifest.json validates against the skill manifest schema",
-        "README.md explains the local skill behavior"
-      ],
-      "test_expectations": [
-        "validate manifest core fields and permission shape"
-      ],
-      "interface_artifact_expectations": [
-        "declare manifest fields created",
-        "declare schemas or entrypoints exposed to child tasks"
-      ],
-      "backend_api_ids": []
-    }
-  ],
-  "edges": [
-    {
-      "from": "manifest_contract",
-      "to": "entrypoint_behavior",
-      "reason": "entrypoint task needs the manifest entrypoint contract"
-    }
-  ],
-  "final_e2e_expectations": [
-    "the generated package satisfies the blueprint end to end",
-    "runtime manifest permissions match or narrow the approved plan"
-  ]
+  "task_dag": {
+    "schema_version": 1,
+    "graph_id": "safe_skill_name_build",
+    "root_task_ids": ["core_skill"],
+    "nodes": [
+      {
+        "id": "short_safe_id",
+        "title": "short title",
+        "summary": "specific work BuilderAgent should complete for this task node",
+        "depends_on": [],
+        "difficulty": "easy|medium|hard",
+        "requires_tests": true,
+        "parallel_safe": true,
+        "expected_inputs": [],
+        "expected_output_paths": ["skill.py"],
+        "file_write_claims": ["skill.py"],
+        "acceptance_criteria": ["string"],
+        "test_expectations": ["string"],
+        "interface_artifact_expectations": ["string"],
+        "backend_api_ids": []
+      }
+    ],
+    "final_e2e_expectations": ["string"]
+  },
+  "summary": "short user-facing summary"
 }
 ```
+
+`root_task_ids` contains node ids whose `depends_on` list is empty. `requires_tests` and `parallel_safe` are JSON booleans. `manifest.json` is excluded from `file_write_claims`; the backend owns it and grants Builder a serialized exception when a task needs to update it.
 
 Backend validation must reject the graph when:
 
@@ -149,7 +126,7 @@ After approval and DAG validation, the backend builds the DAG data structure and
 4. Each active node creates one Builder step.
 5. After each Builder step, the backend deterministically fills missing manifest fields from the approved blueprint and permission plan when possible.
 6. If `requires_tests` is true, the Builder step is followed immediately by a Tester step for the same node.
-7. A node is `done` only after Builder succeeds, its `interface_artifact.json` is written and valid, and required tests pass.
+7. A node is `done` only after Builder succeeds, the backend validates and moves its skill-local `interface_artifact.json` into the task's run-artifact folder, and required tests pass.
 8. A node with `requires_tests = false` is still subject to deterministic package validation before it can be marked `done`.
 
 Node statuses:
@@ -158,13 +135,18 @@ Node statuses:
 pending, ready, building, testing, fixing, done, failed, blocked
 ```
 
+The backend groups simultaneously ready `parallel_safe` nodes into execution batches. The current shared skill workspace processes nodes within an admitted batch deterministically, while the batch boundary preserves the same safety contract for a parallel executor: all nodes already admitted to the batch finish before a quota pause, and no node from the next ready batch starts.
+
+Before admitting another ready batch and after an admitted batch finishes, the backend refreshes the Codex account allowance. If either the 5-hour or weekly window has less than 5% remaining, the agent run becomes `paused`. Exactly 5% remains runnable. The workflow page shows the reset time and a Resume control. Resume rechecks both windows and continues from persisted `done` nodes without regenerating the task DAG or repeating completed nodes.
+
+Every ProductManager, Builder, and Tester Codex invocation records input, cached-input, output, reasoning-output, and total tokens together with its action, adapter, and model. Step totals appear on the DAG node and invocation detail; the agent run stores the build total. Skill runtime Codex calls are excluded.
+
 ## Builder Actions
 
 ### `builder_build_task`
 
 Inputs:
 
-- `blueprint.json`, excluding duplicated permission-plan data;
 - `permissions.json`;
 - the current task node fields needed to build the node;
 - all direct and transitive parent `interface_artifact.json` files;
@@ -182,7 +164,8 @@ Behavior:
 - respect `file_write_claims` unless the backend grants an explicit serialized exception;
 - treat the backend-seeded `manifest.json` as the package contract starting point instead of inventing a separate manifest shape;
 - produce or update skill package files for the node;
-- write `runtime/agent_runs/run_<id>/tasks/<task_id>/interface_artifact.json`.
+- write temporary `interface_artifact.json` at the controlled skill-folder root;
+- let the backend validate the sidecar and move it to `runtime/agent_runs/run_<id>/tasks/<task_id>/interface_artifact.json`; Builder never writes under `runtime/agent_runs`;
 - call Codex from generated skill code only through the backend Skill Codex Call API when that API context is provided; never shell out to the Codex CLI.
 
 Interface artifact shape:
@@ -204,10 +187,13 @@ Interface artifact shape:
 }
 ```
 
+All six top-level fields are required and unknown top-level fields are rejected. Declared paths must be unique relative files inside the skill folder, must exist, and must be covered by the task's `file_write_claims`; `manifest.json` is the sole backend-owned exception. `created_paths` and `updated_paths` must not overlap. Files exposed by parent artifacts and `manifest.json` are updates; files introduced by the current task are creations. The backend performs these checks before replacing any run artifact. A missing or invalid sidecar fails the Builder node and remains in the skill folder for inspection.
+
 ### `builder_fix_task`
 
 Inputs:
 
+- `permissions.json`;
 - all `builder_build_task` inputs for the node;
 - node `failure.log`;
 - failing test output;
@@ -218,7 +204,7 @@ Behavior:
 - fix implementation files only;
 - do not edit Tester-owned tests;
 - preserve or narrow permissions unless the approved `permissions.json` explicitly allows the change;
-- write a replacement `interface_artifact.json` if interfaces changed.
+- write a complete replacement `interface_artifact.json` for every repair attempt, preserving the task's created-versus-updated contract when interfaces did not change.
 
 ### `builder_fix_final_e2e`
 
@@ -227,7 +213,6 @@ Inputs:
 - `blueprint.json`;
 - `permissions.json`;
 - final end-to-end expectations from `task_dag.json`;
-- concise task summaries;
 - all interface artifacts;
 - final end-to-end failure output;
 - all generated skill package files.
@@ -247,8 +232,6 @@ Runs only for nodes with `requires_tests = true`.
 
 Inputs:
 
-- `blueprint.json`;
-- `permissions.json`;
 - the current task node;
 - parent interface artifacts;
 - Builder-created files needed to test the node.
@@ -269,11 +252,9 @@ Runs after every task node is `done`.
 
 Inputs:
 
-- original user request;
 - `blueprint.json`;
 - `permissions.json`;
 - final end-to-end expectations from `task_dag.json`;
-- concise task summaries;
 - all interface artifacts;
 - all generated skill package files.
 
@@ -322,6 +303,6 @@ Repair uses the same task-node contracts:
 - `build_next_milestone` is replaced by `proceed_to_blueprint` because the plausibility step no longer selects a linear next milestone.
 - Per-node `requires_tests` controls whether Tester runs immediately after Builder.
 - Per-node `file_write_claims` enables safe parallel Builder/Tester execution.
-- Builder must write `interface_artifact.json` for every node so child nodes have explicit contracts instead of relying on hidden context.
+- Builder must write a skill-local `interface_artifact.json` for every node; the backend validates and moves it into the node's run-artifact folder so child nodes have explicit contracts without granting Builder write access to `runtime`.
 - Tester writes node-specific test files and one final end-to-end test file instead of sharing one test file across all build work.
 - Backend seeds `manifest.json` from `blueprint.json` and `permissions.json`, and later fills missing manifest fields deterministically when possible.

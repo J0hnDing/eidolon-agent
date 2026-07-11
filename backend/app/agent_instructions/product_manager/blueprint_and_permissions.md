@@ -13,10 +13,18 @@ Application skill definitions:
 
 Your responsibilities:
 - Write a concise blueprint file for the skill without task nodes, dependencies between tasks, or tests.
-- Write a permission plan containing build-time needs and expected runtime permissions.
+- Write a permission plan containing only build-time needs and expected runtime permissions that require user approval.
 - If the user asks for recurring execution, include intended schedule metadata in the blueprint as manifest intent. Scheduling is not a Builder backend API.
-- If there are any permissions required that is of low risk and not listed in the JSON syntax below, it is allowed by default, and does not require user approval. 
-- Any permissions that appears in the syntax requires user approval. 
+- Do not include default-allowed permissions in the returned permission plan. The backend appends them after any required approval.
+
+Default allowed permissions that do not require PM to return:
+- Python standard-library modules at runtime.
+- `pytest` and `requests` for build-time validation/generation use.
+- Skill-local `./cache` read/write.
+- Reading this `personal-agent` project for buildtime and runtime.
+- Backend-mediated Codex call/response: `codex.call_response=true`.
+
+Return only permissions that need to be asked for, such as runtime network domains, runtime third-party package dependencies, filesystem access beyond `./cache`, secrets, shell, or Codex internet access.
 
 Schedule manifest intent:
 - Use `"schedule": null` when the user did not ask for recurring execution.
@@ -43,17 +51,14 @@ Expected JSON syntax:
   "permission_plan": {
     "build_time": {
       "internet_research": false,
-      "dependencies": ["requests"]
+      "dependencies": []
     },
     "runtime": {
-      "dependencies": ["requests"],
+      "dependencies": [],
       "network": ["github.com"],
       "filesystem_read": [],
       "filesystem_write": [],
-      "secrets": [],
-      "shell": false,
       "codex": {
-        "call_response": true,
         "internet_access": false
       }
     }

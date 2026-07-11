@@ -16,6 +16,7 @@ Routes are defined in `frontend/src/App.tsx`:
 - `/agent-runs`
 - `/agent-runs/:agentRunId`
 - `/approval-requests`
+- `/settings/usage`
 
 ## API Client
 
@@ -60,7 +61,11 @@ Installed executable skills may be run manually only when backend checks pass.
 
 ## Agent Runs Pages
 
-Agent Runs list and detail pages show run status, current task node or parallel active nodes, current step, step logs, structured inputs/outputs, DAG progress, node failures, and retry/cancel controls. The detail page renders the recorded task DAG explicitly with graph id, roots, edges, task node status, dependencies, expected output paths, file write claims, and backend API ids.
+Agent Runs list and detail pages show run status, current task node or parallel active nodes, current step, step logs, structured inputs/outputs, DAG progress, node failures, and retry/cancel controls. The detail page renders the recorded task DAG explicitly with graph id, roots, edges, task node status, dependencies, expected output paths, file write claims, backend API ids, per-node Codex tokens, build totals, usage pause reason, and resume control. Skill detail shows completed agent-run token totals.
+
+## Usage Settings
+
+`/settings/usage` shows both the 5-hour and weekly Codex allowance windows, remaining percentage, and reset timestamp. Refresh reads current local App Server state; it does not infer quota from project-build token totals.
 
 ## Targeted Polling
 

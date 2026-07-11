@@ -14,7 +14,6 @@ update
 
 Builder reads:
 
-- blueprint artifact;
 - permission artifact;
 - current task node fields needed for the task;
 - backend API context for API ids selected by ProductManager on the current task node;
@@ -27,9 +26,11 @@ Builder implements the current task node only. It must not jump ahead to child n
 
 When backend API context is present, Builder may use only those documented backend APIs. Generated skill code must call the backend Skill Codex Call API for Codex responses and must not invoke the Codex CLI, shell commands, or arbitrary subprocesses.
 
+Builder must honor runtime budgets in backend API context. Multi-item Codex work uses one bounded batched request with per-item result mapping instead of sequential per-item calls.
+
 For new build workflows, the backend may create a skeleton `manifest.json` before the first Builder step from the approved blueprint and permission plan. Builder should preserve that manifest shape and complete only the current node's package details.
 
-After each successful task build, Builder writes an interface artifact for child nodes. The artifact must name created/updated paths, schemas, entrypoints, functions, data contracts, and known limitations relevant to downstream work.
+After each successful task build, Builder writes `interface_artifact.json` at the controlled skill-folder root for child nodes. The artifact must name created/updated paths, schemas, entrypoints, functions, data contracts, and known limitations relevant to downstream work. The backend validates the sidecar before moving it to `runtime/agent_runs/run_<id>/tasks/<task_id>/interface_artifact.json`; Builder never writes under `runtime`.
 
 When `interface_type = "tool"`, Builder implements ProductManager UI-schema task nodes as declarative skill metadata only: `tool_ui_schema`, matching input/output schemas where useful, field labels, options/defaults, and result rendering hints. Builder must not generate React, HTML, JavaScript, or application frontend files for a tool skill.
 

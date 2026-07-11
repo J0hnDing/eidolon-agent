@@ -2,6 +2,12 @@
 
 The backend can use the local Codex CLI for direct chat, Project-mode plausibility review, skill planning, Builder edits, Tester test writing, repairs, updates, and ProductManager summaries.
 
+The backend also starts one persistent local `codex app-server --stdio` child process for account allowance reads. It uses `account/rateLimits/read` to expose the current 5-hour and weekly windows. App Server availability failures are reported by the usage API and do not block normal chat or skill runtime.
+
+DAG builds keep a 5% reserve in both account windows. A new ready-node batch is not admitted when either window has less than 5% remaining; already admitted parallel-ready work is allowed to reach its batch boundary before the run pauses.
+
+Project-build Codex CLI invocations use JSONL output plus the final-message file. The backend persists the `turn.completed` token breakdown for ProductManager, Builder, and Tester invocations. Records include adapter and model identity so another adapter can supply the same usage contract later. Direct chat and installed skill runtime calls are not added to project-build token totals.
+
 ## Defaults
 
 ```text

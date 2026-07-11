@@ -41,7 +41,7 @@ GenerationRequestStatus = Literal[
 AgentRunType = Literal["build_skill", "repair_skill", "update_skill"]
 SkillVersionStatus = Literal["active", "draft", "proposed_update", "archived", "discarded"]
 SkillVersionActor = Literal["user", "agent", "system"]
-AgentRunStatus = Literal["pending", "running", "waiting_for_approval", "succeeded", "failed", "cancelled", "blocked"]
+AgentRunStatus = Literal["pending", "running", "waiting_for_approval", "paused", "succeeded", "failed", "cancelled", "blocked"]
 AgentStepName = Literal["product_manager", "builder", "tester"]
 AgentRunStepStatus = Literal[
     "pending",

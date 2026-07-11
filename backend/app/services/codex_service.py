@@ -2,7 +2,7 @@ import json
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.models import Skill, SkillGenerationRequest, SkillVersion
 from app.schemas.skill_codex import SkillCodexRequest
 from app.services.backend_api_catalog import backend_api_index
+from app.services.default_permissions import default_build_time_dependencies
 from app.services.manifest_validator import validate_manifest_file
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
@@ -41,6 +42,8 @@ def _env_int(name: str, default: int) -> int:
 
 
 class RealCodexAdapter:
+    uses_codex_account_quota = True
+
     def __init__(
         self,
         command: str | None = None,
@@ -62,6 +65,8 @@ class RealCodexAdapter:
         prompt_path = output_dir / "codex_prompt.txt"
         prompt_path.write_text(prompt, encoding="utf-8")
         command = [self.command, "--ask-for-approval", self.approval_policy]
+        last_message_path = output_dir / "codex_last_message.txt"
+        last_message_path.unlink(missing_ok=True)
         if self._should_enable_search(plan):
             command.append("--search")
         command.extend(
@@ -75,12 +80,15 @@ class RealCodexAdapter:
                 "never",
                 "--sandbox",
                 self.sandbox_mode,
+                "--json",
+                "--output-last-message",
+                str(last_message_path),
             ]
         )
         if self.model:
             command.extend(["--model", self.model])
         command.append("-")
-        return subprocess.run(
+        result = subprocess.run(
             command,
             cwd=output_dir,
             input=prompt,
@@ -91,6 +99,43 @@ class RealCodexAdapter:
             timeout=self.timeout_seconds,
             shell=False,
         )
+        events = self._json_events(result.stdout)
+        result.codex_usage = self._usage_from_events(events)  # type: ignore[attr-defined]
+        result.codex_model = self.model  # type: ignore[attr-defined]
+        result.codex_adapter = "codex_cli"  # type: ignore[attr-defined]
+        if last_message_path.is_file():
+            result.stdout = last_message_path.read_text(encoding="utf-8", errors="replace")
+        return result
+
+    @staticmethod
+    def _json_events(raw: str) -> list[dict]:
+        events = []
+        for line in (raw or "").splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                events.append(event)
+        return events
+
+    @staticmethod
+    def _usage_from_events(events: list[dict]) -> dict[str, int] | None:
+        for event in reversed(events):
+            usage = event.get("usage")
+            if event.get("type") != "turn.completed" or not isinstance(usage, dict):
+                continue
+            normalized = {
+                "input_tokens": int(usage.get("input_tokens", 0)),
+                "cached_input_tokens": int(usage.get("cached_input_tokens", 0)),
+                "output_tokens": int(usage.get("output_tokens", 0)),
+                "reasoning_output_tokens": int(usage.get("reasoning_output_tokens", 0)),
+            }
+            normalized["total_tokens"] = int(
+                usage.get("total_tokens", normalized["input_tokens"] + normalized["output_tokens"])
+            )
+            return normalized
+        return None
 
     def _should_enable_search(self, plan: dict) -> bool:
         mode = self.enable_search.strip().lower()
@@ -323,19 +368,59 @@ class FakeCodexAdapter:
                     "    assert isinstance(json.loads(result.stdout), dict)\n",
                     encoding="utf-8",
                 )
+        self._write_interface_artifact(output_dir, plan)
         return subprocess.CompletedProcess(args=["fake-codex"], returncode=0, stdout="fake generation complete", stderr="")
 
+    def _write_interface_artifact(self, output_dir: Path, plan: dict) -> None:
+        context = plan.get("current_milestone")
+        if not isinstance(context, dict):
+            return
+        task_node = context.get("task_node")
+        if not isinstance(task_node, dict) or not task_node.get("id"):
+            return
+        expected_paths = [
+            str(path).replace("\\", "/").removeprefix("./")
+            for path in task_node.get("expected_output_paths", []) or []
+            if (output_dir / str(path)).is_file()
+        ]
+        parent_paths: set[str] = set()
+        for parent in context.get("parent_interface_artifacts", []) or []:
+            if not isinstance(parent, dict):
+                continue
+            for key in ("created_paths", "updated_paths"):
+                parent_paths.update(str(path) for path in parent.get(key, []) or [])
+        update_paths = parent_paths | {"manifest.json"}
+        artifact = {
+            "task_id": str(task_node["id"]),
+            "created_paths": [path for path in expected_paths if path not in update_paths],
+            "updated_paths": [path for path in expected_paths if path in update_paths],
+            "interfaces": {
+                "entrypoint": "skill.py" if (output_dir / "skill.py").is_file() else None,
+                "input_schema": plan.get("input_schema") or {},
+                "output_schema": plan.get("output_schema") or {},
+            },
+            "contracts_for_children": list(task_node.get("interface_artifact_expectations", []) or []),
+            "known_limitations": [],
+        }
+        (output_dir / "interface_artifact.json").write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+
     def _permission_plan_from_generation_plan(self, plan: dict) -> dict:
+        runtime_dependencies = list(plan.get("requested_dependencies", []) or [])
+        build_time_dependencies = [
+            dependency
+            for dependency in runtime_dependencies
+            if str(dependency).lower() not in default_build_time_dependencies()
+        ]
         return {
             "build_time": {
                 "codex_generation": True,
                 "internet_research": bool(plan.get("requested_network_domains") or plan.get("requested_dependencies")),
-                "dependencies": plan.get("requested_dependencies", []),
+                "dependencies": build_time_dependencies,
                 "reason": "Codex needs to generate proposed skill files.",
             },
             "runtime": {
                 **self._flat_runtime_permissions(plan),
-                "dependencies": plan.get("requested_dependencies", []),
+                "dependencies": runtime_dependencies,
                 "reason": "Runtime permissions expected by the proposed skill design.",
             },
         }
@@ -352,8 +437,16 @@ class FakeCodexAdapter:
             network = list(plan.get("requested_network_domains", []) or [])
         return {
             "network": network,
-            "filesystem_read": list(permissions.get("filesystem_read", []) or []),
-            "filesystem_write": list(permissions.get("filesystem_write", []) or []),
+            "filesystem_read": [
+                path
+                for path in list(permissions.get("filesystem_read", []) or [])
+                if str(path).replace("\\", "/").removeprefix("./").rstrip("/") != "cache"
+            ],
+            "filesystem_write": [
+                path
+                for path in list(permissions.get("filesystem_write", []) or [])
+                if str(path).replace("\\", "/").removeprefix("./").rstrip("/") != "cache"
+            ],
             "secrets": list(permissions.get("secrets", []) or []),
             "shell": bool(permissions.get("shell", False)),
             "codex": self._fake_codex_permissions(permissions, network),
@@ -407,9 +500,8 @@ class FakeCodexAdapter:
             "requires_tests": requires_tests,
             "parallel_safe": True,
             "expected_inputs": ["blueprint.json", "permissions.json"],
-            "parent_interface_artifacts": [],
             "expected_output_paths": expected_files,
-            "file_write_claims": expected_files,
+            "file_write_claims": [path for path in expected_files if path != "manifest.json"],
             "acceptance_criteria": list(
                 blueprint.get("acceptance_criteria")
                 or [
@@ -427,7 +519,6 @@ class FakeCodexAdapter:
             "graph_id": f"{blueprint.get('skill_name') or plan.get('skill_name') or 'skill'}_build",
             "root_task_ids": [node["id"]],
             "nodes": [node],
-            "edges": [],
             "final_e2e_expectations": [
                 "the generated package satisfies the blueprint end to end",
                 "runtime manifest permissions match or narrow the approved plan",
@@ -645,6 +736,7 @@ class CodexService:
     db: Session
     adapter: CodexAdapter | None = None
     project_root: Path | None = None
+    _pending_invocations: list[dict[str, object]] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
         if self.project_root is None:
@@ -663,7 +755,9 @@ class CodexService:
         adapter = self.adapter
         if isinstance(adapter, RealCodexAdapter):
             adapter = adapter.with_sandbox(PRODUCT_MANAGER_SANDBOX)
-        return adapter.generate(prompt, self._product_manager_workspace(), payload)
+        result = adapter.generate(prompt, self._product_manager_workspace(), payload)
+        self._record_invocation(result, payload)
+        return result
 
     def _generate_writable_skill(
         self,
@@ -675,7 +769,27 @@ class CodexService:
         adapter = self.adapter
         if isinstance(adapter, RealCodexAdapter):
             adapter = adapter.with_sandbox(WRITABLE_SKILL_SANDBOX)
-        return adapter.generate(prompt, output_dir, plan)
+        result = adapter.generate(prompt, output_dir, plan)
+        self._record_invocation(result, plan)
+        return result
+
+    def _record_invocation(self, result: subprocess.CompletedProcess[str], plan: dict[str, object]) -> None:
+        usage = getattr(result, "codex_usage", None)
+        if not isinstance(usage, dict):
+            return
+        self._pending_invocations.append(
+            {
+                "action": plan.get("codex_task") or plan.get("action") or "codex_invocation",
+                "adapter": getattr(result, "codex_adapter", type(self.adapter).__name__),
+                "model": getattr(result, "codex_model", None) or plan.get("model"),
+                **usage,
+            }
+        )
+
+    def consume_invocation_usage(self) -> list[dict[str, object]]:
+        invocations = self._pending_invocations
+        self._pending_invocations = []
+        return invocations
 
     def _assert_proposed_skill_workspace(self, output_dir: Path) -> Path:
         resolved = output_dir.resolve()
@@ -747,7 +861,10 @@ class CodexService:
         fallback = self._fallback_build_blueprint(generation_request)
         fallback_permission_plan = self._sanitize_permission_plan(fallback.get("permission_plan"), generation_request.plan_json)
         result = self._generate_product_manager(
-            self.build_product_manager_prompt("write_blueprint_and_permissions", payload),
+            self.build_product_manager_prompt(
+                "write_blueprint_and_permissions",
+                {"intent_prompt": intent_prompt},
+            ),
             payload,
         )
         parsed = self._parse_product_manager_json(
@@ -766,7 +883,6 @@ class CodexService:
     def product_manager_write_task_dag(
         self,
         generation_request: SkillGenerationRequest,
-        intent_prompt: dict[str, object],
         blueprint: dict[str, object],
         permission_plan: dict[str, object],
         backend_api_index_payload: list[dict[str, object]] | None = None,
@@ -774,15 +890,19 @@ class CodexService:
         payload = {
             "codex_task": "product_manager_write_task_dag",
             "user_message": generation_request.user_message,
-            "intent_prompt": intent_prompt,
             "blueprint_json": blueprint,
             "permission_plan": permission_plan,
             "generation_plan": generation_request.plan_json,
             "backend_api_index": backend_api_index_payload or backend_api_index(),
         }
         fallback = self._fallback_task_dag(generation_request, blueprint)
+        prompt_payload = {
+            "blueprint_json": blueprint,
+            "permission_plan": permission_plan,
+            "backend_api_index": payload["backend_api_index"],
+        }
         result = self._generate_product_manager(
-            self.build_product_manager_prompt("write_task_dag", payload),
+            self.build_product_manager_prompt("write_task_dag", prompt_payload),
             payload,
         )
         parsed = self._parse_product_manager_json(result, fallback={"task_dag": fallback})
@@ -808,7 +928,7 @@ class CodexService:
             "optional_projects": [],
         }
         result = self._generate_product_manager(
-            self.build_product_manager_prompt("build_review", payload),
+            self.build_product_manager_prompt("build_review", {"intent_prompt": intent_prompt or {}}),
             payload,
         )
         parsed = self._parse_product_manager_json(result, fallback=fallback)
@@ -987,7 +1107,11 @@ class CodexService:
     def repair_skill(self, skill: Skill, failure_context: dict) -> subprocess.CompletedProcess[str]:
         skill_dir = self.proposed_service.skill_dir_for_record(skill)
         self._assert_proposed_skill_workspace(skill_dir)
-        plan = {**self.plan_from_skill(skill, failure_context), "builder_writes_tests": False}
+        plan = {
+            **self.plan_from_skill(skill, failure_context),
+            "builder_writes_tests": False,
+            "current_milestone": failure_context,
+        }
         prompt = self.build_repair_prompt(skill, skill_dir, failure_context)
         result = self._generate_writable_skill(prompt, skill_dir, plan)
         if result.returncode != 0:
@@ -1046,19 +1170,17 @@ class CodexService:
         plan = {
             **self.plan_from_skill(skill, tester_context),
             "codex_task": "tester_write_tests",
-            "blueprint_json": tester_context.get("blueprint_json", {}),
-            "permission_plan": tester_context.get("permission_plan", {}),
-            "milestone": tester_context.get("milestone", {}),
             "task_node": tester_context.get("task_node", {}),
-            "task_id": tester_context.get("task_id"),
             "test_file": tester_context.get("test_file"),
             "final_e2e_expectations": tester_context.get("final_e2e_expectations", []),
-            "task_summaries": tester_context.get("task_summaries", []),
             "interface_artifacts": tester_context.get("interface_artifacts", []),
             "code_files": tester_context.get("code_files", {}),
             "input_schema": skill.input_schema_json,
             "output_schema": skill.output_schema_json,
             "tool_ui_schema": skill.tool_ui_schema_json,
+            **({"blueprint_json": tester_context["blueprint_json"]} if "blueprint_json" in tester_context else {}),
+            **({"permission_plan": tester_context["permission_plan"]} if "permission_plan" in tester_context else {}),
+            **({"milestone": tester_context["milestone"]} if "milestone" in tester_context else {}),
         }
         prompt = self.build_tester_prompt(skill, skill_dir, tester_context)
         result = self._generate_writable_skill(prompt, skill_dir, plan)
@@ -1081,19 +1203,17 @@ class CodexService:
             "codex_task": "tester_write_tests",
             "mode": "update",
             "version_id": version.id,
-            "blueprint_json": tester_context.get("blueprint_json", {}),
-            "permission_plan": tester_context.get("permission_plan", {}),
-            "milestone": tester_context.get("milestone", {}),
             "task_node": tester_context.get("task_node", {}),
-            "task_id": tester_context.get("task_id"),
             "test_file": tester_context.get("test_file"),
             "final_e2e_expectations": tester_context.get("final_e2e_expectations", []),
-            "task_summaries": tester_context.get("task_summaries", []),
             "interface_artifacts": tester_context.get("interface_artifacts", []),
             "code_files": tester_context.get("code_files", {}),
             "input_schema": skill.input_schema_json,
             "output_schema": skill.output_schema_json,
             "tool_ui_schema": skill.tool_ui_schema_json,
+            **({"blueprint_json": tester_context["blueprint_json"]} if "blueprint_json" in tester_context else {}),
+            **({"permission_plan": tester_context["permission_plan"]} if "permission_plan" in tester_context else {}),
+            **({"milestone": tester_context["milestone"]} if "milestone" in tester_context else {}),
         }
         prompt = self.build_tester_prompt(skill, version_dir, {**tester_context, "mode": "update"})
         result = self._generate_writable_skill(prompt, version_dir, plan)
@@ -1330,8 +1450,16 @@ class CodexService:
             network = list(plan.get("requested_network_domains", []) or [])
         return {
             "network": network,
-            "filesystem_read": list(permissions.get("filesystem_read", []) or []),
-            "filesystem_write": list(permissions.get("filesystem_write", []) or []),
+            "filesystem_read": [
+                path
+                for path in list(permissions.get("filesystem_read", []) or [])
+                if str(path).replace("\\", "/").removeprefix("./").rstrip("/") != "cache"
+            ],
+            "filesystem_write": [
+                path
+                for path in list(permissions.get("filesystem_write", []) or [])
+                if str(path).replace("\\", "/").removeprefix("./").rstrip("/") != "cache"
+            ],
             "secrets": list(permissions.get("secrets", []) or []),
             "shell": bool(permissions.get("shell", False)),
             "codex": self._sanitize_codex_permissions(permissions, network),
@@ -1362,6 +1490,9 @@ class CodexService:
 
     def build_prompt(self, plan: dict, output_dir: Path, *, builder_writes_tests: bool = True) -> str:
         instruction = self._instruction("builder/build.md")
+        builder_context = plan.get("current_milestone")
+        if not isinstance(builder_context, dict):
+            builder_context = plan
         test_requirement = (
             "- tests must not require installing packages"
             if builder_writes_tests
@@ -1385,14 +1516,15 @@ Application skill definition:
 Write files only inside this exact folder:
 {output_dir}
 
-Generation plan:
-{json.dumps(plan, indent=2)}
+Builder context:
+{json.dumps(builder_context, indent=2)}
 
 Product structure:
-- Follow the ProductManager blueprint, permissions, task_dag.json, and current task node.
+- Follow only the permission plan, current task node, parent interface artifacts, selected backend API context, and generated files in Builder context.
 - Build only the current task node and respect its file_write_claims.
 - Treat the folder above as the only writable workspace. Do not write by absolute path or traverse outside it.
-- Do not write blueprint.json, permissions.json, task_dag.json, task JSON files, or other runtime/agent_runs artifacts; those are platform workflow artifacts.
+- Write interface_artifact.json at the controlled skill-folder root. Do not write directly under runtime/agent_runs; the backend validates and moves the sidecar there.
+- Do not write blueprint.json, permissions.json, task_dag.json, or task JSON files; those are backend-owned workflow artifacts.
 - The backend may seed manifest.json from the approved blueprint and permissions before Builder runs. Preserve that schema shape and complete only fields owned by the current task node.
 - Platform validation still requires manifest.json and README.md in every skill package.
 - Instruction skills need the manifest instructions_path to point to an instructions file such as SKILL.md.
@@ -1403,11 +1535,8 @@ Product structure:
 Manifest requirements:
 - manifest.json must include these top-level fields: name, description, skill_type, interface_type, risk_level, permissions, dependencies, schedule, created_by, and enabled.
 - Automation manifests must include entrypoint pointing to a Python file. Instruction manifests must include instructions_path pointing to an instructions file.
-- Use the plan skill_name, skill_type, risk_level, and requested_permissions exactly.
-- Use the plan interface_type exactly.
-- Include dependencies from requested_dependencies exactly. Use [] when no packages are needed.
-- Include input_schema and output_schema from the plan when present.
-- Include tool_ui_schema from the plan when present.
+- Preserve the backend-seeded manifest name, skill_type, interface_type, risk_level, permissions, and dependencies exactly unless the current task explicitly owns a declarative schema field.
+- Preserve input_schema, output_schema, and tool_ui_schema from the seeded manifest unless the current task explicitly updates them.
 - If interface_type is tool, prefer a clear declarative tool_ui_schema so the app can render a user-friendly form. Do not generate React, HTML, JavaScript, or frontend app code.
 - Network permissions must be explicit domains only; no wildcard permissions.
 - shell must be false.
@@ -1601,22 +1730,30 @@ Payload:
         return blueprint
 
     def _sanitize_permission_plan(self, value: object, fallback_plan: dict[str, object]) -> dict[str, object]:
+        fallback_permissions = fallback_plan.get("requested_permissions")
+        fallback_permissions = fallback_permissions if isinstance(fallback_permissions, dict) else {}
         default_permissions = {
             "network": list(fallback_plan.get("requested_network_domains", []) or []),
             "filesystem_read": [],
-            "filesystem_write": list(
-                (fallback_plan.get("requested_permissions") or {}).get("filesystem_write", [])  # type: ignore[union-attr]
-                if isinstance(fallback_plan.get("requested_permissions"), dict)
-                else []
-            ),
+            "filesystem_write": [],
             "secrets": [],
             "shell": False,
         }
-        if isinstance(fallback_plan.get("requested_permissions"), dict):
+        if fallback_permissions:
             default_permissions = {
                 **default_permissions,
-                **dict(fallback_plan["requested_permissions"]),  # type: ignore[index]
+                **dict(fallback_permissions),
             }
+            default_permissions["filesystem_read"] = [
+                path
+                for path in list(default_permissions.get("filesystem_read", []) or [])
+                if str(path).replace("\\", "/").removeprefix("./").rstrip("/") != "cache"
+            ]
+            default_permissions["filesystem_write"] = [
+                path
+                for path in list(default_permissions.get("filesystem_write", []) or [])
+                if str(path).replace("\\", "/").removeprefix("./").rstrip("/") != "cache"
+            ]
         default_dependencies = list(fallback_plan.get("requested_dependencies", []) or [])
         if not isinstance(value, dict):
             value = {}
@@ -1634,11 +1771,16 @@ Payload:
         network = sanitized_permissions["network"]
         sanitized_permissions["codex"] = self._sanitize_codex_permissions(permissions, network)
         dependencies = list(runtime.get("dependencies", default_dependencies) or [])
+        build_time_dependencies = [
+            dependency
+            for dependency in list(build_time.get("dependencies", dependencies) or [])
+            if str(dependency).lower() not in default_build_time_dependencies()
+        ]
         return {
             "build_time": {
                 "codex_generation": bool(build_time.get("codex_generation", True)),
                 "internet_research": bool(build_time.get("internet_research", bool(network or dependencies))),
-                "dependencies": list(build_time.get("dependencies", dependencies) or []),
+                "dependencies": build_time_dependencies,
                 "reason": str(build_time.get("reason") or "Codex needs to generate controlled skill files."),
             },
             "runtime": {
@@ -1733,6 +1875,7 @@ Payload:
             sanitized_claims = self._skill_package_files(claims if isinstance(claims, list) else [])
             if not sanitized_claims:
                 sanitized_claims = list(sanitized_expected_paths)
+            sanitized_claims = [path for path in sanitized_claims if path != "manifest.json"]
             sanitized_nodes.append(
                 {
                     "id": node_id,
@@ -1746,9 +1889,6 @@ Payload:
                     "parallel_safe": bool(raw.get("parallel_safe", True)),
                     "expected_inputs": [str(item) for item in raw.get("expected_inputs", [])]
                     if isinstance(raw.get("expected_inputs"), list)
-                    else [],
-                    "parent_interface_artifacts": [str(item) for item in raw.get("parent_interface_artifacts", [])]
-                    if isinstance(raw.get("parent_interface_artifacts"), list)
                     else [],
                     "expected_output_paths": sanitized_expected_paths,
                     "file_write_claims": sanitized_claims,
@@ -1780,9 +1920,6 @@ Payload:
             "graph_id": str(dag.get("graph_id") or f"{blueprint.get('skill_name', 'skill')}_build"),
             "root_task_ids": [str(item) for item in root_task_ids] if isinstance(root_task_ids, list) else [],
             "nodes": sanitized_nodes,
-            "edges": [edge for edge in dag.get("edges", []) if isinstance(edge, dict)]
-            if isinstance(dag.get("edges"), list)
-            else [],
             "final_e2e_expectations": [str(item) for item in dag.get("final_e2e_expectations", [])]
             if isinstance(dag.get("final_e2e_expectations"), list)
             else [
@@ -1806,16 +1943,21 @@ Payload:
         ]
         if plan.get("interface_type") == "tool":
             acceptance_criteria.append("tool_ui_schema is present so the Tools page can render a user-friendly UI")
+        runtime_dependencies = list(plan.get("requested_dependencies", []) or [])
         permission_plan = {
             "build_time": {
                 "codex_generation": True,
                 "internet_research": bool(plan.get("requested_network_domains") or plan.get("requested_dependencies")),
-                "dependencies": plan.get("requested_dependencies", []),
+                "dependencies": [
+                    dependency
+                    for dependency in runtime_dependencies
+                    if str(dependency).lower() not in default_build_time_dependencies()
+                ],
                 "reason": "Codex needs to generate proposed skill files.",
             },
             "runtime": {
                 **self._flat_runtime_permissions(plan),
-                "dependencies": plan.get("requested_dependencies", []),
+                "dependencies": runtime_dependencies,
                 "reason": "Runtime permissions expected by the proposed skill design.",
             },
         }
@@ -1855,9 +1997,8 @@ Payload:
             "requires_tests": requires_tests,
             "parallel_safe": True,
             "expected_inputs": ["blueprint.json", "permissions.json"],
-            "parent_interface_artifacts": [],
             "expected_output_paths": expected_files,
-            "file_write_claims": expected_files,
+            "file_write_claims": [path for path in expected_files if path != "manifest.json"],
             "acceptance_criteria": list(
                 blueprint.get("acceptance_criteria")
                 or [
@@ -1875,7 +2016,6 @@ Payload:
             "graph_id": f"{blueprint.get('skill_name') or plan.get('skill_name') or 'skill'}_build",
             "root_task_ids": [node["id"]],
             "nodes": [node],
-            "edges": [],
             "final_e2e_expectations": [
                 "the generated package satisfies the blueprint end to end",
                 "runtime manifest permissions match or narrow the approved plan",

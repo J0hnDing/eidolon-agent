@@ -504,7 +504,8 @@ def test_build_time_permission_allows_skill_own_cache_read(db_session: Session) 
 
     permission_request = response["permission_request"]
     assert permission_request.risk_level == "low"
-    assert permission_request.requested_filesystem_json["filesystem_read"] == ["./cache"]
+    assert permission_request.requested_filesystem_json["filesystem_read"] == []
+    assert permission_request.requested_filesystem_json["filesystem_write"] == []
 
 
 def test_stale_blocked_build_time_request_is_refreshed_before_approval(db_session: Session) -> None:
@@ -992,7 +993,7 @@ def test_product_manager_codex_calls_force_read_only_sandbox(
     intent_prompt = service.product_manager_refine_intent(generation_request)
     decision = service.product_manager_build_review(generation_request)
     blueprint, permission_plan = service.product_manager_write_blueprint_and_permissions(generation_request, intent_prompt)
-    service.product_manager_write_task_dag(generation_request, intent_prompt, blueprint, permission_plan)
+    service.product_manager_write_task_dag(generation_request, blueprint, permission_plan)
     assert service.product_manager_summary("build_blocked", decision, "Fallback summary.") == "Fallback summary."
 
     assert len(captured_commands) == 4

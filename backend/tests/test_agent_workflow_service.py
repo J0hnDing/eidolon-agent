@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db import Base
 from app.models import AgentRunStep, MemoryFact, Skill, SkillGenerationRequest, SkillRun
 from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
-from app.services.backend_api_catalog import backend_api_context_file, backend_api_index_file
+from app.services.backend_api_catalog import backend_api_index_file
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.codex_service import CodexService, FakeCodexAdapter
 from app.services.permission_service import PermissionService
@@ -68,6 +68,9 @@ def test_product_manager_creates_blueprint_and_permissions_before_task_dag(tmp_p
     assert not (run_dir / "task_dag.json").exists()
     assert not (run_dir / "tasks").exists()
     assert all(not path.startswith("tests/") for path in agent_run.blueprint_json["expected_files"])
+    assert set(steps[1].input_json) == {"action", "intent_prompt"}
+    assert set(steps[2].input_json) == {"action", "intent_prompt"}
+    assert set(steps[3].input_json) == {"action", "blueprint_json", "permission_plan"}
 
 
 def test_product_manager_uses_codex_adapter_for_blueprint_and_permissions(tmp_path: Path, db_session: Session) -> None:
@@ -77,11 +80,13 @@ def test_product_manager_uses_codex_adapter_for_blueprint_and_permissions(tmp_pa
         def __init__(self) -> None:
             self.tasks: list[str] = []
             self.plans: list[dict] = []
+            self.prompts: dict[str, str] = {}
 
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             task = plan.get("codex_task")
             if task:
                 self.tasks.append(task)
+                self.prompts[task] = prompt
             self.plans.append(dict(plan))
             return super().generate(prompt, output_dir, plan)
 
@@ -118,6 +123,14 @@ def test_product_manager_uses_codex_adapter_for_blueprint_and_permissions(tmp_pa
     refine_plan = next(plan for plan in adapter.plans if plan.get("codex_task") == "product_manager_refine_intent")
     review_plan = next(plan for plan in adapter.plans if plan.get("codex_task") == "product_manager_build_review")
     assert review_plan["intent_prompt"]["refined_prompt"]
+    review_prompt = adapter.prompts["product_manager_build_review"]
+    assert '"intent_prompt"' in review_prompt
+    assert '"user_message"' not in review_prompt
+    assert '"project_conversation"' not in review_prompt
+    blueprint_prompt = adapter.prompts["product_manager_write_blueprint_and_permissions"]
+    assert '"intent_prompt"' in blueprint_prompt
+    assert '"generation_plan"' not in blueprint_prompt
+    assert '"user_message"' not in blueprint_prompt
     assert refine_plan["selected_memory_facts"] == [
         {
             "id": selected_fact.id,
@@ -210,6 +223,15 @@ def test_approved_build_uses_pm_builder_tester_and_permission_artifacts(tmp_path
     runtime_artifact = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "runtime_permissions.json"
     assert runtime_artifact.is_file()
     assert json.loads(runtime_artifact.read_text(encoding="utf-8"))["skill_id"] == skill.id
+    final_permission_plan = json.loads(
+        (tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "permissions.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert final_permission_plan["runtime"]["filesystem_read"] == ["./cache"]
+    assert final_permission_plan["runtime"]["filesystem_write"] == ["./cache"]
+    assert final_permission_plan["default_allowed"]["runtime"]["python_standard_library"] is True
+    assert all(item.startswith("DO NOT ") for item in final_permission_plan["banned_permissions"])
     tester_step = [step for step in agent_run.steps if step.step_name == "tester"][0]
     assert "skill.py" in tester_step.input_json["code_files"]
     assert "tests/test_core_skill.py" in tester_step.output_json["tests_written"]
@@ -392,6 +414,8 @@ def test_build_workflow_executes_pm_task_dag_in_dependency_order(tmp_path: Path,
     builder_steps = [step for step in agent_run.steps if step.step_name == "builder"]
     assert builder_steps[0].input_json["task_node"]["id"] == "scaffold"
     assert builder_steps[1].input_json["task_node"]["id"] == "edge_cases"
+    assert builder_steps[0].input_json["code_files"] == {}
+    assert "skill.py" in builder_steps[1].input_json["code_files"]
     assert "task_path" not in builder_steps[0].input_json
     assert "task_dag_path" not in builder_steps[0].input_json
     tester_steps = [step for step in agent_run.steps if step.step_name == "tester"]
@@ -425,10 +449,13 @@ def test_builder_receives_backend_api_context_for_task_node(tmp_path: Path, db_s
     builder_step = next(step for step in agent_run.steps if step.step_name == "builder")
     assert builder_step.input_json["task_node"]["backend_api_ids"] == [1]
     assert builder_step.input_json["backend_api_context"][0]["title"] == "Skill Codex Call API"
-    assert builder_step.input_json["backend_api_context_file"] == backend_api_context_file().as_posix()
+    runtime_budget = builder_step.input_json["backend_api_context"][0]["runtime_budget"]
+    assert runtime_budget["default_entrypoint_timeout_seconds"] == 60
+    assert runtime_budget["maximum_recommended_codex_calls_per_run"] == 1
+    assert "backend_api_context_file" not in builder_step.input_json
 
 
-def test_interface_artifact_fallback_distinguishes_created_and_updated_paths(
+def test_builder_interface_artifact_is_validated_and_moved_to_agent_run(
     tmp_path: Path,
     db_session: Session,
 ) -> None:
@@ -510,9 +537,52 @@ def test_interface_artifact_fallback_distinguishes_created_and_updated_paths(
     assert scaffold_artifact["updated_paths"] == ["manifest.json"]
     assert polish_artifact["created_paths"] == []
     assert polish_artifact["updated_paths"] == ["manifest.json"]
+    skill_dir = tmp_path / "skills" / "proposed" / generation_request.plan_json["skill_name"]
+    assert not (skill_dir / "interface_artifact.json").exists()
 
 
-def test_tester_agent_invokes_codex_with_blueprint_and_code_context(tmp_path: Path, db_session: Session) -> None:
+def test_invalid_builder_interface_artifact_is_not_moved_to_agent_run(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    generation_request = create_generation_request(db_session)
+
+    class InvalidArtifactAdapter(FakeCodexAdapter):
+        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            result = super().generate(prompt, output_dir, plan)
+            if isinstance(plan.get("current_milestone"), dict) and plan.get("codex_task") != "tester_write_tests":
+                (output_dir / "interface_artifact.json").write_text(
+                    json.dumps({"task_id": "core_skill"}),
+                    encoding="utf-8",
+                )
+            return result
+
+    service = AgentWorkflowService(
+        db_session,
+        codex_service=CodexService(db_session, adapter=InvalidArtifactAdapter(), project_root=tmp_path),
+        project_root=tmp_path,
+    )
+    agent_run = service.create_build_run(generation_request)
+    approve_generation(db_session, generation_request, tmp_path)
+
+    with pytest.raises(AgentWorkflowError, match="interface_artifact.json is invalid"):
+        service.continue_build_after_approval(generation_request)
+
+    destination = (
+        tmp_path
+        / "runtime"
+        / "agent_runs"
+        / f"run_{agent_run.id}"
+        / "tasks"
+        / "core_skill"
+        / "interface_artifact.json"
+    )
+    source = tmp_path / "skills" / "proposed" / generation_request.plan_json["skill_name"] / "interface_artifact.json"
+    assert not destination.exists()
+    assert source.is_file()
+
+
+def test_builder_and_tester_agents_receive_trimmed_task_context(tmp_path: Path, db_session: Session) -> None:
     generation_request = create_generation_request(db_session)
     AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
     approve_generation(db_session, generation_request, tmp_path)
@@ -538,18 +608,40 @@ def test_tester_agent_invokes_codex_with_blueprint_and_code_context(tmp_path: Pa
     tester_plans = [plan for plan in adapter.plans if plan.get("codex_task") == "tester_write_tests"]
     assert len(tester_plans) == 2
     tester_plan = tester_plans[0]
-    assert tester_plan["blueprint_json"]["skill_name"] == skill.name
+    assert "blueprint_json" not in tester_plan
+    assert "permission_plan" not in tester_plan
     assert "skill.py" in tester_plan["code_files"]
     assert any("You are TesterAgent" in prompt for prompt in adapter.prompts)
-    assert tester_plan["task_id"] == "core_skill"
-    assert tester_plans[-1]["task_id"] == "final_e2e"
+    assert tester_plan["task_node"]["id"] == "core_skill"
+    assert tester_plan["test_file"] == "tests/test_core_skill.py"
+    assert tester_plans[-1]["test_file"] == "tests/test_final_e2e.py"
+    assert tester_plans[-1]["blueprint_json"]["skill_name"] == skill.name
+    assert "permission_plan" in tester_plans[-1]
     assert any("tests/test_<task_id>.py" in prompt for prompt in adapter.prompts)
     builder_plans = [plan for plan in adapter.plans if plan.get("current_milestone")]
     assert builder_plans[0]["builder_writes_tests"] is False
     assert "task_path" not in builder_plans[0]["current_milestone"]
     assert "task_dag_path" not in builder_plans[0]["current_milestone"]
+    assert "blueprint_json" not in builder_plans[0]["current_milestone"]
     assert "task_dag_json" not in tester_plans[0]
     assert "final_e2e_expectations" in tester_plans[-1]
+    task_dag_prompt = next(
+        prompt
+        for prompt, plan in zip(adapter.prompts, adapter.plans, strict=True)
+        if plan.get("codex_task") == "product_manager_write_task_dag"
+    )
+    assert '"blueprint_json"' in task_dag_prompt
+    assert '"permission_plan"' in task_dag_prompt
+    assert '"backend_api_index"' in task_dag_prompt
+    assert '"intent_prompt"' not in task_dag_prompt
+    assert '"generation_plan"' not in task_dag_prompt
+    builder_prompt = next(
+        prompt
+        for prompt, plan in zip(adapter.prompts, adapter.plans, strict=True)
+        if isinstance(plan.get("current_milestone"), dict) and plan.get("codex_task") != "tester_write_tests"
+    )
+    assert "Builder context:" in builder_prompt
+    assert "Generation plan:" not in builder_prompt
     assert agent_run.status == "succeeded"
 
 
@@ -793,7 +885,7 @@ def test_task_dag_sanitizer_removes_tester_owned_paths(db_session: Session) -> N
     sanitized = CodexService(db_session)._sanitize_task_dag(raw, fallback, {"skill_name": "weather_tool"})
 
     assert sanitized["nodes"][0]["expected_output_paths"] == ["manifest.json"]
-    assert sanitized["nodes"][0]["file_write_claims"] == ["manifest.json"]
+    assert sanitized["nodes"][0]["file_write_claims"] == []
     assert sanitized["nodes"][1]["expected_output_paths"] == ["skill.py"]
     assert sanitized["nodes"][1]["file_write_claims"] == ["skill.py"]
     AgentWorkflowService(db_session)._validate_task_dag(sanitized, {"skill_type": "automation"})

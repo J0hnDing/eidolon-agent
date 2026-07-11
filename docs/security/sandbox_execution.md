@@ -28,6 +28,8 @@ The Docker runner:
 
 Generated skills cannot provide Dockerfiles, image names, build contexts, or build args.
 
+Skill entrypoints have a default 60-second execution timeout, configurable with `PERSONAL_AGENT_SKILL_TIMEOUT_SECONDS`. Generated network or backend-Codex workflows must budget retrieval, bounded Codex calls, cache writes, and graceful error output within that limit. Multi-item Codex work should use one batched backend request rather than sequential per-item calls.
+
 ## Network Limitation
 
 Network domains may be approved, and Docker runtime can enable network for approved networked skills. Domain-level egress filtering is not implemented yet.

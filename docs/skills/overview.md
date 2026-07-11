@@ -47,4 +47,4 @@ Automation skills may also include optional reusable instructions. When they do,
 
 Automation skills need an executable Python entrypoint referenced by `entrypoint`, usually `skill.py`, and tests written/maintained by TesterAgent.
 
-ProductManager controls the product structure beyond these platform minimums. Workflow artifacts such as `intent_prompt.json`, `decision.json`, `blueprint.json`, `permissions.json`, `task_dag.json`, `tasks/*.json`, and task `interface_artifact.json` files are platform artifacts, not skill package files.
+ProductManager controls the product structure beyond these platform minimums. Workflow artifacts such as `intent_prompt.json`, `decision.json`, `blueprint.json`, `permissions.json`, `task_dag.json`, `tasks/*.json`, and task `interface_artifact.json` files are platform artifacts, not skill package files. Builder temporarily writes `interface_artifact.json` inside the controlled skill folder; the backend validates and moves it into the run-artifact folder before the package can proceed.

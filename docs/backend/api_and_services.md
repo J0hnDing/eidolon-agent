@@ -12,6 +12,7 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 - `/permission-requests`: permission request list/detail/approve/deny.
 - `/skill-generation-requests`: generation request list/detail/approve/deny/agent-run.
 - `/agent-runs`: list/detail/steps/cancel/delete/resume/retry.
+- `/usage/codex`: live 5-hour and weekly Codex account allowance from the persistent local App Server.
 
 ## Service Responsibilities
 
@@ -34,6 +35,12 @@ The build scheduler should be modular and called by the backend with the generat
 ### CodexService
 
 Builds prompts from instruction files and calls Codex adapters. It owns real/fake Codex integration, ProductManager intent refinement, plausibility review, blueprint JSON parsing, permission-plan JSON parsing, task DAG JSON parsing, proposed skill task-node builds, task-node repairs, final end-to-end repairs, update edits, Tester test-writing calls, and backend-mediated skill Codex calls. ProductManager Codex calls are forced to `read-only`; writable Builder/Tester calls are forced to `workspace-write` and scoped to controlled skill or draft-version directories.
+
+CodexService also normalizes per-invocation token metadata into an adapter-neutral record. AgentWorkflowService attaches those records to the active role step and maintains run totals. Runtime skill Codex calls intentionally bypass this build accounting.
+
+### CodexUsageService
+
+Owns one persistent `codex app-server --stdio` child process for the FastAPI lifespan, performs JSON-RPC initialization, reads `account/rateLimits/read`, and normalizes the primary 300-minute and secondary 10,080-minute windows. Workflow pause checks are fail-open when allowance data is unavailable and pause only when Codex reports exhaustion.
 
 ### PermissionService
 

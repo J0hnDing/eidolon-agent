@@ -31,6 +31,14 @@ Use this template for future entries:
 
 ## Current Entries
 
+## 2026-07-11 02:38 America/Toronto - Codex Build Usage Tracking
+
+- Area: Codex integration, agent-run persistence, DAG workflow controls, skill and settings UI, documentation.
+- Intention: Distinguish per-invocation build token consumption from account allowance remaining, while keeping a 5% reserve in both Codex allowance windows before admitting more DAG work.
+- Changed: Added adapter/model-aware ProductManager, Builder, and Tester invocation token records with per-step and per-build totals; displayed token usage in DAG nodes, agent-run details, and completed skill builds; added a persistent local Codex App Server client and `/usage/codex` endpoint for 5-hour and weekly allowance windows; added Settings usage UI; added ready-node execution batches plus allowance-based DAG pause below 5% in either window and resume from persisted completed nodes; explicitly excluded skill runtime from build accounting; added `docs/todo.md` with the follow-up to implement skill runtime token tracking.
+- Verification: Full backend suite passed with a fresh system `--basetemp`, `200 passed`; focused usage and DAG workflow tests passed, `36 passed`; frontend TypeScript and Vite production build passed with `npm run build`; a live local App Server probe returned both normalized allowance windows; `git diff --check` passed.
+- Follow-up: Implement skill runtime token tracking as recorded in `docs/todo.md`.
+
 ## 2026-07-09 00:50 America/Toronto - ProductManager Build Instruction Split
 
 - Area: ProductManager build workflow, permission-plan schema, agent instructions, backend permission parsing, docs, tests.

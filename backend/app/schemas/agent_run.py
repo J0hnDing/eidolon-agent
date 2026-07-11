@@ -21,6 +21,12 @@ class AgentRunStepRead(BaseModel):
     started_at: datetime | None
     ended_at: datetime | None
     error_message: str | None
+    codex_invocations_json: list[dict[str, Any]]
+    input_tokens: int
+    cached_input_tokens: int
+    output_tokens: int
+    reasoning_output_tokens: int
+    total_tokens: int
 
 
 class AgentRunRead(BaseModel):
@@ -43,6 +49,12 @@ class AgentRunRead(BaseModel):
     updated_at: datetime
     completed_at: datetime | None
     error_message: str | None
+    total_input_tokens: int
+    total_cached_input_tokens: int
+    total_output_tokens: int
+    total_reasoning_output_tokens: int
+    total_tokens: int
+    pause_reason: str | None
 
 
 class AgentRunDetailRead(AgentRunRead):

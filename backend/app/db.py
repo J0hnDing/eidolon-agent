@@ -83,6 +83,17 @@ def ensure_local_schema() -> None:
                 connection.execute(text("ALTER TABLE agent_runs ADD COLUMN blueprint_json JSON"))
             if "final_summary_json" not in columns:
                 connection.execute(text("ALTER TABLE agent_runs ADD COLUMN final_summary_json JSON"))
+            for column in (
+                "total_input_tokens",
+                "total_cached_input_tokens",
+                "total_output_tokens",
+                "total_reasoning_output_tokens",
+                "total_tokens",
+            ):
+                if column not in columns:
+                    connection.execute(text(f"ALTER TABLE agent_runs ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"))
+            if "pause_reason" not in columns:
+                connection.execute(text("ALTER TABLE agent_runs ADD COLUMN pause_reason TEXT"))
             connection.execute(text("UPDATE agent_runs SET current_step = 'product_manager' WHERE current_step IN ('planner', 'reviewer')"))
             connection.execute(text("UPDATE agent_runs SET current_step = 'product_manager' WHERE current_step IN ('permission_analyst', 'security_reviewer')"))
             connection.execute(text("UPDATE agent_runs SET current_step = 'builder' WHERE current_step = 'repairer'"))
@@ -90,6 +101,17 @@ def ensure_local_schema() -> None:
             columns = {column["name"] for column in inspector.get_columns("agent_run_steps")}
             if "milestone_name" not in columns:
                 connection.execute(text("ALTER TABLE agent_run_steps ADD COLUMN milestone_name VARCHAR(128)"))
+            if "codex_invocations_json" not in columns:
+                connection.execute(text("ALTER TABLE agent_run_steps ADD COLUMN codex_invocations_json JSON NOT NULL DEFAULT '[]'"))
+            for column in (
+                "input_tokens",
+                "cached_input_tokens",
+                "output_tokens",
+                "reasoning_output_tokens",
+                "total_tokens",
+            ):
+                if column not in columns:
+                    connection.execute(text(f"ALTER TABLE agent_run_steps ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"))
             connection.execute(text("UPDATE agent_run_steps SET step_name = 'product_manager' WHERE step_name IN ('planner', 'reviewer')"))
             connection.execute(text("UPDATE agent_run_steps SET step_name = 'product_manager' WHERE step_name IN ('permission_analyst', 'security_reviewer')"))
             connection.execute(text("UPDATE agent_run_steps SET step_name = 'builder' WHERE step_name = 'repairer'"))

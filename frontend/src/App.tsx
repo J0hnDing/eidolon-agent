@@ -10,6 +10,7 @@ import SkillsPage from "./pages/SkillsPage";
 import SchedulesPage from "./pages/SchedulesPage";
 import ToolDetailPage from "./pages/ToolDetailPage";
 import ToolsPage from "./pages/ToolsPage";
+import UsageSettingsPage from "./pages/UsageSettingsPage";
 
 const navItems = [
   { to: "/chat", label: "Chat" },
@@ -19,6 +20,7 @@ const navItems = [
   { to: "/schedules", label: "Schedules" },
   { to: "/agent-runs", label: "Agent Runs" },
   { to: "/approval-requests", label: "Approvals" },
+  { to: "/settings/usage", label: "Settings" },
 ];
 
 export default function App() {
@@ -58,6 +60,8 @@ export default function App() {
           <Route path="/agent-runs" element={<AgentRunsPage />} />
           <Route path="/agent-runs/:agentRunId" element={<AgentRunDetailPage />} />
           <Route path="/approval-requests" element={<ApprovalRequestsPage />} />
+          <Route path="/settings" element={<Navigate to="/settings/usage" replace />} />
+          <Route path="/settings/usage" element={<UsageSettingsPage />} />
         </Routes>
       </main>
     </div>

@@ -3,7 +3,7 @@
     {
       "id": 1,
       "title": "Skill Codex Call API",
-      "description": "Lets an installed skill ask the backend to call Codex for a bounded text response. Shell remains prohibited; Codex internet access is allowed only when the skill has runtime network access."
+      "description": "Lets an installed skill ask the backend to call Codex for a bounded text response. Multi-item work must be batched into one bounded call that fits the runner timeout. Shell remains prohibited; Codex internet access is allowed only when the skill has runtime network access."
     },
     {
       "id": 2,

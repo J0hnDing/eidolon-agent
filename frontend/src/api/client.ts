@@ -23,6 +23,7 @@ export type AgentRunStatus =
   | "pending"
   | "running"
   | "waiting_for_approval"
+  | "paused"
   | "succeeded"
   | "failed"
   | "cancelled"
@@ -150,6 +151,23 @@ export interface AgentRunStep {
   started_at: string | null;
   ended_at: string | null;
   error_message: string | null;
+  codex_invocations_json: CodexInvocationUsage[];
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  reasoning_output_tokens: number;
+  total_tokens: number;
+}
+
+export interface CodexInvocationUsage {
+  action: string;
+  adapter: string;
+  model: string | null;
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  reasoning_output_tokens: number;
+  total_tokens: number;
 }
 
 export interface AgentRun {
@@ -170,6 +188,32 @@ export interface AgentRun {
   updated_at: string;
   completed_at: string | null;
   error_message: string | null;
+  total_input_tokens: number;
+  total_cached_input_tokens: number;
+  total_output_tokens: number;
+  total_reasoning_output_tokens: number;
+  total_tokens: number;
+  pause_reason: string | null;
+}
+
+export interface CodexUsageWindow {
+  label: string;
+  used_percent: number;
+  remaining_percent: number;
+  window_duration_minutes: number | null;
+  resets_at: string | null;
+}
+
+export interface CodexAccountUsage {
+  available: boolean;
+  source: string;
+  fetched_at: string;
+  error?: string;
+  plan_type: string | null;
+  limit_id: string;
+  rate_limit_reached_type: string | null;
+  five_hour: CodexUsageWindow | null;
+  weekly: CodexUsageWindow | null;
 }
 
 export interface AgentRunDetail extends AgentRun {
@@ -427,6 +471,7 @@ export const api = {
       method: "DELETE",
     }),
   listSkills: () => request<Skill[]>("/skills"),
+  getCodexUsage: () => request<CodexAccountUsage>("/usage/codex"),
   listAgentRuns: () => request<AgentRun[]>("/agent-runs"),
   getAgentRun: (id: number) => request<AgentRunDetail>(`/agent-runs/${id}`),
   listAgentRunSteps: (id: number) => request<AgentRunStep[]>(`/agent-runs/${id}/steps`),

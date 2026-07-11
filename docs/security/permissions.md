@@ -10,6 +10,8 @@ Build-time approval lets Codex generate proposed files or draft update files. It
 
 For DAG builds, ProductManager returns build-time intent and expected runtime intent as structured JSON after `blueprint.json` exists and before the task DAG is created. The backend writes `permissions.json`, reads `blueprint.json` and `permissions.json`, performs deterministic review, and presents one build-time approval prompt with the blueprint summary plus permission summary. ProductManager must not return task DAG JSON until this approval is granted; the backend writes `task_dag.json` after approval.
 
+ProductManager returns only permissions that need user approval. Backend-owned defaults live in `backend/app/static/default_permissions.json`. After build-time approval, the backend rewrites `permissions.json` as the effective permission file: PM-requested permissions plus default allowed permissions and a concise `banned_permissions` list of `DO NOT` rules. Builder and Tester read this final file.
+
 ### Runtime
 
 Runtime approval is based on the actual generated `manifest.json`. It is required before install/run when permissions or dependencies require review.
@@ -26,7 +28,7 @@ low, medium, high, blocked
 
 Examples:
 
-- Low: no permissions, explicit public domains, own `./cache` read/write.
+- Low: no requested permissions, explicit public domains, own `./cache` read/write.
 - Medium: package dependencies, web scraping, scheduled jobs.
 - High/blocked in MVP: secrets, shell, arbitrary file access, broad writes, dangerous third-party actions.
 
@@ -36,6 +38,20 @@ Allowed:
 
 ```json
 {
+  "default_allowed": {
+    "build_time": {
+      "dependencies": ["pytest", "requests"],
+      "project_read": ["personal-agent"]
+    },
+    "runtime": {
+      "python_standard_library": true,
+      "filesystem_read": ["./cache"],
+      "filesystem_write": ["./cache"],
+      "codex": {
+        "call_response": true
+      }
+    }
+  },
   "network": ["explicit-domain.example"],
   "filesystem_read": ["./cache"],
   "filesystem_write": ["./cache"],

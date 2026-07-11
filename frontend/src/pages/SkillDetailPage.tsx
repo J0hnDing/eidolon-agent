@@ -763,6 +763,13 @@ export default function SkillDetailPage() {
           <div>
             <h2>Agent Runs</h2>
             <p className="muted">Build and repair workflows are tracked as bounded, observable agent runs.</p>
+            {agentRuns.some((run) => run.status === "succeeded") && (
+              <p className="muted">
+                Completed build usage: {new Intl.NumberFormat().format(
+                  agentRuns.filter((run) => run.status === "succeeded").reduce((total, run) => total + run.total_tokens, 0),
+                )} tokens
+              </p>
+            )}
           </div>
           <Link to="/agent-runs">All agent runs</Link>
         </header>
@@ -775,6 +782,7 @@ export default function SkillDetailPage() {
                     <Link to={`/agent-runs/${agentRun.id}`}>Agent Run #{agentRun.id}</Link>
                   </strong>
                   <span>{agentRun.run_type} / {agentRun.current_step ?? "none"}</span>
+                  <span>{new Intl.NumberFormat().format(agentRun.total_tokens)} Codex tokens</span>
                   {agentRun.summary && <span>{agentRun.summary}</span>}
                 </div>
                 <span className={`badge status-${agentRun.status}`}>{agentRun.status}</span>
