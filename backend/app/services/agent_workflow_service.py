@@ -37,6 +37,14 @@ DEFAULT_TASK_ID = "core_skill"
 DEFAULT_MILESTONE = DEFAULT_TASK_ID
 FINAL_E2E_FAILURE_KEY = "__final_e2e__"
 CODEX_USAGE_RESERVE_PERCENT = 5
+BLOCKED_AGENT_CAPABILITIES = [
+    "shell and arbitrary subprocess execution",
+    "secrets and private credentials",
+    "filesystem access outside approved skill-local paths",
+    "wildcard or unrestricted network access",
+    "browser automation and external account actions",
+    "file deletion, purchases, posting, trading, or package installation at runtime",
+]
 
 
 def utc_now() -> datetime:
@@ -80,6 +88,7 @@ class AgentWorkflowService:
         self.db.add(agent_run)
         self.db.commit()
         self.db.refresh(agent_run)
+        self._initialize_artifact_dir(agent_run)
         return self._review_build_intent(generation_request, agent_run)
 
     def _review_build_intent(self, generation_request: SkillGenerationRequest, agent_run: AgentRun) -> AgentRun:
@@ -111,7 +120,8 @@ class AgentWorkflowService:
             logs="ProductManager wrote intent_prompt.json.",
         )
 
-        review = self.codex_service.product_manager_build_review(generation_request, intent_prompt)
+        downstream_intent = self._downstream_intent_prompt(intent_prompt)
+        review = self.codex_service.product_manager_build_review(generation_request, downstream_intent)
         decision = str(review["decision"])
         summary = str(review["summary"])
         reason = str(review["reason"])
@@ -129,7 +139,7 @@ class AgentWorkflowService:
             "product_manager",
             input_json={
                 "action": "pm_review_plausibility",
-                "intent_prompt": intent_prompt,
+                "intent_prompt": downstream_intent,
             },
             logs="ProductManager reviewed clarity, plausibility, and MVP support before blueprint creation.",
         )
@@ -206,7 +216,7 @@ class AgentWorkflowService:
             },
             logs=summary,
         )
-        return self._create_build_artifacts_after_review(generation_request, agent_run, intent_prompt)
+        return self._create_build_artifacts_after_review(generation_request, agent_run, downstream_intent)
 
     def _create_build_artifacts_after_review(
         self,
@@ -329,10 +339,11 @@ class AgentWorkflowService:
         self._mark_waiting_permission_steps_approved(agent_run)
         permission_plan = self._finalize_build_permission_plan(agent_run, generation_request)
         api_index = backend_api_index()
+        permission_bounds = self._agent_permission_bounds(permission_plan)
         task_dag = self.codex_service.product_manager_write_task_dag(
             generation_request,
             agent_run.blueprint_json or {},
-            permission_plan,
+            permission_bounds,
             api_index,
         )
         self._validate_task_dag(task_dag, agent_run.blueprint_json or {})
@@ -351,7 +362,7 @@ class AgentWorkflowService:
                 input_json={
                     "action": "pm_write_task_dag",
                     "blueprint_json": agent_run.blueprint_json,
-                    "permission_plan": permission_plan,
+                    "permission_bounds": permission_bounds,
                     "backend_api_index": api_index,
                     "backend_api_index_file": backend_api_index_file().as_posix(),
                 },
@@ -495,6 +506,7 @@ class AgentWorkflowService:
         self.db.add(agent_run)
         self.db.commit()
         self.db.refresh(agent_run)
+        self._initialize_artifact_dir(agent_run)
 
         try:
             repair_skill = self._prepare_repair_target(skill, agent_run)
@@ -559,6 +571,7 @@ class AgentWorkflowService:
         self.db.add(agent_run)
         self.db.commit()
         self.db.refresh(agent_run)
+        self._initialize_artifact_dir(agent_run)
         blueprint_path = self._write_json_artifact(agent_run, "blueprint.json", blueprint)
         permission_plan = self._permission_plan_from_blueprint(blueprint)
         permission_path = self._write_json_artifact(agent_run, "permissions.json", permission_plan)
@@ -749,6 +762,15 @@ class AgentWorkflowService:
                 raise AgentWorkflowError(agent_run.pause_reason)
             if agent_run.run_type == "build_skill" and agent_run.generation_request_id:
                 return self._resume_paused_build(agent_run)
+        if agent_run.status == "failed" and agent_run.run_type == "build_skill":
+            resumable_artifact = (
+                self._artifact_dir(agent_run)
+                / "tasks"
+                / str(agent_run.current_milestone or "")
+                / "interface_artifact.json"
+            )
+            if agent_run.skill_id and agent_run.current_milestone and resumable_artifact.is_file():
+                return self._resume_failed_build_task(agent_run)
         if agent_run.generation_request_id:
             generation_request = self.db.get(SkillGenerationRequest, agent_run.generation_request_id)
             if generation_request is None:
@@ -782,6 +804,38 @@ class AgentWorkflowService:
             self.db.refresh(agent_run)
             return agent_run
         return agent_run
+
+    def _resume_failed_build_task(self, agent_run: AgentRun) -> AgentRun:
+        generation_request = self.db.get(SkillGenerationRequest, agent_run.generation_request_id)
+        skill = self.db.get(Skill, agent_run.skill_id)
+        if generation_request is None or skill is None or not agent_run.current_milestone:
+            raise AgentWorkflowError("Failed build no longer has a resumable task")
+        task_id = agent_run.current_milestone
+        generation_request.status = "approved"
+        generation_request.error_message = None
+        skill.status = "building"
+        agent_run.status = "running"
+        agent_run.error_message = None
+        agent_run.completed_at = None
+        self.db.commit()
+
+        validation = self.proposed_service.validate_proposed_skill(skill)
+        self._increment_failure_count(agent_run, task_id)
+        if self._failure_count(agent_run, task_id) > MAX_TASK_FAILURES:
+            self._product_manager_stop_failed(agent_run, skill, validation)
+            return agent_run
+        validation = self._repair_current_milestone(agent_run, skill, validation, milestone_name=task_id)
+        while not validation.ok:
+            self._increment_failure_count(agent_run, task_id)
+            if self._failure_count(agent_run, task_id) > MAX_TASK_FAILURES:
+                self._product_manager_stop_failed(agent_run, skill, validation)
+                return agent_run
+            validation = self._repair_current_milestone(agent_run, skill, validation, milestone_name=task_id)
+
+        task_statuses = dict((agent_run.final_summary_json or {}).get("task_statuses", {}))
+        task_statuses[task_id] = "done"
+        self._write_task_statuses(agent_run, task_statuses)
+        return self._resume_paused_build(agent_run)
 
     def _pause_if_usage_below_reserve(self, agent_run: AgentRun) -> bool:
         if not getattr(self.codex_service.adapter, "uses_codex_account_quota", False):
@@ -905,6 +959,8 @@ class AgentWorkflowService:
 
     def retry_current_milestone(self, agent_run: AgentRun) -> AgentRun:
         self._ensure_not_cancelled(agent_run)
+        if agent_run.status == "failed":
+            return self.resume_run(agent_run)
         if agent_run.run_type == "build_skill" and agent_run.generation_request_id:
             generation_request = self.db.get(SkillGenerationRequest, agent_run.generation_request_id)
             if generation_request is None:
@@ -970,9 +1026,9 @@ class AgentWorkflowService:
         task_node = self._task_by_id(agent_run, milestone_name)
         tester_context = {
             "task_node": self._tester_task_node(task_node),
-            "parent_interface_artifacts": self._parent_interface_artifacts(agent_run, task_node),
+            "parent_interface_artifacts": self._direct_parent_interface_artifacts(agent_run, task_node),
             "test_file": f"tests/test_{milestone_name}.py",
-            "code_files": self._skill_file_snapshot(skill, self._task_relevant_paths(task_node)),
+            "workspace_paths": self._task_relevant_paths(task_node),
         }
         tester_step = self._start_step(
             agent_run,
@@ -1022,12 +1078,11 @@ class AgentWorkflowService:
 
     def _test_final_e2e(self, agent_run: AgentRun, skill: Skill, validation: Any) -> Any:
         tester_context = {
-            "blueprint_json": self._agent_blueprint(agent_run),
-            "permission_plan": self._permission_plan(agent_run),
+            "blueprint_contract": self._final_blueprint_contract(agent_run),
             "final_e2e_expectations": self._final_e2e_expectations(agent_run),
-            "interface_artifacts": self._all_interface_artifacts(agent_run),
+            "interface_contracts": self._compact_interface_artifacts(self._all_interface_artifacts(agent_run)),
             "test_file": "tests/test_final_e2e.py",
-            "code_files": self._skill_file_snapshot(skill),
+            "workspace_paths": self._skill_file_paths(skill),
         }
         tester_step = self._start_step(
             agent_run,
@@ -1077,13 +1132,12 @@ class AgentWorkflowService:
     def _repair_final_e2e(self, agent_run: AgentRun, skill: Skill, validation: Any) -> Any:
         context = {
             "action": "builder_fix_final_e2e",
-            "blueprint_json": self._agent_blueprint(agent_run),
-            "permission_plan": self._permission_plan(agent_run),
+            "permission_bounds": self._agent_permission_bounds(self._permission_plan(agent_run)),
+            "blueprint_contract": self._final_blueprint_contract(agent_run),
             "final_e2e_expectations": self._final_e2e_expectations(agent_run),
-            "interface_artifacts": self._all_interface_artifacts(agent_run),
-            "test_result_json": validation.model_dump(mode="json"),
-            "failure_log": self._validation_log_text("final_e2e", validation),
-            "project_files": self._skill_file_snapshot(skill),
+            "interface_contracts": self._compact_interface_artifacts(self._all_interface_artifacts(agent_run)),
+            "failure": self._validation_failure_context("final_e2e", validation),
+            "workspace_paths": self._skill_file_paths(skill),
         }
         builder_step = self._start_step(
             agent_run,
@@ -1230,10 +1284,9 @@ class AgentWorkflowService:
         context = {
             **self._builder_task_context(agent_run, task_node, skill),
             "action": "builder_fix_task",
-            "failure_log": self._validation_log_text(milestone_name, validation) if validation is not None else "",
+            "current_interface_artifact": self._task_interface_artifact(agent_run, milestone_name),
+            "failure": self._validation_failure_context(milestone_name, validation) if validation is not None else None,
         }
-        if validation is not None:
-            context["test_result_json"] = validation.model_dump(mode="json")
         builder_step = self._start_step(
             agent_run,
             "builder",
@@ -2194,22 +2247,18 @@ class AgentWorkflowService:
     def _builder_task_node(self, task_node: dict[str, Any]) -> dict[str, Any]:
         useful_fields = [
             "id",
-            "title",
             "summary",
             "expected_output_paths",
             "file_write_claims",
             "acceptance_criteria",
             "interface_artifact_expectations",
-            "backend_api_ids",
         ]
         return {key: task_node[key] for key in useful_fields if key in task_node}
 
     def _tester_task_node(self, task_node: dict[str, Any]) -> dict[str, Any]:
         useful_fields = [
             "id",
-            "title",
             "summary",
-            "expected_output_paths",
             "acceptance_criteria",
             "test_expectations",
         ]
@@ -2223,43 +2272,54 @@ class AgentWorkflowService:
     ) -> dict[str, Any]:
         context = {
             "action": "builder_build_task",
-            "permission_plan": self._permission_plan(agent_run),
-            "manifest_requirements": self._manifest_requirements(),
+            "permission_bounds": self._agent_permission_bounds(self._permission_plan(agent_run)),
             "task_node": self._builder_task_node(task_node),
             "backend_api_context": backend_api_context(task_node.get("backend_api_ids", [])),
-            "parent_interface_artifacts": self._parent_interface_artifacts(agent_run, task_node),
-            "code_files": self._skill_file_snapshot(skill, self._task_relevant_paths(task_node)) if skill else {},
-            "interface_artifact": {
-                "path": "interface_artifact.json",
-                "required_fields": [
-                    "task_id",
-                    "created_paths",
-                    "updated_paths",
-                    "interfaces",
-                    "contracts_for_children",
-                    "known_limitations",
-                ],
-            },
+            "parent_interface_artifacts": self._direct_parent_interface_artifacts(agent_run, task_node),
+            "workspace_paths": self._task_relevant_paths(task_node),
         }
         return context
 
-    def _manifest_requirements(self) -> dict[str, Any]:
+    def _agent_permission_bounds(self, permission_plan: dict[str, Any]) -> dict[str, Any]:
+        build_time = permission_plan.get("build_time") if isinstance(permission_plan.get("build_time"), dict) else {}
+        runtime = permission_plan.get("runtime") if isinstance(permission_plan.get("runtime"), dict) else {}
         return {
-            "required_fields": [
-                "name",
-                "description",
-                "skill_type",
-                "interface_type",
-                "risk_level",
-                "permissions",
-                "created_by",
-                "enabled",
-            ],
-            "automation_fields": ["entrypoint"],
-            "instruction_fields": ["instructions_path"],
-            "permission_fields": ["network", "filesystem_read", "filesystem_write", "secrets", "shell", "codex"],
-            "codex_permission_fields": ["call_response", "internet_access"],
-            "defaults": {"schedule": None, "dependencies": []},
+            "source": "backend-approved effective permission bounds",
+            "build_time": {
+                "internet_research": bool(build_time.get("internet_research", False)),
+                "dependencies": list(build_time.get("dependencies", []) or []),
+            },
+            "runtime": dict(runtime),
+            "blocked_capabilities": BLOCKED_AGENT_CAPABILITIES,
+        }
+
+    def _final_blueprint_contract(self, agent_run: AgentRun) -> dict[str, Any]:
+        blueprint = self._agent_blueprint(agent_run)
+        fields = ("goal", "expected_behavior", "schedule", "acceptance_criteria")
+        return {field: blueprint[field] for field in fields if field in blueprint}
+
+    def _compact_interface_artifacts(self, artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        fields = ("task_id", "interfaces", "contracts_for_children", "known_limitations")
+        return [{field: artifact[field] for field in fields if field in artifact} for artifact in artifacts]
+
+    def _task_interface_artifact(self, agent_run: AgentRun, task_id: str) -> dict[str, Any]:
+        path = self._artifact_dir(agent_run) / "tasks" / task_id / "interface_artifact.json"
+        if not path.is_file():
+            return {}
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _validation_failure_context(self, task_id: str, validation: Any) -> dict[str, Any]:
+        return {
+            "task_id": task_id,
+            "error": validation.error_message or "",
+            "stdout": self._truncate_text(validation.stdout or "", 4000),
+            "stderr": self._truncate_text(validation.stderr or "", 4000),
+        }
+
+    def _downstream_intent_prompt(self, intent_prompt: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "schema_version": int(intent_prompt.get("schema_version", 1)),
+            "refined_prompt": str(intent_prompt.get("refined_prompt") or ""),
         }
 
     def _task_relevant_paths(self, task_node: dict[str, Any]) -> list[str]:
@@ -2326,6 +2386,21 @@ class AgentWorkflowService:
                 snapshot[relative_path] = content[:12000]
         return snapshot
 
+    def _skill_file_paths(self, skill: Skill) -> list[str]:
+        try:
+            skill_dir = self.proposed_service.skill_dir_for_record(skill)
+        except Exception:
+            return []
+        excluded_names = {"interface_artifact.json", "codex_prompt.txt", "codex_last_message.txt"}
+        excluded_parts = {".agents", ".deps", ".git", ".pytest_cache", "__pycache__"}
+        return [
+            path.relative_to(skill_dir).as_posix()
+            for path in sorted(skill_dir.rglob("*"))
+            if path.is_file()
+            and path.name not in excluded_names
+            and not any(part in excluded_parts for part in path.parts)
+        ]
+
     def _version_file_snapshot(self, version: Any) -> dict[str, str]:
         version_dir = (self.project_root / version.folder_path).resolve()
         snapshot: dict[str, str] = {}
@@ -2344,6 +2419,16 @@ class AgentWorkflowService:
 
     def _artifact_dir(self, agent_run: AgentRun) -> Path:
         path = self.project_root / "runtime" / "agent_runs" / f"run_{agent_run.id}"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _initialize_artifact_dir(self, agent_run: AgentRun) -> Path:
+        path = self.project_root / "runtime" / "agent_runs" / f"run_{agent_run.id}"
+        if path.exists() and any(path.iterdir()):
+            orphaned_dir = path.parent / "orphaned"
+            orphaned_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = utc_now().strftime("%Y%m%dT%H%M%S%fZ")
+            path.replace(orphaned_dir / f"{path.name}_{timestamp}")
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -2522,6 +2607,18 @@ class AgentWorkflowService:
 
         artifacts = []
         for parent_id in ordered_parent_ids:
+            path = self._artifact_dir(agent_run) / "tasks" / str(parent_id) / "interface_artifact.json"
+            if path.is_file():
+                artifacts.append(json.loads(path.read_text(encoding="utf-8")))
+        return artifacts
+
+    def _direct_parent_interface_artifacts(
+        self,
+        agent_run: AgentRun,
+        task_node: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        artifacts = []
+        for parent_id in task_node.get("depends_on", []) or []:
             path = self._artifact_dir(agent_run) / "tasks" / str(parent_id) / "interface_artifact.json"
             if path.is_file():
                 artifacts.append(json.loads(path.read_text(encoding="utf-8")))

@@ -14,15 +14,17 @@ update
 
 Builder reads:
 
-- permission artifact;
+- compact backend-approved permission bounds with effective runtime permissions and explicit blocked capabilities;
 - current task node fields needed for the task;
 - backend API context for API ids selected by ProductManager on the current task node;
-- interface artifacts from all parent task nodes;
-- existing generated files when applicable.
+- interface artifacts from direct parent task nodes;
+- safe workspace paths for existing generated files when applicable. File contents are read from the controlled workspace instead of duplicated in the prompt.
 
-Builder should not be prompted with backend bookkeeping fields such as artifact paths, task indexes, task status, generation request ids, or the entire task DAG for ordinary node work.
+Builder should not be prompted with backend bookkeeping fields such as artifact paths, task indexes, task status, generation request ids, or the entire task DAG for ordinary node work. It also should not receive duplicated manifest requirements, interface-artifact schemas, full source snapshots, transitive ancestor artifacts, or resolved backend API ids after API context has been selected.
 
 Builder implements the current task node only. It must not jump ahead to child nodes unless the current node explicitly defines shared setup as part of its acceptance criteria.
+
+Builder reads only the named workspace paths plus the backend-seeded manifest. It does not recursively inventory internal metadata, initialize version control, run tests, or repeatedly reread unchanged files; backend validation and Tester own those actions.
 
 When backend API context is present, Builder may use only those documented backend APIs. Generated skill code must call the backend Skill Codex Call API for Codex responses and must not invoke the Codex CLI, shell commands, or arbitrary subprocesses.
 
@@ -54,7 +56,7 @@ Builder modifies only the copied draft version folder. It must never modify the 
 
 ## Builder Must Not
 
-- Create, modify, or delete tests in build/update workflows; Tester owns tests.
+- Create, modify, or delete tests in build/update workflows; Tester owns tests. The backend restores changed Python test sources and fails any Builder invocation that crosses this boundary.
 - Modify backend/frontend application source while building an application skill.
 - Install dependencies.
 - Run the skill task automatically.

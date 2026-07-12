@@ -93,7 +93,7 @@ def config(tmp_path: Path) -> RunnerConfig:
 
 
 def test_default_runner_timeout_supports_bounded_network_workflows() -> None:
-    assert RunnerConfig().timeout_seconds == 60
+    assert RunnerConfig().timeout_seconds == 120
 
 
 def completed(stdout: str = "", stderr: str = "", returncode: int = 0) -> subprocess.CompletedProcess[str]:

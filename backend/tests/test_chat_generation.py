@@ -35,6 +35,7 @@ from app.services.proposed_skill_service import ProposedSkillService
 from app.services.skill_plan_service import (
     FakeSkillPlanAdapter,
     RealSkillPlanAdapter,
+    SkillGenerationPlan,
     SkillPlanError,
     SkillPlanService,
     parse_json_object,
@@ -202,6 +203,18 @@ def skill_plan(**overrides) -> dict:
     return plan
 
 
+def test_skill_plan_requires_manifest_but_not_readme_or_optional_instructions() -> None:
+    minimal_files = ["manifest.json", "skill.py", "tests/test_skill.py"]
+
+    parsed = SkillGenerationPlan.model_validate(skill_plan(files_to_generate=minimal_files))
+
+    assert parsed.files_to_generate == minimal_files
+    with pytest.raises(ValueError, match="manifest.json"):
+        SkillGenerationPlan.model_validate(
+            skill_plan(files_to_generate=["skill.py", "tests/test_skill.py"])
+        )
+
+
 def test_fake_skill_plan_names_github_trending_request_and_keeps_weekly_schedule() -> None:
     plan = SkillPlanService(adapter=FakeSkillPlanAdapter()).build_generation_plan(
         "Build a weekly ran automation skill that parse top 10 trending github projects and let codex analyze each of them."
@@ -333,8 +346,6 @@ def test_project_mode_uses_product_manager_review_before_blueprint(db_session: S
         "product_manager_build_review",
         "product_manager_write_blueprint_and_permissions",
     ]
-    assert "performing intent refinement" in prompts["product_manager_refine_intent"]
-    assert "performing plausibility review" not in prompts["product_manager_refine_intent"]
     assert "performing plausibility review" in prompts["product_manager_build_review"]
     assert '"blueprint"' not in prompts["product_manager_build_review"]
     assert "Expected JSON syntax" in prompts["product_manager_write_blueprint_and_permissions"]
@@ -1063,6 +1074,43 @@ def test_builder_repair_rejects_non_proposed_skill_workspace(tmp_path: Path, db_
 
     with pytest.raises(CodexGenerationError, match="skills/proposed"):
         service.repair_skill(skill, {"failure_log": "failed"})
+
+
+def test_builder_repair_restores_tester_owned_files(tmp_path: Path, db_session: Session) -> None:
+    skill_dir = tmp_path / "skills" / "proposed" / "guarded_skill"
+    tests_dir = skill_dir / "tests"
+    tests_dir.mkdir(parents=True)
+    existing_test = tests_dir / "test_skill.py"
+    existing_test.write_text("def test_original():\n    assert True\n", encoding="utf-8")
+
+    class TestMutatingBuilderAdapter:
+        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            existing_test.unlink()
+            (tests_dir / "test_replacement.py").write_text(
+                "def test_replacement():\n    assert False\n",
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(args=["codex"], returncode=0, stdout="ok", stderr="")
+
+    skill = Skill(
+        name="guarded_skill",
+        description="Exercise Builder ownership enforcement.",
+        skill_type="automation",
+        interface_type="chat",
+        risk_level="low",
+        manifest_path="skills/proposed/guarded_skill/manifest.json",
+        status="building",
+    )
+    db_session.add(skill)
+    db_session.commit()
+
+    service = CodexService(db_session, adapter=TestMutatingBuilderAdapter(), project_root=tmp_path)
+
+    with pytest.raises(CodexGenerationError, match="Builder modified Tester-owned files"):
+        service.repair_skill(skill, {"failure_log": "failed"})
+
+    assert existing_test.read_text(encoding="utf-8") == "def test_original():\n    assert True\n"
+    assert not (tests_dir / "test_replacement.py").exists()
 
 
 def test_real_codex_adapter_auto_enables_search_for_network_plans(

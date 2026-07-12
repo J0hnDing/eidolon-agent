@@ -64,9 +64,7 @@ class SkillGenerationPlan(BaseModel):
 
     @model_validator(mode="after")
     def validate_plan_contract(self) -> "SkillGenerationPlan":
-        required_files = {"manifest.json", "README.md"}
-        if self.skill_type == "instruction":
-            required_files.add("SKILL.md")
+        required_files = {"manifest.json"}
         if self.skill_type == "automation":
             required_files.update({"skill.py", "tests/test_skill.py"})
         missing = required_files - set(self.files_to_generate)

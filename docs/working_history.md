@@ -31,6 +31,14 @@ Use this template for future entries:
 
 ## Current Entries
 
+## 2026-07-12 01:39 America/Toronto - Project Build Context Optimization And GitHub E2E
+
+- Area: ProductManager, Builder, and Tester workflow context; generated-skill permissions and runtime budgets; failed-build handling; agent ownership boundaries; workflow documentation and tests.
+- Intention: Reduce redundant Codex context and token consumption while preserving explicit permission bounds, deterministic package validation, generated-code quality, and separate approval boundaries for generation, installation, runtime permissions, scheduling, and execution.
+- Changed: Compacted downstream ProductManager intent and permission inputs; limited Builder to the current task, selected backend APIs, direct-parent contracts, explicit permission bounds, and workspace paths; limited node and final Tester inputs to compact contracts and workspace paths; normalized and truncated repair failure context while preserving the current interface contract; deterministically assigned omitted required package files to a root DAG task; enforced Tester ownership by restoring Python test files changed by Builder and failing the Builder invocation; allowed one focused Tester pytest self-check; increased generated skill runtime timeout to 120 seconds while retaining a 45-second backend Codex caller timeout; documented model-per-task/chat selection and Codex CLI/model-version compatibility as TODOs. The generated GitHub skill was corrected after a live-page audit so duplicate Trending cards are normalized and entries beyond the requested limit do not create false partial failures. Post-work decision: the user reverted optimization 1, which skipped intent refinement for clear first-turn Project requests, and optimization 8, which resumed a failed build directly from its current DAG task.
+- Verification: Before those two reverts, an E2E run with the unchanged GitHub Trending prompt completed successfully at 382,608 tokens versus the 684,621-token baseline, saving 302,013 tokens (44.1%); Builder usage fell 51.2%, node Tester usage fell 53.7%, and final Tester usage fell 30.7%. The corrected proposed skill passed platform validation and 24 tests, a live GitHub Trending parser smoke check returned 10 unique projects without false failures, the full backend suite passed with 205 tests, and `git diff --check` passed.
+- Follow-up: Re-measure end-to-end token usage after the two reverts before treating 44.1% as representative of the current workflow. Model routing by DAG task and chat, plus Codex CLI/model-version compatibility, remain unimplemented TODOs. The generated skill remains proposed, disabled, uninstalled, unscheduled, and subject to separate pending runtime permission approval.
+
 ## 2026-07-11 02:38 America/Toronto - Codex Build Usage Tracking
 
 - Area: Codex integration, agent-run persistence, DAG workflow controls, skill and settings UI, documentation.

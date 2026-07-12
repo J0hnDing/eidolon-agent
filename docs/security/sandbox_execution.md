@@ -28,7 +28,7 @@ The Docker runner:
 
 Generated skills cannot provide Dockerfiles, image names, build contexts, or build args.
 
-Skill entrypoints have a default 60-second execution timeout, configurable with `PERSONAL_AGENT_SKILL_TIMEOUT_SECONDS`. Generated network or backend-Codex workflows must budget retrieval, bounded Codex calls, cache writes, and graceful error output within that limit. Multi-item Codex work should use one batched backend request rather than sequential per-item calls.
+Skill entrypoints have a default 120-second execution timeout, configurable with `PERSONAL_AGENT_SKILL_TIMEOUT_SECONDS`. Generated network or backend-Codex workflows must budget retrieval, bounded Codex calls, cache writes, and graceful error output within that limit. Multi-item Codex work should use one batched backend request rather than sequential per-item calls. Individual backend-Codex caller timeouts should remain bounded below the full entrypoint timeout so the skill can persist partial results and exit cleanly.
 
 ## Network Limitation
 

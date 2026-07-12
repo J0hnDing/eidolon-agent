@@ -34,6 +34,8 @@ Output for PM does NOT mean agent writes files directly, instead backend receive
    - Inputs: latest Project-mode user message, prior clarification turns for the same generation request, and explicit user memory facts, this is currently default to none until memory system implemented.
    - Output: `intent_prompt.json`.
    - Purpose: rewrite the request into a clearer build prompt for downstream PM actions.
+   - ProductManager refinement runs after every Project-mode user input, including a first-turn request with no clarification history or selected memory facts.
+   - Only `schema_version` and `refined_prompt` continue to plausibility and blueprint prompts. Selected memory facts remain in the stored intent artifact for audit and are not repeated downstream.
    - Must not create a blueprint, permissions, task graph, or generated skill files.
 
 2. `pm_review_plausibility`
@@ -60,7 +62,7 @@ Output for PM does NOT mean agent writes files directly, instead backend receive
    - Also writes a `manifest.json` from `blueprint.json`, `permissions.json`.
 
 5. `pm_write_task_dag`
-   - Inputs: `blueprint.json`, `permissions.json`, and the static backend API index file at `backend/app/static/backend_api_index.json`.
+   - Inputs: `blueprint.json`, compact backend-approved `permission_bounds`, and the static backend API index file at `backend/app/static/backend_api_index.json`.
    - Output: `task_dag.json`.
    - Purpose: split the project into explicit task nodes with dependencies, difficulty, test requirements, I/O expectations, file write claims, interface artifact expectations, and any required backend API ids.
    - Must not include separate "test-only" task nodes. Tester actions are attached to the build nodes that require tests.
@@ -116,6 +118,8 @@ The `file_write_claims` field is added so the backend can parallelize independen
 
 Task `expected_output_paths` and `file_write_claims` are Builder-owned skill package paths only. They must not include Tester-owned files such as `tests/test_skill.py` or `tests/test_<task_id>.py`; the backend sanitizes those paths out of ProductManager DAG output before validation.
 
+Every package path listed in the approved blueprint's `expected_files` should be owned by a task. The backend does not add omitted blueprint paths to a root task. `README.md` and `SKILL.md` are not universal package requirements; `manifest.json` remains backend-owned and is always validated, including any entrypoint or instructions file it declares.
+
 ## Task Node Execution
 
 After approval and DAG validation, the backend builds the DAG data structure and repeatedly executes ready nodes:
@@ -147,13 +151,13 @@ Every ProductManager, Builder, and Tester Codex invocation records input, cached
 
 Inputs:
 
-- `permissions.json`;
+- compact `permission_bounds` derived from approved `permissions.json`, including effective runtime permissions, approved build dependencies/research, and blocked capabilities;
 - the current task node fields needed to build the node;
-- all direct and transitive parent `interface_artifact.json` files;
+- direct-parent `interface_artifact.json` files only;
 - backend API context for ids listed in the current task node's `backend_api_ids`;
-- generated skill files needed by the current node.
+- `workspace_paths` naming generated skill files the node may need. File contents are not embedded because Builder can read these paths inside its controlled workspace.
 
-The Builder prompt must not include backend bookkeeping fields such as `generation_request_id`, `blueprint_path`, `permission_path`, `task_dag_path`, `task_path`, task `index`, or task `status`. It should not receive the entire task DAG for a normal node build; dependency contracts come from parent interface artifacts.
+The Builder prompt must not include backend bookkeeping fields such as `generation_request_id`, `blueprint_path`, `permission_path`, `task_dag_path`, `task_path`, task `index`, or task `status`. It must not include full source snapshots, manifest requirement summaries already enforced by the backend, or interface-artifact field lists already defined by Builder instructions. It should not receive the entire task DAG for a normal node build; dependency contracts come from direct-parent interface artifacts. The backend may still use transitive lineage for deterministic created-versus-updated validation.
 
 The full backend API context is loaded from the static file at `backend/app/static/backend_api_context.json`. ProductManager sees only the index file; Builder receives only the context entries selected by the current task node's `backend_api_ids`.
 
@@ -194,15 +198,15 @@ All six top-level fields are required and unknown top-level fields are rejected.
 Inputs:
 
 - `permissions.json`;
-- all `builder_build_task` inputs for the node;
-- node `failure.log`;
-- failing test output;
-- current generated files for the node.
+- all compact `builder_build_task` inputs for the node;
+- the current node's last backend-validated interface artifact so created/updated declarations survive repair;
+- one normalized failure object containing task id, error, and bounded stdout/stderr;
+- current generated file paths, without embedding file contents.
 
 Behavior:
 
 - fix implementation files only;
-- do not edit Tester-owned tests;
+- do not edit Tester-owned tests; the backend restores changed Python test sources and fails the Builder invocation if this boundary is crossed;
 - preserve or narrow permissions unless the approved `permissions.json` explicitly allows the change;
 - write a complete replacement `interface_artifact.json` for every repair attempt, preserving the task's created-versus-updated contract when interfaces did not change.
 
@@ -210,12 +214,12 @@ Behavior:
 
 Inputs:
 
-- `blueprint.json`;
-- `permissions.json`;
+- compact final blueprint contract;
+- effective `permission_bounds`;
 - final end-to-end expectations from `task_dag.json`;
-- all interface artifacts;
-- final end-to-end failure output;
-- all generated skill package files.
+- compact interface contracts without file-claim bookkeeping;
+- one normalized final failure object;
+- generated skill package paths without embedded contents.
 
 Behavior:
 
@@ -233,8 +237,8 @@ Runs only for nodes with `requires_tests = true`.
 Inputs:
 
 - the current task node;
-- parent interface artifacts;
-- Builder-created files needed to test the node.
+- direct-parent interface artifacts;
+- `workspace_paths` for Builder-created files needed to test the node. Source contents are not duplicated in the prompt.
 
 The Tester prompt for a node must not include the entire task DAG, task artifact paths, task status, task index, or other backend-only bookkeeping. It should receive `test_file` so it writes only the node-specific test file.
 
@@ -242,6 +246,7 @@ Behavior:
 
 - write tests that match the node's `test_expectations` and acceptance criteria;
 - write node-specific test files such as `tests/test_<task_id>.py` so parallel testers do not edit the same file;
+- run at most one focused pytest self-check and correct only test-owned harness mistakes, without weakening requirements or editing implementation;
 - run tests through the safe validation path;
 - write `tasks/<task_id>/test_result.json`;
 - on failure, write `tasks/<task_id>/failure.log` and trigger `builder_fix_task`.
@@ -252,11 +257,10 @@ Runs after every task node is `done`.
 
 Inputs:
 
-- `blueprint.json`;
-- `permissions.json`;
+- compact blueprint goal, expected behavior, schedule, and acceptance criteria;
 - final end-to-end expectations from `task_dag.json`;
-- all interface artifacts;
-- all generated skill package files.
+- compact interface contracts;
+- safe package `workspace_paths`, excluding `.git`, `.agents`, caches, bytecode, and Codex bookkeeping files.
 
 Behavior:
 
@@ -269,6 +273,8 @@ Behavior:
 ## Failure Limits
 
 Each task node has its own fix counter. After more than three failed test/fix attempts for one node, ProductManager writes a stuck user-facing summary and the run stops as `blocked`.
+
+When a build run fails after a task has already produced a validated interface artifact, Retry Current Task reuses the persisted DAG, task contract, skill workspace, and failure count. It reruns only that task's repair/test loop and then continues with remaining tasks and final E2E; it does not regenerate ProductManager artifacts or repeat completed Builder work.
 
 The final end-to-end loop has a separate failure counter. After more than three final failures, ProductManager writes a stuck user-facing summary and the run stops as `blocked`.
 
@@ -304,5 +310,6 @@ Repair uses the same task-node contracts:
 - Per-node `requires_tests` controls whether Tester runs immediately after Builder.
 - Per-node `file_write_claims` enables safe parallel Builder/Tester execution.
 - Builder must write a skill-local `interface_artifact.json` for every node; the backend validates and moves it into the node's run-artifact folder so child nodes have explicit contracts without granting Builder write access to `runtime`.
+- When a newly persisted agent-run ID collides with an orphaned `runtime/agent_runs/run_<id>` directory, the backend preserves the stale directory under `runtime/agent_runs/orphaned/` and initializes a clean directory for the new run.
 - Tester writes node-specific test files and one final end-to-end test file instead of sharing one test file across all build work.
 - Backend seeds `manifest.json` from `blueprint.json` and `permissions.json`, and later fills missing manifest fields deterministically when possible.

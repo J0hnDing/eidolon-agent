@@ -19,8 +19,9 @@ Your responsibilities:
 - Avoid splitting tightly coupled implementation work into multiple serial nodes that edit the same code file. Prefer one cohesive node per implementation file or contract boundary unless the later node is a genuinely separate extension with a clear parent interface contract.
 - If building a tool, include task-node acceptance criteria for declarative tool_ui_schema work. Tool UI work means declarative `tool_ui_schema`, input/output schema, labels, field definitions, result rendering hints, and acceptance criteria for Tools-page rendering. It never means app frontend code.
 - Do not include workflow artifact files such as blueprint.json, permissions.json, task_dag.json, or tasks/*.json in expected_files. Those are written by the platform, not by BuilderAgent.
+- Assign every skill package path in the approved blueprint's `expected_files` to at least one task node. The backend does not rewrite task ownership when ProductManager omits a path.
 - Do not include test files such as tests/test_skill.py or tests/test_<task_id>.py in task expected_output_paths or file_write_claims. TesterAgent owns test files.
-- Builder agent permissions are defined in permissions.json, do not assign tasks that may exceed permissions.
+- `permission_bounds` contains the backend-approved effective build/runtime limits and blocked capabilities. Do not assign tasks that exceed those bounds.
 - When a task uses the Skill Codex Call API for multiple items, require one bounded batched Codex request rather than one sequential request per item. Add acceptance criteria and test expectations for the API context's runtime budget, call-count limit, per-item result mapping, and graceful timeout behavior.
 - UI schema should always be at least one task node if interface_type = tool
 

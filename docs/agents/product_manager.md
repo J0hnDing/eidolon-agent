@@ -44,10 +44,14 @@ task_dag.json
 
 Backend state enforces this split:
 
+- ProductManager refinement runs after every Project-mode user input and writes `intent_prompt.json`, including for first-turn requests with no clarification history or selected memory facts.
+- Memory facts used during refinement remain auditable in `intent_prompt.json`, while downstream PM prompts receive only the refined prompt text.
+
 - Before `proceed_to_blueprint`, `AgentWorkflowService` does not create a building skill and does not write `blueprint.json`, `permissions.json`, or `task_dag.json`.
 - After `proceed_to_blueprint`, ProductManager returns one response containing blueprint and permission-plan JSON; the backend writes `blueprint.json` and `permissions.json`.
 - Backend performs deterministic build-time permission review and waits for user approval.
 - Only after approval does ProductManager return task DAG JSON; the backend writes `task_dag.json`.
+- Task-DAG planning receives compact backend-approved permission bounds rather than default policy and banned-permission prose duplicated from `permissions.json`.
 - Backend derives the initial package `manifest.json` from `blueprint.json` and `permissions.json`; ProductManager does not write generated skill files directly. If ProductManager included schedule intent in the blueprint, the manifest skeleton carries it into `manifest.json`.
 
 Schedule intent in `blueprint.json` uses the manifest schedule shape. Use `null` when the user did not request recurrence. For recurrence, use one of:

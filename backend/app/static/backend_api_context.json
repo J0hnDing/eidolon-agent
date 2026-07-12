@@ -23,7 +23,7 @@
         "internet_access": "bool"
       },
       "runtime_budget": {
-        "default_entrypoint_timeout_seconds": 60,
+        "default_entrypoint_timeout_seconds": 120,
         "maximum_recommended_codex_calls_per_run": 1,
         "maximum_recommended_caller_timeout_seconds": 45,
         "rules": [

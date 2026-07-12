@@ -484,12 +484,10 @@ class FakeCodexAdapter:
     def _build_task_dag_from_plan(self, blueprint: dict, plan: dict) -> dict:
         skill_type = blueprint.get("skill_type") or plan.get("skill_type")
         expected_files = self._skill_package_files(
-            blueprint.get("expected_files") or plan.get("files_to_generate") or ["manifest.json", "README.md"]
+            blueprint.get("expected_files") or plan.get("files_to_generate") or ["manifest.json"]
         )
         if "manifest.json" not in expected_files:
             expected_files.insert(0, "manifest.json")
-        if "README.md" not in expected_files:
-            expected_files.insert(1, "README.md")
         requires_tests = skill_type == "automation"
         node = {
             "id": "core_skill",
@@ -773,6 +771,45 @@ class CodexService:
         self._record_invocation(result, plan)
         return result
 
+    def _generate_builder_with_test_guard(
+        self,
+        prompt: str,
+        output_dir: Path,
+        plan: dict,
+    ) -> subprocess.CompletedProcess[str]:
+        before = self._test_source_snapshot(output_dir)
+        result = self._generate_writable_skill(prompt, output_dir, plan)
+        after = self._test_source_snapshot(output_dir)
+        changed = sorted(path for path in before.keys() | after.keys() if before.get(path) != after.get(path))
+        if changed:
+            self._restore_test_source_snapshot(output_dir, before, after)
+            raise CodexGenerationError(f"Builder modified Tester-owned files: {', '.join(changed)}")
+        return result
+
+    @staticmethod
+    def _test_source_snapshot(output_dir: Path) -> dict[str, bytes]:
+        tests_dir = output_dir / "tests"
+        if not tests_dir.exists():
+            return {}
+        return {
+            path.relative_to(output_dir).as_posix(): path.read_bytes()
+            for path in tests_dir.rglob("*.py")
+            if path.is_file()
+        }
+
+    @staticmethod
+    def _restore_test_source_snapshot(
+        output_dir: Path,
+        before: dict[str, bytes],
+        after: dict[str, bytes],
+    ) -> None:
+        for relative_path in after.keys() - before.keys():
+            (output_dir / relative_path).unlink(missing_ok=True)
+        for relative_path, content in before.items():
+            path = output_dir / relative_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+
     def _record_invocation(self, result: subprocess.CompletedProcess[str], plan: dict[str, object]) -> None:
         usage = getattr(result, "codex_usage", None)
         if not isinstance(usage, dict):
@@ -818,10 +855,13 @@ class CodexService:
         generation_request: SkillGenerationRequest,
         selected_memory_facts: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
+        conversation = generation_request.plan_json.get("project_conversation", [])
+        if not isinstance(conversation, list) or not conversation:
+            conversation = [{"role": "user", "content": generation_request.user_message}]
         payload = {
             "codex_task": "product_manager_refine_intent",
             "user_message": generation_request.user_message,
-            "project_conversation": generation_request.plan_json.get("project_conversation", []),
+            "project_conversation": conversation,
             "selected_memory_facts": selected_memory_facts or [],
         }
         fallback = {
@@ -831,7 +871,13 @@ class CodexService:
             "selected_memory_facts": selected_memory_facts or [],
         }
         result = self._generate_product_manager(
-            self.build_product_manager_prompt("refine_intent", payload),
+            self.build_product_manager_prompt(
+                "refine_intent",
+                {
+                    "project_conversation": conversation,
+                    "selected_memory_facts": selected_memory_facts or [],
+                },
+            ),
             payload,
         )
         parsed = self._parse_product_manager_json(result, fallback={"intent_prompt": fallback})
@@ -884,21 +930,21 @@ class CodexService:
         self,
         generation_request: SkillGenerationRequest,
         blueprint: dict[str, object],
-        permission_plan: dict[str, object],
+        permission_bounds: dict[str, object],
         backend_api_index_payload: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
         payload = {
             "codex_task": "product_manager_write_task_dag",
             "user_message": generation_request.user_message,
             "blueprint_json": blueprint,
-            "permission_plan": permission_plan,
+            "permission_bounds": permission_bounds,
             "generation_plan": generation_request.plan_json,
             "backend_api_index": backend_api_index_payload or backend_api_index(),
         }
         fallback = self._fallback_task_dag(generation_request, blueprint)
         prompt_payload = {
             "blueprint_json": blueprint,
-            "permission_plan": permission_plan,
+            "permission_bounds": permission_bounds,
             "backend_api_index": payload["backend_api_index"],
         }
         result = self._generate_product_manager(
@@ -1057,7 +1103,8 @@ class CodexService:
         if milestone_context is not None:
             plan_for_adapter["current_milestone"] = milestone_context
         prompt = self.build_prompt(plan_for_adapter, proposed_dir, builder_writes_tests=builder_writes_tests)
-        result = self._generate_writable_skill(prompt, proposed_dir, plan_for_adapter)
+        generate = self._generate_writable_skill if builder_writes_tests else self._generate_builder_with_test_guard
+        result = generate(prompt, proposed_dir, plan_for_adapter)
         if result.returncode != 0:
             generation_request.status = "failed"
             generation_request.error_message = result.stderr or "Codex generation failed"
@@ -1095,7 +1142,7 @@ class CodexService:
             "existing_files": self._read_files_from_dir(skill_dir),
         }
         prompt = self.build_prompt(plan, skill_dir, builder_writes_tests=False)
-        result = self._generate_writable_skill(prompt, skill_dir, plan)
+        result = self._generate_builder_with_test_guard(prompt, skill_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex milestone build failed")
         self.finalize_manifest(skill_dir, generation_request.plan_json, milestone_context)
@@ -1113,7 +1160,7 @@ class CodexService:
             "current_milestone": failure_context,
         }
         prompt = self.build_repair_prompt(skill, skill_dir, failure_context)
-        result = self._generate_writable_skill(prompt, skill_dir, plan)
+        result = self._generate_builder_with_test_guard(prompt, skill_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex repair failed")
         return result
@@ -1135,7 +1182,7 @@ class CodexService:
             "builder_writes_tests": False,
         }
         prompt = self.build_repair_prompt(skill, version_dir, failure_context)
-        result = self._generate_writable_skill(prompt, version_dir, plan)
+        result = self._generate_builder_with_test_guard(prompt, version_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex draft-version repair failed")
         return result
@@ -1159,7 +1206,7 @@ class CodexService:
             "project_files": self._read_files_from_dir(version_dir),
         }
         prompt = self.build_update_prompt(skill, version, version_dir, suggestion, blueprint)
-        result = self._generate_writable_skill(prompt, version_dir, plan)
+        result = self._generate_builder_with_test_guard(prompt, version_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex update failed")
         return result
@@ -1173,13 +1220,12 @@ class CodexService:
             "task_node": tester_context.get("task_node", {}),
             "test_file": tester_context.get("test_file"),
             "final_e2e_expectations": tester_context.get("final_e2e_expectations", []),
-            "interface_artifacts": tester_context.get("interface_artifacts", []),
-            "code_files": tester_context.get("code_files", {}),
+            "interface_contracts": tester_context.get("interface_contracts", []),
+            "workspace_paths": tester_context.get("workspace_paths", []),
             "input_schema": skill.input_schema_json,
             "output_schema": skill.output_schema_json,
             "tool_ui_schema": skill.tool_ui_schema_json,
-            **({"blueprint_json": tester_context["blueprint_json"]} if "blueprint_json" in tester_context else {}),
-            **({"permission_plan": tester_context["permission_plan"]} if "permission_plan" in tester_context else {}),
+            **({"blueprint_contract": tester_context["blueprint_contract"]} if "blueprint_contract" in tester_context else {}),
             **({"milestone": tester_context["milestone"]} if "milestone" in tester_context else {}),
         }
         prompt = self.build_tester_prompt(skill, skill_dir, tester_context)
@@ -1501,18 +1547,6 @@ class CodexService:
         return f"""
 {instruction}
 
-Application skill definition:
-- A skill is a reusable capability package.
-- skill_type is one of instruction, automation.
-- Instruction skills contain reusable instructions only.
-- Automation skills contain executable Python automation.
-- Automation skills may include SKILL.md for reusable instructions or operating notes, but SKILL.md is optional for automation.
-- interface_type is one of chat, tool, hidden.
-- Chat skills are primarily used through chat.
-- Tool skills are installed enabled automation skills exposed as manual forms in the Tools UI.
-- Hidden skills are not shown as a normal user-facing entry point.
-- Tool UI work is declarative manifest work: tool_ui_schema, input/output schemas, labels, fields, options, and result rendering hints. Do not generate frontend app code.
-
 Write files only inside this exact folder:
 {output_dir}
 
@@ -1520,30 +1554,14 @@ Builder context:
 {json.dumps(builder_context, indent=2)}
 
 Product structure:
-- Follow only the permission plan, current task node, parent interface artifacts, selected backend API context, and generated files in Builder context.
+- Follow only the permission bounds, current task node, direct-parent interface artifacts, selected backend API context, and workspace paths in Builder context.
 - Build only the current task node and respect its file_write_claims.
 - Treat the folder above as the only writable workspace. Do not write by absolute path or traverse outside it.
 - Write interface_artifact.json at the controlled skill-folder root. Do not write directly under runtime/agent_runs; the backend validates and moves the sidecar there.
 - Do not write blueprint.json, permissions.json, task_dag.json, or task JSON files; those are backend-owned workflow artifacts.
-- The backend may seed manifest.json from the approved blueprint and permissions before Builder runs. Preserve that schema shape and complete only fields owned by the current task node.
-- Platform validation still requires manifest.json and README.md in every skill package.
-- Instruction skills need the manifest instructions_path to point to an instructions file such as SKILL.md.
-- Automation skills may set instructions_path to SKILL.md when they include optional reusable instructions.
-- Automation skills need the manifest entrypoint to point to executable Python code such as skill.py.
+- Read existing files directly from the listed workspace paths; their contents are intentionally not duplicated in the prompt.
+- The backend seeds manifest.json from approved product and permission artifacts. Preserve its security fields and complete only fields owned by this task.
 - TesterAgent owns test files in this workflow unless builder_writes_tests is explicitly true.
-
-Manifest requirements:
-- manifest.json must include these top-level fields: name, description, skill_type, interface_type, risk_level, permissions, dependencies, schedule, created_by, and enabled.
-- Automation manifests must include entrypoint pointing to a Python file. Instruction manifests must include instructions_path pointing to an instructions file.
-- Preserve the backend-seeded manifest name, skill_type, interface_type, risk_level, permissions, and dependencies exactly unless the current task explicitly owns a declarative schema field.
-- Preserve input_schema, output_schema, and tool_ui_schema from the seeded manifest unless the current task explicitly updates them.
-- If interface_type is tool, prefer a clear declarative tool_ui_schema so the app can render a user-friendly form. Do not generate React, HTML, JavaScript, or frontend app code.
-- Network permissions must be explicit domains only; no wildcard permissions.
-- shell must be false.
-- secrets must be [].
-- permissions.codex.call_response defaults to true for backend-mediated Codex responses.
-- permissions.codex.internet_access must be true only when runtime network domains are requested and approved.
-- schedule must preserve ProductManager manifest intent when present. Use null only when no recurring run was requested.
 
 Executable skill requirements:
 - read JSON from stdin
@@ -1585,11 +1603,6 @@ Repair the current task node or final end-to-end failure using the provided Test
 
 Controlled skill folder:
 {output_dir}
-
-Skill:
-- name: {skill.name}
-- skill_type: {skill.skill_type}
-- interface_type: {skill.interface_type}
 
 Tester context:
 {json.dumps(tester_context, indent=2)}
@@ -1915,10 +1928,11 @@ Payload:
         if not sanitized_nodes:
             return fallback
         root_task_ids = dag.get("root_task_ids")
+        normalized_root_ids = [str(item) for item in root_task_ids] if isinstance(root_task_ids, list) else []
         return {
             "schema_version": 1,
             "graph_id": str(dag.get("graph_id") or f"{blueprint.get('skill_name', 'skill')}_build"),
-            "root_task_ids": [str(item) for item in root_task_ids] if isinstance(root_task_ids, list) else [],
+            "root_task_ids": normalized_root_ids,
             "nodes": sanitized_nodes,
             "final_e2e_expectations": [str(item) for item in dag.get("final_e2e_expectations", [])]
             if isinstance(dag.get("final_e2e_expectations"), list)
@@ -1981,12 +1995,10 @@ Payload:
         plan = generation_request.plan_json
         skill_type = blueprint.get("skill_type") or plan.get("skill_type")
         expected_files = self._skill_package_files(
-            blueprint.get("expected_files") or plan.get("files_to_generate") or ["manifest.json", "README.md"]
+            blueprint.get("expected_files") or plan.get("files_to_generate") or ["manifest.json"]
         )
         if "manifest.json" not in expected_files:
             expected_files.insert(0, "manifest.json")
-        if "README.md" not in expected_files:
-            expected_files.insert(1, "README.md")
         requires_tests = skill_type == "automation"
         node = {
             "id": "core_skill",

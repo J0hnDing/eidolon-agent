@@ -36,12 +36,11 @@ The active installed skill points to one active version folder.
 
 ## Required Package Files
 
-Every skill package needs:
+Every skill package needs a valid `manifest.json`.
 
-- `manifest.json`
-- `README.md`
+`README.md` is optional.
 
-Instruction skills need an instructions file referenced by `instructions_path`, usually `SKILL.md`.
+`SKILL.md` is not a universal package requirement. Instruction skills need an instructions file referenced by `instructions_path`, usually `SKILL.md`, because the instructions are their implementation.
 
 Automation skills may also include optional reusable instructions. When they do, `instructions_path` should reference that file, usually `SKILL.md`.
 
