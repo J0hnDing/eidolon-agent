@@ -34,7 +34,13 @@ def effective_permission_plan(
     runtime = permission_plan.get("runtime") if isinstance(permission_plan.get("runtime"), dict) else {}
     build_time = permission_plan.get("build_time") if isinstance(permission_plan.get("build_time"), dict) else {}
     defaults = default_allowed_permissions()
+    default_build_time = defaults.get("build_time", {}) if isinstance(defaults.get("build_time"), dict) else {}
     default_runtime = defaults.get("runtime", {}) if isinstance(defaults.get("runtime"), dict) else {}
+
+    build_dependencies = list(build_time.get("dependencies", []) or [])
+    for dependency in default_build_time.get("dependencies", []) or []:
+        if dependency not in build_dependencies:
+            build_dependencies.append(dependency)
 
     filesystem_read = list(runtime.get("filesystem_read", []) or [])
     filesystem_write = list(runtime.get("filesystem_write", []) or [])
@@ -57,12 +63,12 @@ def effective_permission_plan(
 
     return {
         "build_time": {
-            "codex_generation": bool(build_time.get("codex_generation", True)),
             "internet_research": bool(build_time.get("internet_research", False)),
-            "dependencies": list(build_time.get("dependencies", []) or []),
-            "reason": str(build_time.get("reason") or "Codex needs to generate controlled skill files."),
+            "dependencies": build_dependencies,
+            "project_read": list(default_build_time.get("project_read", []) or []),
         },
         "runtime": {
+            "python_standard_library": bool(default_runtime.get("python_standard_library", True)),
             "network": list(runtime.get("network", []) or []),
             "filesystem_read": filesystem_read,
             "filesystem_write": filesystem_write,
@@ -70,8 +76,5 @@ def effective_permission_plan(
             "shell": bool(runtime.get("shell", False)),
             "codex": effective_codex,
             "dependencies": list(runtime.get("dependencies", []) or []),
-            "reason": str(runtime.get("reason") or "Expected runtime permissions for this skill."),
         },
-        "default_allowed": defaults,
-        "banned_permissions": default_banned_permissions(),
     }

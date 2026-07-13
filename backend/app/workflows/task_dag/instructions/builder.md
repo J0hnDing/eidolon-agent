@@ -28,7 +28,6 @@ Rules:
 Required `interface_artifact.json` syntax:
 ```json
 {
-  "task_id": "current_task_id",
   "created_paths": [xxx.py],
   "updated_paths": ["manifest.json"],
   "interfaces": {

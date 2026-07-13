@@ -1,6 +1,6 @@
 # Project Build Workflow
 
-New skill builds use a directed acyclic graph of task nodes instead of a linear milestone list. The graph is still specific to this application: it builds one proposed local skill under controlled folders, uses the same ProductManagerAgent, BuilderAgent, and TesterAgent roles, and keeps permission review in deterministic backend logic.
+New skill builds share one general starting sequence and then dispatch to a backend-managed build workflow. ProductManager intent refinement, plausibility review, blueprint creation, permission planning, and deterministic build-time approval happen before workflow dispatch. The supported build workflows are `single_codex` and `task_dag`.
 
 ## Build Artifacts
 
@@ -12,8 +12,8 @@ runtime/agent_runs/run_<id>/
   decision.json
   blueprint.json
   permissions.json
-  task_dag.json
-  tasks/
+  task_dag.json              task_dag only
+  tasks/                     task_dag only
     <task_id>.json
     <task_id>/
       interface_artifact.json
@@ -22,7 +22,7 @@ runtime/agent_runs/run_<id>/
   final_e2e_test_result.json
 ```
 
-`task_dag.json` replaces `milestones/*.json`. The file name uses lowercase repository naming even when UI copy calls it the task DAG.
+`task_dag.json` replaces `milestones/*.json` for the `task_dag` workflow. The `single_codex` workflow does not create DAG or task artifacts.
 
 ## ProductManager Actions
 
@@ -49,8 +49,10 @@ Output for PM does NOT mean agent writes files directly, instead backend receive
 
 3. `pm_write_blueprint_and_permissions`
    - Inputs: `intent_prompt.json`.
-   - Output: one structured response that the backend writes as `blueprint.json` and `permissions.json`.
-   - Purpose: describe the skill goal, skill type, interface type, expected user behavior, package expectations, and high-level acceptance criteria. draft both build-time needs and expected runtime permissions/dependencies.
+   - Output: one structured response containing top-level `build_workflow`, `blueprint`, and `permission_plan` fields. The backend writes only the latter two as `blueprint.json` and `permissions.json`.
+   - Purpose: choose `single_codex` or `task_dag`; describe the skill goal, skill type, interface type, expected user behavior, schedule intent, and high-level acceptance criteria; draft both build-time needs and expected runtime permissions/dependencies.
+   - `build_workflow` is backend routing state stored on the agent run. It must not appear inside `blueprint` or in `blueprint.json` because downstream DAG, Builder, and Tester inputs do not need it.
+   - Must not enumerate generated package files. Builder-owned paths are defined later by task-node `expected_output_paths` and `file_write_claims` in `task_dag.json`.
    - Must not include task nodes, dependencies between tasks, or test files.
    - Must not approve permissions.
 
@@ -61,13 +63,30 @@ Output for PM does NOT mean agent writes files directly, instead backend receive
    - Approval to generate does not install, run, schedule, or approve runtime permissions.
    - Also writes a `manifest.json` from `blueprint.json`, `permissions.json`.
 
-5. `pm_write_task_dag`
+5. Backend workflow dispatch
+   - Inputs: the agent run's backend-only `build_workflow`, approved `blueprint.json`, and effective `permissions.json`.
+   - Output: execution by the registered `single_codex` or `task_dag` workflow module.
+   - The registry rejects unknown workflow names. Workflow selection and execution are not hard-coded into the common pre-approval sequence.
+
+6. `pm_write_task_dag` (`task_dag` only)
    - Inputs: `blueprint.json`, compact backend-approved `permission_bounds`, and the static backend API index file at `backend/app/static/backend_api_index.json`.
    - Output: `task_dag.json`.
-   - Purpose: split the project into explicit task nodes with dependencies, difficulty, test requirements, I/O expectations, file write claims, interface artifact expectations, and any required backend API ids.
+   - Purpose: split the project into explicit task nodes with dependencies, difficulty, test requirements, output expectations, file write claims, interface artifact expectations, and any required backend API ids.
    - Must not include separate "test-only" task nodes. Tester actions are attached to the build nodes that require tests.
 
-## Task DAG Schema
+## Single-Codex Workflow
+
+The `single_codex` workflow package contains `workflow.py`, `prompts.py`, and `instructions/run.md`. It makes one writable Codex invocation in the controlled proposed-skill folder. Its prompt contains the approved blueprint, effective permissions, and fixed workflow instructions. Within that invocation Codex plans internally, creates the complete skill package, writes tests for automation skills, runs a focused test command, and fixes failures before returning.
+
+The backend still seeds and finalizes `manifest.json`, records invocation usage, creates runtime permission review from the actual manifest, and leaves the skill proposed. It does not currently run an independent final proposed-package validation after the single Codex invocation. Adding that validation is tracked in `docs/todo.md`.
+
+The workflow can pause before its single invocation when Codex allowance is below the configured reserve. It cannot pause partway through the invocation; a retry starts a new Codex invocation against a freshly prepared proposed-skill workspace.
+
+## Task DAG Workflow
+
+The `task_dag` package contains its executor, prompt composition, and ProductManager/Builder/Tester/repair instructions. It retains the existing ProductManager, BuilderAgent, and TesterAgent orchestration and deterministic node/final validation behavior without placing workflow-specific prompt mappings in `CodexService` or the common `AgentWorkflowService` dispatch path.
+
+### Task DAG Schema
 
 `task_dag.json` has this shape:
 
@@ -75,8 +94,6 @@ Output for PM does NOT mean agent writes files directly, instead backend receive
 {
   "task_dag": {
     "schema_version": 1,
-    "graph_id": "safe_skill_name_build",
-    "root_task_ids": ["core_skill"],
     "nodes": [
       {
         "id": "short_safe_id",
@@ -86,7 +103,6 @@ Output for PM does NOT mean agent writes files directly, instead backend receive
         "difficulty": "easy|medium|hard",
         "requires_tests": true,
         "parallel_safe": true,
-        "expected_inputs": [],
         "expected_output_paths": ["skill.py"],
         "file_write_claims": ["skill.py"],
         "acceptance_criteria": ["string"],
@@ -96,17 +112,15 @@ Output for PM does NOT mean agent writes files directly, instead backend receive
       }
     ],
     "final_e2e_expectations": ["string"]
-  },
-  "summary": "short user-facing summary"
+  }
 }
 ```
 
-`root_task_ids` contains node ids whose `depends_on` list is empty. `requires_tests` and `parallel_safe` are JSON booleans. `manifest.json` is excluded from `file_write_claims`; the backend owns it and grants Builder a serialized exception when a task needs to update it.
+`requires_tests` and `parallel_safe` are JSON booleans. Root nodes are derived from an empty `depends_on` list. `manifest.json` is excluded from `file_write_claims`; the backend owns it and grants Builder a serialized exception when a task needs to update it.
 
 Backend validation must reject the graph when:
 
 - the graph is cyclic;
-- `root_task_ids` is empty;
 - a dependency references a missing node;
 - a node id is not a safe path segment;
 - a node omits acceptance criteria or expected output paths;
@@ -118,9 +132,9 @@ The `file_write_claims` field is added so the backend can parallelize independen
 
 Task `expected_output_paths` and `file_write_claims` are Builder-owned skill package paths only. They must not include Tester-owned files such as `tests/test_skill.py` or `tests/test_<task_id>.py`; the backend sanitizes those paths out of ProductManager DAG output before validation.
 
-Every package path listed in the approved blueprint's `expected_files` should be owned by a task. The backend does not add omitted blueprint paths to a root task. `README.md` and `SKILL.md` are not universal package requirements; `manifest.json` remains backend-owned and is always validated, including any entrypoint or instructions file it declares.
+The blueprint does not define package file paths. ProductManager assigns Builder-owned paths directly to task nodes in `task_dag.json`; the backend does not invent omitted task outputs. `README.md` and `SKILL.md` are not universal package requirements; `manifest.json` remains backend-owned and is always validated, including any entrypoint or instructions file it declares.
 
-## Task Node Execution
+### Task Node Execution
 
 After approval and DAG validation, the backend builds the DAG data structure and repeatedly executes ready nodes:
 
@@ -143,7 +157,9 @@ The backend groups simultaneously ready `parallel_safe` nodes into execution bat
 
 Before admitting another ready batch and after an admitted batch finishes, the backend refreshes the Codex account allowance. If either the 5-hour or weekly window has less than 5% remaining, the agent run becomes `paused`. Exactly 5% remains runnable. The workflow page shows the reset time and a Resume control. Resume rechecks both windows and continues from persisted `done` nodes without regenerating the task DAG or repeating completed nodes.
 
-Every ProductManager, Builder, and Tester Codex invocation records input, cached-input, output, reasoning-output, and total tokens together with its action, adapter, and model. Step totals appear on the DAG node and invocation detail; the agent run stores the build total. Skill runtime Codex calls are excluded.
+Every ProductManager, Builder, and Tester Codex invocation records input, cached-input, output, reasoning-output, and total tokens together with its action, adapter, requested/effective model, requested/effective reasoning effort, and route source. Builder records also include the task difficulty used for routing. Step totals appear on the DAG node and invocation detail; the agent run stores the build total. Skill runtime Codex calls are excluded.
+
+Model routing is backend policy, not ProductManager output. ProductManager actions may have separate user defaults. Builder task nodes use the existing validated `difficulty` value to select the user-configured `easy`, `medium`, or `hard` route, falling back to the Builder default. Tester task, final end-to-end, and update actions have independent routes. Changing a model never changes sandbox, permission, approval, retry, quota-reserve, or workspace boundaries.
 
 ## Builder Actions
 
@@ -176,7 +192,6 @@ Interface artifact shape:
 
 ```json
 {
-  "task_id": "entrypoint_behavior",
   "created_paths": ["skill.py"],
   "updated_paths": ["manifest.json"],
   "interfaces": {
@@ -191,7 +206,7 @@ Interface artifact shape:
 }
 ```
 
-All six top-level fields are required and unknown top-level fields are rejected. Declared paths must be unique relative files inside the skill folder, must exist, and must be covered by the task's `file_write_claims`; `manifest.json` is the sole backend-owned exception. `created_paths` and `updated_paths` must not overlap. Files exposed by parent artifacts and `manifest.json` are updates; files introduced by the current task are creations. The backend performs these checks before replacing any run artifact. A missing or invalid sidecar fails the Builder node and remains in the skill folder for inspection.
+All five top-level fields are required and unknown top-level fields are rejected. The backend adds `task_id` from workflow context only when passing the artifact to another agent. Declared paths must be unique relative files inside the skill folder, must exist, and must be covered by the task's `file_write_claims`; `manifest.json` is the sole backend-owned exception. `created_paths` and `updated_paths` must not overlap. Files exposed by parent artifacts and `manifest.json` are updates; files introduced by the current task are creations. The backend performs these checks before replacing any run artifact. A missing or invalid sidecar fails the Builder node and remains in the skill folder for inspection.
 
 ### `builder_fix_task`
 
@@ -280,7 +295,7 @@ The final end-to-end loop has a separate failure counter. After more than three 
 
 ## Completion
 
-After all task nodes and the final end-to-end test pass:
+For `task_dag`, after all task nodes and the final end-to-end test pass:
 
 1. Backend deterministically finalizes any missing fields in the actual `manifest.json` from the approved blueprint and permission plan.
 2. Backend validates the actual `manifest.json`, declared package files, and tests.
@@ -288,6 +303,8 @@ After all task nodes and the final end-to-end test pass:
 4. ProductManager does not write a completion summary unless the workflow is blocked or needs user input.
 5. Chat tells the user only that the project is finished and surfaces any runtime permission approval needed before install.
 6. The skill remains proposed until the user explicitly installs or rejects it.
+
+For `single_codex`, successful Codex completion and runtime permission review mark the agent run succeeded and leave the skill proposed. Independent backend package/test validation is intentionally deferred to the TODO described above.
 
 ## Project Repair Flow
 

@@ -349,6 +349,7 @@ def test_project_mode_uses_product_manager_review_before_blueprint(db_session: S
     assert "performing plausibility review" in prompts["product_manager_build_review"]
     assert '"blueprint"' not in prompts["product_manager_build_review"]
     assert "Expected JSON syntax" in prompts["product_manager_write_blueprint_and_permissions"]
+    assert '"expected_files"' not in prompts["product_manager_write_blueprint_and_permissions"]
     assert "For `write_task_dag`, return" not in prompts["product_manager_write_blueprint_and_permissions"]
     agent_run = db_session.query(AgentRun).filter_by(generation_request_id=generation_request.id).one()
     steps = sorted(agent_run.steps, key=lambda step: step.id)
@@ -364,6 +365,22 @@ def test_project_mode_uses_product_manager_review_before_blueprint(db_session: S
     assert "plausibility_review" not in generation_request.plan_json
 
 
+def test_project_build_instructions_are_colocated_with_workflow_packages() -> None:
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    workflow_root = app_dir / "workflows"
+
+    assert (workflow_root / "common" / "instructions" / "refine_intent.md").is_file()
+    assert (workflow_root / "common" / "instructions" / "plausibility_review.md").is_file()
+    assert (workflow_root / "common" / "instructions" / "blueprint_and_permissions.md").is_file()
+    assert (workflow_root / "task_dag" / "instructions" / "product_manager.md").is_file()
+    assert (workflow_root / "task_dag" / "instructions" / "builder.md").is_file()
+    assert (workflow_root / "task_dag" / "instructions" / "repair.md").is_file()
+    assert (workflow_root / "task_dag" / "instructions" / "tester.md").is_file()
+    assert (workflow_root / "single_codex" / "instructions" / "run.md").is_file()
+    assert not (app_dir / "agent_instructions" / "product_manager" / "task_dag.md").exists()
+    assert not (app_dir / "agent_instructions" / "workflows" / "single_codex.md").exists()
+
+
 def test_unsupported_project_reports_pm_reason_without_artifacts(db_session: Session, tmp_path: Path) -> None:
     class UnsupportedAdapter(FakeCodexAdapter):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
@@ -371,14 +388,11 @@ def test_unsupported_project_reports_pm_reason_without_artifacts(db_session: Ses
                 return subprocess.CompletedProcess(
                     args=["fake"],
                     returncode=0,
-                    stdout=json.dumps(
-                        {
-                            "decision": "stop_unsupported",
-                            "summary": "This requires unsupported file deletion automation.",
-                            "reason": "File deletion is blocked in the MVP.",
-                            "user_prompt": None,
-                            "optional_projects": ["Create an instruction skill that explains safe cleanup steps."],
-                        }
+                        stdout=json.dumps(
+                            {
+                                "decision": "stop_inplausible",
+                                "user_prompt": "File deletion is blocked. Create an instruction skill that explains safe cleanup steps instead.",
+                            }
                     ),
                     stderr="",
                 )
@@ -392,8 +406,7 @@ def test_unsupported_project_reports_pm_reason_without_artifacts(db_session: Ses
     assert response == {
         "type": "project_not_plausible",
         "message": "I would not turn that into a skill yet.",
-        "reason": "This requires unsupported file deletion automation.",
-        "optional_projects": ["Create an instruction skill that explains safe cleanup steps."],
+        "reason": "File deletion is blocked. Create an instruction skill that explains safe cleanup steps instead.",
     }
     generation_request = db_session.query(SkillGenerationRequest).one()
     assert generation_request.status == "failed"
@@ -1003,12 +1016,17 @@ def test_product_manager_codex_calls_force_read_only_sandbox(
 
     intent_prompt = service.product_manager_refine_intent(generation_request)
     decision = service.product_manager_build_review(generation_request)
-    blueprint, permission_plan = service.product_manager_write_blueprint_and_permissions(generation_request, intent_prompt)
+    blueprint, permission_plan, build_workflow = service.product_manager_write_blueprint_and_permissions(
+        generation_request,
+        intent_prompt,
+    )
+    assert build_workflow == "task_dag"
     service.product_manager_write_task_dag(generation_request, blueprint, permission_plan)
     assert service.product_manager_summary("build_blocked", decision, "Fallback summary.") == "Fallback summary."
 
-    assert len(captured_commands) == 4
-    for command in captured_commands:
+    invocation_commands = [command for command in captured_commands if "exec" in command]
+    assert len(invocation_commands) == 4
+    for command in invocation_commands:
         assert command[command.index("-C") + 1] == str(tmp_path / "runtime" / "product_manager")
         assert command[command.index("--sandbox") + 1] == "read-only"
 
@@ -1322,11 +1340,17 @@ def test_delete_chat_conversation_removes_history_and_clears_memory_source(db_se
     assert memory_fact.source_message_id is None
 
 
-def test_default_codex_mode_uses_real_when_cli_is_available(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_codex_mode_uses_real_when_cli_is_available(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.delenv("PERSONAL_AGENT_CODEX_MODE", raising=False)
-    monkeypatch.setenv("PERSONAL_AGENT_CODEX_COMMAND", "codex")
-    monkeypatch.setattr("app.services.codex_service.shutil.which", lambda command: "C:/Tools/codex.exe")
-    monkeypatch.setattr("app.services.project_plausibility.shutil.which", lambda command: "C:/Tools/codex.exe")
+    executable = tmp_path / "codex.exe"
+    executable.touch()
+    monkeypatch.setenv("PERSONAL_AGENT_CODEX_COMMAND", str(executable))
+    monkeypatch.setattr(
+        "app.services.codex_cli_service.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args=args[0], returncode=0, stdout="codex-cli 0.140.0", stderr=""),
+    )
 
     assert isinstance(default_codex_adapter(), RealCodexAdapter)
     assert isinstance(default_project_plausibility_adapter(), RealProjectPlausibilityAdapter)
@@ -1334,8 +1358,6 @@ def test_default_codex_mode_uses_real_when_cli_is_available(monkeypatch: pytest.
 
 def test_default_codex_mode_can_be_forced_fake(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PERSONAL_AGENT_CODEX_MODE", "fake")
-    monkeypatch.setattr("app.services.codex_service.shutil.which", lambda command: "C:/Tools/codex.exe")
-    monkeypatch.setattr("app.services.project_plausibility.shutil.which", lambda command: "C:/Tools/codex.exe")
 
     assert isinstance(default_codex_adapter(), FakeCodexAdapter)
     assert isinstance(default_project_plausibility_adapter(), FakeProjectPlausibilityAdapter)

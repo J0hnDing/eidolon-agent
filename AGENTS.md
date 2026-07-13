@@ -31,7 +31,7 @@ personal-agent/
   README.md
   docs/                      detailed project documentation
     README.md                documentation index
-    working_history.md       future working-history log format, currently no history entries
+    working_history.md       concise dated implementation summaries and limitations/future work
     architecture/
     agents/
     backend/

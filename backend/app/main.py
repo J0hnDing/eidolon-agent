@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import SessionLocal, create_db_and_tables
-from app.routers import agent_runs, chat, memory_facts, permission_requests, schedules, skill_generation_requests, skills, tools, usage
+from app.routers import agent_runs, chat, codex_settings, memory_facts, permission_requests, schedules, skill_generation_requests, skills, tools, usage
 from app.services.codex_usage_service import codex_usage_service
 from app.services.scheduler_service import SchedulerService
 
@@ -54,6 +54,7 @@ app.include_router(skill_generation_requests.router)
 app.include_router(permission_requests.router)
 app.include_router(schedules.router)
 app.include_router(usage.router)
+app.include_router(codex_settings.router)
 
 
 @app.get("/health")

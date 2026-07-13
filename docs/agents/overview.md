@@ -34,7 +34,7 @@ Build workflows use task-node artifacts instead of linear milestone artifacts. E
 
 ## Codex Integration
 
-ProductManager, Builder, and Tester are Codex-backed through `CodexService`. Each action loads a role-relative instruction file from `backend/app/agent_instructions/`, such as `product_manager/blueprint_and_permissions.md`, `product_manager/task_dag.md`, `builder/repair.md`, or `tester/update.md`.
+ProductManager, Builder, and Tester are Codex-backed through `CodexService`. Project-build packages under `backend/app/workflows/` own and load their workflow-specific instructions and prompt composition. Shared preflight instructions live under `workflows/common`, DAG instructions under `workflows/task_dag`, and the one-call prompt under `workflows/single_codex`. Update and standalone repair actions continue to load role-relative files from `backend/app/agent_instructions/`.
 
 Tests may use fake Codex adapters. Production workflow code should not bypass Codex for these roles except as a safe fallback when Codex output is unusable.
 

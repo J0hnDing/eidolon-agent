@@ -1,7 +1,7 @@
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 
-import { AgentRunDetail, api } from "../api/client";
+import { AgentRunDetail, SkillRun, api } from "../api/client";
 import { usePolling } from "../lib/usePolling";
 
 const LIVE_RUN_STATUSES = new Set(["pending", "running", "waiting_for_approval"]);
@@ -19,20 +19,19 @@ interface TaskDagNode {
 interface TaskDagEdge {
   from?: string;
   to?: string;
-  reason?: string;
 }
 
 interface TaskDag {
-  graph_id?: string;
-  root_task_ids?: string[];
   nodes?: TaskDagNode[];
-  edges?: TaskDagEdge[];
 }
 
 export default function AgentRunDetailPage() {
   const { agentRunId } = useParams();
   const navigate = useNavigate();
   const [run, setRun] = useState<AgentRunDetail | null>(null);
+  const [skillRuns, setSkillRuns] = useState<SkillRun[]>([]);
+  const [activeTab, setActiveTab] = useState<"build" | "run-history">("build");
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isWorking, setIsWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,11 +41,36 @@ export default function AgentRunDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentRunId]);
 
+  useEffect(() => {
+    loadSkillRuns();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run?.skill_id]);
+
   usePolling(
     () => loadRun({ showLoading: false }),
     Boolean(run && LIVE_RUN_STATUSES.has(run.status)),
     1500,
   );
+
+  usePolling(
+    loadSkillRuns,
+    Boolean(run?.skill_id && activeTab === "run-history"),
+    5000,
+  );
+
+  async function loadSkillRuns() {
+    if (!run?.skill_id) {
+      setSkillRuns([]);
+      setHistoryError(null);
+      return;
+    }
+    try {
+      setSkillRuns(await api.listSkillRuns(run.skill_id));
+      setHistoryError(null);
+    } catch (err) {
+      setHistoryError(err instanceof Error ? err.message : "Could not load skill run history");
+    }
+  }
 
   async function loadRun(options: { showLoading?: boolean } = {}) {
     const id = Number(agentRunId);
@@ -232,6 +256,30 @@ export default function AgentRunDetailPage() {
         </div>
       </section>
 
+      <div className="agent-run-tabs" role="tablist" aria-label="Agent run views">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "build"}
+          className={activeTab === "build" ? "active" : ""}
+          onClick={() => setActiveTab("build")}
+        >
+          Build Details
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "run-history"}
+          className={activeTab === "run-history" ? "active" : ""}
+          onClick={() => setActiveTab("run-history")}
+          disabled={!run.skill_id}
+        >
+          Skill Run History
+        </button>
+      </div>
+
+      {activeTab === "build" ? (
+        <>
       <section className="detail-panel">
         <h2>Blueprint</h2>
         {run.blueprint_json ? <pre>{JSON.stringify(run.blueprint_json, null, 2)}</pre> : <p className="muted">No blueprint recorded.</p>}
@@ -305,6 +353,83 @@ export default function AgentRunDetailPage() {
           ))}
         </div>
       </section>
+        </>
+      ) : (
+        <SkillRunHistory runs={skillRuns} error={historyError} />
+      )}
+    </section>
+  );
+}
+
+function SkillRunHistory({ runs, error }: { runs: SkillRun[]; error: string | null }) {
+  if (error) {
+    return <p className="error-text">{error}</p>;
+  }
+  if (runs.length === 0) {
+    return (
+      <section className="detail-panel">
+        <h2>Skill Run History</h2>
+        <p className="muted">No skill runs have been recorded yet.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="detail-panel">
+      <header className="page-header">
+        <div>
+          <h2>Skill Run History</h2>
+          <p className="muted">Runtime Codex tokens are tracked separately from the build totals.</p>
+        </div>
+      </header>
+      <div className="agent-step-list">
+        {runs.map((skillRun) => (
+          <article className="agent-step" key={skillRun.id}>
+            <header className="agent-step-header">
+              <div>
+                <h3>Skill Run #{skillRun.id}</h3>
+                <p className="muted">
+                  {formatTimestamp(skillRun.started_at, "not started")} - {formatTimestamp(skillRun.ended_at, "not ended")}
+                </p>
+              </div>
+              <span className={`badge status-${skillRun.status}`}>{skillRun.status}</span>
+            </header>
+            <dl className="compact-grid detail-grid">
+              <div>
+                <dt>Total Tokens</dt>
+                <dd>{formatTokens(skillRun.total_tokens)}</dd>
+              </div>
+              <div>
+                <dt>Input Tokens</dt>
+                <dd>{formatTokens(skillRun.input_tokens)}</dd>
+              </div>
+              <div>
+                <dt>Cached Input</dt>
+                <dd>{formatTokens(skillRun.cached_input_tokens)}</dd>
+              </div>
+              <div>
+                <dt>Output Tokens</dt>
+                <dd>{formatTokens(skillRun.output_tokens)}</dd>
+              </div>
+              <div>
+                <dt>Reasoning Output</dt>
+                <dd>{formatTokens(skillRun.reasoning_output_tokens)}</dd>
+              </div>
+              <div>
+                <dt>Codex Calls</dt>
+                <dd>{skillRun.codex_invocations_json.length}</dd>
+              </div>
+            </dl>
+            {skillRun.error_message && <p className="error-text">{skillRun.error_message}</p>}
+            {skillRun.codex_invocations_json.length > 0 && (
+              <details>
+                <summary>Codex invocations</summary>
+                <pre>{JSON.stringify(skillRun.codex_invocations_json, null, 2)}</pre>
+              </details>
+            )}
+          </article>
+        ))}
+      </div>
     </section>
   );
 }
@@ -321,26 +446,20 @@ function TaskDagView({
   steps: AgentRunDetail["steps"];
 }) {
   const nodes = Array.isArray(dag.nodes) ? dag.nodes : [];
-  const explicitEdges = Array.isArray(dag.edges) ? dag.edges : [];
   const dependencyEdges = nodes.flatMap((node) =>
     Array.isArray(node.depends_on)
-      ? node.depends_on.map((dependency) => ({ from: dependency, to: node.id, reason: "dependency" }))
+      ? node.depends_on.map((dependency) => ({ from: dependency, to: node.id }))
       : [],
   );
-  const edges = explicitEdges.length > 0 ? explicitEdges : dependencyEdges;
+  const edges = dependencyEdges;
 
   return (
     <div className="task-dag">
-      <div className="task-dag-meta">
-        <span>Graph: {dag.graph_id ?? "unnamed"}</span>
-        <span>Roots: {Array.isArray(dag.root_task_ids) && dag.root_task_ids.length ? dag.root_task_ids.join(", ") : "none"}</span>
-      </div>
       {edges.length > 0 && (
         <div className="task-dag-edges">
           {edges.map((edge, index) => (
             <span key={`${edge.from ?? "unknown"}-${edge.to ?? "unknown"}-${index}`}>
               {edge.from ?? "unknown"} {"->"} {edge.to ?? "unknown"}
-              {edge.reason ? ` (${edge.reason})` : ""}
             </span>
           ))}
         </div>

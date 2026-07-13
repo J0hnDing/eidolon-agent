@@ -17,6 +17,12 @@ class SkillRunBase(BaseModel):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     error_message: str | None = None
+    codex_invocations_json: list[dict[str, Any]] = Field(default_factory=list)
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_output_tokens: int = 0
+    total_tokens: int = 0
 
 
 class SkillRunCreate(SkillRunBase):

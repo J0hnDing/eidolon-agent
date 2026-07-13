@@ -1,5 +1,7 @@
 import json
+import subprocess
 from collections.abc import Generator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -8,11 +10,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import Skill
+from app.models import Skill, SkillRun
 from app.routers import skills as skills_router
 from app.routers.skills import call_codex_for_skill
 from app.schemas.skill_codex import SkillCodexRequest
 from app.services.permission_service import PermissionService
+from app.services.codex_service import CodexService
 
 
 @pytest.fixture
@@ -124,3 +127,62 @@ def test_skill_codex_internet_requires_runtime_network(
 
     assert exc_info.value.status_code == 409
     assert exc_info.value.detail == "Codex internet access requires approved runtime network permission"
+
+
+class UsageCodexAdapter:
+    def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+        result = subprocess.CompletedProcess(
+            args=["usage-codex"],
+            returncode=0,
+            stdout='{"response": "Tracked response."}',
+            stderr="",
+        )
+        result.codex_usage = {
+            "input_tokens": 120,
+            "cached_input_tokens": 20,
+            "output_tokens": 30,
+            "reasoning_output_tokens": 10,
+            "total_tokens": 150,
+        }
+        result.codex_adapter = "test_runtime_adapter"
+        result.codex_model = "gpt-test"
+        result.codex_requested_model = "gpt-test"
+        return result
+
+
+def test_skill_runtime_codex_tokens_are_added_to_the_active_skill_run(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill = create_skill(db_session)
+    run = SkillRun(
+        skill_id=skill.id,
+        status="running",
+        input_json={},
+        started_at=datetime.now(UTC),
+    )
+    db_session.add(run)
+    db_session.commit()
+
+    service = CodexService(db_session, adapter=UsageCodexAdapter(), project_root=tmp_path)
+    response = service.skill_runtime_codex_call(
+        skill,
+        SkillCodexRequest(prompt="Track this call.", model="gpt-test"),
+        internet_access=False,
+    )
+    service.skill_runtime_codex_call(
+        skill,
+        SkillCodexRequest(prompt="Track the second call.", model="gpt-test"),
+        internet_access=False,
+    )
+    db_session.refresh(run)
+
+    assert response["response"] == "Tracked response."
+    assert len(run.codex_invocations_json) == 2
+    assert run.codex_invocations_json[0]["adapter"] == "test_runtime_adapter"
+    assert run.codex_invocations_json[0]["model"] == "gpt-test"
+    assert run.input_tokens == 240
+    assert run.cached_input_tokens == 40
+    assert run.output_tokens == 60
+    assert run.reasoning_output_tokens == 20
+    assert run.total_tokens == 300

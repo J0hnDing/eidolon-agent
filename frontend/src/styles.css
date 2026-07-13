@@ -236,6 +236,14 @@ textarea {
   padding: 12px;
 }
 
+.success-text {
+  border: 1px solid #a9d6b5;
+  border-radius: 6px;
+  background: #effaf2;
+  color: #216e39;
+  padding: 12px;
+}
+
 .callout {
   display: grid;
   gap: 10px;
@@ -892,6 +900,30 @@ pre {
   display: grid;
   gap: 14px;
   margin-top: 14px;
+}
+
+.agent-run-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid #dfe3ea;
+}
+
+.agent-run-tabs button {
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: #5d697b;
+}
+
+.agent-run-tabs button:hover:not(:disabled) {
+  background: #eef2f7;
+  color: #162033;
+}
+
+.agent-run-tabs button.active {
+  border-bottom-color: #2458a6;
+  color: #162033;
 }
 
 .agent-step {

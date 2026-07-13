@@ -327,14 +327,20 @@ def test_update_request_permission_waits_and_resumes_after_approval(tmp_path: Pa
                         "skill_type": skill.skill_type,
                         "interface_type": skill.interface_type,
                         "suggestion": plan["suggestion"],
-                        "requested_network_domains": ["docs.python.org"],
-                        "requested_dependencies": [],
-                        "requested_permissions": {
-                            "network": ["docs.python.org"],
-                            "filesystem_read": [],
-                            "filesystem_write": [],
-                            "secrets": [],
-                            "shell": False,
+                        "permission_plan": {
+                            "build_time": {
+                                "internet_research": True,
+                                "dependencies": [],
+                            },
+                            "runtime": {
+                                "network": ["docs.python.org"],
+                                "filesystem_read": [],
+                                "filesystem_write": [],
+                                "secrets": [],
+                                "shell": False,
+                                "codex": {"internet_access": False},
+                                "dependencies": [],
+                            },
                         },
                         "milestones": [
                             {

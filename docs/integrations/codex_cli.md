@@ -6,13 +6,12 @@ The backend also starts one persistent local `codex app-server --stdio` child pr
 
 DAG builds keep a 5% reserve in both account windows. A new ready-node batch is not admitted when either window has less than 5% remaining; already admitted parallel-ready work is allowed to reach its batch boundary before the run pauses.
 
-Project-build Codex CLI invocations use JSONL output plus the final-message file. The backend persists the `turn.completed` token breakdown for ProductManager, Builder, and Tester invocations. Records include adapter and model identity so another adapter can supply the same usage contract later. Direct chat and installed skill runtime calls are not added to project-build token totals.
+Project-build Codex CLI invocations use JSONL output plus the final-message file. The backend persists the `turn.completed` token breakdown for ProductManager, Builder, and Tester invocations. Records include adapter, role, route source, requested/effective model, requested/effective reasoning effort, and Builder difficulty when applicable. Installed skill runtime calls use the same normalized invocation shape but are stored on the active skill run; they and direct chat are not added to project-build token totals.
 
 ## Defaults
 
 ```text
 PERSONAL_AGENT_CODEX_MODE=auto
-PERSONAL_AGENT_CODEX_COMMAND=codex
 PERSONAL_AGENT_CODEX_SANDBOX=workspace-write
 PERSONAL_AGENT_CODEX_PLAUSIBILITY_SANDBOX=read-only
 PERSONAL_AGENT_CODEX_CHAT_SANDBOX=read-only
@@ -21,7 +20,50 @@ PERSONAL_AGENT_CODEX_APPROVAL_POLICY=never
 PERSONAL_AGENT_CODEX_ENABLE_SEARCH=auto
 ```
 
-`auto` uses real Codex when `codex` is on PATH, otherwise fake/dev adapters are used.
+`auto` uses real Codex when a compatible executable is discovered, otherwise fake/dev adapters are used.
+
+## Executable Resolution and Compatibility
+
+Every backend Codex path, including Chat, ProductManager, Builder, Tester, planning, plausibility review, skill runtime calls, and the persistent App Server, uses one central CLI resolver.
+
+When `PERSONAL_AGENT_CODEX_COMMAND` is set, that executable is an explicit override and no automatic fallback replaces it. Without an override, the backend checks the Codex Desktop installation and every `codex` executable visible on `PATH`, runs `<candidate> --version`, and selects the newest valid semantic version. Codex Desktop wins a version tie. This prevents an older PATH installation from silently taking precedence over a newer Desktop-bundled CLI.
+
+The Settings page displays the effective executable, version, source, and compatibility status. `GET /usage/codex/cli` exposes the same adapter-neutral status contract for future model and reasoning-effort capability checks.
+
+Callers may also supply an operation-specific minimum version when requesting the resolved command. This is unused by current model selection, but gives a future model/effort capability policy a preflight hook without moving executable discovery into that policy.
+
+## Model and Reasoning-Effort Routing
+
+The backend reads the account-aware model picker through App Server `model/list`. Only visible advertised models and their advertised `supportedReasoningEfforts` may be saved. A configured combination is revalidated before a real invocation; unavailable or unsupported combinations block with an actionable error instead of silently selecting another model.
+
+Routing settings cover:
+
+- normal Chat independently;
+- ProductManager refine-intent, plausibility, blueprint/permissions, task-DAG, repair, and update actions;
+- Builder `easy`, `medium`, and `hard` DAG nodes plus repair and update actions;
+- Tester task, final end-to-end, and update actions.
+
+Builder routing reads the backend-validated `difficulty` already present on the task node. The task DAG contains no model or reasoning-effort fields, so ProductManager cannot invent or select model ids.
+
+Precedence is:
+
+```text
+explicit invocation override
+action or Builder difficulty setting
+role default
+legacy PERSONAL_AGENT_CODEX_MODEL / PERSONAL_AGENT_CODEX_REASONING_EFFORT
+Codex catalog default
+```
+
+The CLI receives the effective model through `--model` and effective effort through `--config model_reasoning_effort=...`.
+
+An optional minimum version can be enforced:
+
+```powershell
+$env:PERSONAL_AGENT_CODEX_MIN_VERSION = "0.140.0"
+```
+
+If the explicit override cannot be version-checked, or the selected CLI is older than the configured minimum, real Codex operations fail before starting with an actionable compatibility error. Refreshing the Settings page re-runs discovery and version checks.
 
 ## Setup
 
@@ -34,6 +76,7 @@ Optional overrides:
 
 ```powershell
 $env:PERSONAL_AGENT_CODEX_MODE = "real"
+$env:PERSONAL_AGENT_CODEX_COMMAND = "C:\path\to\codex.exe"
 $env:PERSONAL_AGENT_CODEX_MODEL = "gpt-5"
 $env:PERSONAL_AGENT_CODEX_TIMEOUT_SECONDS = "300"
 ```
@@ -56,6 +99,8 @@ POST /skills/{skill_id}/codex
 ```
 
 The runner sets `PERSONAL_AGENT_SKILL_ID` and `PERSONAL_AGENT_BACKEND_URL` for generated skill code. The backend validates runtime approval and manifest `permissions.codex` before invoking Codex. `codex_permissions.internet_access=true` is accepted only when runtime `network` entries were approved for the skill.
+
+When the call succeeds during an active executable skill run, the backend appends its adapter/model and token breakdown to that `skill_runs` row and updates the runtime aggregate counters. Per-skill operation locking makes the active row unambiguous. Calls made outside an active run are not attributed to run history.
 
 ## Web Search
 

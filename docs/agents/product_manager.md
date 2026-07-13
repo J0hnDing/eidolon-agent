@@ -1,6 +1,6 @@
 # ProductManagerAgent
 
-ProductManagerAgent owns project judgment, intent refinement, blueprinting, permission-file drafting, DAG task planning, and user-facing blocked/clarification responses.
+ProductManagerAgent owns project judgment, intent refinement, build-workflow selection, blueprinting, permission-file drafting, conditional DAG task planning, and user-facing blocked/clarification responses.
 
 ## Responsibilities
 
@@ -13,8 +13,10 @@ ProductManagerAgent owns project judgment, intent refinement, blueprinting, perm
 - Write a concise blueprint without tasks or milestones.
 - Include intended recurring schedule metadata in the blueprint when the user asks for scheduled execution.
 - Draft build-time and expected runtime permission intent in a separate permission file.
-- Define a task DAG for new skill builds after build-time approval.
-- For each task node, define dependencies, difficulty, whether tests are required, expected inputs/outputs, file write claims, interface artifact expectations, and acceptance criteria.
+- Return one top-level `build_workflow` value: `single_codex` for a self-contained small or medium build, or `task_dag` when explicit dependency boundaries and independently retryable tasks are needed.
+- Keep `build_workflow` outside the blueprint because it is backend routing state and must not be written to `blueprint.json`.
+- Define a task DAG after build-time approval only when `build_workflow=task_dag`.
+- For each task node, define dependencies, difficulty, whether tests are required, expected outputs, file write claims, interface artifact expectations, and acceptance criteria.
 - For each task node, include `backend_api_ids` only when the node needs a backend API from the backend-provided API index.
 - Keep tightly coupled implementation work together when separate nodes would repeatedly edit the same code file without a meaningful interface boundary.
 - Summarize approval checkpoints.
@@ -39,7 +41,7 @@ intent_prompt.json
 decision.json
 blueprint.json
 permissions.json
-task_dag.json
+task_dag.json  # task_dag workflow only
 ```
 
 Backend state enforces this split:
@@ -48,9 +50,9 @@ Backend state enforces this split:
 - Memory facts used during refinement remain auditable in `intent_prompt.json`, while downstream PM prompts receive only the refined prompt text.
 
 - Before `proceed_to_blueprint`, `AgentWorkflowService` does not create a building skill and does not write `blueprint.json`, `permissions.json`, or `task_dag.json`.
-- After `proceed_to_blueprint`, ProductManager returns one response containing blueprint and permission-plan JSON; the backend writes `blueprint.json` and `permissions.json`.
+- After `proceed_to_blueprint`, ProductManager returns one response containing `build_workflow`, blueprint, and permission-plan fields. The backend stores `build_workflow` on the agent run and writes only `blueprint.json` and `permissions.json`.
 - Backend performs deterministic build-time permission review and waits for user approval.
-- Only after approval does ProductManager return task DAG JSON; the backend writes `task_dag.json`.
+- After approval the backend resolves the registered workflow. Only `task_dag` invokes ProductManager again to return task DAG JSON and write `task_dag.json`; `single_codex` invokes Codex once with the blueprint and effective permissions.
 - Task-DAG planning receives compact backend-approved permission bounds rather than default policy and banned-permission prose duplicated from `permissions.json`.
 - Backend derives the initial package `manifest.json` from `blueprint.json` and `permissions.json`; ProductManager does not write generated skill files directly. If ProductManager included schedule intent in the blueprint, the manifest skeleton carries it into `manifest.json`.
 

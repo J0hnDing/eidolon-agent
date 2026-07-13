@@ -1,6 +1,7 @@
-# TODO: After finish, remove the corresponding task.
+# TODO: After finish, remove the corresponding task and add to working history md
 
 - Implement skill runtime token tracking.
+- Add independent backend final package, manifest, declared-file, acceptance-criteria, and test validation after the `single_codex` workflow finishes. Keep this separate from Codex's own in-invocation tests and runtime permission review.
 
 ## Local non-agentic model adapter. Where backend would read the path, parth context, feed into local/non-agentic model, read/parse output, write into corresponding files.  
 

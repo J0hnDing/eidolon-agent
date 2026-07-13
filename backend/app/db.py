@@ -73,12 +73,28 @@ def ensure_local_schema() -> None:
                 connection.execute(text("ALTER TABLE skill_versions ADD COLUMN validation_status VARCHAR(32) NOT NULL DEFAULT 'not_run'"))
             if "changelog" not in columns:
                 connection.execute(text("ALTER TABLE skill_versions ADD COLUMN changelog TEXT"))
+        if "skill_runs" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("skill_runs")}
+            if "codex_invocations_json" not in columns:
+                connection.execute(text("ALTER TABLE skill_runs ADD COLUMN codex_invocations_json JSON NOT NULL DEFAULT '[]'"))
+            for column in (
+                "input_tokens",
+                "cached_input_tokens",
+                "output_tokens",
+                "reasoning_output_tokens",
+                "total_tokens",
+            ):
+                if column not in columns:
+                    connection.execute(text(f"ALTER TABLE skill_runs ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"))
         if "agent_runs" in table_names:
             columns = {column["name"] for column in inspector.get_columns("agent_runs")}
             if "current_milestone" not in columns:
                 connection.execute(text("ALTER TABLE agent_runs ADD COLUMN current_milestone VARCHAR(128)"))
             if "failure_count_json" not in columns:
                 connection.execute(text("ALTER TABLE agent_runs ADD COLUMN failure_count_json JSON NOT NULL DEFAULT '{}'"))
+            if "build_workflow" not in columns:
+                connection.execute(text("ALTER TABLE agent_runs ADD COLUMN build_workflow VARCHAR(32)"))
+                connection.execute(text("UPDATE agent_runs SET build_workflow = 'task_dag' WHERE run_type = 'build_skill'"))
             if "blueprint_json" not in columns:
                 connection.execute(text("ALTER TABLE agent_runs ADD COLUMN blueprint_json JSON"))
             if "final_summary_json" not in columns:

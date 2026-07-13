@@ -1,16 +1,19 @@
 import json
 import os
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from sqlalchemy.orm import Session
 
 from app.schemas.common import InterfaceType, RiskLevel, SkillType
 from app.schemas.manifest import ManifestPermissions
+from app.schemas.codex_routing import ResolvedInvocationSettings
+from app.services.codex_cli_service import codex_cli_service, should_use_real_codex
+from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
 
 
 SAFE_SKILL_NAME = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -150,19 +153,27 @@ class RealSkillPlanAdapter:
         sandbox_mode: str | None = None,
         approval_policy: str | None = None,
         model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
-        self.command = command or os.getenv("PERSONAL_AGENT_CODEX_COMMAND", "codex")
+        self.command = command or codex_cli_service.command()
         self.timeout_seconds = timeout_seconds or _env_int("PERSONAL_AGENT_CODEX_PLAN_TIMEOUT_SECONDS", 120)
         self.workdir = workdir or Path.cwd()
         self.sandbox_mode = sandbox_mode or os.getenv("PERSONAL_AGENT_CODEX_PLAN_SANDBOX", "read-only")
         self.approval_policy = approval_policy or os.getenv("PERSONAL_AGENT_CODEX_APPROVAL_POLICY", "never")
         self.model = model if model is not None else os.getenv("PERSONAL_AGENT_CODEX_MODEL")
+        self.reasoning_effort = (
+            reasoning_effort if reasoning_effort is not None else os.getenv("PERSONAL_AGENT_CODEX_REASONING_EFFORT")
+        )
 
     def build_plan(self, prompt: str, message: str) -> dict[str, Any]:
         command = [
             self.command,
             "--ask-for-approval",
             self.approval_policy,
+        ]
+        if self.reasoning_effort:
+            command.extend(["--config", f'model_reasoning_effort="{self.reasoning_effort}"'])
+        command.extend([
             "exec",
             "-C",
             str(self.workdir),
@@ -171,7 +182,7 @@ class RealSkillPlanAdapter:
             "never",
             "--sandbox",
             self.sandbox_mode,
-        ]
+        ])
         if self.model:
             command.extend(["--model", self.model])
         command.append("-")
@@ -190,6 +201,17 @@ class RealSkillPlanAdapter:
             raise SkillPlanError(result.stderr.strip() or "Codex could not build a skill generation plan")
         return parse_json_object(result.stdout)
 
+    def with_invocation_settings(self, settings: ResolvedInvocationSettings) -> "RealSkillPlanAdapter":
+        return RealSkillPlanAdapter(
+            command=self.command,
+            timeout_seconds=self.timeout_seconds,
+            workdir=self.workdir,
+            sandbox_mode=self.sandbox_mode,
+            approval_policy=self.approval_policy,
+            model=settings.effective_model,
+            reasoning_effort=settings.effective_reasoning_effort,
+        )
+
 
 def default_skill_plan_adapter() -> SkillPlanAdapter:
     if should_use_real_codex():
@@ -197,26 +219,26 @@ def default_skill_plan_adapter() -> SkillPlanAdapter:
     return FakeSkillPlanAdapter()
 
 
-def should_use_real_codex() -> bool:
-    mode = os.getenv("PERSONAL_AGENT_CODEX_MODE", "auto").strip().lower()
-    if mode == "real":
-        return True
-    if mode in {"fake", "dev", "stub", "local"}:
-        return False
-    command = os.getenv("PERSONAL_AGENT_CODEX_COMMAND", "codex")
-    return shutil.which(command) is not None
-
-
 @dataclass
 class SkillPlanService:
     adapter: SkillPlanAdapter | None = None
+    db: Session | None = None
 
     def __post_init__(self) -> None:
         if self.adapter is None:
             self.adapter = default_skill_plan_adapter()
 
     def build_generation_plan(self, message: str) -> dict[str, Any]:
-        raw_plan = self.adapter.build_plan(self.build_prompt(message), message)
+        adapter = self.adapter
+        if isinstance(adapter, RealSkillPlanAdapter) and self.db is not None:
+            try:
+                settings = CodexRoutingService(self.db).resolve(
+                    role="product_manager", action="skill_plan"
+                )
+            except CodexRoutingError as exc:
+                raise SkillPlanError(str(exc)) from exc
+            adapter = adapter.with_invocation_settings(settings)
+        raw_plan = adapter.build_plan(self.build_prompt(message), message)
         raw_plan.setdefault("goal", message)
         try:
             plan = SkillGenerationPlan.model_validate(raw_plan)

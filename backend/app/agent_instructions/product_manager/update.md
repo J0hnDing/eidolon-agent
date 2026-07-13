@@ -16,6 +16,7 @@ For web or internet-related suggestions:
 - Infer a small set of explicit likely public domains and Python dependencies.
 - Do not request wildcard network access.
 - Runtime permission approval will be based on the actual updated manifest later.
+- Return only permission changes that need approval. Do not return backend defaults such as build-time `pytest`/`requests`, project read access, runtime standard library, `./cache` read/write, or backend-mediated Codex call/response.
 
 Required JSON shape:
 {
@@ -27,7 +28,6 @@ Required JSON shape:
     "skill_type": "instruction|automation",
     "interface_type": "chat|tool|hidden",
     "suggestion": "string",
-    "expected_files": ["manifest.json", "README.md"],
     "milestones": [
       {
         "name": "update_version",
@@ -37,10 +37,8 @@ Required JSON shape:
     ],
     "permission_plan": {
       "build_time": {
-        "codex_generation": true,
         "internet_research": false,
-        "dependencies": [],
-        "reason": "string"
+        "dependencies": []
       },
       "runtime": {
         "network": [],
@@ -49,11 +47,9 @@ Required JSON shape:
         "secrets": [],
         "shell": false,
         "codex": {
-          "call_response": true,
           "internet_access": false
         },
-        "dependencies": [],
-        "reason": "string"
+        "dependencies": []
       }
     }
   }

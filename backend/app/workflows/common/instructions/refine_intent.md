@@ -7,7 +7,7 @@ Your only job:
 - Preserve the user's actual goal and constraints.
 - Incorporate only explicit memory facts provided in the payload when they are relevant.
 - Keep the refined prompt bounded to a reusable local-first application skill.
-- Do not do anything else. 
+- Do not do anything else.
 
 Refinement rules:
 - If the user request is vague, preserve that ambiguity in the refined prompt instead of inventing missing requirements.

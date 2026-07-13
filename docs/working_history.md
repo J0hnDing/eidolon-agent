@@ -1,104 +1,82 @@
 # Working History
 
-This file is reserved for future working-history entries.
+This file records notable implemented changes. Each entry must contain only:
 
-Do not backfill old project history here. The file starts empty by design so future entries can be explicit, timestamped, and attributable to actual changes made after this documentation system was introduced.
+- date,
+- time,
+- title,
+- summary,
+- limitations or future implementations.
 
-## Purpose
-
-Use this file to record future notable changes with:
-
-- timestamp,
-- changed area,
-- intention,
-- summary of files or behavior changed,
-- verification performed,
-- known follow-up or limitations.
+Do not add separate area, intention, changed-files, or verification fields. Implementation and verification details that materially explain the result belong in the summary.
 
 ## Entry Format
 
-Use this template for future entries:
-
 ```markdown
-## YYYY-MM-DD HH:MM TZ - Short Title
+## YYYY-MM-DD HH:MM - Short Title
 
-- Area:
-- Intention:
-- Changed:
-- Verification:
-- Follow-up:
+- Summary: Short title followed by the implemented behavior and material verification.
+- Limitations/Future implementations: Known limitations and explicitly deferred work. Use `None known` when empty.
 ```
 
 ## Current Entries
 
-## 2026-07-12 01:39 America/Toronto - Project Build Context Optimization And GitHub E2E
+## 2026-07-12 20:50 - Modular Project Build Workflows
 
-- Area: ProductManager, Builder, and Tester workflow context; generated-skill permissions and runtime budgets; failed-build handling; agent ownership boundaries; workflow documentation and tests.
-- Intention: Reduce redundant Codex context and token consumption while preserving explicit permission bounds, deterministic package validation, generated-code quality, and separate approval boundaries for generation, installation, runtime permissions, scheduling, and execution.
-- Changed: Compacted downstream ProductManager intent and permission inputs; limited Builder to the current task, selected backend APIs, direct-parent contracts, explicit permission bounds, and workspace paths; limited node and final Tester inputs to compact contracts and workspace paths; normalized and truncated repair failure context while preserving the current interface contract; deterministically assigned omitted required package files to a root DAG task; enforced Tester ownership by restoring Python test files changed by Builder and failing the Builder invocation; allowed one focused Tester pytest self-check; increased generated skill runtime timeout to 120 seconds while retaining a 45-second backend Codex caller timeout; documented model-per-task/chat selection and Codex CLI/model-version compatibility as TODOs. The generated GitHub skill was corrected after a live-page audit so duplicate Trending cards are normalized and entries beyond the requested limit do not create false partial failures. Post-work decision: the user reverted optimization 1, which skipped intent refinement for clear first-turn Project requests, and optimization 8, which resumed a failed build directly from its current DAG task.
-- Verification: Before those two reverts, an E2E run with the unchanged GitHub Trending prompt completed successfully at 382,608 tokens versus the 684,621-token baseline, saving 302,013 tokens (44.1%); Builder usage fell 51.2%, node Tester usage fell 53.7%, and final Tester usage fell 30.7%. The corrected proposed skill passed platform validation and 24 tests, a live GitHub Trending parser smoke check returned 10 unique projects without false failures, the full backend suite passed with 205 tests, and `git diff --check` passed.
-- Follow-up: Re-measure end-to-end token usage after the two reverts before treating 44.1% as representative of the current workflow. Model routing by DAG task and chat, plus Codex CLI/model-version compatibility, remain unimplemented TODOs. The generated skill remains proposed, disabled, uninstalled, unscheduled, and subject to separate pending runtime permission approval.
+- Summary: Modular project build workflows. Added ProductManager selection of a single backend-only `build_workflow` value, persisted it separately from `blueprint.json`, kept intent refinement, plausibility review, blueprint creation, permission planning, and build-time approval as the shared starting sequence, and routed post-approval execution through a trusted workflow registry. Colocated shared preflight, DAG, and single-Codex Markdown instructions and prompt composition with their owning workflow packages; `CodexService` now delegates project-build prompt construction while retaining shared invocation, parsing, routing, usage, workspace, and safety primitives. Moved existing DAG execution, pause/resume, and retry orchestration into the `task_dag` package, and added a `single_codex` package that gives Codex the approved blueprint and effective permissions for one planning, build, and test invocation. The workflow/chat regression suite passed with 85 tests, the final single-Codex end-to-end test passed and executed the generated JSON entrypoint, the frontend production build passed, and `git diff --check` passed.
+- Limitations/Future implementations: Independent backend final package, manifest, declared-file, acceptance-criteria, and test validation after `single_codex` completion remains deferred in `docs/todo.md`. Runtime permission review remains enforced from the generated manifest.
 
-## 2026-07-11 02:38 America/Toronto - Codex Build Usage Tracking
+## 2026-07-12 15:00 - Codex CLI Compatibility And Per-Task Model Routing
 
-- Area: Codex integration, agent-run persistence, DAG workflow controls, skill and settings UI, documentation.
-- Intention: Distinguish per-invocation build token consumption from account allowance remaining, while keeping a 5% reserve in both Codex allowance windows before admitting more DAG work.
-- Changed: Added adapter/model-aware ProductManager, Builder, and Tester invocation token records with per-step and per-build totals; displayed token usage in DAG nodes, agent-run details, and completed skill builds; added a persistent local Codex App Server client and `/usage/codex` endpoint for 5-hour and weekly allowance windows; added Settings usage UI; added ready-node execution batches plus allowance-based DAG pause below 5% in either window and resume from persisted completed nodes; explicitly excluded skill runtime from build accounting; added `docs/todo.md` with the follow-up to implement skill runtime token tracking.
-- Verification: Full backend suite passed with a fresh system `--basetemp`, `200 passed`; focused usage and DAG workflow tests passed, `36 passed`; frontend TypeScript and Vite production build passed with `npm run build`; a live local App Server probe returned both normalized allowance windows; `git diff --check` passed.
-- Follow-up: Implement skill runtime token tracking as recorded in `docs/todo.md`.
+- Summary: Codex CLI compatibility and per-task model routing. Added centralized CLI discovery/version probing with strict command overrides, live App Server model and supported-effort discovery, persistent routing settings, independent Chat and ProductManager action routes, Builder `easy`/`medium`/`hard` difficulty routes, Tester task/final/update routes, pre-invocation model/effort validation, requested/effective routing metadata, and the Codex Settings UI. The task DAG continues to contain difficulty but no model ids. The final backend suite passed with 219 tests, focused routing tests passed, the live model-catalog probe succeeded, the frontend production build passed, and `git diff --check` passed.
+- Limitations/Future implementations: Only the `codex_cli` provider is implemented. The local non-agentic model adapter remains deferred. Model selection requires the local Codex App Server catalog to validate explicit choices. Direct Chat applies its configured route but does not persist a build-style token or invocation audit record.
 
-## 2026-07-09 00:50 America/Toronto - ProductManager Build Instruction Split
+## 2026-07-12 14:45 - Skill Runtime Token History
 
-- Area: ProductManager build workflow, permission-plan schema, agent instructions, backend permission parsing, docs, tests.
-- Intention: Make blueprint and permissions one ProductManager action, keep task DAG planning as a separate post-approval phase, and use a flat runtime permission syntax where domains live in `runtime.network`.
-- Changed: Added active `product_manager/blueprint_and_permissions.md` and lowercase `product_manager/task_dag.md`, left `product_manager/build.md` as legacy, removed PM summary Codex calls in favor of fallback summaries, removed `approval_summary`, removed unsupported DAG-phase block/ask language, changed `permissions.json` to use flat `runtime.network`/filesystem/codex fields instead of `runtime.permissions` plus `runtime.network_domains`, and updated `CodexService`, `AgentWorkflowService`, `PermissionService`, tests, and docs to parse and preserve that shape.
-- Verification: Focused PM/schema tests passed with `.\.venv\Scripts\python.exe -m pytest --basetemp "$env:TEMP\pa-pytest-codex-pm-schema" ...` from the repo root; full backend suite passed with `.\.venv\Scripts\python.exe -m pytest --basetemp "$env:TEMP\pa-pytest-codex-full-schema" backend\tests` from the repo root, `190 passed`.
-- Follow-up: Existing DB/API fields named `requested_network_domains_json` remain for compatibility and are populated from `permission_plan.runtime.network`; unrelated generated files under `skills/proposed/weekly_github_trend_analyzer/` remain untracked.
+- Summary: Skill runtime token history. Added adapter/model-aware runtime Codex invocation records and aggregate token columns to `skill_runs`, associated successful backend-mediated calls with the active per-skill run, added a Skill Run History tab to Agent Run detail, and removed the completed runtime-tracking TODO. Focused runtime tests passed with 11 tests, the full backend suite passed with 219 tests, the frontend production build passed, and `git diff --check` passed.
+- Limitations/Future implementations: Direct Chat token tracking remains outside runtime history. Runtime Codex calls made outside an active executable skill run are not attributed to a run.
 
-## 2026-07-08 15:06 America/Toronto - Remove Hybrid Skill Type
+## 2026-07-12 01:39 - Project Build Context Optimization And GitHub E2E
 
-- Area: Skill schema, Project Build planning, frontend skill UI, docs.
-- Intention: Collapse executable skills into `automation` only while allowing automation packages to optionally include `SKILL.md`.
-- Changed: Removed `hybrid` from shared skill type literals, manifest validation, planner prompts, generated-agent instructions, tool filtering, frontend type choices, and docs. Automation still requires `entrypoint` and tests; `instructions_path` is optional for automation and validated when present.
-- Verification: `..\.venv\Scripts\python.exe -m pytest tests\test_manifest_validator.py tests\test_proposed_skill_service.py tests\test_chat_generation.py tests\test_scheduler_service.py tests\test_tools.py --basetemp C:\Users\John\personal-agent\runtime\pytest-no-hybrid-focused` passed from `backend`; `..\.venv\Scripts\python.exe -m pytest tests\test_agent_workflow_service.py tests\test_skill_version_service.py tests\test_skill_runner.py tests\test_docker_skill_runner.py --basetemp C:\Users\John\personal-agent\runtime\pytest-no-hybrid-workflow` passed from `backend`; `npm run build` passed from `frontend`.
-- Follow-up: Existing persisted records or generated manifests with `skill_type = "hybrid"` will now fail validation until migrated or regenerated as `automation`.
+- Summary: Project build context optimization and GitHub end-to-end correction. Compacted ProductManager, Builder, Tester, and repair contexts; enforced Tester ownership of test files; added focused Tester self-checks; adjusted generated-skill timeouts; and corrected duplicate GitHub Trending card normalization. Before the user reverted the first-turn intent-refinement skip and direct failed-task resume, an end-to-end run used 382,608 tokens versus a 684,621-token baseline, a 44.1% reduction. The corrected proposed skill passed platform validation, 24 tests, a live parser smoke test, the then-current 205-test backend suite, and `git diff --check`.
+- Limitations/Future implementations: Re-measure token usage after the two reverts before treating the 44.1% reduction as representative. The generated GitHub skill remains proposed, disabled, uninstalled, unscheduled, and subject to runtime permission approval.
 
-## 2026-07-08 02:34 America/Toronto - Manifest Schedule Registration
+## 2026-07-11 02:38 - Codex Build Usage Tracking
 
-- Area: Project Build planning, backend API catalog, install-time scheduling.
-- Intention: Make schedule intent ProductManager-owned manifest metadata instead of a Builder backend API, and register manifest schedules when skills are installed.
-- Changed: Removed the PM-visible Scheduling API catalog entry, preserved schedule intent from plan/blueprint into `manifest.json`, registered manifest-declared schedules as pending records during install, and improved fake planning names for GitHub trending weekly skills.
-- Verification: Focused schedule/planning tests passed, then full backend suite passed with `..\.venv\Scripts\python.exe -m pytest --basetemp C:\Users\John\personal-agent\runtime\pytest-full-schedule-change` from `backend`.
-- Follow-up: Existing proposed skills generated before this change are not renamed in place.
+- Summary: Codex build usage tracking. Added ProductManager, Builder, and Tester invocation token records, step/build totals, UI reporting, a persistent App Server allowance client, `/usage/codex`, parallel-aware ready-node batches, and workflow pause/resume below a 5% reserve in either allowance window. The full backend suite passed with 200 tests, focused usage/workflow tests passed with 36 tests, the frontend build passed, a live allowance probe succeeded, and `git diff --check` passed.
+- Limitations/Future implementations: The scheduler batches parallel-safe nodes but does not yet execute shared-workspace nodes concurrently. Build totals intentionally exclude installed-skill runtime calls.
 
-## 2026-07-08 01:52 America/Toronto - Skill Codex API And DAG API Context
+## 2026-07-09 00:50 - ProductManager Build Instruction Split
 
-- Area: Runtime permissions, backend skill APIs, Project Build DAG workflow, Agent Runs UI.
-- Intention: Allow skills to ask the backend to call Codex without granting shell access, and give Builder only the backend API context selected by ProductManager task nodes.
-- Changed: Added manifest `permissions.codex`, `POST /skills/{skill_id}/codex`, backend API catalog ids for Codex and Tool UI schema, task-node `backend_api_ids`, Builder `backend_api_context`, runner backend URL env vars, and an explicit DAG view in Agent Run detail.
-- Verification: Full backend suite passed with `..\.venv\Scripts\python.exe -m pytest --basetemp C:\Users\John\personal-agent\runtime\pytest-full-final-codex-api` from `backend`; frontend build passed with `npm run build` from `frontend`; Chrome UI E2E submitted the requested Project prompt, approved generation, and verified Agent Run #11 showed the explicit task DAG with `core_skill` status `done`.
-- Follow-up: Future backend API candidates inferred but not added: runtime cache helper API, runtime permission status API, skill run metadata API, and memory lookup API.
+- Summary: ProductManager build instruction split. Separated blueprint/permissions from post-approval task-DAG planning, adopted flat runtime permission fields, removed ProductManager summary Codex calls and unsupported DAG-phase decisions, and aligned CodexService, AgentWorkflowService, PermissionService, tests, and documentation. Focused schema tests and the then-current 190-test backend suite passed.
+- Limitations/Future implementations: Existing compatibility DB/API fields such as `requested_network_domains_json` remain and are populated from `permission_plan.runtime.network`. Unrelated generated files under `skills/proposed/weekly_github_trend_analyzer/` remain untracked.
 
-## 2026-07-07 21:43 America/Toronto - Backend Manifest Skeletons
+## 2026-07-08 15:06 - Remove Hybrid Skill Type
 
-- Area: Project-mode DAG build workflow, manifest validation, Builder/ProductManager instructions.
-- Intention: Stop Builder from inventing manifest shape from prose while preserving the DAG workflow.
-- Changed: Backend now seeds `manifest.json` from `blueprint.json` and `permissions.json`, fills missing manifest fields after Builder steps, validates declared executable entrypoint files, reports backend-seeded manifest paths as updated in fallback interface artifacts, and tells ProductManager to avoid over-splitting tightly coupled same-file implementation nodes.
-- Verification: Targeted backend workflow suite passed with `..\.venv\Scripts\python.exe -m pytest tests\test_agent_workflow_service.py --basetemp C:\Users\John\personal-agent\runtime\pytest-agent-workflow` from `backend`.
-- Follow-up: None known.
+- Summary: Removed the hybrid skill type. Restricted executable skills to `automation`, retained optional `SKILL.md` support for automation packages, and updated shared schemas, manifest validation, prompts, agent instructions, tool filtering, frontend choices, and documentation. Focused backend suites and the frontend build passed.
+- Limitations/Future implementations: Persisted records or generated manifests using `skill_type = "hybrid"` require migration or regeneration as `automation`.
 
-## 2026-07-07 02:32 America/Toronto - DAG Build Workflow
+## 2026-07-08 02:34 - Manifest Schedule Registration
 
-- Area: Project-mode skill build workflow, Codex service adapters, agent instructions, agent-run UI.
-- Intention: Replace the linear milestone build flow with the documented DAG-based task-node workflow.
-- Changed: Split ProductManager build actions into intent refinement, plausibility review, blueprint, permissions, and post-approval task DAG creation; added backend DAG validation, task-node artifacts, interface artifacts, node-specific tests, final E2E tests, task retry aliases, and task-node UI labels.
-- Verification: Full backend suite passed with `..\.venv\Scripts\python.exe -m pytest --basetemp <temp>` from `backend`; frontend build passed with `npm run build` from `frontend`.
-- Follow-up: None known.
+- Summary: Manifest schedule registration. Moved schedule intent into ProductManager-owned manifest metadata, removed the PM-visible Scheduling API catalog entry, registered manifest schedules as pending during installation, and improved fake planning names for weekly GitHub Trending skills. Focused schedule/planning tests and the full backend suite passed.
+- Limitations/Future implementations: Proposed skills generated before this change are not renamed in place.
 
-## 2026-07-04 13:09 America/Toronto - Two-Phase ProductManager Build Review
+## 2026-07-08 01:52 - Skill Codex API And DAG API Context
 
-- Area: ProductManager build workflow, chat Project mode, agent instructions, frontend chat state.
-- Intention: Ensure ProductManager reviews intent and plausibility before blueprint/permission artifacts are created, while allowing unclear requests to continue in the same chat.
-- Changed: Added PM build review before artifact creation, a separate `product_manager_plausibility_review.md` instruction file, `needs_input` generation requests, same-chat clarification continuation, tool UI milestone guidance, and chat UI pending request tracking.
-- Verification: `..\.venv\Scripts\python.exe -m pytest` from `backend`; `npm run build` from `frontend` with the documented Vite/esbuild sandbox escalation.
-- Follow-up: Consider a durable backend conversation table if multi-device chat continuity becomes a requirement.
+- Summary: Skill Codex API and DAG API context. Added manifest `permissions.codex`, `POST /skills/{skill_id}/codex`, backend API catalog ids, task-node `backend_api_ids`, selected Builder API context, runner backend URL variables, and an explicit DAG view in Agent Run detail. The full backend suite and frontend build passed, and Chrome UI end-to-end verification completed an approved task DAG.
+- Limitations/Future implementations: Potential backend APIs for runtime cache, permission status, skill-run metadata, and memory lookup remain deferred until their contracts and permissions are designed.
+
+## 2026-07-07 21:43 - Backend Manifest Skeletons
+
+- Summary: Backend manifest skeletons. The backend now seeds and finalizes `manifest.json` from approved blueprint and permission artifacts, validates declared entrypoints, reports seeded manifest changes in fallback interface artifacts, and discourages over-splitting same-file DAG nodes. The targeted workflow suite passed.
+- Limitations/Future implementations: None known.
+
+## 2026-07-07 02:32 - DAG Build Workflow
+
+- Summary: DAG build workflow. Replaced the linear milestone flow with explicit ProductManager phases, backend DAG validation, task artifacts, interface artifacts, node-specific tests, final end-to-end tests, task retry aliases, and task-node UI labels. The full backend suite and frontend build passed.
+- Limitations/Future implementations: True concurrent isolated-workspace DAG execution remains deferred.
+
+## 2026-07-04 13:09 - Two-Phase ProductManager Build Review
+
+- Summary: Two-phase ProductManager build review. Added intent and plausibility review before blueprint/permission creation, a separate plausibility instruction, `needs_input` requests, same-chat clarification continuation, tool UI guidance, and pending-request tracking in Chat. Backend tests and the frontend build passed.
+- Limitations/Future implementations: A durable backend conversation table may be needed if multi-device chat continuity becomes a requirement.

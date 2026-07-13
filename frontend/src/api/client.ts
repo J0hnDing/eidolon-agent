@@ -90,6 +90,12 @@ export interface SkillRun {
   started_at: string | null;
   ended_at: string | null;
   error_message: string | null;
+  codex_invocations_json: CodexInvocationUsage[];
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  reasoning_output_tokens: number;
+  total_tokens: number;
 }
 
 export type SkillVersionStatus = "active" | "draft" | "proposed_update" | "archived" | "discarded";
@@ -163,6 +169,13 @@ export interface CodexInvocationUsage {
   action: string;
   adapter: string;
   model: string | null;
+  requested_model?: string | null;
+  effective_model?: string | null;
+  requested_reasoning_effort?: string | null;
+  effective_reasoning_effort?: string | null;
+  route_source?: string | null;
+  role?: string | null;
+  difficulty?: string | null;
   input_tokens: number;
   cached_input_tokens: number;
   output_tokens: number;
@@ -182,6 +195,7 @@ export interface AgentRun {
   current_milestone: string | null;
   current_step: string | null;
   failure_count_json: Record<string, number>;
+  build_workflow: string | null;
   blueprint_json: Record<string, unknown> | null;
   final_summary_json: Record<string, unknown> | null;
   created_at: string;
@@ -214,6 +228,79 @@ export interface CodexAccountUsage {
   rate_limit_reached_type: string | null;
   five_hour: CodexUsageWindow | null;
   weekly: CodexUsageWindow | null;
+}
+
+export interface CodexCliCandidate {
+  path: string;
+  source: "explicit_override" | "codex_desktop" | "path" | string;
+  version: string | null;
+  error: string | null;
+}
+
+export interface CodexCliStatus {
+  available: boolean;
+  compatible: boolean;
+  requested_command: string | null;
+  explicit_override: boolean;
+  resolved_path: string | null;
+  source: "explicit_override" | "codex_desktop" | "path" | null | string;
+  version: string | null;
+  minimum_version: string | null;
+  error: string | null;
+  candidates: CodexCliCandidate[];
+}
+
+export interface CodexInvocationChoice {
+  model: string | null;
+  reasoning_effort: string | null;
+}
+
+export interface CodexRoutingSettingsPayload {
+  chat: CodexInvocationChoice;
+  product_manager: {
+    default: CodexInvocationChoice;
+    refine_intent: CodexInvocationChoice;
+    plausibility_review: CodexInvocationChoice;
+    blueprint_and_permissions: CodexInvocationChoice;
+    task_dag: CodexInvocationChoice;
+    repair: CodexInvocationChoice;
+    update: CodexInvocationChoice;
+  };
+  builder: {
+    default: CodexInvocationChoice;
+    easy: CodexInvocationChoice;
+    medium: CodexInvocationChoice;
+    hard: CodexInvocationChoice;
+    repair: CodexInvocationChoice;
+    update: CodexInvocationChoice;
+  };
+  tester: {
+    default: CodexInvocationChoice;
+    task: CodexInvocationChoice;
+    final_e2e: CodexInvocationChoice;
+    update: CodexInvocationChoice;
+  };
+}
+
+export interface CodexRoutingSettings extends CodexRoutingSettingsPayload {
+  updated_at: string | null;
+}
+
+export interface CodexModelOption {
+  id: string;
+  model: string;
+  display_name: string;
+  description: string;
+  is_default: boolean;
+  default_reasoning_effort: string;
+  supported_reasoning_efforts: string[];
+}
+
+export interface CodexModelCatalog {
+  available: boolean;
+  fetched_at: string;
+  error: string | null;
+  models: CodexModelOption[];
 }
 
 export interface AgentRunDetail extends AgentRun {
@@ -340,7 +427,6 @@ export type ChatResponse =
       type: "project_not_plausible";
       message: string;
       reason: string;
-      optional_projects: string[];
     }
   | {
       type: "project_needs_input";
@@ -472,6 +558,15 @@ export const api = {
     }),
   listSkills: () => request<Skill[]>("/skills"),
   getCodexUsage: () => request<CodexAccountUsage>("/usage/codex"),
+  getCodexCliStatus: (refresh = false) => request<CodexCliStatus>(`/usage/codex/cli?refresh=${refresh}`),
+  getCodexRoutingSettings: () => request<CodexRoutingSettings>("/settings/codex-routing"),
+  updateCodexRoutingSettings: (payload: CodexRoutingSettingsPayload) =>
+    request<CodexRoutingSettings>("/settings/codex-routing", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  getCodexModels: (refresh = false) =>
+    request<CodexModelCatalog>(`/settings/codex-models?refresh=${refresh}`),
   listAgentRuns: () => request<AgentRun[]>("/agent-runs"),
   getAgentRun: (id: number) => request<AgentRunDetail>(`/agent-runs/${id}`),
   listAgentRunSteps: (id: number) => request<AgentRunStep[]>(`/agent-runs/${id}/steps`),

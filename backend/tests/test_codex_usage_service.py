@@ -49,6 +49,27 @@ def test_real_codex_adapter_parses_turn_usage() -> None:
     }
 
 
+def test_model_catalog_normalizes_advertised_efforts() -> None:
+    model = CodexUsageService._normalize_model(
+        {
+            "id": "gpt-example",
+            "model": "gpt-example",
+            "displayName": "GPT Example",
+            "description": "Example",
+            "isDefault": True,
+            "defaultReasoningEffort": "medium",
+            "supportedReasoningEfforts": [
+                {"reasoningEffort": "low", "description": "Fast"},
+                {"reasoningEffort": "medium", "description": "Balanced"},
+            ],
+        }
+    )
+
+    assert model["model"] == "gpt-example"
+    assert model["default_reasoning_effort"] == "medium"
+    assert model["supported_reasoning_efforts"] == ["low", "medium"]
+
+
 def test_codex_usage_service_normalizes_primary_and_secondary_windows(monkeypatch) -> None:
     class FakeProcess:
         def __init__(self) -> None:

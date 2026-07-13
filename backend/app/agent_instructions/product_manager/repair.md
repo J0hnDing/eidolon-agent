@@ -18,7 +18,6 @@ Required JSON shape:
     "skill_name": "safe_name",
     "skill_type": "instruction|automation",
     "interface_type": "chat|tool|hidden",
-    "expected_files": ["manifest.json", "README.md"],
     "milestones": [
       {
         "name": "repair_skill",

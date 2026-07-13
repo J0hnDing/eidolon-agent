@@ -1,6 +1,7 @@
 import json
 import subprocess
 import copy
+import sys
 from collections.abc import Generator
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflo
 from app.services.backend_api_catalog import backend_api_index_file
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.codex_service import CodexService, FakeCodexAdapter
+from app.services.default_permissions import default_banned_permissions
 from app.services.permission_service import PermissionService
 from app.routers.agent_runs import delete_agent_run
 
@@ -42,7 +44,9 @@ def test_product_manager_creates_blueprint_and_permissions_before_task_dag(tmp_p
     assert agent_run.current_step == "product_manager"
     assert agent_run.current_task_id is None
     assert building_skill.status == "building"
+    assert agent_run.build_workflow == "task_dag"
     assert "milestones" not in agent_run.blueprint_json
+    assert "build_workflow" not in agent_run.blueprint_json
     steps = sorted(agent_run.steps, key=lambda step: step.id)
     assert [step.step_name for step in steps] == ["product_manager"] * 4
     assert [step.input_json["action"] for step in steps] == [
@@ -62,12 +66,21 @@ def test_product_manager_creates_blueprint_and_permissions_before_task_dag(tmp_p
     assert (run_dir / "blueprint.json").is_file()
     assert (run_dir / "permissions.json").is_file()
     permission_plan = json.loads((run_dir / "permissions.json").read_text(encoding="utf-8"))
+    decision_json = json.loads((run_dir / "decision.json").read_text(encoding="utf-8"))
+    assert set(decision_json) == {"decision", "user_prompt"}
     assert "permissions" not in permission_plan["runtime"]
     assert "network_domains" not in permission_plan["runtime"]
+    assert "codex_generation" not in permission_plan["build_time"]
+    assert "reason" not in permission_plan["build_time"]
+    assert "reason" not in permission_plan["runtime"]
+    assert "call_response" not in permission_plan["runtime"]["codex"]
     assert isinstance(permission_plan["runtime"]["network"], list)
     assert not (run_dir / "task_dag.json").exists()
     assert not (run_dir / "tasks").exists()
-    assert all(not path.startswith("tests/") for path in agent_run.blueprint_json["expected_files"])
+    assert "expected_files" not in agent_run.blueprint_json
+    stored_blueprint = json.loads((run_dir / "blueprint.json").read_text(encoding="utf-8"))
+    assert "expected_files" not in stored_blueprint
+    assert "build_workflow" not in stored_blueprint
     assert set(steps[1].input_json) == {"action", "intent_prompt"}
     assert set(steps[2].input_json) == {"action", "intent_prompt"}
     assert set(steps[3].input_json) == {"action", "blueprint_json", "permission_plan"}
@@ -272,8 +285,15 @@ def test_approved_build_uses_pm_builder_tester_and_permission_artifacts(tmp_path
     )
     assert final_permission_plan["runtime"]["filesystem_read"] == ["./cache"]
     assert final_permission_plan["runtime"]["filesystem_write"] == ["./cache"]
-    assert final_permission_plan["default_allowed"]["runtime"]["python_standard_library"] is True
-    assert all(item.startswith("DO NOT ") for item in final_permission_plan["banned_permissions"])
+    assert final_permission_plan["runtime"]["python_standard_library"] is True
+    assert final_permission_plan["runtime"]["codex"]["call_response"] is True
+    assert final_permission_plan["build_time"]["dependencies"] == ["pytest", "requests"]
+    assert final_permission_plan["build_time"]["project_read"] == ["personal-agent"]
+    assert "default_allowed" not in final_permission_plan
+    assert "banned_permissions" not in final_permission_plan
+    assert "codex_generation" not in final_permission_plan["build_time"]
+    assert "reason" not in final_permission_plan["build_time"]
+    assert "reason" not in final_permission_plan["runtime"]
     tester_step = [step for step in agent_run.steps if step.step_name == "tester"][0]
     assert "skill.py" in tester_step.input_json["workspace_paths"]
     assert "code_files" not in tester_step.input_json
@@ -293,10 +313,76 @@ def test_approved_build_uses_pm_builder_tester_and_permission_artifacts(tmp_path
     assert dag_step.input_json["backend_api_index_file"] == backend_api_index_file().as_posix()
     assert task_artifact.is_file()
     assert interface_artifact.is_file()
+    assert "task_id" not in json.loads(interface_artifact.read_text(encoding="utf-8"))
     test_file = tmp_path / "skills" / "proposed" / skill.name / "tests" / "test_core_skill.py"
     test_source = test_file.read_text(encoding="utf-8")
     assert "test_manifest_matches_blueprint_and_safe_contract" in test_source
     assert "test_skill_accepts_representative_input_and_outputs_json_object" in test_source
+
+
+def test_single_codex_workflow_runs_one_build_invocation_end_to_end(tmp_path: Path, db_session: Session) -> None:
+    generation_request = create_generation_request(db_session)
+
+    class SingleWorkflowAdapter(FakeCodexAdapter):
+        def __init__(self) -> None:
+            self.tasks: list[str] = []
+            self.single_prompt = ""
+
+        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            task = str(plan.get("codex_task") or "")
+            self.tasks.append(task)
+            result = super().generate(prompt, output_dir, plan)
+            if task == "product_manager_write_blueprint_and_permissions":
+                payload = json.loads(result.stdout)
+                payload["build_workflow"] = "single_codex"
+                return subprocess.CompletedProcess(args=result.args, returncode=0, stdout=json.dumps(payload), stderr="")
+            if task == "single_codex_build":
+                self.single_prompt = prompt
+            return result
+
+    adapter = SingleWorkflowAdapter()
+    service = AgentWorkflowService(
+        db_session,
+        codex_service=CodexService(db_session, adapter=adapter, project_root=tmp_path),
+        project_root=tmp_path,
+    )
+    agent_run = service.create_build_run(generation_request)
+    run_dir = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}"
+    stored_blueprint = json.loads((run_dir / "blueprint.json").read_text(encoding="utf-8"))
+
+    assert agent_run.build_workflow == "single_codex"
+    assert "build_workflow" not in stored_blueprint
+    approve_generation(db_session, generation_request, tmp_path)
+    service.proposed_service.validate_proposed_skill = lambda _skill: pytest.fail(
+        "single_codex must not run backend final package validation yet"
+    )
+    service.codex_service.proposed_service.validate_proposed_skill = lambda _skill: pytest.fail(
+        "single_codex must not run backend final package validation yet"
+    )
+
+    agent_run, skill, validation = service.continue_build_after_approval(generation_request)
+
+    assert validation is None
+    assert agent_run.status == "succeeded"
+    assert skill.status == "proposed"
+    assert adapter.tasks.count("single_codex_build") == 1
+    assert "product_manager_write_task_dag" not in adapter.tasks
+    assert "tester_write_tests" not in adapter.tasks
+    assert not (run_dir / "task_dag.json").exists()
+    assert (tmp_path / "skills" / "proposed" / skill.name / "tests" / "test_skill.py").is_file()
+    assert "Blueprint:" in adapter.single_prompt
+    assert "Effective permissions:" in adapter.single_prompt
+    assert agent_run.final_summary_json["backend_final_validation"] == "pending_todo"
+    skill_result = subprocess.run(
+        [sys.executable, str(tmp_path / "skills" / "proposed" / skill.name / "skill.py")],
+        input="{}",
+        capture_output=True,
+        text=True,
+        timeout=5,
+        shell=False,
+    )
+    assert skill_result.returncode == 0
+    assert isinstance(json.loads(skill_result.stdout), dict)
 
 
 def test_backend_seeds_and_finalizes_manifest_json(tmp_path: Path, db_session: Session) -> None:
@@ -712,10 +798,12 @@ def test_builder_and_tester_agents_receive_trimmed_task_context(tmp_path: Path, 
     assert "interface_artifact" not in builder_plans[0]["current_milestone"]
     assert "code_files" not in builder_plans[0]["current_milestone"]
     permission_bounds = builder_plans[0]["current_milestone"]["permission_bounds"]
-    assert permission_bounds["source"] == "backend-approved effective permission bounds"
+    assert "source" not in permission_bounds
     assert permission_bounds["runtime"]["shell"] is False
     assert permission_bounds["runtime"]["secrets"] == []
-    assert permission_bounds["blocked_capabilities"]
+    assert permission_bounds["runtime"]["python_standard_library"] is True
+    assert permission_bounds["build_time"]["project_read"] == ["personal-agent"]
+    assert permission_bounds["blocked_capabilities"] == default_banned_permissions()
     assert "task_dag_json" not in tester_plans[0]
     assert "final_e2e_expectations" in tester_plans[-1]
     task_dag_prompt = next(
@@ -911,7 +999,6 @@ def test_builder_user_action_required_blocks_workflow(tmp_path: Path, db_session
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
-        (lambda dag: dag.update({"root_task_ids": []}), "root_task_ids"),
         (lambda dag: dag["nodes"][0].update({"depends_on": ["second"]}), "cyclic"),
         (lambda dag: dag["nodes"][0].update({"depends_on": ["missing"]}), "missing node"),
         (lambda dag: dag["nodes"][0].update({"id": "../bad"}), "safe path segment"),
@@ -1030,6 +1117,9 @@ def test_task_dag_sanitizer_removes_tester_owned_paths(db_session: Session) -> N
 
     sanitized = CodexService(db_session)._sanitize_task_dag(raw, fallback, {"skill_name": "weather_tool"})
 
+    assert "graph_id" not in sanitized
+    assert "root_task_ids" not in sanitized
+    assert "expected_inputs" not in sanitized["nodes"][0]
     assert sanitized["nodes"][0]["expected_output_paths"] == ["manifest.json"]
     assert sanitized["nodes"][0]["file_write_claims"] == []
     assert sanitized["nodes"][1]["expected_output_paths"] == ["skill.py"]
@@ -1037,7 +1127,7 @@ def test_task_dag_sanitizer_removes_tester_owned_paths(db_session: Session) -> N
     AgentWorkflowService(db_session)._validate_task_dag(sanitized, {"skill_type": "automation"})
 
 
-def test_task_dag_sanitizer_does_not_assign_omitted_blueprint_package_files(db_session: Session) -> None:
+def test_task_dag_sanitizer_does_not_read_package_files_from_blueprint(db_session: Session) -> None:
     node = {
         "id": "core_skill",
         "title": "Core skill",
@@ -1073,8 +1163,55 @@ def test_task_dag_sanitizer_does_not_assign_omitted_blueprint_package_files(db_s
     )
 
     node = sanitized["nodes"][0]
+    assert "graph_id" not in sanitized
+    assert "root_task_ids" not in sanitized
+    assert "expected_inputs" not in node
     assert node["expected_output_paths"] == ["skill.py"]
     assert node["file_write_claims"] == ["skill.py"]
+
+
+def test_blueprint_sanitizer_removes_expected_files(db_session: Session) -> None:
+    fallback = {
+        "goal": "Fallback goal",
+        "skill_name": "fallback_skill",
+        "skill_type": "automation",
+        "interface_type": "hidden",
+        "schedule": None,
+    }
+    raw = {
+        **fallback,
+        "skill_name": "generated_skill",
+        "expected_files": ["manifest.json", "skill.py", "SKILL.md", "README.md"],
+        "summary": "discard me",
+        "decision": "request_permission",
+        "arbitrary": {"field": True},
+    }
+
+    sanitized = CodexService(db_session)._sanitize_blueprint(raw, fallback)
+
+    assert sanitized["skill_name"] == "generated_skill"
+    assert "expected_files" not in sanitized
+    assert "summary" not in sanitized
+    assert "decision" not in sanitized
+    assert "arbitrary" not in sanitized
+
+
+def test_plausibility_sanitizer_keeps_only_required_contract_fields(db_session: Session) -> None:
+    sanitized = CodexService(db_session)._sanitize_build_review(
+        {
+            "decision": "stop_inplausible",
+            "user_prompt": "This requires blocked deletion. Try a non-destructive report instead.",
+            "summary": "discard me",
+            "reason": "discard me too",
+            "optional_projects": ["discard me"],
+        },
+        {"decision": "proceed_to_blueprint", "user_prompt": None},
+    )
+
+    assert sanitized == {
+        "decision": "stop_inplausible",
+        "user_prompt": "This requires blocked deletion. Try a non-destructive report instead.",
+    }
 
 
 def test_permission_review_records_permission_expansion(tmp_path: Path, db_session: Session) -> None:

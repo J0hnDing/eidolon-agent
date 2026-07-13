@@ -10,7 +10,7 @@ Build-time approval lets Codex generate proposed files or draft update files. It
 
 For DAG builds, ProductManager returns build-time intent and expected runtime intent as structured JSON after `blueprint.json` exists and before the task DAG is created. The backend writes `permissions.json`, reads `blueprint.json` and `permissions.json`, performs deterministic review, and presents one build-time approval prompt with the blueprint summary plus permission summary. ProductManager must not return task DAG JSON until this approval is granted; the backend writes `task_dag.json` after approval.
 
-ProductManager returns only permissions that need user approval. Backend-owned defaults live in `backend/app/static/default_permissions.json`. After build-time approval, the backend rewrites `permissions.json` as the effective permission file: PM-requested permissions plus default allowed permissions and a concise `banned_permissions` list of `DO NOT` rules. Builder and Tester read this final file.
+ProductManager returns only permissions that need user approval. Backend-owned defaults and blocked capabilities live in `backend/app/static/default_permissions.json`. After build-time approval, the backend rewrites `permissions.json` as one minimal effective permission object with defaults already merged into its build-time and runtime fields. Builder receives that object once as compact `permission_bounds`; the static defaults and blocked policy are not duplicated into `permissions.json`.
 
 ### Runtime
 
@@ -38,28 +38,23 @@ Allowed:
 
 ```json
 {
-  "default_allowed": {
-    "build_time": {
-      "dependencies": ["pytest", "requests"],
-      "project_read": ["personal-agent"]
-    },
-    "runtime": {
-      "python_standard_library": true,
-      "filesystem_read": ["./cache"],
-      "filesystem_write": ["./cache"],
-      "codex": {
-        "call_response": true
-      }
-    }
+  "build_time": {
+    "internet_research": false,
+    "dependencies": ["pytest", "requests"],
+    "project_read": ["personal-agent"]
   },
-  "network": ["explicit-domain.example"],
-  "filesystem_read": ["./cache"],
-  "filesystem_write": ["./cache"],
-  "secrets": [],
-  "shell": false,
-  "codex": {
-    "call_response": true,
-    "internet_access": false
+  "runtime": {
+    "python_standard_library": true,
+    "network": ["explicit-domain.example"],
+    "filesystem_read": ["./cache"],
+    "filesystem_write": ["./cache"],
+    "secrets": [],
+    "shell": false,
+    "codex": {
+      "call_response": true,
+      "internet_access": false
+    },
+    "dependencies": []
   }
 }
 ```

@@ -9,6 +9,10 @@ The backend uses SQLite through SQLAlchemy models in `backend/app/models/entitie
 Stores chat messages with role, content, optional conversation id, and creation time.
 Deleting a chat conversation removes message rows for that conversation id and clears any memory fact source links that pointed at those rows.
 
+### codex_routing_settings
+
+Stores the single-user Codex invocation routing document. It contains independent Chat settings, ProductManager action settings, Builder default/difficulty/repair/update settings, and Tester task/final/update settings. Model ids and reasoning efforts are user-owned settings; ProductManager task DAG output does not contain them.
+
 ### memory_facts
 
 Stores explicit user-editable memory facts. Typical categories include interests, goals, preferences, routines, trusted sources, blocked sources, writing style, and risk tolerance.
@@ -41,6 +45,8 @@ Stores manual, tool, or scheduled run results:
 - exit code
 - start/end timestamps
 - status and error message
+- ordered runtime Codex invocation records with adapter/model identity and token breakdowns
+- aggregate input, cached-input, output, reasoning-output, and total token counts
 
 ### skill_operation_locks
 
@@ -60,7 +66,7 @@ Stores Project-mode skill generation requests and the initial/updated generation
 
 ### agent_runs and agent_run_steps
 
-Store bounded agent workflows and role-specific steps. Agent communication is persisted as structured artifacts rather than free-form hidden agent chat.
+Store bounded agent workflows and role-specific steps. Agent communication is persisted as structured artifacts rather than free-form hidden agent chat. New build runs persist backend-only `build_workflow` separately from `blueprint_json` so routing state does not leak into downstream product artifacts.
 
 DAG build runs should persist:
 
@@ -68,6 +74,7 @@ DAG build runs should persist:
 - plausibility `decision_json`;
 - `blueprint_json`;
 - `permission_plan_json`;
+- `build_workflow` (`single_codex` or `task_dag`);
 - `task_dag_json`;
 - current task node id instead of current milestone;
 - per-task failure counts;
@@ -75,7 +82,7 @@ DAG build runs should persist:
 
 Agent run steps should identify the explicit action being performed and the task node id when applicable. During migration from the linear milestone workflow, existing names such as `current_milestone` and `milestone_name` may be treated as compatibility aliases for `current_task_id` and `task_node_id`, but new code should use task-node terminology.
 
-Agent runs also persist aggregate build-token fields and an optional usage pause reason. Each step persists an ordered `codex_invocations_json` list with action, adapter, model, and token breakdown plus aggregate token columns. These fields describe build-agent activity only; `skill_runs` and backend-mediated skill runtime Codex calls do not contribute.
+Agent runs also persist aggregate build-token fields and an optional usage pause reason. Each step persists an ordered `codex_invocations_json` list with action, adapter, requested/effective model, requested/effective reasoning effort, route source, task difficulty when applicable, and token breakdown plus aggregate token columns. These fields describe build-agent activity only. Runtime Codex calls are recorded separately on the active `skill_runs` row and do not contribute to build totals.
 
 ## Status Values
 

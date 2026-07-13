@@ -22,9 +22,9 @@ class ChatOrchestrator:
 
     def __post_init__(self) -> None:
         if self.direct_chat_service is None:
-            self.direct_chat_service = DirectChatService()
+            self.direct_chat_service = DirectChatService(db=self.db)
         if self.skill_plan_service is None:
-            self.skill_plan_service = SkillPlanService()
+            self.skill_plan_service = SkillPlanService(db=self.db)
 
     def handle_message(
         self,
@@ -59,7 +59,6 @@ class ChatOrchestrator:
                     "type": "project_not_plausible",
                     "message": "I would not turn that into a skill yet.",
                     "reason": str((agent_run.final_summary_json or {}).get("user_summary") or agent_run.summary or ""),
-                    "optional_projects": list((agent_run.final_summary_json or {}).get("optional_projects") or []),
                 }
             permission_request = PermissionService(self.db).create_build_time_request(generation_request)
             return {

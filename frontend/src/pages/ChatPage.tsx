@@ -202,14 +202,11 @@ export default function ChatPage() {
           pendingGenerationRequestId: undefined,
           updatedAt: new Date().toISOString(),
         }));
-        const optionalProjects = response.optional_projects.length
-          ? `\n\nOptional projects:\n${response.optional_projects.map((project) => `- ${project}`).join("\n")}`
-          : "";
         appendMessagesToConversation(conversationId, [
           {
             id: nextId + 2,
             role: "assistant",
-            content: `${response.message}\n\n${response.reason}${optionalProjects}`,
+            content: `${response.message}\n\n${response.reason}`,
           },
         ]);
       } else if (response.type === "project_needs_input") {

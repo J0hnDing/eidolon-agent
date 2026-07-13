@@ -13,6 +13,9 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 - `/skill-generation-requests`: generation request list/detail/approve/deny/agent-run.
 - `/agent-runs`: list/detail/steps/cancel/delete/resume/retry.
 - `/usage/codex`: live 5-hour and weekly Codex account allowance from the persistent local App Server.
+- `/usage/codex/cli`: effective Codex CLI executable, version, source, candidates, and compatibility status.
+- `/settings/codex-models`: live account-aware model catalog and supported reasoning efforts from Codex App Server.
+- `/settings/codex-routing`: read or replace the validated single-user invocation routing settings.
 
 ## Service Responsibilities
 
@@ -26,21 +29,33 @@ Use Codex adapters when available to classify project plausibility and generate 
 
 ### AgentWorkflowService
 
-Coordinates bounded agent workflows for build, repair, and update. For builds, it records ProductManager intent refinement and plausibility steps before blueprint artifacts exist, pauses unclear requests with `needs_input`, invokes ProductManager in a read-only Codex workspace, parses ProductManager JSON, writes `blueprint.json` and `permissions.json` only after a plausible review, requests deterministic build-time approval, writes `task_dag.json` only after approval, validates the DAG, schedules ready task nodes, starts Builder/Tester steps for each node in controlled skill workspaces, handles node fix loops, runs the final end-to-end Tester step, handles final fix loops, and records blocked summaries when needed.
+Coordinates the common bounded lifecycle for build, repair, and update. For new builds, it owns ProductManager intent refinement, plausibility review, blueprint and permission artifacts, and deterministic build-time approval. It stores ProductManager's top-level `build_workflow` string separately from `blueprint.json`, then dispatches post-approval execution through the project-build workflow registry.
+
+### Project Build Workflows
+
+Trusted workflow modules live under `backend/app/workflows/`. Each package owns its executor, Markdown instructions, and prompt composition. `common` owns intent refinement, plausibility review, blueprint generation, permission planning, and workflow selection before dispatch. `task_dag` owns task-DAG planning prompts, Builder/Tester/repair prompts, DAG validation, ready-node scheduling, final end-to-end testing, and DAG resume/retry behavior. `single_codex` owns the prompt and executor for one Codex planning, build, and test invocation. Unknown workflow names are rejected by the registry.
 
 When ProductManager returns task DAG JSON, the backend exposes the static `backend/app/static/backend_api_index.json` file containing id, title, and description only. ProductManager may add `backend_api_ids` to a task node. Before Builder runs that node, the backend resolves those ids from the static `backend/app/static/backend_api_context.json` file and appends only the selected entries to Builder input as `backend_api_context`. Scheduling is not a Builder backend API; recurring intent belongs in `manifest.json` schedule metadata.
 
-The build scheduler should be modular and called by the backend with the generation request, selected memory facts, approval state, project paths, Codex adapter, permission service, and proposed skill service. It should not be a generic workflow engine for unrelated applications.
+The project-build workflow registry is backend-managed and contains only trusted checked-in executors. ProductManager selects a registered name; it cannot supply executable workflow code.
 
 ### CodexService
 
-Builds prompts from instruction files and calls Codex adapters. It owns real/fake Codex integration, ProductManager intent refinement, plausibility review, blueprint JSON parsing, permission-plan JSON parsing, task DAG JSON parsing, proposed skill task-node builds, task-node repairs, final end-to-end repairs, update edits, Tester test-writing calls, and backend-mediated skill Codex calls. ProductManager Codex calls are forced to `read-only`; writable Builder/Tester calls are forced to `workspace-write` and scoped to controlled skill or draft-version directories.
+Calls Codex adapters and owns shared real/fake integration, structured-output parsing, model routing, usage capture, controlled workspaces, manifest helpers, and invocation safety. Project-build prompt composition is supplied by the owning workflow package. Update and standalone repair prompt composition remains role-based until those workflows are modularized. ProductManager Codex calls are forced to `read-only`; writable workflow/Builder/Tester calls are forced to `workspace-write` and scoped to controlled skill or draft-version directories.
 
-CodexService also normalizes per-invocation token metadata into an adapter-neutral record. AgentWorkflowService attaches those records to the active role step and maintains run totals. Runtime skill Codex calls intentionally bypass this build accounting.
+CodexService also normalizes per-invocation token metadata into an adapter-neutral record. AgentWorkflowService attaches build records to the active role step and maintains agent-run totals. Successful backend-mediated runtime calls append the same adapter/model-aware record to the active `skill_runs` row and update its separate runtime totals.
 
 ### CodexUsageService
 
 Owns one persistent `codex app-server --stdio` child process for the FastAPI lifespan, performs JSON-RPC initialization, reads `account/rateLimits/read`, and normalizes the primary 300-minute and secondary 10,080-minute windows. Workflow pause checks are fail-open when allowance data is unavailable and pause only when Codex reports exhaustion.
+
+### CodexCliService
+
+Discovers Codex Desktop and PATH executables, probes their semantic versions, honors `PERSONAL_AGENT_CODEX_COMMAND` as a strict explicit override, selects the newest compatible automatic candidate, and supplies one resolved executable to every Codex-backed service. It exposes an optional minimum-version compatibility gate without owning future model or reasoning-effort selection policy.
+
+### CodexRoutingService
+
+Persists and validates unified invocation choices against the live App Server model catalog. Resolution precedence is invocation override, action or Builder-difficulty setting, role default, legacy environment default, then the catalog default. It returns requested and effective values plus the route source. The current provider is `codex_cli`; the contract keeps provider identity explicit so a future adapter can participate without being implemented here.
 
 ### PermissionService
 
@@ -52,7 +67,7 @@ Creates sample proposed skills, validates proposed skill packages, reads safe fi
 
 ### SkillRunner
 
-Selects Docker or local/dev runner. Runners validate manifests, enforce supported permissions, run tests, execute entrypoints with JSON input, require JSON stdout, capture logs, and store `skill_runs`. Runners provide `PERSONAL_AGENT_SKILL_ID` and `PERSONAL_AGENT_BACKEND_URL` so skill code can call approved backend APIs without shell access.
+Selects Docker or local/dev runner. Runners validate manifests, enforce supported permissions, run tests, execute entrypoints with JSON input, require JSON stdout, capture logs, and store `skill_runs`. Runtime Codex usage is associated with the currently running row under the existing per-skill operation lock. Runners provide `PERSONAL_AGENT_SKILL_ID` and `PERSONAL_AGENT_BACKEND_URL` so skill code can call approved backend APIs without shell access.
 
 ## Skill Codex API
 

@@ -941,7 +941,7 @@ export default function SkillDetailPage() {
                     <div>
                       <strong>Run #{run.id}</strong>
                       <span>
-                        {formatTimestamp(run.started_at, "not started")}
+                        {formatTimestamp(run.started_at, "not started")} · {formatTokens(run.total_tokens)} runtime tokens
                       </span>
                     </div>
                     <span className={`badge run-${run.status}`}>{run.status}</span>
@@ -1356,7 +1356,21 @@ function RunDetail({ run }: { run: SkillRun }) {
           <dt>Ended</dt>
           <dd>{formatTimestamp(run.ended_at, "not ended")}</dd>
         </div>
+        <div>
+          <dt>Runtime Tokens</dt>
+          <dd>{formatTokens(run.total_tokens)}</dd>
+        </div>
+        <div>
+          <dt>Codex Calls</dt>
+          <dd>{run.codex_invocations_json.length}</dd>
+        </div>
       </dl>
+
+      {run.total_tokens > 0 && (
+        <p className="muted">
+          {formatTokens(run.input_tokens)} input, {formatTokens(run.cached_input_tokens)} cached input, {formatTokens(run.output_tokens)} output, {formatTokens(run.reasoning_output_tokens)} reasoning output
+        </p>
+      )}
 
       {run.error_message && (
         <div>
@@ -1380,4 +1394,8 @@ function RunDetail({ run }: { run: SkillRun }) {
       </div>
     </div>
   );
+}
+
+function formatTokens(value: number): string {
+  return new Intl.NumberFormat().format(value);
 }

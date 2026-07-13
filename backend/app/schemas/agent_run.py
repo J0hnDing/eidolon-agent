@@ -43,6 +43,7 @@ class AgentRunRead(BaseModel):
     current_milestone: str | None
     current_step: str | None
     failure_count_json: dict[str, Any]
+    build_workflow: str | None
     blueprint_json: dict[str, Any] | None
     final_summary_json: dict[str, Any] | None
     created_at: datetime

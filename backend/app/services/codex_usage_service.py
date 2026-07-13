@@ -1,22 +1,25 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
+
+from app.services.codex_cli_service import codex_cli_service
 
 
 class CodexUsageService:
     """Persistent, local Codex App Server client for account allowance data."""
 
     def __init__(self, command: str | None = None) -> None:
-        self.command = command or os.getenv("PERSONAL_AGENT_CODEX_COMMAND", "codex")
+        self.command = command
         self._process: subprocess.Popen[str] | None = None
         self._lock = threading.Lock()
         self._request_id = 0
         self._last_error: str | None = None
+        self._model_catalog: dict[str, Any] | None = None
+        self._model_catalog_expires_at: datetime | None = None
 
     def start(self) -> None:
         with self._lock:
@@ -75,11 +78,54 @@ class CodexUsageService:
         )
         return below_reserve, usage
 
+    def read_model_catalog(self, *, refresh: bool = False) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        if (
+            not refresh
+            and self._model_catalog is not None
+            and self._model_catalog_expires_at is not None
+            and now < self._model_catalog_expires_at
+        ):
+            return self._model_catalog
+        try:
+            models: list[dict[str, Any]] = []
+            cursor: str | None = None
+            while True:
+                result = self._request(
+                    "model/list",
+                    {"cursor": cursor, "includeHidden": False, "limit": 100},
+                )
+                data = result.get("data")
+                if not isinstance(data, list):
+                    raise RuntimeError("Codex App Server returned an invalid model catalog")
+                models.extend(self._normalize_model(item) for item in data if isinstance(item, dict))
+                next_cursor = result.get("nextCursor")
+                if not isinstance(next_cursor, str) or not next_cursor:
+                    break
+                cursor = next_cursor
+            catalog = {
+                "available": True,
+                "fetched_at": now.isoformat(),
+                "error": None,
+                "models": models,
+            }
+            self._model_catalog = catalog
+            self._model_catalog_expires_at = now + timedelta(minutes=5)
+            return catalog
+        except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as exc:
+            return {
+                "available": False,
+                "fetched_at": now.isoformat(),
+                "error": str(exc),
+                "models": [],
+            }
+
     def _start_locked(self) -> None:
         if self._process is not None and self._process.poll() is None:
             return
+        command = self.command or codex_cli_service.command()
         self._process = subprocess.Popen(
-            [self.command, "app-server", "--stdio"],
+            [command, "app-server", "--stdio"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -142,6 +188,27 @@ class CodexUsageService:
         if not isinstance(snapshot, dict):
             raise ValueError("Codex allowance data is unavailable")
         return snapshot
+
+    @staticmethod
+    def _normalize_model(value: dict[str, Any]) -> dict[str, Any]:
+        effort_values = []
+        for option in value.get("supportedReasoningEfforts", []):
+            effort = option.get("reasoningEffort") if isinstance(option, dict) else None
+            if isinstance(effort, str) and effort and effort not in effort_values:
+                effort_values.append(effort)
+        default_effort = value.get("defaultReasoningEffort")
+        if isinstance(default_effort, str) and default_effort and default_effort not in effort_values:
+            effort_values.append(default_effort)
+        model = str(value.get("model") or value.get("id") or "")
+        return {
+            "id": str(value.get("id") or model),
+            "model": model,
+            "display_name": str(value.get("displayName") or model),
+            "description": str(value.get("description") or ""),
+            "is_default": bool(value.get("isDefault")),
+            "default_reasoning_effort": str(default_effort or "medium"),
+            "supported_reasoning_efforts": effort_values,
+        }
 
     @staticmethod
     def _window(value: Any, label: str) -> dict[str, Any] | None:

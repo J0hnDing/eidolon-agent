@@ -51,7 +51,7 @@ class PermissionService:
         dependencies = list(runtime_plan["dependencies"])
         network = list(future_permissions["network"])
         permissions = {
-            "codex_generation": bool(build_time_plan.get("codex_generation", True)),
+            "codex_generation": True,
             "internet_research": bool(build_time_plan.get("internet_research", bool(network or dependencies))),
             "future_runtime_permissions": future_permissions,
             "future_runtime_network": network,
@@ -107,7 +107,7 @@ class PermissionService:
         dependencies = list(runtime_plan["dependencies"])
         network = list(future_permissions["network"])
         permissions = {
-            "codex_generation": bool(build_time_plan.get("codex_generation", True)),
+            "codex_generation": True,
             "internet_research": bool(build_time_plan.get("internet_research", bool(network or dependencies))),
             "future_runtime_permissions": future_permissions,
             "future_runtime_network": network,
@@ -491,15 +491,12 @@ class PermissionService:
         permissions["codex"] = self._normalize_codex_permissions(raw_permissions, network)
         return {
             "build_time": {
-                "codex_generation": bool(build_time.get("codex_generation", True)),
                 "internet_research": bool(build_time.get("internet_research", bool(network or dependencies))),
                 "dependencies": list(build_time.get("dependencies", dependencies) or []),
-                "reason": str(build_time.get("reason") or "Codex needs to generate controlled skill files."),
             },
             "runtime": {
                 **permissions,
                 "dependencies": dependencies,
-                "reason": str(runtime.get("reason") or "Expected runtime permissions for this skill."),
             },
         }
 

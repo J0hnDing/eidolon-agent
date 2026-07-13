@@ -1,12 +1,11 @@
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 
 class InterfaceArtifact(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    task_id: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
     created_paths: list[str]
     updated_paths: list[str]
     interfaces: dict[str, Any]

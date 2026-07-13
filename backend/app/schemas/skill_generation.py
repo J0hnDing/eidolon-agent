@@ -57,7 +57,6 @@ class ProjectNotPlausibleResponse(BaseModel):
     type: Literal["project_not_plausible"]
     message: str
     reason: str
-    optional_projects: list[str]
 
 
 class ProjectNeedsInputResponse(BaseModel):
