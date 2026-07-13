@@ -69,7 +69,7 @@ export default function UsageSettingsPage() {
       setRouting(next);
       setSaved("Codex settings saved.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save model routing settings");
+      setError(err instanceof Error ? err.message : "Could not save Codex settings");
     } finally {
       setLoading(false);
     }

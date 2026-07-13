@@ -23,7 +23,7 @@ Do not add separate area, intention, changed-files, or verification fields. Impl
 
 ## 2026-07-13 00:58 - Project Build Workflow Override
 
-- Summary: Project build workflow override. Added a persistent Codex setting that keeps automatic ProductManager workflow selection by default or forces every new Project build through Simple (`single_codex`) or Task DAG (`task_dag`). Backend selection now applies the override after ProductManager blueprinting, records the effective workflow and selection source in the ProductManager step, and validates the effective workflow through the trusted registry. Added the Codex Settings control, backend regression coverage, and current-behavior documentation.
+- Summary: Project build workflow override. Added a persistent Codex setting that keeps automatic ProductManager workflow selection by default or forces every new Project build through Simple (`single_codex`) or Task DAG (`task_dag`). Backend selection now applies the override after ProductManager blueprinting, records the effective workflow and selection source in the ProductManager step, and validates the effective workflow through the trusted registry. Added the Codex Settings control, backend regression coverage, and current-behavior documentation. Ruff passed, the focused routing/workflow suite passed with 43 tests, all 237 backend tests passed, the frontend production build passed, and `git diff --check` passed.
 - Limitations/Future implementations: The override applies to new Project builds and does not rewrite workflows already persisted on existing agent runs.
 
 ## 2026-07-13 00:55 - Canonical Contracts, Structured TODO, And Ruff
