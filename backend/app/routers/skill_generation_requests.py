@@ -4,16 +4,15 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import ApprovalRequest, SkillGenerationRequest
+from app.schemas.agent_run import AgentRunRead
 from app.schemas.skill_generation import (
     SkillGenerationApprovalResponse,
     SkillGenerationRequestRead,
 )
-from app.schemas.agent_run import AgentRunRead
 from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
 from app.services.codex_service import CodexGenerationError
 from app.services.permission_service import PermissionError, PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
-
 
 router = APIRouter(prefix="/skill-generation-requests", tags=["skill_generation_requests"])
 

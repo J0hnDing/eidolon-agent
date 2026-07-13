@@ -16,6 +16,7 @@ from app.services.backend_api_catalog import (
     backend_api_context,
     valid_backend_api_ids,
 )
+from app.services.codex_routing_service import CodexRoutingService
 from app.services.codex_service import CodexGenerationError, CodexService
 from app.services.codex_usage_service import codex_usage_service
 from app.services.default_permissions import (
@@ -29,19 +30,15 @@ from app.services.skill_operation_guard import SkillOperationGuard
 from app.services.skill_version_service import SkillVersionError, SkillVersionService
 from app.workflows.base import (
     DEFAULT_BUILD_WORKFLOW,
-    FINAL_E2E_FAILURE_KEY,
     MAX_TASK_FAILURES,
     ProjectBuildWorkflowError,
 )
 from app.workflows.registry import get_project_build_workflow
 
-
 AgentWorkflowError = ProjectBuildWorkflowError
 
 
-MAX_MILESTONE_FAILURES = MAX_TASK_FAILURES
 DEFAULT_TASK_ID = "core_skill"
-DEFAULT_MILESTONE = DEFAULT_TASK_ID
 CODEX_USAGE_RESERVE_PERCENT = 5
 
 
@@ -158,7 +155,7 @@ class AgentWorkflowService:
             generation_request.error_message = prompt
             agent_run.status = "blocked"
             agent_run.current_step = "product_manager"
-            agent_run.current_milestone = None
+            agent_run.current_task_id = None
             agent_run.summary = prompt
             agent_run.final_summary_json = {
                 "decision_json": {"decision": "ask_user_for_input"},
@@ -186,7 +183,7 @@ class AgentWorkflowService:
             generation_request.error_message = summary
             agent_run.status = "blocked"
             agent_run.current_step = "product_manager"
-            agent_run.current_milestone = None
+            agent_run.current_task_id = None
             agent_run.summary = summary
             agent_run.final_summary_json = {
                 "decision_json": {"decision": "stop_inplausible"},
@@ -217,10 +214,14 @@ class AgentWorkflowService:
         agent_run: AgentRun,
         intent_prompt: dict[str, Any],
     ) -> AgentRun:
-        blueprint, raw_permission_plan, build_workflow = self.codex_service.product_manager_write_blueprint_and_permissions(
-            generation_request,
-            intent_prompt,
+        blueprint, raw_permission_plan, product_manager_build_workflow = (
+            self.codex_service.product_manager_write_blueprint_and_permissions(
+                generation_request,
+                intent_prompt,
+            )
         )
+        workflow_override = CodexRoutingService(self.db).project_build_workflow_override()
+        build_workflow = workflow_override or product_manager_build_workflow
         get_project_build_workflow(build_workflow)
         blueprint_path = self._write_json_artifact(agent_run, "blueprint.json", blueprint)
         permission_plan = self._apply_blueprint_permission_plan(
@@ -244,6 +245,8 @@ class AgentWorkflowService:
                 "blueprint_json": blueprint,
                 "permission_plan": permission_plan,
                 "build_workflow": build_workflow,
+                "product_manager_build_workflow": product_manager_build_workflow,
+                "build_workflow_source": "settings_override" if workflow_override else "product_manager",
                 "blueprint_path": blueprint_path,
                 "permission_path": permission_path,
             },
@@ -256,7 +259,7 @@ class AgentWorkflowService:
         generation_request.error_message = None
         agent_run.skill_id = building_skill.id
         agent_run.user_request = generation_request.user_message
-        agent_run.current_milestone = None
+        agent_run.current_task_id = None
         agent_run.current_step = "product_manager"
         agent_run.failure_count_json = {}
         agent_run.blueprint_json = blueprint
@@ -356,7 +359,7 @@ class AgentWorkflowService:
             status="running",
             skill_id=skill.id,
             user_request=user_request or f"Repair skill {skill.name}.",
-            current_milestone="repair_skill",
+            current_task_id="repair_skill",
             current_step="product_manager",
             failure_count_json={"repair_skill": 0},
             blueprint_json=blueprint,
@@ -379,30 +382,30 @@ class AgentWorkflowService:
                 self._start_step(
                     agent_run,
                     "product_manager",
-                    milestone_name="repair_skill",
+                    task_node_id="repair_skill",
                     input_json={"skill_id": skill.id},
                     logs="ProductManager reviewed the repair request and selected repair mode.",
                 ),
                 "succeeded",
                 output_json={
                     "blueprint_json": blueprint,
-                    "decision_json": {"decision": "repair_current_milestone"},
+                    "decision_json": {"decision": "repair_current_task"},
                     "user_summary": pm_summary,
                 },
                 logs=pm_summary,
             )
 
-            validation = self._repair_current_milestone(agent_run, repair_skill, None, milestone_name="repair_skill")
+            validation = self._repair_current_task(agent_run, repair_skill, None, task_node_id="repair_skill")
             while not validation.ok:
                 self._increment_failure_count(agent_run, "repair_skill")
-                if self._failure_count(agent_run, "repair_skill") > MAX_MILESTONE_FAILURES:
+                if self._failure_count(agent_run, "repair_skill") > MAX_TASK_FAILURES:
                     self._product_manager_stop_failed(agent_run, repair_skill, validation)
                     return agent_run
-                validation = self._repair_current_milestone(agent_run, repair_skill, validation, milestone_name="repair_skill")
+                validation = self._repair_current_task(agent_run, repair_skill, validation, task_node_id="repair_skill")
 
-            self._product_manager_after_tests(agent_run, repair_skill, validation, milestone_name="repair_skill")
-            runtime_status = self._runtime_permission_review(agent_run, repair_skill, validation, milestone_name="repair_skill")
-            self._product_manager_finish(agent_run, repair_skill, validation, runtime_status, milestone_name="repair_skill")
+            self._product_manager_after_tests(agent_run, repair_skill, validation, task_node_id="repair_skill")
+            runtime_status = self._runtime_permission_review(agent_run, repair_skill, validation, task_node_id="repair_skill")
+            self._product_manager_finish(agent_run, repair_skill, validation, runtime_status, task_node_id="repair_skill")
         except Exception as exc:
             if agent_run.status != "blocked":
                 self._fail_run(agent_run, str(exc))
@@ -421,7 +424,7 @@ class AgentWorkflowService:
             status="running",
             skill_id=skill.id,
             user_request=suggestion,
-            current_milestone="update_version",
+            current_task_id="update_version",
             current_step="product_manager",
             failure_count_json={"update_version": 0},
             blueprint_json=blueprint,
@@ -441,7 +444,7 @@ class AgentWorkflowService:
             self._start_step(
                 agent_run,
                 "product_manager",
-                milestone_name="update_version",
+                task_node_id="update_version",
                 input_json={"skill_id": skill.id, "suggestion": suggestion},
                 logs="ProductManager evaluated the improvement suggestion against the current skill and project rules.",
             ),
@@ -521,7 +524,7 @@ class AgentWorkflowService:
             builder_step = self._start_step(
                 agent_run,
                 "builder",
-                milestone_name="update_version",
+                task_node_id="update_version",
                 input_json={
                     "skill_id": skill.id,
                     "version_id": draft.id,
@@ -542,10 +545,10 @@ class AgentWorkflowService:
                 logs="Builder updated the draft version. The active version was not modified.",
             )
 
-            validation = self._test_version_milestone(agent_run, skill, draft, version_service, blueprint)
+            validation = self._test_version_task(agent_run, skill, draft, version_service, blueprint)
             while not validation.ok:
                 self._increment_failure_count(agent_run, "update_version")
-                if self._failure_count(agent_run, "update_version") > MAX_MILESTONE_FAILURES:
+                if self._failure_count(agent_run, "update_version") > MAX_TASK_FAILURES:
                     self._product_manager_stop_update_failed(agent_run, skill, draft, validation)
                     self.db.refresh(agent_run)
                     return agent_run
@@ -585,7 +588,7 @@ class AgentWorkflowService:
                 self._start_step(
                     agent_run,
                     "product_manager",
-                    milestone_name="update_version",
+                    task_node_id="update_version",
                     input_json={"skill_id": skill.id, "version_id": draft.id},
                     logs="ProductManager summarized the proposed update.",
                 ),
@@ -689,7 +692,7 @@ class AgentWorkflowService:
             )
         return "Workflow paused because the Codex account allowance is at its limit."
 
-    def retry_current_milestone(self, agent_run: AgentRun) -> AgentRun:
+    def retry_current_task(self, agent_run: AgentRun) -> AgentRun:
         self._ensure_not_cancelled(agent_run)
         if agent_run.status == "failed":
             return self.resume_run(agent_run)
@@ -708,15 +711,12 @@ class AgentWorkflowService:
                 raise AgentWorkflowError("Skill no longer exists")
             self.create_repair_run(skill, agent_run.user_request)
             return agent_run
-        raise AgentWorkflowError("Retry current milestone is not available for this run")
-
-    def retry_current_task(self, agent_run: AgentRun) -> AgentRun:
-        return self.retry_current_milestone(agent_run)
+        raise AgentWorkflowError("Retry current task is not available for this run")
 
     def retry_step(self, agent_run: AgentRun, step: AgentRunStep) -> AgentRun:
         if step.agent_run_id != agent_run.id:
             raise AgentWorkflowError("Step does not belong to this agent run")
-        return self.retry_current_milestone(agent_run)
+        return self.retry_current_task(agent_run)
 
     def cancel_run(self, agent_run: AgentRun) -> AgentRun:
         if agent_run.status in {"succeeded", "failed", "cancelled", "blocked"}:
@@ -754,18 +754,18 @@ class AgentWorkflowService:
                 return request
         return None
 
-    def _test_milestone(self, agent_run: AgentRun, skill: Skill, validation: Any, milestone_name: str = DEFAULT_MILESTONE) -> Any:
-        task_node = self._task_by_id(agent_run, milestone_name)
+    def _test_task_node(self, agent_run: AgentRun, skill: Skill, validation: Any, task_node_id: str = DEFAULT_TASK_ID) -> Any:
+        task_node = self._task_by_id(agent_run, task_node_id)
         tester_context = {
             "task_node": self._tester_task_node(task_node),
             "parent_interface_artifacts": self._direct_parent_interface_artifacts(agent_run, task_node),
-            "test_file": f"tests/test_{milestone_name}.py",
+            "test_file": f"tests/test_{task_node_id}.py",
             "workspace_paths": self._task_relevant_paths(task_node),
         }
         tester_step = self._start_step(
             agent_run,
             "tester",
-            milestone_name=milestone_name,
+            task_node_id=task_node_id,
             input_json=tester_context,
             logs="TesterAgent uses Codex to inspect the task contract and Builder code, write tests, then validate through the existing safe path.",
         )
@@ -808,8 +808,8 @@ class AgentWorkflowService:
             error_message=validation.error_message,
         )
         if not validation.ok:
-            self._write_failure_log(agent_run, milestone_name, validation)
-        self._write_task_test_result(agent_run, milestone_name, validation)
+            self._write_failure_log(agent_run, task_node_id, validation)
+        self._write_task_test_result(agent_run, task_node_id, validation)
         return validation
 
     def _test_final_e2e(self, agent_run: AgentRun, skill: Skill, validation: Any) -> Any:
@@ -823,7 +823,7 @@ class AgentWorkflowService:
         tester_step = self._start_step(
             agent_run,
             "tester",
-            milestone_name="final_e2e",
+            task_node_id="final_e2e",
             input_json=tester_context,
             logs="TesterAgent writes and runs the final end-to-end validation.",
         )
@@ -882,7 +882,7 @@ class AgentWorkflowService:
         builder_step = self._start_step(
             agent_run,
             "builder",
-            milestone_name="final_e2e",
+            task_node_id="final_e2e",
             input_json={"mode": "fix_final_e2e", "failure_context": context},
             logs="Builder is repairing cross-node final end-to-end failures.",
         )
@@ -906,7 +906,7 @@ class AgentWorkflowService:
         )
         return self._test_final_e2e(agent_run, skill, validation)
 
-    def _test_version_milestone(
+    def _test_version_task(
         self,
         agent_run: AgentRun,
         skill: Skill,
@@ -929,7 +929,7 @@ class AgentWorkflowService:
         tester_step = self._start_step(
             agent_run,
             "tester",
-            milestone_name="update_version",
+            task_node_id="update_version",
             input_json=tester_context,
             logs="TesterAgent uses Codex to inspect the update blueprint and draft code, write tests, then validate through the existing safe path.",
         )
@@ -991,7 +991,7 @@ class AgentWorkflowService:
         builder_step = self._start_step(
             agent_run,
             "builder",
-            milestone_name="update_version",
+            task_node_id="update_version",
             input_json={
                 "mode": "repair",
                 "skill_id": skill.id,
@@ -1015,26 +1015,26 @@ class AgentWorkflowService:
             output_json={"stdout": result.stdout, "stderr": result.stderr, "exit_code": result.returncode, "mode": "repair"},
             logs="Builder repaired the draft version. The active version was not modified.",
         )
-        return self._test_version_milestone(agent_run, skill, draft, version_service, blueprint)
+        return self._test_version_task(agent_run, skill, draft, version_service, blueprint)
 
-    def _repair_current_milestone(
+    def _repair_current_task(
         self,
         agent_run: AgentRun,
         skill: Skill,
         validation: Any | None,
-        milestone_name: str = DEFAULT_MILESTONE,
+        task_node_id: str = DEFAULT_TASK_ID,
     ) -> Any:
-        task_node = self._task_by_id(agent_run, milestone_name)
+        task_node = self._task_by_id(agent_run, task_node_id)
         context = {
             **self._builder_task_context(agent_run, task_node, skill),
             "action": "builder_fix_task",
-            "current_interface_artifact": self._task_interface_artifact(agent_run, milestone_name),
-            "failure": self._validation_failure_context(milestone_name, validation) if validation is not None else None,
+            "current_interface_artifact": self._task_interface_artifact(agent_run, task_node_id),
+            "failure": self._validation_failure_context(task_node_id, validation) if validation is not None else None,
         }
         builder_step = self._start_step(
             agent_run,
             "builder",
-            milestone_name=milestone_name,
+            task_node_id=task_node_id,
             input_json={
                 "mode": "fix_task",
                 "action": "builder_fix_task",
@@ -1050,7 +1050,7 @@ class AgentWorkflowService:
             )
         except CodexGenerationError as exc:
             if "USER_ACTION_REQUIRED:" in str(exc):
-                self._builder_user_action_required(agent_run, builder_step, str(exc), milestone_name)
+                self._builder_user_action_required(agent_run, builder_step, str(exc), task_node_id)
                 raise AgentWorkflowError(str(exc)) from exc
             raise
         self._finish_step(
@@ -1061,32 +1061,32 @@ class AgentWorkflowService:
             logs="Builder proposed a repair. The skill was not installed or run.",
         )
         self._move_validated_interface_artifact(agent_run, skill, task_node)
-        return self._test_milestone(agent_run, skill, None, milestone_name=milestone_name)
+        return self._test_task_node(agent_run, skill, None, task_node_id=task_node_id)
 
     def _product_manager_after_tests(
         self,
         agent_run: AgentRun,
         skill: Skill,
         validation: Any,
-        milestone_name: str = DEFAULT_MILESTONE,
+        task_node_id: str = DEFAULT_TASK_ID,
     ) -> None:
-        next_milestone = self._next_milestone_name(agent_run, milestone_name)
-        decision = "finish_ready_for_review" if next_milestone is None else "build_next_milestone"
+        next_task_node_id = self._next_task_node_id(agent_run, task_node_id)
+        decision = "finish_ready_for_review" if next_task_node_id is None else "build_next_milestone"
         summary = self.codex_service.product_manager_summary(
             "milestone_passed",
             {
                 "skill_id": skill.id,
-                "milestone_name": milestone_name,
-                "next_milestone": next_milestone,
+                "task_node_id": task_node_id,
+                "next_task_node_id": next_task_node_id,
                 "test_result_json": validation.model_dump(mode="json"),
                 "blueprint_json": agent_run.blueprint_json,
             },
             (
-                f"Milestone {milestone_name} passed. " +
+                f"Milestone {task_node_id} passed. " +
                 (
                     "ProductManager considers the planned blueprint complete and is preparing runtime permission review."
-                    if next_milestone is None
-                    else f"ProductManager is continuing to milestone {next_milestone}."
+                    if next_task_node_id is None
+                    else f"ProductManager is continuing to milestone {next_task_node_id}."
                 )
             ),
         )
@@ -1095,7 +1095,7 @@ class AgentWorkflowService:
             self._start_step(
                 agent_run,
                 "product_manager",
-                milestone_name=milestone_name,
+                task_node_id=task_node_id,
                 input_json={"skill_id": skill.id, "test_result_json": validation.model_dump(mode="json")},
                 logs="ProductManager reviewed the passing milestone result.",
             ),
@@ -1104,52 +1104,12 @@ class AgentWorkflowService:
             logs=summary,
         )
 
-    def _product_manager_verify_project(self, agent_run: AgentRun, skill: Skill, validation: Any) -> str:
-        code_files = self._skill_file_snapshot(skill)
-        context = {
-            "skill_id": skill.id,
-            "skill_name": skill.name,
-            "user_request": agent_run.user_request,
-            "blueprint_json": agent_run.blueprint_json,
-            "task_dag_json": self._task_dag(agent_run),
-            "task_paths": self._milestone_artifact_paths(agent_run),
-            "interface_artifacts": self._all_interface_artifacts(agent_run),
-            "code_files": code_files,
-            "test_result_json": validation.model_dump(mode="json"),
-        }
-        summary = self.codex_service.product_manager_summary(
-            "project_verification",
-            context,
-            (
-                f"ProductManager reviewed {skill.name} against the original request and passing tests. "
-                "The proposed skill appears ready for user review; runtime permissions still require review."
-            ),
-        )
-        self._finish_step(
-            agent_run,
-            self._start_step(
-                agent_run,
-                "product_manager",
-                milestone_name=agent_run.current_milestone,
-                input_json=context,
-                logs="ProductManager reviewed the completed project against the user request, blueprint, files, and test result.",
-            ),
-            "succeeded",
-            output_json={
-                "decision_json": {"decision": "finish_ready_for_review"},
-                "user_summary": summary,
-                "code_files": code_files,
-            },
-            logs=summary,
-        )
-        return summary
-
     def _runtime_permission_review(
         self,
         agent_run: AgentRun,
         skill: Skill,
         validation: Any,
-        milestone_name: str = DEFAULT_MILESTONE,
+        task_node_id: str = DEFAULT_TASK_ID,
         pm_summary: str | None = None,
     ) -> str:
         runtime_request = PermissionService(self.db, project_root=self.project_root).create_runtime_request(skill)
@@ -1189,7 +1149,7 @@ class AgentWorkflowService:
         skill: Skill,
         validation: Any,
         runtime_status: str,
-        milestone_name: str = DEFAULT_MILESTONE,
+        task_node_id: str = DEFAULT_TASK_ID,
         pm_summary: str | None = None,
     ) -> None:
         summary = pm_summary or self.codex_service.product_manager_summary(
@@ -1221,7 +1181,7 @@ class AgentWorkflowService:
             self._start_step(
                 agent_run,
                 "product_manager",
-                milestone_name=milestone_name,
+                task_node_id=task_node_id,
                 input_json={"skill_id": skill.id},
                 logs="ProductManager wrote the completion summary.",
             ),
@@ -1241,14 +1201,14 @@ class AgentWorkflowService:
         self.db.refresh(agent_run)
 
     def _product_manager_stop_failed(self, agent_run: AgentRun, skill: Skill, validation: Any) -> None:
-        milestone_name = agent_run.current_milestone or DEFAULT_TASK_ID
-        is_final = milestone_name == "final_e2e"
-        failure_label = "Final end-to-end validation" if is_final else f"Task node {milestone_name}"
+        task_node_id = agent_run.current_task_id or DEFAULT_TASK_ID
+        is_final = task_node_id == "final_e2e"
+        failure_label = "Final end-to-end validation" if is_final else f"Task node {task_node_id}"
         summary = self.codex_service.product_manager_summary(
             "stop_failed",
             {
                 "skill_id": skill.id,
-                "task_id": milestone_name,
+                "task_id": task_node_id,
                 "failure_count_json": agent_run.failure_count_json,
                 "latest_failure": validation.error_message or validation.stderr or "tests failed",
             },
@@ -1262,7 +1222,7 @@ class AgentWorkflowService:
             self._start_step(
                 agent_run,
                 "product_manager",
-                milestone_name=milestone_name,
+                task_node_id=task_node_id,
                 input_json={"skill_id": skill.id, "failure_count_json": agent_run.failure_count_json},
                 logs="ProductManager stopped the workflow after repeated failures.",
             ),
@@ -1296,12 +1256,12 @@ class AgentWorkflowService:
             {
                 "skill_id": skill.id,
                 "version_id": draft.id,
-                "milestone_name": "update_version",
+                "task_node_id": "update_version",
                 "failure_count_json": agent_run.failure_count_json,
                 "latest_failure": validation.error_message or validation.stderr or "tests failed",
             },
             (
-                f"Update version {draft.version} failed more than {MAX_MILESTONE_FAILURES} times. "
+                f"Update version {draft.version} failed more than {MAX_TASK_FAILURES} times. "
                 "The active version was not modified. User review is recommended."
             ),
         )
@@ -1310,7 +1270,7 @@ class AgentWorkflowService:
             self._start_step(
                 agent_run,
                 "product_manager",
-                milestone_name="update_version",
+                task_node_id="update_version",
                 input_json={"skill_id": skill.id, "version_id": draft.id, "failure_count_json": agent_run.failure_count_json},
                 logs="ProductManager stopped the update workflow after repeated draft-version failures.",
             ),
@@ -1335,7 +1295,7 @@ class AgentWorkflowService:
         agent_run: AgentRun,
         builder_step: AgentRunStep,
         message: str,
-        milestone_name: str,
+        task_node_id: str,
     ) -> None:
         report = {
             "exact_blocker": message.replace("USER_ACTION_REQUIRED:", "").strip(),
@@ -1353,7 +1313,7 @@ class AgentWorkflowService:
             error_message=report["exact_blocker"],
         )
         agent_run.status = "blocked"
-        agent_run.current_milestone = milestone_name
+        agent_run.current_task_id = task_node_id
         agent_run.current_step = "builder"
         agent_run.summary = report["exact_blocker"]
         agent_run.final_summary_json = {"user_action_required": report}
@@ -1401,31 +1361,6 @@ class AgentWorkflowService:
         self.db.refresh(repair_skill)
         return repair_skill
 
-    def _blueprint_from_generation_request(self, generation_request: SkillGenerationRequest) -> dict[str, Any]:
-        plan = generation_request.plan_json
-        acceptance_criteria = [
-            "manifest.json is valid",
-            "required skill files exist",
-            "automation tests pass",
-            "executable skills use JSON stdin/stdout",
-        ]
-        if plan.get("interface_type") == "tool":
-            acceptance_criteria.append("tool_ui_schema is present so the Tools page can render a user-friendly UI")
-        return {
-            "goal": plan.get("goal") or generation_request.user_message,
-            "skill_name": plan.get("skill_name"),
-            "skill_type": plan.get("skill_type"),
-            "interface_type": plan.get("interface_type", "chat"),
-            "expected_behavior": plan.get("expected_output", {}),
-            "milestones": [
-                {
-                    "name": DEFAULT_MILESTONE,
-                    "summary": "Create the proposed skill package and tests.",
-                    "acceptance_criteria": acceptance_criteria,
-                }
-            ],
-        }
-
     def _create_or_update_building_skill(
         self,
         generation_request: SkillGenerationRequest,
@@ -1472,42 +1407,6 @@ class AgentWorkflowService:
         if isinstance(files, list) and any(str(path).replace("\\", "/") == "SKILL.md" for path in files):
             return "SKILL.md"
         return None
-
-    def _blueprint_for_repair(self, skill: Skill, user_request: str | None) -> dict[str, Any]:
-        return {
-            "goal": user_request or f"Repair {skill.name}.",
-            "skill_name": skill.name,
-            "skill_type": skill.skill_type,
-            "interface_type": skill.interface_type,
-            "milestones": [
-                {
-                    "name": "repair_skill",
-                    "summary": "Repair the proposed skill package and confirm tests pass.",
-                    "acceptance_criteria": ["manifest.json is valid", "tests pass", "permissions do not expand silently"],
-                }
-            ],
-        }
-
-    def _blueprint_for_update(self, skill: Skill, suggestion: str, decision: dict[str, str]) -> dict[str, Any]:
-        return {
-            "goal": decision["summary"],
-            "skill_name": skill.name,
-            "skill_type": skill.skill_type,
-            "interface_type": skill.interface_type,
-            "suggestion": suggestion,
-            "milestones": [
-                {
-                    "name": "update_version",
-                    "summary": "Copy the active version, implement the requested improvement, and validate the draft.",
-                    "acceptance_criteria": [
-                        "active version folder is not modified",
-                        "draft version manifest is valid",
-                        "draft version tests pass when executable",
-                        "runtime permission changes are detected before activation",
-                    ],
-                }
-            ],
-        }
 
     def _pm_build_time_summary(self, blueprint: dict[str, Any]) -> str:
         return (
@@ -1716,56 +1615,10 @@ class AgentWorkflowService:
             step.logs = f"{step.logs or ''}\n\nApproved by local user.".strip()
         self.db.commit()
 
-    def _current_milestone(self, agent_run: AgentRun) -> dict[str, Any]:
-        return self._task_by_id(agent_run, agent_run.current_milestone or DEFAULT_TASK_ID)
-
-    def _milestones(self, agent_run: AgentRun) -> list[dict[str, Any]]:
-        return self._task_nodes(agent_run)
-
-    def _milestones_from_blueprint(self, blueprint: dict[str, Any]) -> list[dict[str, Any]]:
-        raw_milestones = blueprint.get("milestones")
-        if not isinstance(raw_milestones, list) or not raw_milestones:
-            raw_milestones = [
-                {
-                    "name": DEFAULT_MILESTONE,
-                    "summary": "Create the core proposed skill package.",
-                    "acceptance_criteria": ["manifest.json describes the skill contract", "validation and tests pass"],
-                }
-            ]
-        milestones = []
-        used_names: set[str] = set()
-        for index, raw in enumerate(raw_milestones, start=1):
-            if not isinstance(raw, dict):
-                raw = {}
-            base_name = self._safe_milestone_name(str(raw.get("name") or f"milestone_{index}"))
-            name = base_name
-            suffix = 2
-            while name in used_names:
-                name = f"{base_name}_{suffix}"
-                suffix += 1
-            used_names.add(name)
-            criteria = raw.get("acceptance_criteria")
-            milestone = dict(raw)
-            milestone["name"] = name
-            milestone["summary"] = str(raw.get("summary") or "Build and validate this milestone.")
-            milestone["acceptance_criteria"] = criteria if isinstance(criteria, list) else []
-            milestones.append(milestone)
-        return milestones
-
-    def _safe_milestone_name(self, value: str) -> str:
-        normalized = "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in value.strip().lower())
-        normalized = normalized.strip("_-")
-        if normalized == "initial_skill":
-            return DEFAULT_MILESTONE
-        return normalized or DEFAULT_MILESTONE
-
     def _milestone_by_name(self, agent_run: AgentRun, name: str) -> dict[str, Any]:
         return self._task_by_id(agent_run, name)
 
-    def _all_milestones_complete(self, agent_run: AgentRun) -> bool:
-        return self._next_milestone_name(agent_run, agent_run.current_milestone or DEFAULT_MILESTONE) is None
-
-    def _next_milestone_name(self, agent_run: AgentRun, current_name: str) -> str | None:
+    def _next_task_node_id(self, agent_run: AgentRun, current_name: str) -> str | None:
         nodes = self._topological_task_nodes(self._task_dag(agent_run))
         for index, node in enumerate(nodes):
             if node["id"] == current_name:
@@ -1782,7 +1635,7 @@ class AgentWorkflowService:
             "schema_version": 1,
             "nodes": [
                 {
-                    "id": agent_run.current_milestone or DEFAULT_TASK_ID,
+                    "id": agent_run.current_task_id or DEFAULT_TASK_ID,
                     "title": "Compatibility task",
                     "summary": "Compatibility task node.",
                     "depends_on": [],
@@ -1937,26 +1790,26 @@ class AgentWorkflowService:
     def _is_safe_path_segment(self, value: str) -> bool:
         return bool(value) and all(char.isalnum() or char in {"_", "-"} for char in value)
 
-    def _failure_count(self, agent_run: AgentRun, milestone_name: str) -> int:
-        return int((agent_run.failure_count_json or {}).get(milestone_name, 0))
+    def _failure_count(self, agent_run: AgentRun, task_node_id: str) -> int:
+        return int((agent_run.failure_count_json or {}).get(task_node_id, 0))
 
-    def _increment_failure_count(self, agent_run: AgentRun, milestone_name: str) -> None:
+    def _increment_failure_count(self, agent_run: AgentRun, task_node_id: str) -> None:
         counts = dict(agent_run.failure_count_json or {})
-        counts[milestone_name] = int(counts.get(milestone_name, 0)) + 1
+        counts[task_node_id] = int(counts.get(task_node_id, 0)) + 1
         agent_run.failure_count_json = counts
         self.db.commit()
 
-    def _write_failure_log(self, agent_run: AgentRun, milestone_name: str, validation: Any) -> None:
-        log_dir = self._artifact_dir(agent_run) / "tasks" / milestone_name
+    def _write_failure_log(self, agent_run: AgentRun, task_node_id: str, validation: Any) -> None:
+        log_dir = self._artifact_dir(agent_run) / "tasks" / task_node_id
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / "failure.log"
-        content = self._validation_log_text(milestone_name, validation)
+        content = self._validation_log_text(task_node_id, validation)
         log_path.write_text(content, encoding="utf-8")
 
-    def _validation_log_text(self, milestone_name: str, validation: Any) -> str:
+    def _validation_log_text(self, task_node_id: str, validation: Any) -> str:
         return "\n".join(
             [
-                f"task_id={milestone_name}",
+                f"task_id={task_node_id}",
                 f"error={validation.error_message or ''}",
                 "stdout:",
                 validation.stdout or "",
@@ -2085,32 +1938,6 @@ class AgentWorkflowService:
             paths.append(path.relative_to(skill_dir).as_posix())
         return paths
 
-    def _skill_file_snapshot(self, skill: Skill, relative_paths: list[str] | None = None) -> dict[str, str]:
-        try:
-            skill_dir = self.proposed_service.skill_dir_for_record(skill)
-        except Exception:
-            return {}
-        snapshot: dict[str, str] = {}
-        if relative_paths is None:
-            paths = [
-                path.relative_to(skill_dir).as_posix()
-                for path in sorted(skill_dir.rglob("*"))
-                if path.is_file()
-                and path.name not in {"interface_artifact.json", "codex_prompt.txt"}
-                and not any(part in {".deps", ".pytest_cache", "__pycache__"} for part in path.parts)
-            ]
-        else:
-            paths = relative_paths
-        for relative_path in paths:
-            path = skill_dir / relative_path
-            if path.is_file():
-                try:
-                    content = path.read_text(encoding="utf-8")
-                except UnicodeDecodeError:
-                    continue
-                snapshot[relative_path] = content[:12000]
-        return snapshot
-
     def _skill_file_paths(self, skill: Skill) -> list[str]:
         try:
             skill_dir = self.proposed_service.skill_dir_for_record(skill)
@@ -2160,37 +1987,6 @@ class AgentWorkflowService:
     def _artifact_relative_path(self, agent_run: AgentRun, filename: str) -> str:
         return (self._artifact_dir(agent_run) / filename).resolve().relative_to(self.project_root).as_posix()
 
-    def _milestone_artifact_relative_path(self, agent_run: AgentRun, milestone_name: str) -> str:
-        return self._task_artifact_relative_path(agent_run, milestone_name)
-
-    def _milestone_artifact_paths(self, agent_run: AgentRun) -> list[str]:
-        return [self._task_artifact_relative_path(agent_run, node["id"]) for node in self._task_nodes(agent_run)]
-
-    def _write_milestone_artifacts(self, agent_run: AgentRun, milestones: list[dict[str, Any]]) -> list[str]:
-        return self._write_task_artifacts(
-            agent_run,
-            {
-                "nodes": [
-                    {
-                        **milestone,
-                        "id": milestone.get("id") or milestone.get("name") or DEFAULT_TASK_ID,
-                        "depends_on": milestone.get("depends_on", []),
-                        "expected_output_paths": milestone.get("expected_output_paths", ["manifest.json"]),
-                        "file_write_claims": milestone.get("file_write_claims", ["manifest.json"]),
-                    }
-                    for milestone in milestones
-                ]
-            },
-        )
-
-    def _task_artifact_relative_path(self, agent_run: AgentRun, task_id: str) -> str:
-        return (self._artifact_dir(agent_run) / "tasks" / f"{task_id}.json").resolve().relative_to(
-            self.project_root
-        ).as_posix()
-
-    def _task_dir_relative_path(self, agent_run: AgentRun, task_id: str) -> str:
-        return (self._artifact_dir(agent_run) / "tasks" / task_id).resolve().relative_to(self.project_root).as_posix()
-
     def _write_task_artifacts(self, agent_run: AgentRun, task_dag: dict[str, Any]) -> list[str]:
         task_root = self._artifact_dir(agent_run) / "tasks"
         task_root.mkdir(parents=True, exist_ok=True)
@@ -2234,7 +2030,7 @@ class AgentWorkflowService:
         skill: Skill,
         task_node: dict[str, Any],
     ) -> str:
-        task_id = str(task_node.get("id") or agent_run.current_milestone or DEFAULT_TASK_ID)
+        task_id = str(task_node.get("id") or agent_run.current_task_id or DEFAULT_TASK_ID)
         skill_dir = self.proposed_service.skill_dir_for_record(skill)
         source = skill_dir / "interface_artifact.json"
         if not source.is_file():
@@ -2380,7 +2176,7 @@ class AgentWorkflowService:
         agent_run: AgentRun,
         step_name: str,
         *,
-        milestone_name: str | None = None,
+        task_node_id: str | None = None,
         input_json: dict[str, Any] | None = None,
         logs: str | None = None,
     ) -> AgentRunStep:
@@ -2388,7 +2184,7 @@ class AgentWorkflowService:
         step = AgentRunStep(
             agent_run_id=agent_run.id,
             step_name=step_name,
-            milestone_name=milestone_name,
+            task_node_id=task_node_id,
             status="running",
             input_json=input_json,
             logs=logs,
@@ -2397,7 +2193,7 @@ class AgentWorkflowService:
         self.db.add(step)
         agent_run.status = "running"
         agent_run.current_step = step_name
-        agent_run.current_milestone = milestone_name or agent_run.current_milestone
+        agent_run.current_task_id = task_node_id or agent_run.current_task_id
         self.db.commit()
         self.db.refresh(step)
         return step

@@ -6,7 +6,6 @@ from app.db import get_db
 from app.models import MemoryFact
 from app.schemas.memory_fact import MemoryFactCreate, MemoryFactRead, MemoryFactUpdate
 
-
 router = APIRouter(prefix="/memory-facts", tags=["memory_facts"])
 
 

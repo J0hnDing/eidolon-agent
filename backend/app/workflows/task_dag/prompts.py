@@ -4,7 +4,6 @@ from typing import Any
 
 from app.workflows.instructions import load_instruction
 
-
 _PACKAGE_DIR = Path(__file__).resolve().parent
 
 
@@ -22,7 +21,7 @@ Payload:
 
 def build_builder_prompt(plan: dict, output_dir: Path, *, builder_writes_tests: bool = False) -> str:
     instruction = load_instruction(_PACKAGE_DIR, "builder.md")
-    builder_context = plan.get("current_milestone")
+    builder_context = plan.get("task_context")
     if not isinstance(builder_context, dict):
         builder_context = plan
     test_requirement = (

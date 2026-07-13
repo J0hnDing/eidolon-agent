@@ -16,7 +16,7 @@ User-facing tools are not a separate skill type. A tool is an installed, enabled
 
 ## Current Stack
 
-- Backend: FastAPI, SQLite, SQLAlchemy, Pydantic schemas, pytest.
+- Backend: FastAPI, SQLite, SQLAlchemy, Pydantic schemas, pytest, Ruff.
 - Frontend: React, Vite, TypeScript, plain CSS.
 - Skill language: Python.
 - Skill execution: Docker sandbox by default when available, explicit local/dev fallback.
@@ -31,6 +31,7 @@ personal-agent/
   README.md
   docs/                      detailed project documentation
     README.md                documentation index
+    todo.md                  structured source of truth for confirmed unfinished work
     working_history.md       concise dated implementation summaries and limitations/future work
     architecture/
     agents/
@@ -75,7 +76,14 @@ Read the relevant files under `docs/` before making non-trivial changes. Start a
 - Permissions and sandboxing: [docs/security/permissions.md](docs/security/permissions.md), [docs/security/sandbox_execution.md](docs/security/sandbox_execution.md)
 - Scheduling and tools: [docs/runtime/scheduling.md](docs/runtime/scheduling.md), [docs/runtime/tools.md](docs/runtime/tools.md)
 - Codex CLI integration: [docs/integrations/codex_cli.md](docs/integrations/codex_cli.md)
+- Confirmed unfinished work: [docs/todo.md](docs/todo.md)
 - Working history log format: [docs/working_history.md](docs/working_history.md)
+
+## TODO Management
+
+`docs/todo.md` is the source of truth for confirmed unfinished work. Each item must have a stable ID, Priority, Status, Area, Rationale, and Acceptance criteria. Keep priorities limited to `High`, `Medium`, or `Low`, and statuses limited to `Planned`, `In progress`, or `Blocked`.
+
+When work is completed, remove its TODO entry and add a concise dated summary to `docs/working_history.md`. Do not leave completed items in the TODO as a second history log.
 
 ## Non-Negotiable Guardrails
 
@@ -187,10 +195,13 @@ Common checks:
 
 ```powershell
 cd backend
+..\.venv\Scripts\python.exe -m ruff check app tests
 ..\.venv\Scripts\python.exe -m pytest
 
 cd ..\frontend
 npm run build
 ```
+
+Run Ruff before every backend pytest run, including focused test runs, and resolve its findings in changed code before treating the tests as complete.
 
 The frontend build may need normal filesystem access for Vite/esbuild config loading in the Codex sandbox. If the sandbox denies config reads, rerun the same `npm run build` command with the narrow build escalation.

@@ -67,7 +67,7 @@ export default function AgentRunsPage() {
               </div>
               <div>
                 <dt>Task Node</dt>
-                <dd>{run.current_task_id ?? run.current_milestone ?? "none"}</dd>
+                <dd>{run.current_task_id ?? "none"}</dd>
               </div>
               <div>
                 <dt>Step</dt>

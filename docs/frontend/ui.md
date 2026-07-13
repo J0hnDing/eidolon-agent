@@ -66,7 +66,7 @@ Agent Runs list and detail pages show run status, current task node or parallel 
 
 ## Codex Settings
 
-`/settings/usage` shows the resolved CLI and both the 5-hour and weekly Codex allowance windows. It also loads the live App Server model catalog and lets the user choose model and reasoning effort independently for Chat, ProductManager actions, Builder difficulty tiers plus repair/update, and Tester task/final/update actions. Unsupported model/effort combinations are rejected by the backend. Refresh reads current local App Server state; it does not infer quota from project-build token totals.
+`/settings/usage` shows the resolved CLI and both the 5-hour and weekly Codex allowance windows. It lets the user keep automatic Project build workflow selection or force every new build through Simple (`single_codex`) or Task DAG (`task_dag`); forced selection overrides ProductManager output in the backend. The page also loads the live App Server model catalog and lets the user choose model and reasoning effort independently for Chat, ProductManager actions, Builder difficulty tiers plus repair/update, and Tester task/final/update actions. Unsupported model/effort combinations are rejected by the backend. Refresh reads current local App Server state; it does not infer quota from project-build token totals.
 
 ## Targeted Polling
 

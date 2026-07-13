@@ -3,7 +3,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 BACKEND_API_INDEX_PATH = STATIC_DIR / "backend_api_index.json"
 BACKEND_API_CONTEXT_PATH = STATIC_DIR / "backend_api_context.json"

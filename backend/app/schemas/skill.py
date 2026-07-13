@@ -23,24 +23,9 @@ class SkillBase(BaseModel):
     enabled: bool = False
 
 
-class SkillCreate(SkillBase):
-    pass
-
-
 class SkillUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
-    description: str | None = Field(default=None, min_length=1)
-    skill_type: SkillType | None = None
-    interface_type: InterfaceType | None = None
-    status: SkillStatus | None = None
-    risk_level: RiskLevel | None = None
-    manifest_path: str | None = Field(default=None, min_length=1, max_length=512)
-    instructions_path: str | None = Field(default=None, max_length=512)
-    input_schema_json: dict[str, Any] | None = None
-    output_schema_json: dict[str, Any] | None = None
-    tool_ui_schema_json: dict[str, Any] | None = None
-    installed_path: str | None = Field(default=None, max_length=512)
-    active_version_id: int | None = None
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool | None = None
 
 

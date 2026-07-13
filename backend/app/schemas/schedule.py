@@ -5,7 +5,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.schemas.common import ScheduleStatus, ScheduleType, SkillType
 
-
 IntervalUnit = Literal["minutes", "hours", "days"]
 Weekday = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 

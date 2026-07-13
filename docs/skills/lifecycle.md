@@ -4,12 +4,10 @@
 
 ```text
 building -> proposed -> installed
-                    -> failed
-                    -> deleted
-installed -> disabled
+building -> failed
 ```
 
-`building` means an agent workflow is creating or repairing the package. `proposed` means generation is complete and the skill is waiting for review, runtime permission approval, installation, or rejection.
+`building` means an agent workflow is creating or repairing the package. `proposed` means generation is complete and the skill is waiting for review, runtime permission approval, installation, or rejection. `installed` is the only normal installed lifecycle status; `enabled` independently controls whether that installed skill can run. `deleted` is retained only as a hidden legacy tombstone value, while current rejection and deletion paths hard-delete records.
 
 ## Proposed Skill Workflow
 
@@ -19,16 +17,12 @@ installed -> disabled
 4. If the request is plausible, ProductManager returns blueprint and permission JSON; the backend writes the artifacts.
 5. The app creates a build-time approval request from the blueprint summary and permission plan.
 6. User approves generation.
-7. ProductManager returns task DAG JSON; the backend writes `task_dag.json`.
-8. Backend validates the DAG and schedules ready task nodes.
-9. Builder writes files inside `skills/proposed/<skill_name>/` for each task node.
-10. Tester writes/runs node tests immediately after task builds that require tests.
-11. Builder fixes failed task nodes until tests pass or failure limits block the workflow.
-12. Tester writes and runs one final end-to-end test after all task nodes are done.
-13. Builder fixes final end-to-end failures until tests pass or failure limits block the workflow.
-14. Runtime permission review is created from actual `manifest.json`.
-15. User inspects files and approvals.
-16. User installs or rejects. If the installed manifest declares a schedule, the backend registers it as a pending schedule record during install.
+7. Backend dispatches the approved build through the ProductManager-selected registered workflow:
+   - `single_codex`: one controlled invocation plans, builds, writes tests, and performs its focused test run;
+   - `task_dag`: ProductManager returns task DAG JSON, the backend validates it, and Builder/Tester execute its task nodes and final end-to-end loop.
+8. Runtime permission review is created from the actual generated `manifest.json`.
+9. User inspects files and approvals.
+10. User installs or rejects. If the installed manifest declares a schedule, the backend registers it as a pending schedule record during install.
 
 Generated skills are not installed or run automatically. Manifest-declared schedules are not activated automatically; schedule approval is still separate from install approval.
 
@@ -48,9 +42,9 @@ If `manifest.json` contains `schedule`, install reads the installed manifest cop
 
 ## Rejection and Deletion
 
-Rejected proposed skills are hard-deleted in the local MVP: controlled folder removed and database record removed. Deleted skills should not remain visible in the normal Skills list.
+Rejected proposed skills are hard-deleted in the local MVP: the controlled folder and database record are removed.
 
-Installed skill deletion is also a controlled hard delete and must respect operation locks.
+Installed skill deletion is also a controlled hard delete and must respect operation locks. Current delete paths do not transition a record to a `deleted` status.
 
 ## Manual Runs
 

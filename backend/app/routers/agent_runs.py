@@ -7,7 +7,6 @@ from app.models import AgentRun, AgentRunStep
 from app.schemas.agent_run import AgentRunDetailRead, AgentRunRead, AgentRunStepRead
 from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
 
-
 router = APIRouter(prefix="/agent-runs", tags=["agent_runs"])
 
 
@@ -65,17 +64,6 @@ def resume_agent_run(agent_run_id: int, db: Session = Depends(get_db)) -> AgentR
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent run not found")
     try:
         return AgentWorkflowService(db).resume_run(agent_run)
-    except AgentWorkflowError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-
-@router.post("/{agent_run_id}/retry-current-milestone", response_model=AgentRunRead)
-def retry_current_milestone(agent_run_id: int, db: Session = Depends(get_db)) -> AgentRun:
-    agent_run = db.get(AgentRun, agent_run_id)
-    if agent_run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent run not found")
-    try:
-        return AgentWorkflowService(db).retry_current_milestone(agent_run)
     except AgentWorkflowError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

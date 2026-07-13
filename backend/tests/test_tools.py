@@ -15,7 +15,6 @@ from app.routers.tools import get_tool, list_tools, run_tool
 from app.schemas.skill_run import SkillRunRequest
 from app.services.permission_service import PermissionService
 
-
 SKILL_RELATIVE_PATH = "skills/installed/simple_calculator_tool"
 CALCULATOR_SKILL_SOURCE = """
 import json

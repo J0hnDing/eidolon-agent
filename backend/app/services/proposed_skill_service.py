@@ -1,22 +1,30 @@
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
-import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import ApprovalRequest, Skill, SkillGenerationRequest, SkillOperationLock, SkillRun, SkillVersion
+from app.models import (
+    AgentRun,
+    ApprovalRequest,
+    Skill,
+    SkillGenerationRequest,
+    SkillOperationLock,
+    SkillRun,
+    SkillSchedule,
+    SkillVersion,
+)
 from app.schemas.common import SkillType
 from app.schemas.proposed_skill import ProposedSkillValidationRead, SkillFileRead
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
-
 
 SAFE_SKILL_NAME = re.compile(r"^[a-zA-Z0-9_-]+$")
 READABLE_FILES = ("manifest.json", "README.md", "SKILL.md", "skill.py", "tests/test_skill.py")
@@ -180,7 +188,6 @@ class ProposedSkillService:
         skill_dir = self.skill_dir_for_record(skill)
         try:
             manifest = validate_manifest_file(skill_dir / "manifest.json")
-            self._validate_declared_files(skill_dir, manifest)
         except (ManifestValidationError, ProposedSkillError, FileNotFoundError) as exc:
             return ProposedSkillValidationRead(
                 ok=False,
@@ -312,6 +319,7 @@ class ProposedSkillService:
             if skill_dir.exists():
                 shutil.rmtree(skill_dir)
             self.db.query(ApprovalRequest).filter(ApprovalRequest.skill_id == skill.id).delete(synchronize_session=False)
+            self.db.query(SkillSchedule).filter(SkillSchedule.skill_id == skill.id).delete(synchronize_session=False)
             self.db.query(SkillRun).filter(SkillRun.skill_id == skill.id).delete(synchronize_session=False)
             self.db.query(SkillVersion).filter(SkillVersion.skill_id == skill.id).delete(synchronize_session=False)
             self.db.query(SkillOperationLock).filter(SkillOperationLock.skill_id == skill.id).delete(
@@ -322,6 +330,8 @@ class ProposedSkillService:
             ).all()
             for generation_request in generation_requests:
                 generation_request.proposed_skill_id = None
+            for agent_run in self.db.scalars(select(AgentRun).where(AgentRun.skill_id == skill.id)).all():
+                agent_run.skill_id = None
             self.db.delete(skill)
             self.db.commit()
         except Exception:
@@ -522,33 +532,6 @@ class ProposedSkillService:
             "    assert output['summary'] == 'The input was not valid JSON.'\n"
             "    assert output['warnings']\n"
         )
-
-    def _validate_declared_files(
-        self,
-        skill_dir: Path,
-        manifest: object,
-    ) -> None:
-        skill_type = getattr(manifest, "skill_type")
-        instructions_path = getattr(manifest, "instructions_path")
-        if skill_type == "instruction":
-            if instructions_path is None:
-                raise ProposedSkillError(f"{skill_type} skills require instructions_path")
-            self._resolve_declared_file(skill_dir, instructions_path)
-        elif instructions_path is not None:
-            self._resolve_declared_file(skill_dir, instructions_path)
-        if skill_type == "automation":
-            entrypoint = getattr(manifest, "entrypoint")
-            if entrypoint is None:
-                raise ProposedSkillError(f"{skill_type} skills require entrypoint")
-            self._resolve_declared_file(skill_dir, entrypoint)
-
-    def _resolve_declared_file(self, skill_dir: Path, relative_path: str) -> Path:
-        path = (skill_dir / relative_path).resolve()
-        if not path.is_relative_to(skill_dir.resolve()):
-            raise ProposedSkillError("Declared skill files must stay inside the skill folder")
-        if not path.is_file():
-            raise ProposedSkillError(f"Declared file is missing: {relative_path}")
-        return path
 
     def _run_optional_instruction_tests(
         self,

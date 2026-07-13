@@ -14,8 +14,8 @@ from app.models import Skill, SkillRun
 from app.routers import skills as skills_router
 from app.routers.skills import call_codex_for_skill
 from app.schemas.skill_codex import SkillCodexRequest
-from app.services.permission_service import PermissionService
 from app.services.codex_service import CodexService
+from app.services.permission_service import PermissionService
 
 
 @pytest.fixture

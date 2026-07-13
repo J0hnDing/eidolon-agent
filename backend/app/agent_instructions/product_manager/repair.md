@@ -26,6 +26,6 @@ Required JSON shape:
       }
     ]
   },
-  "decision": "repair_current_milestone|ask_user_for_input|stop_unsupported",
+  "decision": "repair_current_task|ask_user_for_input|stop_unsupported",
   "summary": "short user-facing summary"
 }

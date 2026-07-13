@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session
 
 from app.models import Skill
 
-
 DEMO_SKILL_NAME = "personal_news_digest"
 DEMO_SKILL_DESCRIPTION = "Offline demo digest that ranks local sample articles by user topics."
 DEMO_SKILL_DIR = Path("skills/installed/personal_news_digest")

@@ -27,7 +27,6 @@ from app.services.permission_service import PermissionService
 from app.services.project_plausibility import (
     FakeProjectPlausibilityAdapter,
     ProjectPlausibilityResult,
-    ProjectPlausibilityService,
     RealProjectPlausibilityAdapter,
     default_project_plausibility_adapter,
 )

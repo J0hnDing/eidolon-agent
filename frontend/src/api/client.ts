@@ -13,11 +13,11 @@ export type MemoryCategory =
 export type RiskLevel = "low" | "medium" | "high" | "blocked";
 export type SkillType = "instruction" | "automation";
 export type InterfaceType = "chat" | "tool" | "hidden";
-export type SkillStatus = "building" | "proposed" | "installed" | "disabled" | "failed" | "deleted";
+export type SkillStatus = "building" | "proposed" | "installed" | "failed" | "deleted";
 export type ChatMode = "chat" | "project";
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired" | "superseded";
 export type PermissionRequestScope = "build_time" | "runtime";
-export type ScheduleStatus = "pending" | "active" | "paused" | "denied" | "deleted";
+export type ScheduleStatus = "pending" | "active" | "paused" | "denied";
 export type ScheduleType = "daily" | "weekly" | "interval";
 export type AgentRunStatus =
   | "pending"
@@ -74,7 +74,7 @@ export interface Skill {
   updated_at: string;
 }
 
-export type SkillInput = Omit<Skill, "id" | "created_at" | "updated_at" | "active_version_id">;
+export type SkillUpdateInput = Pick<Skill, "enabled">;
 
 export type SkillRunStatus = "pending" | "running" | "succeeded" | "failed" | "blocked";
 
@@ -149,7 +149,6 @@ export interface AgentRunStep {
   agent_run_id: number;
   step_name: string;
   task_node_id: string | null;
-  milestone_name: string | null;
   status: AgentRunStepStatus;
   input_json: Record<string, unknown> | null;
   output_json: Record<string, unknown> | null;
@@ -192,7 +191,6 @@ export interface AgentRun {
   user_request: string;
   summary: string | null;
   current_task_id: string | null;
-  current_milestone: string | null;
   current_step: string | null;
   failure_count_json: Record<string, number>;
   build_workflow: string | null;
@@ -255,7 +253,10 @@ export interface CodexInvocationChoice {
   reasoning_effort: string | null;
 }
 
+export type ProjectBuildWorkflowOverride = "single_codex" | "task_dag";
+
 export interface CodexRoutingSettingsPayload {
+  project_build_workflow_override: ProjectBuildWorkflowOverride | null;
   chat: CodexInvocationChoice;
   product_manager: {
     default: CodexInvocationChoice;
@@ -392,6 +393,7 @@ export interface ApprovalRequest {
   id: number;
   skill_id: number | null;
   generation_request_id: number | null;
+  schedule_id: number | null;
   request_scope: PermissionRequestScope;
   request_type: string;
   risk_level: RiskLevel;
@@ -569,7 +571,6 @@ export const api = {
     request<CodexModelCatalog>(`/settings/codex-models?refresh=${refresh}`),
   listAgentRuns: () => request<AgentRun[]>("/agent-runs"),
   getAgentRun: (id: number) => request<AgentRunDetail>(`/agent-runs/${id}`),
-  listAgentRunSteps: (id: number) => request<AgentRunStep[]>(`/agent-runs/${id}/steps`),
   cancelAgentRun: (id: number) =>
     request<AgentRun>(`/agent-runs/${id}/cancel`, {
       method: "POST",
@@ -580,10 +581,6 @@ export const api = {
     }),
   resumeAgentRun: (id: number) =>
     request<AgentRun>(`/agent-runs/${id}/resume`, {
-      method: "POST",
-    }),
-  retryCurrentMilestone: (id: number) =>
-    request<AgentRun>(`/agent-runs/${id}/retry-current-milestone`, {
       method: "POST",
     }),
   retryCurrentTask: (id: number) =>
@@ -602,16 +599,6 @@ export const api = {
       body: JSON.stringify({ input }),
     }),
   listProposedSkills: () => request<Skill[]>("/skills/proposed"),
-  createSampleProposedSkill: (payload: { name: string; skill_type: SkillType }) =>
-    request<Skill>("/skills/proposed/sample", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
-  createSkill: (payload: SkillInput) =>
-    request<Skill>("/skills", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
   getRunnerStatus: () => request<RunnerStatus>("/skills/runner-status"),
   getSkill: (id: number) => request<Skill>(`/skills/${id}`),
   listSkillVersions: (id: number) => request<SkillVersion[]>(`/skills/${id}/versions`),
@@ -700,7 +687,7 @@ export const api = {
       body: JSON.stringify({ input }),
     }),
   listSkillRuns: (id: number) => request<SkillRun[]>(`/skills/${id}/runs`),
-  updateSkill: (id: number, payload: Partial<SkillInput>) =>
+  updateSkill: (id: number, payload: Partial<SkillUpdateInput>) =>
     request<Skill>(`/skills/${id}`, {
       method: "PATCH",
       body: JSON.stringify(payload),

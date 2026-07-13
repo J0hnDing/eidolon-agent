@@ -5,9 +5,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import SkillGenerationRequest
-from app.services.direct_chat_service import DirectChatService
 from app.services.agent_workflow_service import AgentWorkflowService
 from app.services.codex_service import CodexService
+from app.services.direct_chat_service import DirectChatService
 from app.services.permission_service import PermissionService
 from app.services.skill_plan_service import SkillPlanService
 
@@ -15,7 +15,6 @@ from app.services.skill_plan_service import SkillPlanService
 @dataclass
 class ChatOrchestrator:
     db: Session
-    plausibility_service: object | None = None
     direct_chat_service: DirectChatService | None = None
     skill_plan_service: SkillPlanService | None = None
     codex_service: CodexService | None = None
@@ -74,7 +73,6 @@ class ChatOrchestrator:
     def create_generation_request(
         self,
         message: str,
-        plausibility_review: object | None = None,
         conversation_id: str | None = None,
     ) -> SkillGenerationRequest:
         plan = self.skill_plan_service.build_generation_plan(message)

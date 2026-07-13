@@ -8,7 +8,6 @@ from app.services.agent_workflow_service import AgentWorkflowError
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.skill_plan_service import SkillPlanError
 
-
 router = APIRouter(tags=["chat"])
 
 

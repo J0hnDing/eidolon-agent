@@ -127,7 +127,7 @@ def test_finished_step_persists_invocations_and_rolls_up_tokens(db_session) -> N
     db_session.commit()
     codex = CodexService(db_session, adapter=FakeCodexAdapter())
     workflow = AgentWorkflowService(db_session, codex_service=codex)
-    step = workflow._start_step(run, "builder", milestone_name="core_skill")
+    step = workflow._start_step(run, "builder", task_node_id="core_skill")
     codex._pending_invocations.append(
         {
             "action": "builder_build_task",

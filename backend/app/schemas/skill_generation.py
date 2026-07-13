@@ -3,11 +3,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from app.schemas.common import GenerationRequestStatus, RiskLevel, SkillType
-from app.schemas.skill import SkillRead
-from app.schemas.proposed_skill import ProposedSkillValidationRead
-from app.schemas.approval_request import ApprovalRequestRead
 from app.schemas.agent_run import AgentRunRead
+from app.schemas.approval_request import ApprovalRequestRead
+from app.schemas.common import GenerationRequestStatus, RiskLevel, SkillType
+from app.schemas.proposed_skill import ProposedSkillValidationRead
+from app.schemas.skill import SkillRead
 
 
 class ChatRequest(BaseModel):

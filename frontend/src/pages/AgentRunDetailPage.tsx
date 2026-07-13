@@ -200,7 +200,7 @@ export default function AgentRunDetailPage() {
           </div>
           <div>
             <dt>Current Task Node</dt>
-            <dd>{run.current_task_id ?? run.current_milestone ?? "none"}</dd>
+            <dd>{run.current_task_id ?? "none"}</dd>
           </div>
           <div>
             <dt>Skill</dt>
@@ -293,7 +293,7 @@ export default function AgentRunDetailPage() {
       <section className="detail-panel">
         <h2>Task DAG</h2>
         {taskDag ? (
-          <TaskDagView dag={taskDag} statuses={taskStatuses} currentTaskId={run.current_task_id ?? run.current_milestone} steps={run.steps} />
+          <TaskDagView dag={taskDag} statuses={taskStatuses} currentTaskId={run.current_task_id} steps={run.steps} />
         ) : (
           <p className="muted">No task DAG recorded yet.</p>
         )}
@@ -315,7 +315,7 @@ export default function AgentRunDetailPage() {
                 <div>
                   <h3>{step.step_name}</h3>
                   <p className="muted">
-                    {(step.task_node_id ?? step.milestone_name) ? `${step.task_node_id ?? step.milestone_name} / ` : ""}
+                    {step.task_node_id ? `${step.task_node_id} / ` : ""}
                     {formatTimestamp(step.started_at, "not started")} - {formatTimestamp(step.ended_at, "not ended")}
                   </p>
                 </div>
@@ -468,7 +468,7 @@ function TaskDagView({
         {nodes.map((node) => {
           const status = statuses[node.id] ?? (node.id === currentTaskId ? "active" : "pending");
           const tokens = steps
-            .filter((step) => (step.task_node_id ?? step.milestone_name) === node.id)
+            .filter((step) => step.task_node_id === node.id)
             .reduce((total, step) => total + step.total_tokens, 0);
           return (
             <article className="task-dag-node" key={node.id}>

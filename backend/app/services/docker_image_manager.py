@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TRUSTED_DOCKERFILE = PROJECT_ROOT / "backend" / "docker" / "skill-runner.Dockerfile"
 TRUSTED_BUILD_CONTEXT = PROJECT_ROOT

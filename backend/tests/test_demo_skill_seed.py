@@ -39,7 +39,7 @@ def test_register_personal_news_digest_updates_existing_skill(db_session: Sessio
         name="personal_news_digest",
         description="Old",
         skill_type="instruction",
-        status="disabled",
+        status="installed",
         risk_level="low",
         manifest_path="old/manifest.json",
         instructions_path="old.md",

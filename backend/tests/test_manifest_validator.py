@@ -1,7 +1,7 @@
-import pytest
-
 import json
 from pathlib import Path
+
+import pytest
 
 from app.services.manifest_validator import (
     ManifestValidationError,
@@ -255,6 +255,34 @@ def test_automation_manifest_file_requires_tests_directory(tmp_path: Path) -> No
     (skill_dir / "manifest.json").write_text(json.dumps(valid_manifest()), encoding="utf-8")
 
     with pytest.raises(ManifestValidationError, match="automation skills require tests"):
+        validate_manifest_file(skill_dir / "manifest.json")
+
+
+def test_manifest_file_requires_declared_entrypoint(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "automation_without_entrypoint_file"
+    skill_dir.mkdir()
+    (skill_dir / "tests").mkdir()
+    (skill_dir / "manifest.json").write_text(json.dumps(valid_manifest()), encoding="utf-8")
+
+    with pytest.raises(ManifestValidationError, match="Declared file is missing: skill.py"):
+        validate_manifest_file(skill_dir / "manifest.json")
+
+
+def test_manifest_file_requires_declared_instructions_file(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "instruction_without_file"
+    skill_dir.mkdir()
+    data = valid_manifest()
+    data.update(
+        {
+            "skill_type": "instruction",
+            "entrypoint": None,
+            "instructions_path": "SKILL.md",
+            "permissions": no_permissions(),
+        }
+    )
+    (skill_dir / "manifest.json").write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ManifestValidationError, match="Declared file is missing: SKILL.md"):
         validate_manifest_file(skill_dir / "manifest.json")
 
 

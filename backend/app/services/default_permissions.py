@@ -3,7 +3,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_PERMISSION_POLICY_FILE = Path(__file__).resolve().parents[1] / "static" / "default_permissions.json"
 
 

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -245,7 +245,7 @@ class AgentRun(Base):
     )
     user_request: Mapped[str] = mapped_column(Text, nullable=False)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    current_milestone: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    current_task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     current_step: Mapped[str | None] = mapped_column(String(64), nullable=True)
     failure_count_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     build_workflow: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -274,18 +274,13 @@ class AgentRun(Base):
         cascade="all, delete-orphan",
     )
 
-    @property
-    def current_task_id(self) -> str | None:
-        return self.current_milestone
-
-
 class AgentRunStep(Base):
     __tablename__ = "agent_run_steps"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     agent_run_id: Mapped[int] = mapped_column(ForeignKey("agent_runs.id"), nullable=False, index=True)
     step_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    milestone_name: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    task_node_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
     input_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     output_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
@@ -301,7 +296,3 @@ class AgentRunStep(Base):
     total_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     agent_run: Mapped["AgentRun"] = relationship(back_populates="steps")
-
-    @property
-    def task_node_id(self) -> str | None:
-        return self.milestone_name

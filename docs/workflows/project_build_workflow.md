@@ -56,6 +56,8 @@ Output for PM does NOT mean agent writes files directly, instead backend receive
    - Must not include task nodes, dependencies between tasks, or test files.
    - Must not approve permissions.
 
+The Codex Settings page can persist a backend-owned workflow override. `Automatic` keeps the ProductManager choice. `Simple` forces `single_codex`, and `Task DAG` forces `task_dag` for every new Project build, regardless of the top-level value returned by ProductManager. The agent run stores the effective workflow and the ProductManager step records whether selection came from ProductManager or the settings override.
+
 4. Backend deterministic permission review
    - Inputs: `blueprint.json`, `permissions.json`.
    - Output: if approval required, build-time approval request in chat, otherwise proceed automatically.
@@ -78,7 +80,7 @@ Output for PM does NOT mean agent writes files directly, instead backend receive
 
 The `single_codex` workflow package contains `workflow.py`, `prompts.py`, and `instructions/run.md`. It makes one writable Codex invocation in the controlled proposed-skill folder. Its prompt contains the approved blueprint, effective permissions, and fixed workflow instructions. Within that invocation Codex plans internally, creates the complete skill package, writes tests for automation skills, runs a focused test command, and fixes failures before returning.
 
-The backend still seeds and finalizes `manifest.json`, records invocation usage, creates runtime permission review from the actual manifest, and leaves the skill proposed. It does not currently run an independent final proposed-package validation after the single Codex invocation. Adding that validation is tracked in `docs/todo.md`.
+The backend still seeds and finalizes `manifest.json`, records invocation usage, centrally validates the manifest schema, required test directory, and declared files, creates runtime permission review from the actual manifest, and leaves the skill proposed. It does not currently run an independent authoritative test command or acceptance-criteria validation after the single Codex invocation. Adding those checks is tracked in `docs/todo.md`.
 
 The workflow can pause before its single invocation when Codex allowance is below the configured reserve. It cannot pause partway through the invocation; a retry starts a new Codex invocation against a freshly prepared proposed-skill workspace.
 
@@ -140,7 +142,7 @@ After approval and DAG validation, the backend builds the DAG data structure and
 
 1. Before the first Builder step, the backend derives a skeleton `manifest.json` in the proposed skill folder from `blueprint.json` and `permissions.json`.
 2. A node is ready when all `depends_on` nodes are `done`.
-3. The backend may run multiple ready nodes in parallel when their `file_write_claims` do not overlap.
+3. The backend groups non-overlapping `parallel_safe` ready nodes into one admitted batch. The current shared-workspace executor processes that batch serially; true concurrent execution remains deferred.
 4. Each active node creates one Builder step.
 5. After each Builder step, the backend deterministically fills missing manifest fields from the approved blueprint and permission plan when possible.
 6. If `requires_tests` is true, the Builder step is followed immediately by a Tester step for the same node.
@@ -304,7 +306,7 @@ For `task_dag`, after all task nodes and the final end-to-end test pass:
 5. Chat tells the user only that the project is finished and surfaces any runtime permission approval needed before install.
 6. The skill remains proposed until the user explicitly installs or rejects it.
 
-For `single_codex`, successful Codex completion and runtime permission review mark the agent run succeeded and leave the skill proposed. Independent backend package/test validation is intentionally deferred to the TODO described above.
+For `single_codex`, successful Codex completion, central manifest/declared-file validation, and runtime permission review mark the agent run succeeded and leave the skill proposed. Independent authoritative backend test execution and acceptance-criteria validation are intentionally deferred to the TODO described above.
 
 ## Project Repair Flow
 

@@ -1,13 +1,6 @@
-from typing import Literal
-
 from pydantic import BaseModel, Field
 
 from app.schemas.common import SkillType
-
-
-class ProposedSampleCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=128)
-    skill_type: SkillType
 
 
 class SkillFileRead(BaseModel):
@@ -25,6 +18,3 @@ class ProposedSkillValidationRead(BaseModel):
     stderr: str = ""
     error_message: str | None = None
     warnings: list[str] = Field(default_factory=list)
-
-
-ValidationStage = Literal["manifest", "files", "tests", "install"]

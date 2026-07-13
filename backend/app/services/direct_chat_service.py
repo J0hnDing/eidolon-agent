@@ -6,8 +6,8 @@ from typing import Protocol
 
 from sqlalchemy.orm import Session
 
-from app.services.codex_cli_service import codex_cli_service, should_use_real_codex
 from app.schemas.codex_routing import ResolvedInvocationSettings
+from app.services.codex_cli_service import codex_cli_service, should_use_real_codex
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
 
 

@@ -15,9 +15,8 @@ from app.models import ApprovalRequest, Skill, SkillVersion
 from app.schemas.proposed_skill import ProposedSkillValidationRead
 from app.services.manifest_validator import validate_manifest_file
 from app.services.permission_service import PermissionService
-from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
+from app.services.proposed_skill_service import ProposedSkillService
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
-
 
 MAX_SKILL_VERSIONS = 3
 READABLE_COMPARE_FILES = ("manifest.json", "README.md", "SKILL.md", "skill.py", "tests/test_skill.py")
@@ -82,7 +81,7 @@ class SkillVersionService:
         active = self.ensure_active_version(skill)
         existing_versions = self._non_discarded_versions(skill)
         if len(existing_versions) >= MAX_SKILL_VERSIONS:
-            raise SkillVersionError("Maximum 3 versions reached. Discard or archive a version before creating another.")
+            raise SkillVersionError("Maximum 3 non-discarded versions reached. Delete an inactive version before creating another.")
 
         next_number = self._next_version_number(existing_versions)
         version_name = f"v{next_number}"

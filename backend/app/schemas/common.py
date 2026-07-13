@@ -1,6 +1,5 @@
 from typing import Literal
 
-
 MemoryCategory = Literal[
     "interests",
     "goals",
@@ -14,20 +13,12 @@ MemoryCategory = Literal[
 RiskLevel = Literal["low", "medium", "high", "blocked"]
 SkillType = Literal["instruction", "automation"]
 InterfaceType = Literal["chat", "tool", "hidden"]
-SkillStatus = Literal["building", "proposed", "installed", "disabled", "failed", "deleted"]
+SkillStatus = Literal["building", "proposed", "installed", "failed", "deleted"]
 SkillRunStatus = Literal["pending", "running", "succeeded", "failed", "blocked"]
 ApprovalStatus = Literal["pending", "approved", "denied", "expired", "superseded"]
 PermissionRequestScope = Literal["build_time", "runtime"]
-ScheduleStatus = Literal["pending", "active", "paused", "denied", "deleted"]
+ScheduleStatus = Literal["pending", "active", "paused", "denied"]
 ScheduleType = Literal["daily", "weekly", "interval"]
-ChatIntent = Literal[
-    "DIRECT_ANSWER",
-    "CREATE_SKILL_PROPOSAL",
-    "USE_EXISTING_SKILL",
-    "MODIFY_EXISTING_SKILL",
-    "APPROVAL_REQUIRED",
-    "UNSAFE_OR_UNSUPPORTED",
-]
 GenerationRequestStatus = Literal[
     "planned",
     "needs_input",
@@ -52,17 +43,4 @@ AgentRunStepStatus = Literal[
     "skipped",
     "cancelled",
     "blocked",
-]
-ProductManagerDecision = Literal[
-    "request_permission",
-    "proceed_to_blueprint",
-    "run_ready_task_nodes",
-    "build_next_milestone",
-    "run_tests",
-    "repair_current_milestone",
-    "ask_user_for_input",
-    "finish_ready_for_review",
-    "stop_failed",
-    "stop_inplausible",
-    "stop_unsupported",
 ]

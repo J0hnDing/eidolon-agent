@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 
 from app.models import Skill, SkillOperationLock, SkillRun
 
-
 RUN_OPERATIONS = {"run"}
 MUTATING_OPERATIONS = {"install", "update", "repair", "delete"}
 ACTIVE_RUN_STATUSES = {"pending", "running"}

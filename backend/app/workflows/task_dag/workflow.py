@@ -87,12 +87,12 @@ class TaskDagBuildWorkflow:
                 service._write_task_statuses(agent_run, task_statuses)
             task_statuses[task_id] = "building"
             service._write_task_statuses(agent_run, task_statuses)
-            agent_run.current_milestone = task_id
+            agent_run.current_task_id = task_id
             service.db.commit()
             builder_step = service._start_step(
                 agent_run,
                 "builder",
-                milestone_name=task_id,
+                task_node_id=task_id,
                 input_json={"mode": "build_task", **service._builder_task_context(agent_run, task_node, skill)},
                 logs=f"Builder is implementing task node {task_id} only.",
             )
@@ -102,12 +102,12 @@ class TaskDagBuildWorkflow:
                         generation_request,
                         builder_writes_tests=False,
                         initial_skill_status="building",
-                        milestone_context=service._builder_task_context(agent_run, task_node, skill),
+                        task_context=service._builder_task_context(agent_run, task_node, skill),
                         create_runtime_request=False,
                     )
                     builder_output = {"skill_id": skill.id, "skill_name": skill.name, "mode": "build_task"}
                 else:
-                    result, validation = service.codex_service.build_skill_milestone(
+                    result, validation = service.codex_service.build_skill_task(
                         skill,
                         generation_request,
                         service._builder_task_context(agent_run, task_node, skill),
@@ -137,7 +137,7 @@ class TaskDagBuildWorkflow:
             if task_node.get("requires_tests"):
                 task_statuses[task_id] = "testing"
                 service._write_task_statuses(agent_run, task_statuses)
-                validation = service._test_milestone(agent_run, skill, validation, milestone_name=task_id)
+                validation = service._test_task_node(agent_run, skill, validation, task_node_id=task_id)
             else:
                 validation = service.proposed_service.validate_proposed_skill(skill)
             while not validation.ok:
@@ -147,7 +147,7 @@ class TaskDagBuildWorkflow:
                 if service._failure_count(agent_run, task_id) > MAX_TASK_FAILURES:
                     service._product_manager_stop_failed(agent_run, skill, validation)
                     return agent_run, skill, validation
-                validation = service._repair_current_milestone(agent_run, skill, validation, milestone_name=task_id)
+                validation = service._repair_current_task(agent_run, skill, validation, task_node_id=task_id)
 
             task_statuses[task_id] = "done"
             service._write_task_statuses(agent_run, task_statuses)
@@ -214,11 +214,11 @@ class TaskDagBuildWorkflow:
             builder_step = service._start_step(
                 agent_run,
                 "builder",
-                milestone_name=task_id,
+                task_node_id=task_id,
                 input_json={"mode": "build_task", **service._builder_task_context(agent_run, task_node, skill)},
                 logs=f"Builder is resuming task node {task_id} only.",
             )
-            result, validation = service.codex_service.build_skill_milestone(
+            result, validation = service.codex_service.build_skill_task(
                 skill,
                 generation_request,
                 service._builder_task_context(agent_run, task_node, skill),
@@ -241,7 +241,7 @@ class TaskDagBuildWorkflow:
             if task_node.get("requires_tests"):
                 task_statuses[task_id] = "testing"
                 service._write_task_statuses(agent_run, task_statuses)
-                validation = service._test_milestone(agent_run, skill, validation, milestone_name=task_id)
+                validation = service._test_task_node(agent_run, skill, validation, task_node_id=task_id)
             else:
                 validation = service.proposed_service.validate_proposed_skill(skill)
             while not validation.ok:
@@ -251,7 +251,7 @@ class TaskDagBuildWorkflow:
                 if service._failure_count(agent_run, task_id) > MAX_TASK_FAILURES:
                     service._product_manager_stop_failed(agent_run, skill, validation)
                     return agent_run
-                validation = service._repair_current_milestone(agent_run, skill, validation, milestone_name=task_id)
+                validation = service._repair_current_task(agent_run, skill, validation, task_node_id=task_id)
             task_statuses[task_id] = "done"
             service._write_task_statuses(agent_run, task_statuses)
             if task_id in batch_ends and service._pause_if_usage_below_reserve(agent_run):
@@ -289,17 +289,17 @@ class TaskDagBuildWorkflow:
         resumable_artifact = (
             service._artifact_dir(agent_run)
             / "tasks"
-            / str(agent_run.current_milestone or "")
+            / str(agent_run.current_task_id or "")
             / "interface_artifact.json"
         )
-        if skill is None or not agent_run.current_milestone or not resumable_artifact.is_file():
+        if skill is None or not agent_run.current_task_id or not resumable_artifact.is_file():
             generation_request.status = "approved"
             generation_request.error_message = None
             service.db.commit()
             service.continue_build_after_approval(generation_request)
             service.db.refresh(agent_run)
             return agent_run
-        task_id = agent_run.current_milestone
+        task_id = agent_run.current_task_id
         generation_request.status = "approved"
         generation_request.error_message = None
         skill.status = "building"
@@ -313,13 +313,13 @@ class TaskDagBuildWorkflow:
         if service._failure_count(agent_run, task_id) > MAX_TASK_FAILURES:
             service._product_manager_stop_failed(agent_run, skill, validation)
             return agent_run
-        validation = service._repair_current_milestone(agent_run, skill, validation, milestone_name=task_id)
+        validation = service._repair_current_task(agent_run, skill, validation, task_node_id=task_id)
         while not validation.ok:
             service._increment_failure_count(agent_run, task_id)
             if service._failure_count(agent_run, task_id) > MAX_TASK_FAILURES:
                 service._product_manager_stop_failed(agent_run, skill, validation)
                 return agent_run
-            validation = service._repair_current_milestone(agent_run, skill, validation, milestone_name=task_id)
+            validation = service._repair_current_task(agent_run, skill, validation, task_node_id=task_id)
 
         task_statuses = dict((agent_run.final_summary_json or {}).get("task_statuses", {}))
         task_statuses[task_id] = "done"

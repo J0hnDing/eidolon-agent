@@ -7,8 +7,7 @@ from typing import Any
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import select
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
@@ -343,6 +342,30 @@ def test_delete_removes_installed_skill_record_and_folder(
 
     assert db_session.get(Skill, installed_id) is None
     assert not service.installed_dir("delete_installed").exists()
+
+
+def test_delete_removes_skill_schedules(
+    db_session: Session,
+    service: ProposedSkillService,
+) -> None:
+    skill = service.create_sample("delete_scheduled", "automation")
+    installed = service.install_proposed_skill(skill)
+    schedule = SkillSchedule(
+        skill_id=installed.id,
+        name="Delete with skill",
+        status="pending",
+        schedule_type="daily",
+        schedule_json={"type": "daily", "time": "09:00", "timezone": "America/Toronto", "input": {}},
+        input_json={},
+        timezone="America/Toronto",
+    )
+    db_session.add(schedule)
+    db_session.commit()
+    schedule_id = schedule.id
+
+    service.delete_skill(installed)
+
+    assert db_session.get(SkillSchedule, schedule_id) is None
 
 
 def test_sync_installed_from_filesystem_registers_hidden_installed_skill(

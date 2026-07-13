@@ -1262,7 +1262,7 @@ function ScheduleList({
             {schedule.status === "paused" && (
               <button type="button" onClick={() => onResume(schedule.id)} disabled={isWorking}>Resume</button>
             )}
-            <button type="button" className="secondary" onClick={() => onRunNow(schedule.id)} disabled={isWorking || schedule.status === "paused"}>
+            <button type="button" className="secondary" onClick={() => onRunNow(schedule.id)} disabled={isWorking || schedule.status !== "active"}>
               Run Now
             </button>
             <button type="button" className="danger" onClick={() => onDelete(schedule.id)} disabled={isWorking}>Delete</button>

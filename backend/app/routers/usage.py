@@ -2,9 +2,8 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
-from app.services.codex_usage_service import codex_usage_service
 from app.services.codex_cli_service import codex_cli_service
-
+from app.services.codex_usage_service import codex_usage_service
 
 router = APIRouter(prefix="/usage", tags=["usage"])
 

@@ -2,50 +2,40 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import ApprovalRequest, Skill, SkillRun, SkillVersion
-from app.schemas.approval_request import ApprovalRequestRead
+from app.models import ApprovalRequest, Skill, SkillRun, SkillSchedule, SkillVersion
+from app.routers.schedules import create_manifest_schedule, create_skill_schedule, get_scheduler_service
 from app.schemas.agent_run import AgentRunRead
+from app.schemas.approval_request import ApprovalRequestRead
 from app.schemas.proposed_skill import (
-    ProposedSampleCreate,
     ProposedSkillValidationRead,
     SkillFileRead,
 )
 from app.schemas.runner import RunnerStatusRead
 from app.schemas.schedule import ScheduleCreate, ScheduleWithApproval
-from app.schemas.skill import SkillCreate, SkillRead, SkillUpdate
+from app.schemas.skill import SkillRead, SkillUpdate
 from app.schemas.skill_codex import SkillCodexRequest, SkillCodexResponse
 from app.schemas.skill_run import SkillRunRead, SkillRunRequest
-from app.schemas.skill_version import SkillUpdateResponse, SkillUpdateSuggestion, SkillVersionComparison, SkillVersionRead
-from app.services.permission_service import PermissionError, PermissionService
+from app.schemas.skill_version import (
+    SkillUpdateResponse,
+    SkillUpdateSuggestion,
+    SkillVersionComparison,
+    SkillVersionRead,
+)
 from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
 from app.services.codex_service import CodexGenerationError, CodexService
 from app.services.manifest_validator import validate_manifest_file
+from app.services.permission_service import PermissionError, PermissionService
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
+from app.services.scheduler_service import SchedulerService
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
 from app.services.skill_runner import get_runner_status, get_skill_runner
 from app.services.skill_version_service import SkillVersionError, SkillVersionService
-from app.routers.schedules import create_manifest_schedule, create_skill_schedule
-
 
 router = APIRouter(prefix="/skills", tags=["skills"])
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-
-
-@router.post("", response_model=SkillRead, status_code=status.HTTP_201_CREATED)
-def create_skill(payload: SkillCreate, db: Session = Depends(get_db)) -> Skill:
-    skill = Skill(**payload.model_dump())
-    db.add(skill)
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Skill name already exists") from exc
-    db.refresh(skill)
-    return skill
 
 
 @router.get("", response_model=list[SkillRead])
@@ -58,17 +48,6 @@ def list_skills(db: Session = Depends(get_db)) -> list[Skill]:
             .order_by(Skill.created_at.desc())
         ).all()
     )
-
-
-@router.post("/proposed/sample", response_model=SkillRead, status_code=status.HTTP_201_CREATED)
-def create_sample_proposed_skill(
-    payload: ProposedSampleCreate,
-    db: Session = Depends(get_db),
-) -> Skill:
-    try:
-        return ProposedSkillService(db).create_sample(payload.name, payload.skill_type)
-    except ProposedSkillError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/proposed", response_model=list[SkillRead])
@@ -270,17 +249,17 @@ def compare_skill_version(skill_id: int, version_id: int, db: Session = Depends(
 def create_schedule_for_skill(
     skill_id: int,
     payload: ScheduleCreate,
-    db: Session = Depends(get_db),
+    scheduler_service: SchedulerService = Depends(get_scheduler_service),
 ) -> ScheduleWithApproval:
-    return create_skill_schedule(skill_id, payload, db)
+    return create_skill_schedule(skill_id, payload, scheduler_service)
 
 
 @router.post("/{skill_id}/schedules/from-manifest", response_model=ScheduleWithApproval, status_code=status.HTTP_201_CREATED)
 def create_manifest_schedule_for_skill(
     skill_id: int,
-    db: Session = Depends(get_db),
+    scheduler_service: SchedulerService = Depends(get_scheduler_service),
 ) -> ScheduleWithApproval:
-    return create_manifest_schedule(skill_id, db)
+    return create_manifest_schedule(skill_id, scheduler_service)
 
 
 @router.post("/{skill_id}/repair", response_model=AgentRunRead, status_code=status.HTTP_201_CREATED)
@@ -384,14 +363,11 @@ def update_skill(skill_id: int, payload: SkillUpdate, db: Session = Depends(get_
     if skill is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
 
-    for key, value in payload.model_dump(exclude_unset=True).items():
-        setattr(skill, key, value)
-
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Skill name already exists") from exc
+    if skill.status != "installed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only installed skills can be enabled or disabled")
+    if payload.enabled is not None:
+        skill.enabled = payload.enabled
+    db.commit()
     db.refresh(skill)
     return skill
 
@@ -417,12 +393,21 @@ def resolve_skill_dir(skill: Skill) -> Path:
 
 
 @router.delete("/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_skill(skill_id: int, db: Session = Depends(get_db)) -> Response:
+def delete_skill(
+    skill_id: int,
+    db: Session = Depends(get_db),
+    scheduler_service: SchedulerService = Depends(get_scheduler_service),
+) -> Response:
     skill = db.get(Skill, skill_id)
     if skill is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
 
     try:
+        schedule_ids = list(
+            db.scalars(select(SkillSchedule.id).where(SkillSchedule.skill_id == skill.id)).all()
+        )
+        for schedule_id in schedule_ids:
+            scheduler_service.remove_job(schedule_id)
         ProposedSkillService(db).delete_skill(skill)
     except ProposedSkillError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

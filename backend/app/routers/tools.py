@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import ApprovalRequest, Skill, SkillRun
+from app.models import ApprovalRequest, Skill
 from app.routers.skills import resolve_skill_dir
 from app.schemas.skill_run import SkillRunRequest
 from app.schemas.tool import ToolRead, ToolRunResponse
@@ -13,7 +13,6 @@ from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
 from app.services.skill_runner import get_skill_runner
-
 
 router = APIRouter(prefix="/tools", tags=["tools"])
 PROJECT_ROOT = Path(__file__).resolve().parents[3]

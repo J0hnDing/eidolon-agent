@@ -6,7 +6,7 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 
 - `/chat`: normal chat and project-mode entry point, plus conversation history cleanup by frontend conversation id.
 - `/memory-facts`: explicit user memory CRUD.
-- `/skills`: skill CRUD, proposed skill workflow, runs, validation, install/reject, files, versions, schedules, repair, runtime permissions, and backend-mediated skill Codex calls.
+- `/skills`: skill listing/detail, installed-skill enable/disable, proposed skill workflow, runs, validation, install/reject/delete, files, versions, schedules, repair, runtime permissions, and backend-mediated skill Codex calls. Bare skill-record creation is not exposed; user-facing creation must use the controlled proposed-skill workflow.
 - `/tools`: installed enabled tool skills and tool runs.
 - `/schedules`: schedule list/detail/approve/deny/pause/resume/delete/run-now.
 - `/permission-requests`: permission request list/detail/approve/deny.
@@ -15,7 +15,7 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 - `/usage/codex`: live 5-hour and weekly Codex account allowance from the persistent local App Server.
 - `/usage/codex/cli`: effective Codex CLI executable, version, source, candidates, and compatibility status.
 - `/settings/codex-models`: live account-aware model catalog and supported reasoning efforts from Codex App Server.
-- `/settings/codex-routing`: read or replace the validated single-user invocation routing settings.
+- `/settings/codex-routing`: read or replace the validated single-user invocation routing settings and optional Project build workflow override.
 
 ## Service Responsibilities
 
@@ -29,7 +29,7 @@ Use Codex adapters when available to classify project plausibility and generate 
 
 ### AgentWorkflowService
 
-Coordinates the common bounded lifecycle for build, repair, and update. For new builds, it owns ProductManager intent refinement, plausibility review, blueprint and permission artifacts, and deterministic build-time approval. It stores ProductManager's top-level `build_workflow` string separately from `blueprint.json`, then dispatches post-approval execution through the project-build workflow registry.
+Coordinates the common bounded lifecycle for build, repair, and update. For new builds, it owns ProductManager intent refinement, plausibility review, blueprint and permission artifacts, and deterministic build-time approval. It stores the effective top-level `build_workflow` string separately from `blueprint.json`, then dispatches post-approval execution through the project-build workflow registry. When a single-user workflow override is configured, it replaces ProductManager's choice before validation and persistence.
 
 ### Project Build Workflows
 
@@ -63,7 +63,7 @@ Deterministically reviews permissions and dependencies. It creates approval requ
 
 ### ProposedSkillService
 
-Creates sample proposed skills, validates proposed skill packages, reads safe files, installs proposed skills, rejects/deletes proposed skills, handles approved build-time dependencies, and registers pending schedules declared in installed manifests.
+Validates proposed skill packages, reads safe files, installs proposed skills, rejects or deletes proposed skills, handles approved build-time dependencies, and registers pending schedules declared in installed manifests. It does not expose a sample-skill or bare-record creation path.
 
 ### SkillRunner
 
@@ -107,6 +107,7 @@ Creates version records, copies active versions into draft folders, validates ve
 ### SchedulerService
 
 Uses APScheduler to register approved schedules and trigger scheduled skill runs through the same safety path as manual runs. Manifest-declared schedules are registered as pending records when the proposed skill is installed; approval is still required before activation.
+Schedule-mutating API routes use the FastAPI lifespan's shared APScheduler instance with their request-scoped database session, so approval, pause, resume, and deletion update the live scheduler immediately. Run-now is limited to active approved schedules.
 
 ### SkillOperationGuard
 

@@ -1,10 +1,8 @@
 from collections.abc import Generator
 from pathlib import Path
 
-from sqlalchemy import create_engine
-from sqlalchemy import inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
-
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data"
@@ -16,6 +14,15 @@ engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False},
 )
+
+
+@event.listens_for(engine, "connect")
+def enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
@@ -52,6 +59,9 @@ def ensure_local_schema() -> None:
                 connection.execute(text("ALTER TABLE skills ADD COLUMN tool_ui_schema_json JSON"))
             if "active_version_id" not in columns:
                 connection.execute(text("ALTER TABLE skills ADD COLUMN active_version_id INTEGER"))
+            connection.execute(text("UPDATE skills SET status = 'installed', enabled = 0 WHERE status = 'disabled'"))
+        if "skill_schedules" in table_names:
+            connection.execute(text("DELETE FROM skill_schedules WHERE status = 'deleted'"))
         if "skill_versions" in table_names:
             columns = {column["name"] for column in inspector.get_columns("skill_versions")}
             if "status" not in columns:
@@ -88,8 +98,15 @@ def ensure_local_schema() -> None:
                     connection.execute(text(f"ALTER TABLE skill_runs ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"))
         if "agent_runs" in table_names:
             columns = {column["name"] for column in inspector.get_columns("agent_runs")}
-            if "current_milestone" not in columns:
-                connection.execute(text("ALTER TABLE agent_runs ADD COLUMN current_milestone VARCHAR(128)"))
+            if "current_task_id" not in columns:
+                connection.execute(text("ALTER TABLE agent_runs ADD COLUMN current_task_id VARCHAR(128)"))
+            if "current_milestone" in columns:
+                connection.execute(
+                    text(
+                        "UPDATE agent_runs SET current_task_id = current_milestone "
+                        "WHERE current_task_id IS NULL AND current_milestone IS NOT NULL"
+                    )
+                )
             if "failure_count_json" not in columns:
                 connection.execute(text("ALTER TABLE agent_runs ADD COLUMN failure_count_json JSON NOT NULL DEFAULT '{}'"))
             if "build_workflow" not in columns:
@@ -115,8 +132,15 @@ def ensure_local_schema() -> None:
             connection.execute(text("UPDATE agent_runs SET current_step = 'builder' WHERE current_step = 'repairer'"))
         if "agent_run_steps" in table_names:
             columns = {column["name"] for column in inspector.get_columns("agent_run_steps")}
-            if "milestone_name" not in columns:
-                connection.execute(text("ALTER TABLE agent_run_steps ADD COLUMN milestone_name VARCHAR(128)"))
+            if "task_node_id" not in columns:
+                connection.execute(text("ALTER TABLE agent_run_steps ADD COLUMN task_node_id VARCHAR(128)"))
+            if "milestone_name" in columns:
+                connection.execute(
+                    text(
+                        "UPDATE agent_run_steps SET task_node_id = milestone_name "
+                        "WHERE task_node_id IS NULL AND milestone_name IS NOT NULL"
+                    )
+                )
             if "codex_invocations_json" not in columns:
                 connection.execute(text("ALTER TABLE agent_run_steps ADD COLUMN codex_invocations_json JSON NOT NULL DEFAULT '[]'"))
             for column in (

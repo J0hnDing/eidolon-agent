@@ -16,6 +16,8 @@ Schedules can be created from the UI or from manifest-declared schedule intent. 
 
 Manifest-declared schedules are created as pending schedule records, even if an automation skill is installed disabled by default. The schedule does not become active until approved, and scheduled execution still requires the skill to be enabled.
 
+Schedule records use four statuses: `pending`, `active`, `paused`, and `denied`. Deleting a schedule unregisters it and removes its database row rather than assigning a `deleted` status.
+
 ## Approval
 
 Schedule approval shows:

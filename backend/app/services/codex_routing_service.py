@@ -58,6 +58,10 @@ class CodexRoutingService:
     def read_model_catalog(self, *, refresh: bool = False) -> dict[str, Any]:
         return self.catalog_service.read_model_catalog(refresh=refresh)
 
+    def project_build_workflow_override(self) -> str | None:
+        row = self.db.get(CodexRoutingSettings, 1)
+        return self._payload(row.settings_json if row is not None else {}).project_build_workflow_override
+
     def resolve(
         self,
         *,
@@ -151,7 +155,7 @@ class CodexRoutingService:
         routes = [
             ("chat", "chat", None),
             *[("product_manager", action, None) for action in _PM_ACTIONS],
-            *[("builder", "skill_build_milestone", difficulty) for difficulty in ("easy", "medium", "hard")],
+            *[("builder", "skill_build_task", difficulty) for difficulty in ("easy", "medium", "hard")],
             ("builder", "skill_repair", None),
             ("builder", "skill_update", None),
             ("tester", "tester_write_tests", None),
@@ -182,7 +186,7 @@ class CodexRoutingService:
             source = f"product_manager.{route}" if route and (specific.model or specific.reasoning_effort) else "product_manager.default"
             return payload.product_manager.default, specific, source
         if role == "builder":
-            route = difficulty if action in {"skill_build_milestone", "skill_generation"} and difficulty else None
+            route = difficulty if action in {"skill_build_task", "skill_generation"} and difficulty else None
             if action in {"skill_repair", "skill_update_repair"}:
                 route = "repair"
             elif action == "skill_update":

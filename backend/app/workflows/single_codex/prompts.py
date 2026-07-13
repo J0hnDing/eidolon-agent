@@ -3,7 +3,6 @@ from pathlib import Path
 
 from app.workflows.instructions import load_instruction
 
-
 _PACKAGE_DIR = Path(__file__).resolve().parent
 
 

@@ -114,7 +114,7 @@ def test_max_three_versions_enforced(tmp_path: Path, db_session: Session) -> Non
     service.create_draft_from_active(skill, "v2")
     service.create_draft_from_active(skill, "v3")
 
-    with pytest.raises(SkillVersionError, match="Maximum 3 versions"):
+    with pytest.raises(SkillVersionError, match="Maximum 3 non-discarded versions"):
         service.create_draft_from_active(skill, "v4")
 
 

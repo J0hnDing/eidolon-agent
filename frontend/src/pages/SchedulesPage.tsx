@@ -109,7 +109,7 @@ export default function SchedulesPage() {
                           Resume
                         </button>
                       )}
-                      <button type="button" className="secondary" onClick={() => act(() => api.runScheduleNow(schedule.id))} disabled={isWorking || schedule.status === "paused"}>
+                      <button type="button" className="secondary" onClick={() => act(() => api.runScheduleNow(schedule.id))} disabled={isWorking || schedule.status !== "active"}>
                         Run Now
                       </button>
                       <button type="button" className="danger" onClick={() => act(() => api.deleteSchedule(schedule.id))} disabled={isWorking}>

@@ -37,6 +37,14 @@ def validate_manifest_file(path: Path) -> SkillManifest:
 def validate_manifest_package(skill_dir: Path, manifest: SkillManifest) -> None:
     if manifest.skill_type == "automation" and not (skill_dir / "tests").is_dir():
         raise ManifestValidationError("automation skills require tests/")
+    for relative_path in (manifest.entrypoint, manifest.instructions_path):
+        if relative_path is None:
+            continue
+        resolved = (skill_dir / relative_path).resolve()
+        if not resolved.is_relative_to(skill_dir.resolve()):
+            raise ManifestValidationError("Declared skill files must stay inside the skill folder")
+        if not resolved.is_file():
+            raise ManifestValidationError(f"Declared file is missing: {relative_path}")
 
 
 __all__ = [

@@ -15,7 +15,6 @@ from app.schemas.manifest import SkillManifest
 from app.services.docker_image_manager import DockerImageBuildError, DockerImageManager
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
 
-
 DEFAULT_TIMEOUT_SECONDS = 120
 DEFAULT_DOCKER_IMAGE = "personal-agent-skill-runner:latest"
 DEFAULT_DOCKER_MEMORY = "256m"

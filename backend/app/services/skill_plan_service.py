@@ -9,12 +9,11 @@ from typing import Any, Protocol
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from sqlalchemy.orm import Session
 
+from app.schemas.codex_routing import ResolvedInvocationSettings
 from app.schemas.common import InterfaceType, RiskLevel, SkillType
 from app.schemas.manifest import ManifestPermissions
-from app.schemas.codex_routing import ResolvedInvocationSettings
 from app.services.codex_cli_service import codex_cli_service, should_use_real_codex
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
-
 
 SAFE_SKILL_NAME = re.compile(r"^[a-zA-Z0-9_-]+$")
 

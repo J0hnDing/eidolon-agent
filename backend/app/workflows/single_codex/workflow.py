@@ -30,13 +30,13 @@ class SingleCodexBuildWorkflow:
 
         agent_run.status = "running"
         agent_run.current_step = "builder"
-        agent_run.current_milestone = "single_codex"
+        agent_run.current_task_id = "single_codex"
         agent_run.summary = "Codex is planning, building, and testing the skill in one invocation."
         service.db.commit()
         step = service._start_step(
             agent_run,
             "builder",
-            milestone_name="single_codex",
+            task_node_id="single_codex",
             input_json={
                 "action": "single_codex_build",
                 "blueprint_json": agent_run.blueprint_json,
@@ -72,7 +72,7 @@ class SingleCodexBuildWorkflow:
             agent_run,
             skill,
             None,
-            milestone_name="single_codex",
+            task_node_id="single_codex",
             pm_summary=summary,
         )
         agent_run.skill_id = skill.id
@@ -83,7 +83,7 @@ class SingleCodexBuildWorkflow:
             "skill_id": skill.id,
             "skill_name": skill.name,
             "runtime_permission_status": runtime_status,
-            "backend_final_validation": "pending_todo",
+            "backend_final_validation": "manifest_and_declared_files_only",
             "user_summary": summary,
         }
         agent_run.completed_at = datetime.now(UTC)

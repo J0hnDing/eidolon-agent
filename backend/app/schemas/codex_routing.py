@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -47,6 +48,7 @@ class TesterRouting(BaseModel):
 class CodexRoutingSettingsPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    project_build_workflow_override: Literal["single_codex", "task_dag"] | None = None
     chat: InvocationChoice = Field(default_factory=InvocationChoice)
     product_manager: ProductManagerRouting = Field(default_factory=ProductManagerRouting)
     builder: BuilderRouting = Field(default_factory=BuilderRouting)

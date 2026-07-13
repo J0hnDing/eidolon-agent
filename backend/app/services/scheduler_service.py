@@ -168,6 +168,9 @@ class SchedulerService:
 
     def delete_schedule(self, schedule: SkillSchedule) -> None:
         self.remove_job(schedule.id)
+        self.db.query(ApprovalRequest).filter(ApprovalRequest.schedule_id == schedule.id).delete(
+            synchronize_session=False
+        )
         self.db.delete(schedule)
         self.db.commit()
 

@@ -10,8 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Skill, SkillGenerationRequest, SkillRun, SkillVersion
-from app.schemas.skill_codex import SkillCodexRequest
 from app.schemas.codex_routing import ResolvedInvocationSettings
+from app.schemas.skill_codex import SkillCodexRequest
 from app.services.backend_api_catalog import backend_api_index
 from app.services.codex_cli_service import codex_cli_service, should_use_real_codex
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
@@ -24,8 +24,14 @@ from app.workflows.common.prompts import build_product_manager_prompt as build_c
 from app.workflows.single_codex.prompts import build_prompt as build_single_codex_prompt
 from app.workflows.task_dag.prompts import (
     build_builder_prompt as build_task_dag_builder_prompt,
+)
+from app.workflows.task_dag.prompts import (
     build_product_manager_prompt as build_task_dag_product_manager_prompt,
+)
+from app.workflows.task_dag.prompts import (
     build_repair_prompt as build_task_dag_repair_prompt,
+)
+from app.workflows.task_dag.prompts import (
     build_tester_prompt as build_task_dag_tester_prompt,
 )
 
@@ -417,7 +423,7 @@ class FakeCodexAdapter:
         return subprocess.CompletedProcess(args=["fake-codex"], returncode=0, stdout="fake generation complete", stderr="")
 
     def _write_interface_artifact(self, output_dir: Path, plan: dict) -> None:
-        context = plan.get("current_milestone")
+        context = plan.get("task_context")
         if not isinstance(context, dict):
             return
         task_node = context.get("task_node")
@@ -924,7 +930,7 @@ class CodexService:
 
     @staticmethod
     def _plan_difficulty(plan: dict[str, object]) -> str | None:
-        for value in (plan.get("task_node"), plan.get("current_milestone")):
+        for value in (plan.get("task_node"), plan.get("task_context")):
             if not isinstance(value, dict):
                 continue
             task_node = value.get("task_node") if isinstance(value.get("task_node"), dict) else value
@@ -1194,7 +1200,7 @@ class CodexService:
         *,
         builder_writes_tests: bool = True,
         initial_skill_status: str = "proposed",
-        milestone_context: dict[str, object] | None = None,
+        task_context: dict[str, object] | None = None,
         create_runtime_request: bool = True,
     ) -> tuple[Skill, object]:
         if generation_request.status != "approved":
@@ -1214,14 +1220,14 @@ class CodexService:
         if proposed_dir.exists():
             shutil.rmtree(proposed_dir)
         proposed_dir.mkdir(parents=True)
-        self._write_manifest_skeleton(proposed_dir, plan, milestone_context)
+        self._write_manifest_skeleton(proposed_dir, plan, task_context)
 
         generation_request.status = "generating"
         self.db.commit()
 
         plan_for_adapter = {**plan, "builder_writes_tests": builder_writes_tests}
-        if milestone_context is not None:
-            plan_for_adapter["current_milestone"] = milestone_context
+        if task_context is not None:
+            plan_for_adapter["task_context"] = task_context
         prompt = self.build_prompt(plan_for_adapter, proposed_dir, builder_writes_tests=builder_writes_tests)
         generate = self._generate_writable_skill if builder_writes_tests else self._generate_builder_with_test_guard
         result = generate(prompt, proposed_dir, plan_for_adapter)
@@ -1230,7 +1236,7 @@ class CodexService:
             generation_request.error_message = result.stderr or "Codex generation failed"
             self.db.commit()
             raise CodexGenerationError(generation_request.error_message)
-        self.finalize_manifest(proposed_dir, plan, milestone_context)
+        self.finalize_manifest(proposed_dir, plan, task_context)
 
         skill = self.create_or_update_skill_record(plan, proposed_dir, status=initial_skill_status)
         validation = self.proposed_service.validate_proposed_skill(skill)
@@ -1304,26 +1310,26 @@ class CodexService:
         self.db.refresh(generation_request)
         return skill, result
 
-    def build_skill_milestone(
+    def build_skill_task(
         self,
         skill: Skill,
         generation_request: SkillGenerationRequest,
-        milestone_context: dict[str, object],
+        task_context: dict[str, object],
     ) -> tuple[subprocess.CompletedProcess[str], object]:
         skill_dir = self.proposed_service.skill_dir_for_record(skill)
         self._assert_proposed_skill_workspace(skill_dir)
         plan = {
             **generation_request.plan_json,
-            "codex_task": "skill_build_milestone",
+            "codex_task": "skill_build_task",
             "builder_writes_tests": False,
-            "current_milestone": milestone_context,
+            "task_context": task_context,
             "existing_files": self._read_files_from_dir(skill_dir),
         }
         prompt = self.build_prompt(plan, skill_dir, builder_writes_tests=False)
         result = self._generate_builder_with_test_guard(prompt, skill_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex milestone build failed")
-        self.finalize_manifest(skill_dir, generation_request.plan_json, milestone_context)
+        self.finalize_manifest(skill_dir, generation_request.plan_json, task_context)
         validation = self.proposed_service.validate_proposed_skill(skill)
         if validation.manifest_valid:
             self.update_skill_record_from_manifest(skill, skill_dir)
@@ -1342,7 +1348,7 @@ class CodexService:
             **self.plan_from_skill(skill, failure_context),
             "codex_task": "skill_repair",
             "builder_writes_tests": False,
-            "current_milestone": failure_context,
+            "task_context": failure_context,
         }
         prompt = (
             build_task_dag_repair_prompt(skill, skill_dir, failure_context)
@@ -1554,13 +1560,13 @@ class CodexService:
         self,
         proposed_dir: Path,
         plan: dict,
-        milestone_context: dict[str, object] | None,
+        task_context: dict[str, object] | None,
     ) -> None:
         manifest_path = proposed_dir / "manifest.json"
         if manifest_path.exists():
             return
         manifest_path.write_text(
-            json.dumps(self._manifest_skeleton(plan, milestone_context), indent=2),
+            json.dumps(self._manifest_skeleton(plan, task_context), indent=2),
             encoding="utf-8",
         )
 
@@ -1568,10 +1574,10 @@ class CodexService:
         self,
         skill_dir: Path,
         plan: dict,
-        milestone_context: dict[str, object] | None = None,
+        task_context: dict[str, object] | None = None,
     ) -> None:
         manifest_path = skill_dir / "manifest.json"
-        skeleton = self._manifest_skeleton(plan, milestone_context)
+        skeleton = self._manifest_skeleton(plan, task_context)
         if not manifest_path.exists():
             manifest = skeleton
         else:
@@ -1596,10 +1602,10 @@ class CodexService:
     def _manifest_skeleton(
         self,
         plan: dict,
-        milestone_context: dict[str, object] | None,
+        task_context: dict[str, object] | None,
     ) -> dict[str, object]:
-        blueprint = self._context_blueprint(plan, milestone_context)
-        permission_plan = self._context_permission_plan(plan, milestone_context)
+        blueprint = self._context_blueprint(plan, task_context)
+        permission_plan = self._context_permission_plan(plan, task_context)
         runtime = permission_plan.get("runtime") if isinstance(permission_plan.get("runtime"), dict) else {}
         permissions = self._runtime_permissions(runtime)
         sanitized_permission_plan = self._sanitize_permission_plan(
@@ -1713,10 +1719,10 @@ class CodexService:
     def _context_blueprint(
         self,
         plan: dict,
-        milestone_context: dict[str, object] | None,
+        task_context: dict[str, object] | None,
     ) -> dict[str, object]:
-        if milestone_context and isinstance(milestone_context.get("blueprint_json"), dict):
-            return dict(milestone_context["blueprint_json"])  # type: ignore[arg-type]
+        if task_context and isinstance(task_context.get("blueprint_json"), dict):
+            return dict(task_context["blueprint_json"])  # type: ignore[arg-type]
         return {
             "goal": plan.get("goal"),
             "skill_name": plan.get("skill_name"),
@@ -1727,10 +1733,10 @@ class CodexService:
     def _context_permission_plan(
         self,
         plan: dict,
-        milestone_context: dict[str, object] | None,
+        task_context: dict[str, object] | None,
     ) -> dict[str, object]:
-        if milestone_context and isinstance(milestone_context.get("permission_plan"), dict):
-            return dict(milestone_context["permission_plan"])  # type: ignore[arg-type]
+        if task_context and isinstance(task_context.get("permission_plan"), dict):
+            return dict(task_context["permission_plan"])  # type: ignore[arg-type]
         return self._sanitize_permission_plan(None, plan)
 
     def build_prompt(self, plan: dict, output_dir: Path, *, builder_writes_tests: bool = True) -> str:
@@ -1973,7 +1979,7 @@ Payload:
             "request_permission",
             "build_next_milestone",
             "run_tests",
-            "repair_current_milestone",
+            "repair_current_task",
             "ask_user_for_input",
             "finish_ready_for_review",
             "stop_failed",

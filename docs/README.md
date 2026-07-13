@@ -1,6 +1,6 @@
 # Documentation Index
 
-This folder contains the detailed functionality documentation for the local-first personal agent. `AGENTS.md` is intentionally thin and should remain focused on project vision, repository structure, and safety guardrails.
+This folder is the detailed source of truth for current behavior, confirmed future work, and concise implementation history. `AGENTS.md` remains the high-level entry point and safety contract.
 
 ## Start Here
 
@@ -33,7 +33,7 @@ This folder contains the detailed functionality documentation for the local-firs
 - [Scheduling](runtime/scheduling.md)
 - [Tools](runtime/tools.md)
 
-## Integrations and History
+## Integrations, Roadmap, and History
 
 - [Codex CLI integration](integrations/codex_cli.md)
 - [Working history file](working_history.md)
@@ -41,7 +41,8 @@ This folder contains the detailed functionality documentation for the local-firs
 
 ## Documentation Rules
 
-- Put detailed behavior here, not in `AGENTS.md`.
-- Keep `AGENTS.md` as an entry point and safety guardrail file.
-- When changing behavior, update the closest topic file in this folder.
-- If a new subsystem grows large, create a subfolder rather than expanding a single long markdown file.
+- Put current detailed behavior in the closest topic file; do not repeat the same contract across several pages.
+- Keep `AGENTS.md` focused on project-wide guardrails, navigation, TODO rules, and verification requirements.
+- Keep confirmed unfinished work in `todo.md` and completed behavior in `working_history.md`; neither file replaces current-behavior documentation.
+- Update code, tests, and the closest topic document together when behavior changes.
+- Split a growing subsystem into a focused subfolder instead of turning one page into a catch-all.

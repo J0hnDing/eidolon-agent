@@ -12,7 +12,6 @@ from app.schemas.codex_routing import CodexRoutingSettingsPayload, ResolvedInvoc
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
 from app.services.codex_service import RealCodexAdapter
 
-
 CATALOG = {
     "available": True,
     "fetched_at": "2026-07-12T00:00:00+00:00",
@@ -69,8 +68,8 @@ def test_builder_routes_by_task_difficulty_and_inherits_role_defaults(db_session
     service = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
     service.update_settings(payload)
 
-    easy = service.resolve(role="builder", action="skill_build_milestone", difficulty="easy")
-    hard = service.resolve(role="builder", action="skill_build_milestone", difficulty="hard")
+    easy = service.resolve(role="builder", action="skill_build_task", difficulty="easy")
+    hard = service.resolve(role="builder", action="skill_build_task", difficulty="hard")
 
     assert easy.effective_model == "gpt-fast"
     assert easy.effective_reasoning_effort == "low"
@@ -78,6 +77,19 @@ def test_builder_routes_by_task_difficulty_and_inherits_role_defaults(db_session
     assert hard.effective_model == "gpt-smart"
     assert hard.effective_reasoning_effort == "high"
     assert hard.route_source == "builder.hard"
+
+
+def test_project_build_workflow_override_round_trips_and_defaults_to_automatic(db_session: Session) -> None:
+    service = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
+
+    assert service.read_settings().project_build_workflow_override is None
+    assert service.project_build_workflow_override() is None
+
+    payload = CodexRoutingSettingsPayload(project_build_workflow_override="single_codex")
+    saved = service.update_settings(payload)
+
+    assert saved.project_build_workflow_override == "single_codex"
+    assert service.project_build_workflow_override() == "single_codex"
 
 
 def test_product_manager_action_override_is_independent(db_session: Session) -> None:
@@ -127,7 +139,7 @@ def test_real_adapter_applies_effective_model_and_effort_and_records_routing(
     monkeypatch.setattr("app.services.codex_service.subprocess.run", fake_run)
     settings = ResolvedInvocationSettings(
         role="builder",
-        action="skill_build_milestone",
+        action="skill_build_task",
         difficulty="hard",
         route_source="builder.hard",
         requested_model="gpt-smart",

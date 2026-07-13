@@ -2,7 +2,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-
 RiskLevel = Literal["low", "medium", "high"]
 SkillType = Literal["instruction", "automation"]
 InterfaceType = Literal["chat", "tool", "hidden"]

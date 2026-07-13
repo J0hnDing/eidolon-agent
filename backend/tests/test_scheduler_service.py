@@ -2,14 +2,18 @@ import json
 from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import ApprovalRequest, Skill, SkillSchedule
+from app.models import Skill, SkillSchedule
+from app.routers.permission_requests import approve_permission_request
+from app.routers.schedules import run_schedule_now
 from app.schemas.schedule import ScheduleCreate, SchedulePayload
 from app.services.permission_service import PermissionService
 from app.services.scheduler_service import ScheduleError, SchedulerService
@@ -232,6 +236,36 @@ def test_approved_schedule_registers_job_and_denied_does_not(tmp_path: Path, db_
 
     assert denied.status == "denied"
     assert scheduler.job_id(denied.id) not in fake_scheduler.jobs
+
+
+def test_global_approval_endpoint_activates_schedule_on_shared_scheduler(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill = create_skill(db_session, tmp_path)
+    fake_scheduler = FakeScheduler()
+    scheduler = service(db_session, tmp_path, fake_scheduler)
+    schedule, approval = scheduler.create_schedule(skill, daily_payload())
+    request_context = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(scheduler_service=scheduler))
+    )
+
+    updated = approve_permission_request(approval.id, request_context, db=db_session)
+
+    assert updated.status == "approved"
+    assert schedule.status == "active"
+    assert scheduler.job_id(schedule.id) in fake_scheduler.jobs
+
+
+def test_run_now_rejects_schedule_that_is_not_active(tmp_path: Path, db_session: Session) -> None:
+    skill = create_skill(db_session, tmp_path)
+    scheduler = service(db_session, tmp_path)
+    schedule, _ = scheduler.create_schedule(skill, daily_payload())
+
+    with pytest.raises(HTTPException, match="Only active approved schedules can run") as exc_info:
+        run_schedule_now(schedule.id, db_session, scheduler)
+
+    assert exc_info.value.status_code == 409
 
 
 def test_pause_resume_and_delete_schedule_jobs(tmp_path: Path, db_session: Session) -> None:

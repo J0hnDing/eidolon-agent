@@ -67,7 +67,7 @@ export default function UsageSettingsPage() {
       const { updated_at: _updatedAt, ...payload } = routing;
       const next = await api.updateCodexRoutingSettings(payload as CodexRoutingSettingsPayload);
       setRouting(next);
-      setSaved("Model routing settings saved.");
+      setSaved("Codex settings saved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save model routing settings");
     } finally {
@@ -91,6 +91,38 @@ export default function UsageSettingsPage() {
       {saved && <p className="success-text">{saved}</p>}
       {catalog && !catalog.available && (
         <p className="error-text">Model choices are unavailable: {catalog.error ?? "Codex model catalog could not be loaded."}</p>
+      )}
+      {routing && (
+        <section className="detail-panel stack">
+          <div>
+            <h2>Project build workflow</h2>
+            <p className="muted">Override ProductManager workflow selection for every new Project build.</p>
+          </div>
+          <label>
+            Workflow selection
+            <select
+              value={routing.project_build_workflow_override ?? ""}
+              onChange={(event) => {
+                setSaved(null);
+                setRouting({
+                  ...routing,
+                  project_build_workflow_override:
+                    (event.target.value || null) as CodexRoutingSettingsPayload["project_build_workflow_override"],
+                });
+              }}
+            >
+              <option value="">Automatic (ProductManager chooses)</option>
+              <option value="single_codex">Simple (single Codex)</option>
+              <option value="task_dag">Task DAG</option>
+            </select>
+          </label>
+          <p className="muted">
+            Simple and Task DAG are hard overrides. Automatic preserves ProductManager selection.
+          </p>
+          <div className="button-row">
+            <button type="button" onClick={() => void saveRouting()} disabled={loading}>Save Codex settings</button>
+          </div>
+        </section>
       )}
       {routing && catalog?.available && (
         <>
@@ -144,9 +176,6 @@ export default function UsageSettingsPage() {
             <RoutingRow label="Final end-to-end" choice={routing.tester.final_e2e} fallback={routing.tester.default} models={catalog.models} onChange={(choice) => updateChoice("tester", "final_e2e", choice)} />
             <RoutingRow label="Update tests" choice={routing.tester.update} fallback={routing.tester.default} models={catalog.models} onChange={(choice) => updateChoice("tester", "update", choice)} />
           </section>
-          <div className="button-row">
-            <button type="button" onClick={() => void saveRouting()} disabled={loading}>Save model routing</button>
-          </div>
         </>
       )}
       {cliStatus && (

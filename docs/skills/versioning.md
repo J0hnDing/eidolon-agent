@@ -22,7 +22,7 @@ Updates copy the active version into a new draft/proposed version folder. Builde
 
 ## Maximum Versions
 
-The local MVP allows at most three non-discarded versions per skill. The app must block new draft creation when the cap is reached and ask the user to discard/archive a version first. It must not silently delete versions.
+The local MVP allows at most three non-discarded versions per skill. Archived versions still count toward this cap because they remain switchable. The app must block new draft creation when the cap is reached and ask the user to delete an inactive version first. It must not silently delete versions.
 
 ## Permission Reapproval
 

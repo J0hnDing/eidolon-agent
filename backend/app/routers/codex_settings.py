@@ -9,7 +9,6 @@ from app.schemas.codex_routing import (
 )
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
 
-
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 
