@@ -37,10 +37,10 @@ class TaskDagBuildWorkflow:
             api_index,
             prompt_builder=build_product_manager_prompt,
         )
-        service._validate_task_dag(task_dag, agent_run.blueprint_json or {})
-        task_dag_path = service._write_json_artifact(agent_run, "task_dag.json", task_dag)
-        task_paths = service._write_task_artifacts(agent_run, task_dag)
-        task_ids = [node["id"] for node in service._task_nodes_from_dag(task_dag)]
+        service.task_dags.validate(task_dag, agent_run.blueprint_json or {})
+        task_dag_path = service.artifacts.write_json(agent_run, "task_dag.json", task_dag)
+        task_paths = service.artifacts.write_task_artifacts(agent_run, task_dag)
+        task_ids = [node["id"] for node in service.task_dags.nodes(task_dag)]
         agent_run.failure_count_json = {task_id: 0 for task_id in task_ids}
         agent_run.status = "running"
         agent_run.current_step = "product_manager"
@@ -74,7 +74,7 @@ class TaskDagBuildWorkflow:
         skill: Skill | None = None
         validation: Any = None
         task_statuses = {task_id: "pending" for task_id in task_ids}
-        task_batches = service._task_execution_batches(task_dag)
+        task_batches = service.task_dags.execution_batches(task_dag)
         batch_starts = {batch[0]["id"]: batch for batch in task_batches}
         batch_ends = {batch[-1]["id"] for batch in task_batches}
         for task_node in [node for batch in task_batches for node in batch]:
@@ -84,9 +84,9 @@ class TaskDagBuildWorkflow:
                     return agent_run, skill, validation
                 for ready_node in batch_starts[task_id]:
                     task_statuses[ready_node["id"]] = "ready"
-                service._write_task_statuses(agent_run, task_statuses)
+                service.artifacts.write_task_statuses(agent_run, task_statuses)
             task_statuses[task_id] = "building"
-            service._write_task_statuses(agent_run, task_statuses)
+            service.artifacts.write_task_statuses(agent_run, task_statuses)
             agent_run.current_task_id = task_id
             service.db.commit()
             builder_step = service._start_step(
@@ -124,7 +124,11 @@ class TaskDagBuildWorkflow:
                     service._builder_user_action_required(agent_run, builder_step, str(exc), task_id)
                     raise ProjectBuildWorkflowError(str(exc)) from exc
                 raise
-            interface_artifact_path = service._move_validated_interface_artifact(agent_run, skill, task_node)
+            interface_artifact_path = service.artifacts.move_validated_interface_artifact(
+                agent_run,
+                service.proposed_service.skill_dir_for_record(skill),
+                task_node,
+            )
             builder_output["interface_artifact_path"] = interface_artifact_path
             service._finish_step(
                 agent_run,
@@ -136,13 +140,13 @@ class TaskDagBuildWorkflow:
 
             if task_node.get("requires_tests"):
                 task_statuses[task_id] = "testing"
-                service._write_task_statuses(agent_run, task_statuses)
+                service.artifacts.write_task_statuses(agent_run, task_statuses)
                 validation = service._test_task_node(agent_run, skill, validation, task_node_id=task_id)
             else:
                 validation = service.proposed_service.validate_proposed_skill(skill)
             while not validation.ok:
                 task_statuses[task_id] = "fixing"
-                service._write_task_statuses(agent_run, task_statuses)
+                service.artifacts.write_task_statuses(agent_run, task_statuses)
                 service._increment_failure_count(agent_run, task_id)
                 if service._failure_count(agent_run, task_id) > MAX_TASK_FAILURES:
                     service._product_manager_stop_failed(agent_run, skill, validation)
@@ -150,17 +154,18 @@ class TaskDagBuildWorkflow:
                 validation = service._repair_current_task(agent_run, skill, validation, task_node_id=task_id)
 
             task_statuses[task_id] = "done"
-            service._write_task_statuses(agent_run, task_statuses)
+            service.artifacts.write_task_statuses(agent_run, task_statuses)
             if task_id in batch_ends and service._pause_if_usage_below_reserve(agent_run):
                 return agent_run, skill, validation
 
         if skill is None:
             raise ProjectBuildWorkflowError("No task DAG nodes were available")
-        validation = service._test_final_e2e(agent_run, skill, validation)
+        service._write_final_e2e_test(agent_run, skill)
+        validation = service._run_final_validation(agent_run, skill)
         while not validation.ok:
             service._increment_failure_count(agent_run, FINAL_E2E_FAILURE_KEY)
             if service._failure_count(agent_run, FINAL_E2E_FAILURE_KEY) > MAX_TASK_FAILURES:
-                service._product_manager_stop_failed(agent_run, skill, validation)
+                service._stop_final_validation_failed(agent_run, skill, validation)
                 return agent_run, skill, validation
             validation = service._repair_final_e2e(agent_run, skill, validation)
         pm_runtime_summary = service._pm_runtime_summary(skill, validation)
@@ -187,8 +192,8 @@ class TaskDagBuildWorkflow:
         skill = service.db.get(Skill, generation_request.proposed_skill_id)
         if skill is None:
             raise ProjectBuildWorkflowError("Paused build's proposed skill no longer exists")
-        task_dag = service._read_json_artifact(agent_run, "task_dag.json")
-        if not service._task_nodes_from_dag(task_dag):
+        task_dag = service.artifacts.read_json(agent_run, "task_dag.json")
+        if not service.task_dags.nodes(task_dag):
             raise ProjectBuildWorkflowError("Paused build task DAG is unavailable")
         task_statuses = dict((agent_run.final_summary_json or {}).get("task_statuses", {}))
         agent_run.status = "running"
@@ -198,7 +203,7 @@ class TaskDagBuildWorkflow:
 
         validation: Any = service.proposed_service.validate_proposed_skill(skill)
         completed_task_ids = {task_id for task_id, status in task_statuses.items() if status == "done"}
-        task_batches = service._task_execution_batches(task_dag, completed_task_ids=completed_task_ids)
+        task_batches = service.task_dags.execution_batches(task_dag, completed_task_ids=completed_task_ids)
         batch_starts = {batch[0]["id"]: batch for batch in task_batches}
         batch_ends = {batch[-1]["id"] for batch in task_batches}
         for task_node in [node for batch in task_batches for node in batch]:
@@ -208,9 +213,9 @@ class TaskDagBuildWorkflow:
                     return agent_run
                 for ready_node in batch_starts[task_id]:
                     task_statuses[ready_node["id"]] = "ready"
-                service._write_task_statuses(agent_run, task_statuses)
+                service.artifacts.write_task_statuses(agent_run, task_statuses)
             task_statuses[task_id] = "building"
-            service._write_task_statuses(agent_run, task_statuses)
+            service.artifacts.write_task_statuses(agent_run, task_statuses)
             builder_step = service._start_step(
                 agent_run,
                 "builder",
@@ -223,7 +228,11 @@ class TaskDagBuildWorkflow:
                 generation_request,
                 service._builder_task_context(agent_run, task_node, skill),
             )
-            interface_artifact_path = service._move_validated_interface_artifact(agent_run, skill, task_node)
+            interface_artifact_path = service.artifacts.move_validated_interface_artifact(
+                agent_run,
+                service.proposed_service.skill_dir_for_record(skill),
+                task_node,
+            )
             service._finish_step(
                 agent_run,
                 builder_step,
@@ -240,28 +249,29 @@ class TaskDagBuildWorkflow:
             )
             if task_node.get("requires_tests"):
                 task_statuses[task_id] = "testing"
-                service._write_task_statuses(agent_run, task_statuses)
+                service.artifacts.write_task_statuses(agent_run, task_statuses)
                 validation = service._test_task_node(agent_run, skill, validation, task_node_id=task_id)
             else:
                 validation = service.proposed_service.validate_proposed_skill(skill)
             while not validation.ok:
                 task_statuses[task_id] = "fixing"
-                service._write_task_statuses(agent_run, task_statuses)
+                service.artifacts.write_task_statuses(agent_run, task_statuses)
                 service._increment_failure_count(agent_run, task_id)
                 if service._failure_count(agent_run, task_id) > MAX_TASK_FAILURES:
                     service._product_manager_stop_failed(agent_run, skill, validation)
                     return agent_run
                 validation = service._repair_current_task(agent_run, skill, validation, task_node_id=task_id)
             task_statuses[task_id] = "done"
-            service._write_task_statuses(agent_run, task_statuses)
+            service.artifacts.write_task_statuses(agent_run, task_statuses)
             if task_id in batch_ends and service._pause_if_usage_below_reserve(agent_run):
                 return agent_run
 
-        validation = service._test_final_e2e(agent_run, skill, validation)
+        service._write_final_e2e_test(agent_run, skill)
+        validation = service._run_final_validation(agent_run, skill)
         while not validation.ok:
             service._increment_failure_count(agent_run, FINAL_E2E_FAILURE_KEY)
             if service._failure_count(agent_run, FINAL_E2E_FAILURE_KEY) > MAX_TASK_FAILURES:
-                service._product_manager_stop_failed(agent_run, skill, validation)
+                service._stop_final_validation_failed(agent_run, skill, validation)
                 return agent_run
             validation = service._repair_final_e2e(agent_run, skill, validation)
         pm_runtime_summary = service._pm_runtime_summary(skill, validation)
@@ -287,7 +297,7 @@ class TaskDagBuildWorkflow:
         if generation_request is None:
             raise ProjectBuildWorkflowError("Generation request no longer exists")
         resumable_artifact = (
-            service._artifact_dir(agent_run)
+            service.artifacts.directory(agent_run)
             / "tasks"
             / str(agent_run.current_task_id or "")
             / "interface_artifact.json"
@@ -323,5 +333,5 @@ class TaskDagBuildWorkflow:
 
         task_statuses = dict((agent_run.final_summary_json or {}).get("task_statuses", {}))
         task_statuses[task_id] = "done"
-        service._write_task_statuses(agent_run, task_statuses)
+        service.artifacts.write_task_statuses(agent_run, task_statuses)
         return self.resume(service, agent_run)

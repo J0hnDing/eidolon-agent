@@ -14,7 +14,7 @@ from app.models import Skill, SkillRun
 from app.routers import skills as skills_router
 from app.routers.skills import call_codex_for_skill
 from app.schemas.skill_codex import SkillCodexRequest
-from app.services.codex_service import CodexService
+from app.services.codex_service import CodexGenerationError, CodexService
 from app.services.permission_service import PermissionService
 
 
@@ -150,6 +150,16 @@ class UsageCodexAdapter:
         return result
 
 
+class FailingCodexAdapter:
+    def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=["failing-codex"],
+            returncode=1,
+            stdout="",
+            stderr="request context omitted\nERROR: account quota is exhausted\n",
+        )
+
+
 def test_skill_runtime_codex_tokens_are_added_to_the_active_skill_run(
     tmp_path: Path,
     db_session: Session,
@@ -186,3 +196,39 @@ def test_skill_runtime_codex_tokens_are_added_to_the_active_skill_run(
     assert run.output_tokens == 60
     assert run.reasoning_output_tokens == 20
     assert run.total_tokens == 300
+
+
+def test_failed_skill_runtime_codex_call_is_recorded_on_the_active_run(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill = create_skill(db_session)
+    run = SkillRun(
+        skill_id=skill.id,
+        status="running",
+        input_json={},
+        started_at=datetime.now(UTC),
+    )
+    db_session.add(run)
+    db_session.commit()
+
+    service = CodexService(db_session, adapter=FailingCodexAdapter(), project_root=tmp_path)
+    with pytest.raises(CodexGenerationError, match="account quota is exhausted"):
+        service.skill_runtime_codex_call(
+            skill,
+            SkillCodexRequest(prompt="Fail this call."),
+            internet_access=False,
+        )
+    db_session.refresh(run)
+
+    assert len(run.codex_invocations_json) == 1
+    invocation = run.codex_invocations_json[0]
+    assert invocation["status"] == "failed"
+    assert invocation["exit_code"] == 1
+    assert invocation["error_type"] == "CodexCliExitError"
+    assert invocation["error_message"] == "Codex CLI exited with code 1: ERROR: account quota is exhausted"
+    assert invocation["stderr_tail"].endswith("ERROR: account quota is exhausted\n")
+    assert run.error_message == (
+        "Codex runtime call failed: Codex CLI exited with code 1: ERROR: account quota is exhausted"
+    )
+    assert run.total_tokens == 0

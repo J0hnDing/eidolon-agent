@@ -39,4 +39,4 @@ A scheduled run may execute only if:
 - runtime permissions are supported by the runner;
 - schedule is active and approved.
 
-Scheduled runs are stored in `skill_runs` and update schedule last/next run fields.
+Scheduled runs are stored in `skill_runs` and update schedule last/next run fields. A skill that returns top-level `status: "partial"` or `status: "failed"` records that outcome instead of being marked succeeded merely because its process exited with code zero and emitted valid JSON.

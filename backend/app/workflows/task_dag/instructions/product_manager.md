@@ -45,8 +45,7 @@ For `write_task_dag`, return:
         "interface_artifact_expectations": ["string"],
         "backend_api_ids": []
       }
-    ],
-    "final_e2e_expectations": ["string"]
+    ]
   }
 }
 

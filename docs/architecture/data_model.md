@@ -46,7 +46,7 @@ Stores manual, tool, or scheduled run results:
 - exit code
 - start/end timestamps
 - status and error message
-- ordered runtime Codex invocation records with adapter/model identity and token breakdowns
+- ordered runtime Codex invocation records with success/failure status, adapter/model identity, CLI diagnostics, and token breakdowns
 - aggregate input, cached-input, output, reasoning-output, and total token counts
 
 ### skill_operation_locks
@@ -102,7 +102,7 @@ active, draft, proposed_update, archived, discarded
 Run statuses:
 
 ```text
-pending, running, succeeded, failed, blocked
+pending, running, succeeded, partial, failed, blocked
 ```
 
 Approval statuses:

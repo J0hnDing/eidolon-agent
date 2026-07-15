@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from app.models import Skill, SkillGenerationRequest
@@ -21,7 +20,7 @@ class SingleCodexBuildWorkflow:
         generation_request: SkillGenerationRequest,
         agent_run: AgentRun,
         permission_plan: dict[str, Any],
-    ) -> tuple[AgentRun, Skill, None]:
+    ) -> tuple[AgentRun, Skill, Any]:
         existing_skill = service.db.get(Skill, generation_request.proposed_skill_id)
         if existing_skill is None:
             raise ProjectBuildWorkflowError("Single-Codex build no longer has a proposed skill record")
@@ -64,37 +63,39 @@ class SingleCodexBuildWorkflow:
             logs="Codex completed the single-invocation build and test workflow. The skill was not installed or run.",
         )
 
+        validation = service._run_final_validation(agent_run, skill)
+        if not validation.ok:
+            service._stop_final_validation_failed(agent_run, skill, validation)
+            return agent_run, skill, validation
+
         summary = (
-            f"Codex completed planning, building, and testing {skill.name} in one invocation. "
-            "The skill remains proposed and was not installed or run automatically."
+            f"Codex built and tested {skill.name}, and backend validation passed its manifest, package tests, "
+            "and static capability scan. The skill remains proposed and was not installed or run automatically."
         )
         runtime_status = service._runtime_permission_review(
             agent_run,
             skill,
-            None,
+            validation,
             task_node_id="single_codex",
             pm_summary=summary,
         )
-        agent_run.skill_id = skill.id
-        agent_run.status = "succeeded"
-        agent_run.current_step = "builder"
-        agent_run.summary = summary
-        agent_run.final_summary_json = {
-            "skill_id": skill.id,
-            "skill_name": skill.name,
-            "runtime_permission_status": runtime_status,
-            "backend_final_validation": "manifest_and_declared_files_only",
-            "user_summary": summary,
-        }
-        agent_run.completed_at = datetime.now(UTC)
-        agent_run.error_message = None
-        skill.status = "proposed"
+        service._product_manager_finish(
+            agent_run,
+            skill,
+            validation,
+            runtime_status,
+            task_node_id="single_codex",
+            pm_summary=summary,
+        )
+        final_summary = dict(agent_run.final_summary_json or {})
+        final_summary["backend_final_validation"] = "manifest_tests_and_capability_scan"
+        agent_run.final_summary_json = final_summary
         generation_request.status = "generated"
         generation_request.proposed_skill_id = skill.id
         generation_request.error_message = None
         service.db.commit()
         service.db.refresh(agent_run)
-        return agent_run, skill, None
+        return agent_run, skill, validation
 
     def resume(self, service: AgentWorkflowService, agent_run: AgentRun) -> AgentRun:
         generation_request = service.db.get(SkillGenerationRequest, agent_run.generation_request_id)
@@ -104,7 +105,7 @@ class SingleCodexBuildWorkflow:
         agent_run.pause_reason = None
         agent_run.error_message = None
         service.db.commit()
-        permission_plan = service._read_json_artifact(agent_run, "permissions.json")
+        permission_plan = service.artifacts.read_json(agent_run, "permissions.json")
         self.execute(service, generation_request, agent_run, permission_plan)
         return agent_run
 

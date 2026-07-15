@@ -128,7 +128,7 @@ def test_finished_step_persists_invocations_and_rolls_up_tokens(db_session) -> N
     codex = CodexService(db_session, adapter=FakeCodexAdapter())
     workflow = AgentWorkflowService(db_session, codex_service=codex)
     step = workflow._start_step(run, "builder", task_node_id="core_skill")
-    codex._pending_invocations.append(
+    codex.invocations.record_build(
         {
             "action": "builder_build_task",
             "adapter": "test_adapter",
@@ -216,6 +216,6 @@ def test_parallel_safe_nodes_share_a_ready_batch(db_session) -> None:
         ]
     }
 
-    batches = workflow._task_execution_batches(task_dag)
+    batches = workflow.task_dags.execution_batches(task_dag)
 
     assert [[node["id"] for node in batch] for batch in batches] == [["left", "right"], ["join"]]

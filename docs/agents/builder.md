@@ -30,7 +30,7 @@ When backend API context is present, Builder may use only those documented backe
 
 Builder must honor runtime budgets in backend API context. Multi-item Codex work uses one bounded batched request with per-item result mapping instead of sequential per-item calls.
 
-For new build workflows, the backend may create a skeleton `manifest.json` before the first Builder step from the approved blueprint and permission plan. Builder should preserve that manifest shape and complete only the current node's package details.
+For new build workflows, the backend creates a skeleton `manifest.json` and the skill's `tests/` directory before the first writable agent step. Builder should preserve the manifest shape and the backend-owned test directory and complete only the current node's package details.
 
 After each successful task build, Builder writes `interface_artifact.json` at the controlled skill-folder root for child nodes. The artifact must name created/updated paths, schemas, entrypoints, functions, data contracts, and known limitations relevant to downstream work. The backend validates the sidecar before moving it to `runtime/agent_runs/run_<id>/tasks/<task_id>/interface_artifact.json`; Builder never writes under `runtime`.
 

@@ -537,7 +537,11 @@ class ProposedSkillService:
         self,
         skill_dir: Path,
     ) -> ProposedSkillValidationRead | None:
-        if not (skill_dir / "tests").is_dir():
+        tests_dir = skill_dir / "tests"
+        if not tests_dir.is_dir() or not any(
+            path.is_file() and (path.name.startswith("test_") or path.name.endswith("_test.py"))
+            for path in tests_dir.rglob("*.py")
+        ):
             return None
         result = self._run_tests(skill_dir)
         return ProposedSkillValidationRead(

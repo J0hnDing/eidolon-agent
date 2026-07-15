@@ -33,6 +33,64 @@ class RunAlreadyFinalized(RuntimeError):
     pass
 
 
+def _reported_run_outcome(output_json: dict[str, Any]) -> tuple[str, str | None]:
+    reported_status = output_json.get("status")
+    if reported_status not in {"partial", "failed"}:
+        return "succeeded", None
+
+    failures = output_json.get("failures")
+    messages: list[str] = []
+    if isinstance(failures, list):
+        for failure in failures:
+            if not isinstance(failure, dict):
+                continue
+            message = failure.get("message")
+            if isinstance(message, str) and message.strip() and message.strip() not in messages:
+                messages.append(message.strip())
+
+    prefix = f"Skill reported {reported_status} output"
+    if not messages:
+        return reported_status, prefix
+    shown = messages[:3]
+    remainder = len(messages) - len(shown)
+    detail = "; ".join(shown)
+    if remainder:
+        detail += f" (+{remainder} more distinct failure{'s' if remainder != 1 else ''})"
+    return reported_status, f"{prefix}: {detail}"
+
+
+def _final_run_outcome(run: SkillRun, output_json: dict[str, Any]) -> tuple[str, str | None]:
+    status, error_message = _reported_run_outcome(output_json)
+    has_failed_codex_call = any(
+        invocation.get("status") == "failed"
+        for invocation in (run.codex_invocations_json or [])
+        if isinstance(invocation, dict)
+    )
+    if status == "succeeded" and has_failed_codex_call:
+        return "partial", "Skill completed after one or more runtime Codex calls failed"
+    return status, error_message
+
+
+def _merge_error_message(existing: str | None, current: str | None) -> str | None:
+    if not existing:
+        return current
+    if not current or current in existing:
+        return existing
+    return f"{existing}\n{current}"
+
+
+def _process_exit_error(returncode: int) -> str:
+    known_exits = {
+        126: "Skill could not be executed (exit code 126)",
+        127: "Skill command was not found (exit code 127)",
+        130: "Skill was interrupted by SIGINT (exit code 130)",
+        137: "Skill was forcibly killed by SIGKILL (exit code 137)",
+        139: "Skill crashed with a segmentation fault (exit code 139)",
+        143: "Skill was terminated by SIGTERM (exit code 143)",
+    }
+    return known_exits.get(returncode, f"Skill exited with code {returncode}")
+
+
 def utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -305,7 +363,7 @@ class LocalSkillRunner:
                 stdout=result.stdout,
                 stderr=result.stderr,
                 exit_code=result.returncode,
-                error_message="Skill exited with a non-zero status",
+                error_message=_process_exit_error(result.returncode),
             )
             return
 
@@ -333,13 +391,16 @@ class LocalSkillRunner:
             )
             return
 
+        self.db.refresh(run)
+        run_status, error_message = _final_run_outcome(run, output_json)
         self._finish_run(
             run,
-            status="succeeded",
+            status=run_status,
             output_json=output_json,
             stdout=result.stdout,
             stderr=result.stderr,
             exit_code=result.returncode,
+            error_message=error_message,
         )
 
     def _finish_run(
@@ -361,8 +422,7 @@ class LocalSkillRunner:
             run.stderr = stderr
         if exit_code is not None:
             run.exit_code = exit_code
-        if error_message is not None:
-            run.error_message = error_message
+        run.error_message = _merge_error_message(run.error_message, error_message)
         run.ended_at = utc_now()
         self.db.commit()
 
@@ -584,7 +644,7 @@ class DockerSkillRunner:
                 stdout=result.stdout,
                 stderr=result.stderr,
                 exit_code=result.returncode,
-                error_message="Skill exited with a non-zero status",
+                error_message=_process_exit_error(result.returncode),
             )
             return
 
@@ -612,13 +672,16 @@ class DockerSkillRunner:
             )
             return
 
+        self.db.refresh(run)
+        run_status, error_message = _final_run_outcome(run, output_json)
         self._finish_run(
             run,
-            status="succeeded",
+            status=run_status,
             output_json=output_json,
             stdout=result.stdout,
             stderr=result.stderr,
             exit_code=result.returncode,
+            error_message=error_message,
         )
 
     def _finish_run(
@@ -640,8 +703,7 @@ class DockerSkillRunner:
             run.stderr = stderr
         if exit_code is not None:
             run.exit_code = exit_code
-        if error_message is not None:
-            run.error_message = error_message
+        run.error_message = _merge_error_message(run.error_message, error_message)
         run.ended_at = utc_now()
         self.db.commit()
 

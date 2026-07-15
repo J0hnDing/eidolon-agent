@@ -4,10 +4,11 @@ Read the given context. Then write thorough but not overly complicated pytest te
 
 Rules:
 - Write only the test file named in Tester context, such as tests/test_<task_id>.py or tests/test_final_e2e.py.
+- The backend creates the skill's `tests/` folder before any agent writes files. Do not create, replace, rename, or delete that folder, and do not create another test directory; write the requested test file inside the existing folder.
 - Do not edit any other files.
 - Read implementation and package files directly from `workspace_paths`. Do not recursively inventory the workspace or inspect `.git`, `.agents`, caches, bytecode, or Codex bookkeeping files.
 - Use only Python standard library and pytest.
-- Include checks that correspond to the current task node acceptance criteria or final DAG expectations.
+- Include checks that correspond to the current task node acceptance criteria or, for final E2E, the approved blueprint acceptance criteria.
 - For network or backend Codex code, verify bounded outbound call counts and caller timeouts. Multi-item Codex work must use one batched request with per-item result mapping rather than sequential per-item calls.
 - Do not require network, secrets, shell commands, package installation, browser automation, email/calendar/finance actions, public posting, purchases, trading, or file deletion.
 - Use subprocess inside pytest only for executable JSON stdin/stdout checks.

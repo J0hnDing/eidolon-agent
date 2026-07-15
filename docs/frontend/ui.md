@@ -34,6 +34,8 @@ Build-time and runtime approvals are rendered inline in the chat transcript. App
 Chat persistence is local frontend storage managed by `frontend/src/lib/chatStore.ts`. Project conversations also store the pending generation request id while ProductManager is waiting for clarification so the user's next reply stays attached to the same request.
 Users can delete any chat conversation from the chat list. Deletion removes the local transcript and asks the backend to remove any persisted message rows for the same frontend conversation id; Project-mode approval records remain available through the approval pages.
 
+`ChatPage` retains route-level API orchestration. `features/chat/useChatConversations.ts` owns local conversation selection, creation, deletion, drafts, modes, and message transitions; it persists the synthesized first conversation before accepting edits. `features/chat/ChatWorkspace.tsx` owns the sidebar, mode selector, transcript, approval cards, and composer presentation.
+
 ## Skills Page
 
 Lists skills in one list. User-facing creation goes through the proposed-skill workflow, not bare database record creation.
@@ -54,7 +56,9 @@ Shows:
 - schedules.
 
 Installed executable skills may be run manually only when backend checks pass.
-Run history shows each run's separate runtime Codex token total, and the latest-run detail includes its token breakdown and call count.
+Run history shows each run's separate runtime Codex token total, honest partial/failed status and error summary, and the latest-run detail includes its token breakdown, call count, and persisted Codex invocation diagnostics.
+
+`SkillDetailPage` retains route loading, polling, and mutation orchestration. Cohesive update-chat, version, comparison, schedule, validation, and run-detail presentation lives under `features/skill-detail/SkillDetailPanels.tsx`. Feature tests cover conversation state transitions, chat workspace interactions, schedule delegation, version empty state, and run-input validation; `npm test` is the frontend regression command and `npm run build` remains the production type/build check.
 
 ## Tools Pages
 
@@ -62,7 +66,7 @@ Run history shows each run's separate runtime Codex token total, and the latest-
 
 ## Agent Runs Pages
 
-Agent Runs list and detail pages show run status, current task node or parallel active nodes, current step, step logs, structured inputs/outputs, DAG progress, node failures, and retry/cancel controls. The detail page has Build Details and Skill Run History tabs. Build Details renders the recorded task DAG with task node status, dependencies, expected output paths, file write claims, backend API ids, per-node Codex tokens, build totals, usage pause reason, and resume control. Skill Run History lists runs for the linked skill with separate runtime Codex totals and per-invocation metadata. Skill detail shows completed agent-run token totals.
+Agent Runs list and detail pages show run status, current task node or parallel active nodes, current step, step logs, structured inputs/outputs, DAG progress, node failures, and retry/cancel controls. The detail page has Build Details and Skill Run History tabs. Build Details renders the recorded task DAG with task node status, dependencies, expected output paths, file write claims, backend API ids, per-node Codex tokens, build totals, usage pause reason, and resume control. Skill Run History lists runs for the linked skill with separate runtime Codex totals and per-invocation success/failure metadata, including retained CLI diagnostics for failed calls. Skill detail shows completed agent-run token totals.
 
 ## Codex Settings
 

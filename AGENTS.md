@@ -202,6 +202,6 @@ cd ..\frontend
 npm run build
 ```
 
-Run Ruff before every backend pytest run, including focused test runs, and resolve its findings in changed code before treating the tests as complete.
+Run Ruff on changed backend code before declaring a task is complete. 
 
 The frontend build may need normal filesystem access for Vite/esbuild config loading in the Codex sandbox. If the sandbox denies config reads, rerun the same `npm run build` command with the narrow build escalation.

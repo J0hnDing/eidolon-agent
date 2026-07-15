@@ -346,6 +346,7 @@ def test_single_codex_workflow_runs_one_build_invocation_end_to_end(tmp_path: Pa
         def __init__(self) -> None:
             self.tasks: list[str] = []
             self.single_prompt = ""
+            self.tests_dir_precreated = False
 
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             task = str(plan.get("codex_task") or "")
@@ -357,6 +358,7 @@ def test_single_codex_workflow_runs_one_build_invocation_end_to_end(tmp_path: Pa
                 return subprocess.CompletedProcess(args=result.args, returncode=0, stdout=json.dumps(payload), stderr="")
             if task == "single_codex_build":
                 self.single_prompt = prompt
+                self.tests_dir_precreated = (output_dir / "tests").is_dir()
             return result
 
     adapter = SingleWorkflowAdapter()
@@ -372,26 +374,26 @@ def test_single_codex_workflow_runs_one_build_invocation_end_to_end(tmp_path: Pa
     assert agent_run.build_workflow == "single_codex"
     assert "build_workflow" not in stored_blueprint
     approve_generation(db_session, generation_request, tmp_path)
-    service.proposed_service.validate_proposed_skill = lambda _skill: pytest.fail(
-        "single_codex must not run backend final package validation yet"
-    )
-    service.codex_service.proposed_service.validate_proposed_skill = lambda _skill: pytest.fail(
-        "single_codex must not run backend final package validation yet"
-    )
 
     agent_run, skill, validation = service.continue_build_after_approval(generation_request)
 
-    assert validation is None
+    assert validation.ok is True
     assert agent_run.status == "succeeded"
     assert skill.status == "proposed"
     assert adapter.tasks.count("single_codex_build") == 1
     assert "product_manager_write_task_dag" not in adapter.tasks
-    assert "tester_write_tests" not in adapter.tasks
+    assert adapter.tasks.count("tester_write_tests") == 0
+    assert adapter.tests_dir_precreated is True
     assert not (run_dir / "task_dag.json").exists()
     assert (tmp_path / "skills" / "proposed" / skill.name / "tests" / "test_skill.py").is_file()
+    assert not (tmp_path / "skills" / "proposed" / skill.name / "tests" / "test_final_e2e.py").exists()
+    assert json.loads((run_dir / "capability_scan.json").read_text(encoding="utf-8"))["ok"] is True
+    assert json.loads((run_dir / "final_e2e_test_result.json").read_text(encoding="utf-8"))["test_result_json"][
+        "ok"
+    ] is True
     assert "Blueprint:" in adapter.single_prompt
     assert "Effective permissions:" in adapter.single_prompt
-    assert agent_run.final_summary_json["backend_final_validation"] == "manifest_and_declared_files_only"
+    assert agent_run.final_summary_json["backend_final_validation"] == "manifest_tests_and_capability_scan"
     skill_result = subprocess.run(
         [sys.executable, str(tmp_path / "skills" / "proposed" / skill.name / "skill.py")],
         input="{}",
@@ -402,6 +404,98 @@ def test_single_codex_workflow_runs_one_build_invocation_end_to_end(tmp_path: Pa
     )
     assert skill_result.returncode == 0
     assert isinstance(json.loads(skill_result.stdout), dict)
+
+
+def test_single_codex_static_scan_blocks_runtime_review_without_calling_more_agents(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    generation_request = create_generation_request(db_session)
+
+    class UnsafeSingleWorkflowAdapter(FakeCodexAdapter):
+        def __init__(self) -> None:
+            self.tasks: list[str] = []
+
+        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            task = str(plan.get("codex_task") or "")
+            self.tasks.append(task)
+            result = super().generate(prompt, output_dir, plan)
+            if task == "product_manager_write_blueprint_and_permissions":
+                payload = json.loads(result.stdout)
+                payload["build_workflow"] = "single_codex"
+                return subprocess.CompletedProcess(args=result.args, returncode=0, stdout=json.dumps(payload), stderr="")
+            if task == "single_codex_build":
+                skill_path = output_dir / "skill.py"
+                skill_path.write_text("import subprocess\n" + skill_path.read_text(encoding="utf-8"), encoding="utf-8")
+            return result
+
+    adapter = UnsafeSingleWorkflowAdapter()
+    service = AgentWorkflowService(
+        db_session,
+        codex_service=CodexService(db_session, adapter=adapter, project_root=tmp_path),
+        project_root=tmp_path,
+    )
+    agent_run = service.create_build_run(generation_request)
+    approve_generation(db_session, generation_request, tmp_path)
+
+    agent_run, _skill, validation = service.continue_build_after_approval(generation_request)
+
+    run_dir = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}"
+    scan = json.loads((run_dir / "capability_scan.json").read_text(encoding="utf-8"))
+    assert validation.ok is False
+    assert agent_run.status == "blocked"
+    assert scan["ok"] is False
+    assert any(finding["capability"] == "shell_process" for finding in scan["findings"])
+    assert adapter.tasks.count("single_codex_build") == 1
+    assert "tester_write_tests" not in adapter.tasks
+    assert "skill_repair" not in adapter.tasks
+    assert not (run_dir / "runtime_permissions.json").exists()
+
+
+def test_final_capability_scan_uses_actual_manifest_permissions(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    generation_request = create_generation_request(db_session)
+
+    class ManifestMismatchAdapter(FakeCodexAdapter):
+        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            task = str(plan.get("codex_task") or "")
+            result = super().generate(prompt, output_dir, plan)
+            if task == "product_manager_write_blueprint_and_permissions":
+                payload = json.loads(result.stdout)
+                payload["build_workflow"] = "single_codex"
+                payload["permission_plan"]["runtime"]["network"] = ["example.com"]
+                return subprocess.CompletedProcess(args=result.args, returncode=0, stdout=json.dumps(payload), stderr="")
+            if task == "single_codex_build":
+                manifest_path = output_dir / "manifest.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["permissions"]["network"] = []
+                manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+                (output_dir / "skill.py").write_text(
+                    "import requests\nrequests.get('https://example.com/data')\n",
+                    encoding="utf-8",
+                )
+            return result
+
+    service = AgentWorkflowService(
+        db_session,
+        codex_service=CodexService(db_session, adapter=ManifestMismatchAdapter(), project_root=tmp_path),
+        project_root=tmp_path,
+    )
+    agent_run = service.create_build_run(generation_request)
+    approve_generation(db_session, generation_request, tmp_path)
+
+    agent_run, _skill, validation = service.continue_build_after_approval(generation_request)
+
+    scan_path = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "capability_scan.json"
+    scan = json.loads(scan_path.read_text(encoding="utf-8"))
+    assert validation.ok is False
+    assert agent_run.status == "blocked"
+    assert any(
+        finding["capability"] == "network" and finding["status"] == "undeclared"
+        for finding in scan["findings"]
+    )
 
 
 def test_backend_seeds_and_finalizes_manifest_json(tmp_path: Path, db_session: Session) -> None:
@@ -524,7 +618,6 @@ def test_build_workflow_executes_pm_task_dag_in_dependency_order(tmp_path: Path,
                     },
                         ],
                         "edges": [{"from": "scaffold", "to": "edge_cases", "reason": "edge cases need entrypoint"}],
-                        "final_e2e_expectations": ["package satisfies blueprint"],
                     }
                 }
                 return subprocess.CompletedProcess(
@@ -658,7 +751,6 @@ def test_builder_interface_artifact_is_validated_and_moved_to_agent_run(
                                     },
                                 ],
                                 "edges": [{"from": "scaffold", "to": "manifest_polish"}],
-                                "final_e2e_expectations": ["package satisfies blueprint"],
                             }
                         }
                     ),
@@ -701,7 +793,7 @@ def test_agent_prompts_receive_only_direct_parent_interface_artifacts(
         project_root=tmp_path,
     )
     agent_run = service.create_build_run(generation_request)
-    service._write_json_artifact(
+    service.artifacts.write_json(
         agent_run,
         "task_dag.json",
         {
@@ -720,8 +812,12 @@ def test_agent_prompts_receive_only_direct_parent_interface_artifacts(
             encoding="utf-8",
         )
 
-    direct = service._direct_parent_interface_artifacts(agent_run, {"id": "leaf", "depends_on": ["middle"]})
-    transitive = service._parent_interface_artifacts(agent_run, {"id": "leaf", "depends_on": ["middle"]})
+    direct = service.artifacts.direct_parent_interface_artifacts(
+        agent_run, {"id": "leaf", "depends_on": ["middle"]}
+    )
+    transitive = service.artifacts.parent_interface_artifacts(
+        agent_run, {"id": "leaf", "depends_on": ["middle"]}
+    )
 
     assert [artifact["task_id"] for artifact in direct] == ["middle"]
     assert [artifact["task_id"] for artifact in transitive] == ["root", "middle"]
@@ -824,7 +920,8 @@ def test_builder_and_tester_agents_receive_trimmed_task_context(tmp_path: Path, 
     assert permission_bounds["build_time"]["project_read"] == ["personal-agent"]
     assert permission_bounds["blocked_capabilities"] == default_banned_permissions()
     assert "task_dag_json" not in tester_plans[0]
-    assert "final_e2e_expectations" in tester_plans[-1]
+    assert "final_e2e_expectations" not in tester_plans[-1]
+    assert set(agent_run.blueprint_json["acceptance_criteria"]).issubset(tester_plans[-1]["acceptance_criteria"])
     task_dag_prompt = next(
         prompt
         for prompt, plan in zip(adapter.prompts, adapter.plans, strict=True)
@@ -845,6 +942,8 @@ def test_builder_and_tester_agents_receive_trimmed_task_context(tmp_path: Path, 
     assert "Builder context:" in builder_prompt
     assert "Generation plan:" not in builder_prompt
     assert agent_run.status == "succeeded"
+    run_dir = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}"
+    assert json.loads((run_dir / "capability_scan.json").read_text(encoding="utf-8"))["ok"] is True
 
 
 def test_failed_test_triggers_builder_repair(tmp_path: Path, db_session: Session) -> None:
@@ -1075,7 +1174,6 @@ def test_task_dag_validation_rejects_invalid_graphs(
             }
         ],
         "edges": [],
-        "final_e2e_expectations": ["valid"],
     }
     if message == "cyclic":
         dag["nodes"].append(
@@ -1088,7 +1186,7 @@ def test_task_dag_validation_rejects_invalid_graphs(
     mutation(dag)
 
     with pytest.raises(AgentWorkflowError, match=message):
-        AgentWorkflowService(db_session)._validate_task_dag(dag, {"skill_type": "automation"})
+        AgentWorkflowService(db_session).task_dags.validate(dag, {"skill_type": "automation"})
 
 
 def test_task_dag_sanitizer_removes_tester_owned_paths(db_session: Session) -> None:
@@ -1115,7 +1213,6 @@ def test_task_dag_sanitizer_removes_tester_owned_paths(db_session: Session) -> N
             }
         ],
         "edges": [],
-        "final_e2e_expectations": ["valid"],
     }
     raw = copy.deepcopy(fallback)
     raw["nodes"] = [
@@ -1134,7 +1231,9 @@ def test_task_dag_sanitizer_removes_tester_owned_paths(db_session: Session) -> N
     ]
     raw["root_task_ids"] = ["manifest_contract"]
 
-    sanitized = CodexService(db_session)._sanitize_task_dag(raw, fallback, {"skill_name": "weather_tool"})
+    sanitized = CodexService(db_session).product_manager_contracts.sanitize_task_dag(
+        raw, fallback, {"skill_name": "weather_tool"}
+    )
 
     assert "graph_id" not in sanitized
     assert "root_task_ids" not in sanitized
@@ -1143,7 +1242,7 @@ def test_task_dag_sanitizer_removes_tester_owned_paths(db_session: Session) -> N
     assert sanitized["nodes"][0]["file_write_claims"] == []
     assert sanitized["nodes"][1]["expected_output_paths"] == ["skill.py"]
     assert sanitized["nodes"][1]["file_write_claims"] == ["skill.py"]
-    AgentWorkflowService(db_session)._validate_task_dag(sanitized, {"skill_type": "automation"})
+    AgentWorkflowService(db_session).task_dags.validate(sanitized, {"skill_type": "automation"})
 
 
 def test_task_dag_sanitizer_does_not_read_package_files_from_blueprint(db_session: Session) -> None:
@@ -1168,11 +1267,10 @@ def test_task_dag_sanitizer_does_not_read_package_files_from_blueprint(db_sessio
         "graph_id": "fallback_build",
         "root_task_ids": ["core_skill"],
         "nodes": [copy.deepcopy(node)],
-        "final_e2e_expectations": ["valid"],
     }
     raw = {**fallback, "graph_id": "raw_build", "nodes": [copy.deepcopy(node)]}
 
-    sanitized = CodexService(db_session)._sanitize_task_dag(
+    sanitized = CodexService(db_session).product_manager_contracts.sanitize_task_dag(
         raw,
         fallback,
         {
@@ -1206,7 +1304,7 @@ def test_blueprint_sanitizer_removes_expected_files(db_session: Session) -> None
         "arbitrary": {"field": True},
     }
 
-    sanitized = CodexService(db_session)._sanitize_blueprint(raw, fallback)
+    sanitized = CodexService(db_session).product_manager_contracts.sanitize_blueprint(raw, fallback)
 
     assert sanitized["skill_name"] == "generated_skill"
     assert "expected_files" not in sanitized
@@ -1216,7 +1314,7 @@ def test_blueprint_sanitizer_removes_expected_files(db_session: Session) -> None
 
 
 def test_plausibility_sanitizer_keeps_only_required_contract_fields(db_session: Session) -> None:
-    sanitized = CodexService(db_session)._sanitize_build_review(
+    sanitized = CodexService(db_session).product_manager_contracts.sanitize_build_review(
         {
             "decision": "stop_inplausible",
             "user_prompt": "This requires blocked deletion. Try a non-destructive report instead.",

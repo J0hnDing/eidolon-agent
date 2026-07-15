@@ -8,8 +8,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import Skill
-from app.services.skill_runner import SkillRunner
+from app.models import Skill, SkillRun
+from app.services.skill_runner import SkillRunner, _final_run_outcome, _process_exit_error
 
 
 @pytest.fixture
@@ -106,6 +106,79 @@ def test_valid_manifest_passing_tests_and_valid_json_succeeds(
     assert run.output_json == {"ok": True, "input": {"topic": "local"}}
     assert run.started_at is not None
     assert run.ended_at is not None
+
+
+def test_partial_output_is_reported_as_partial_with_failure_detail(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill_dir = tmp_path / "partial_skill"
+    write_skill(
+        skill_dir,
+        skill_source=(
+            "import json\n"
+            "print(json.dumps({'status': 'partial', 'failures': ["
+            "{'message': 'Codex CLI exited with code 1'}, "
+            "{'message': 'Analysis unavailable'}]}))\n"
+        ),
+    )
+
+    run = run_skill(db_session, skill_dir)
+
+    assert run.status == "partial"
+    assert run.exit_code == 0
+    assert run.error_message == (
+        "Skill reported partial output: Codex CLI exited with code 1; Analysis unavailable"
+    )
+
+
+def test_failed_output_is_reported_as_failed_even_with_zero_exit_code(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill_dir = tmp_path / "reported_failure_skill"
+    write_skill(
+        skill_dir,
+        skill_source=(
+            "import json\n"
+            "print(json.dumps({'status': 'failed', 'failures': [{'message': 'Upstream request failed'}]}))\n"
+        ),
+    )
+
+    run = run_skill(db_session, skill_dir)
+
+    assert run.status == "failed"
+    assert run.exit_code == 0
+    assert run.error_message == "Skill reported failed output: Upstream request failed"
+
+
+def test_failed_runtime_codex_invocation_prevents_succeeded_run_status() -> None:
+    run = SkillRun(
+        skill_id=1,
+        status="running",
+        codex_invocations_json=[{"status": "failed", "error_message": "CLI failed"}],
+    )
+
+    status, error_message = _final_run_outcome(run, {"status": "complete", "failures": []})
+
+    assert status == "partial"
+    assert error_message == "Skill completed after one or more runtime Codex calls failed"
+
+
+@pytest.mark.parametrize(
+    ("returncode", "expected"),
+    [
+        (126, "Skill could not be executed (exit code 126)"),
+        (127, "Skill command was not found (exit code 127)"),
+        (130, "Skill was interrupted by SIGINT (exit code 130)"),
+        (137, "Skill was forcibly killed by SIGKILL (exit code 137)"),
+        (139, "Skill crashed with a segmentation fault (exit code 139)"),
+        (143, "Skill was terminated by SIGTERM (exit code 143)"),
+        (9, "Skill exited with code 9"),
+    ],
+)
+def test_process_exit_error_reports_specific_exit_code(returncode: int, expected: str) -> None:
+    assert _process_exit_error(returncode) == expected
 
 
 def test_invalid_manifest_blocks_run(tmp_path: Path, db_session: Session) -> None:

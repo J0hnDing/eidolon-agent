@@ -80,6 +80,25 @@ Blocked:
 - public posting;
 - file deletion.
 
+## Static Capability Validation
+
+Every completed Project build passes through the same backend-owned static capability scan before the backend runs generated tests and creates runtime permission review. The scanner inspects generated implementation Python while excluding tests, installed dependency code, caches, and metadata. DAG Tester may already have authored a final test file, but test authoring is outside this deterministic validator.
+
+Recognized evidence includes:
+
+- imports of selected network clients and literal HTTP(S) domains;
+- direct process-execution APIs;
+- selected browser-automation imports;
+- literal filesystem writes outside approved runtime write paths;
+- absolute or parent-traversing literal file access;
+- sensitive environment-variable names;
+- direct file-deletion APIs;
+- Python files that cannot be parsed or exceed the bounded scan size.
+
+Allowed network evidence is recorded when the actual generated manifest declares runtime network domains. A literal URL domain must match a manifest-declared domain. Recognized undeclared or blocked evidence fails final validation and prevents runtime permission review. A single-Codex workflow blocks immediately; a DAG workflow may use its bounded Builder repair loop and rescan. Results are persisted as `capability_scan.json` in the agent-run artifacts. The later runtime review separately compares the actual manifest with the earlier approved plan and requests approval for meaningful expansion.
+
+This scan does not grant permissions and does not replace sandbox enforcement. It cannot reliably analyze dynamic imports, reflection, encoded source, dependency internals, runtime-built paths or domains, non-Python executables, or behavior hidden behind external services. Absence of a finding is not proof that code has no side effects.
+
 ## Permission Expansion
 
 Runtime permission review compares actual manifest permissions/dependencies against the approved build-time plan. Meaningful expansion requires explicit runtime review. Empty expansion should not be displayed as a warning.

@@ -112,7 +112,7 @@ class RecordingCodexAdapter:
                 encoding="utf-8",
             )
             tests_dir = output_dir / "tests"
-            tests_dir.mkdir()
+            assert tests_dir.is_dir()
             (tests_dir / "test_skill.py").write_text("def test_generated():\n    assert True\n", encoding="utf-8")
         return subprocess.CompletedProcess(args=["recording-codex"], returncode=0, stdout="ok", stderr="")
 

@@ -10,14 +10,6 @@ This file is the source of truth for confirmed, unfinished project work. Complet
 - **Rationale:** Why the work belongs on the roadmap.
 - **Acceptance criteria:** Observable conditions required before the item can be removed.
 
-## TODO-001 - Independent Single-Codex Final Validation
-
-- **Priority:** High
-- **Status:** Planned
-- **Area:** Backend / project-build validation
-- **Rationale:** The `single_codex` workflow currently relies on checks performed within the same Codex invocation that generated the package. Manifest schema, required test-directory, and declared-file existence are checked centrally, but final acceptance criteria and authoritative tests need an independent backend-owned pass.
-- **Acceptance criteria:** The backend runs final acceptance-criteria and authoritative test validation after generation, persists the result, and blocks runtime permission review or installation when that independent validation fails.
-
 ## TODO-002 - Local Non-Agentic Model Adapter
 
 - **Priority:** Medium
@@ -25,22 +17,6 @@ This file is the source of truth for confirmed, unfinished project work. Complet
 - **Area:** Backend / model adapters
 - **Rationale:** Some controlled artifact transformations should be able to use a selected local non-agentic model without going through the Codex agent workflow.
 - **Acceptance criteria:** A backend adapter reads only the selected path and relevant context, invokes the configured local model, validates its output, and writes only the corresponding backend-controlled artifacts.
-
-## TODO-003 - Decompose Workflow and Codex Services
-
-- **Priority:** Medium
-- **Status:** Planned
-- **Area:** Backend / maintainability
-- **Rationale:** `AgentWorkflowService` and `CodexService` each combine several distinct responsibilities and are large enough that changes have a high review and regression cost.
-- **Acceptance criteria:** Characterization tests protect current behavior; cohesive responsibilities are extracted behind narrow interfaces; workflow transaction, safety, routing, and usage-accounting behavior remains unchanged; and no compatibility forwarding layer is left without a documented removal plan.
-
-## TODO-004 - Decompose Large Frontend Pages
-
-- **Priority:** Medium
-- **Status:** Planned
-- **Area:** Frontend / maintainability
-- **Rationale:** `SkillDetailPage` and `ChatPage` combine data loading, mutation orchestration, state transitions, and many presentation sections, making focused changes harder to review and test.
-- **Acceptance criteria:** Page-level components retain route and orchestration ownership while cohesive panels and stateful flows move into tested components or hooks, with no user-visible behavior regression.
 
 ## TODO-005 - First-Class Schedule Approval Scope
 

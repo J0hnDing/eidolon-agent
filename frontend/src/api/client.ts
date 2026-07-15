@@ -76,7 +76,7 @@ export interface Skill {
 
 export type SkillUpdateInput = Pick<Skill, "enabled">;
 
-export type SkillRunStatus = "pending" | "running" | "succeeded" | "failed" | "blocked";
+export type SkillRunStatus = "pending" | "running" | "succeeded" | "partial" | "failed" | "blocked";
 
 export interface SkillRun {
   id: number;
@@ -167,6 +167,7 @@ export interface AgentRunStep {
 export interface CodexInvocationUsage {
   action: string;
   adapter: string;
+  status?: "succeeded" | "failed";
   model: string | null;
   requested_model?: string | null;
   effective_model?: string | null;
@@ -175,6 +176,13 @@ export interface CodexInvocationUsage {
   route_source?: string | null;
   role?: string | null;
   difficulty?: string | null;
+  cli_path?: string | null;
+  cli_version?: string | null;
+  cli_source?: string | null;
+  exit_code?: number | null;
+  error_type?: string | null;
+  error_message?: string | null;
+  stderr_tail?: string | null;
   input_tokens: number;
   cached_input_tokens: number;
   output_tokens: number;
