@@ -50,11 +50,12 @@ Output for PM does NOT mean agent writes files directly, instead backend receive
 3. `pm_write_blueprint_and_permissions`
    - Inputs: `intent_prompt.json`.
    - Output: one structured response containing top-level `build_workflow`, `blueprint`, and `permission_plan` fields. The backend writes only the latter two as `blueprint.json` and `permissions.json`.
-   - Purpose: choose `single_codex` or `task_dag`; describe the skill goal, interface type, expected user behavior, schedule intent, and high-level acceptance criteria; draft both build-time needs and expected runtime permissions/dependencies.
+   - Purpose: choose `single_codex` or `task_dag`; select the `function` or `web_app` execution protocol; describe the skill goal, expected user behavior, function-only schedule intent, and high-level acceptance criteria; draft both build-time needs and expected runtime permissions/dependencies.
    - `build_workflow` is backend routing state stored on the agent run. It must not appear inside `blueprint` or in `blueprint.json` because downstream DAG, Builder, and Tester inputs do not need it.
    - Must not enumerate generated package files. Builder-owned paths are defined later by task-node `expected_output_paths` and `file_write_claims` in `task_dag.json`.
    - Must not include task nodes, dependencies between tasks, or test files.
    - Must not approve permissions.
+   - The backend-selected `skill_name` is immutable during this step. ProductManager may refine the goal and behavior but cannot rename the controlled database record or package folder.
 
 The Codex Settings page can persist a backend-owned workflow override. `Automatic` keeps the ProductManager choice. `Simple` forces `single_codex`, and `Task DAG` forces `task_dag` for every new Project build, regardless of the top-level value returned by ProductManager. The agent run stores the effective workflow and the ProductManager step records whether selection came from ProductManager or the settings override.
 
@@ -80,24 +81,24 @@ The Codex Settings page can persist a backend-owned workflow override. `Automati
 
 The `single_codex` workflow package contains `workflow.py`, `prompts.py`, and `instructions/run.md`. Before the writable invocation, the backend creates the controlled proposed-skill folder, seeds `manifest.json`, and creates its `tests/` directory. The prompt contains the approved blueprint, effective permissions, and fixed workflow instructions. Within that one invocation Codex plans internally, creates the complete skill package, writes test files inside the existing backend-created `tests/` directory, runs a focused test command, and fixes failures before returning. It must not create or replace the test directory.
 
-After the writable invocation returns, the backend runs the shared deterministic final validator: static capability scan, actual manifest/package validation, and authoritative execution of the generated tests. This validator does not invoke ProductManager, Builder, Tester, or another Codex agent. A validation failure blocks the single-Codex build; retry starts a new single writable invocation against a freshly prepared proposed-skill workspace. Runtime permission review is created only after final validation passes.
+After the writable invocation returns, the backend runs the shared deterministic final validator: static capability scan, actual manifest/package validation, and authoritative execution of the generated tests. This validator does not invoke ProductManager, Builder, Tester, or another Codex agent. Any invocation or validation error permanently stops that single-Codex run; resume, task retry, and step retry cannot invoke Builder again. The user may start a separate new Project build, whose proposed workspace is atomically replaced without descending into sandbox-owned cache directories. Runtime permission review is created only after final validation passes.
 
-The workflow can pause before its single invocation when Codex allowance is below the configured reserve. It cannot pause partway through the invocation; a retry starts a new Codex invocation against a freshly prepared proposed-skill workspace.
+The workflow can pause before its single invocation when Codex allowance is below the configured reserve. A pre-invocation allowance pause may resume, but an invocation or validation error cannot resume or retry.
 
 ## Shared Final Validation
 
 Both project-build workflows use one deterministic final package validator after implementation and workflow-specific test authoring complete:
 
-1. The backend scans implementation `.py` files, excluding tests, dependency folders, caches, and metadata, for selected direct capability evidence.
-2. Undeclared network use, unapproved literal network domains, writes outside approved runtime paths, sensitive environment reads, process execution, browser automation, file deletion, or unscannable Python fail validation.
-3. When the scan passes, the backend reads and validates the actual generated `manifest.json`, validates the declared package files, and runs the tests it finds in the backend-created `tests/` directory.
+1. The backend reads and package-validates the actual generated `manifest.json` and confirms its runtime matches the approved blueprint runtime.
+2. It scans implementation `.py` files plus literal absolute URLs in HTML/CSS/JavaScript assets while excluding tests, dependency folders, caches, and metadata.
+3. Undeclared network use, browser-side external URLs, unapproved literal server domains, writes outside approved runtime paths, sensitive environment reads, process execution, browser automation, file deletion, or unscannable source fail validation. When the scan passes, the backend runs the tests it finds in the backend-created `tests/` directory.
 4. The backend persists `capability_scan.json` plus `final_e2e_test_result.json` without calling an agent.
 5. A `single_codex` failure blocks the run. A `task_dag` failure may enter the DAG-owned bounded Builder repair loop; every repaired result is scanned and validated again.
 6. Runtime permission review is not created until the scan, manifest/package validation, and tests pass.
 
 In `task_dag`, Tester writes `tests/test_final_e2e.py` before this validator runs, using the approved blueprint acceptance criteria and validated node interface artifacts. There is no separate final-expectations field in `task_dag.json`. In `single_codex`, the one writable invocation is responsible for writing its tests from the approved blueprint.
 
-The capability scan is deliberately small and conservative. It recognizes direct Python syntax and selected common modules; it cannot prove the absence of dynamic, transitive, encoded, dependency-internal, non-Python, or runtime-constructed behavior. It is a fail-closed mismatch detector for recognized evidence, not the runtime permission sandbox.
+The capability scan is deliberately small and evidence-based. It blocks selected recognized calls, provably unsafe literal paths or domains, unscannable source, and literal browser-asset URLs. Imports without recognized calls, dynamic paths, and runtime-constructed domains do not block when the scanner cannot prove a violation. The runtime sandbox remains authoritative; the scan cannot prove the absence of dynamic, transitive, encoded, dependency-internal, Python-embedded browser, or runtime-constructed behavior.
 
 ## Task DAG Workflow
 
@@ -148,6 +149,8 @@ The `file_write_claims` field is added so the backend can parallelize independen
 
 Task `expected_output_paths` and `file_write_claims` are Builder-owned skill package paths only. They must not include Tester-owned files such as `tests/test_skill.py` or `tests/test_<task_id>.py`; the backend sanitizes those paths out of ProductManager DAG output before validation.
 
+Function tasks normally claim a Python file entrypoint such as `skill.py`. Web-application tasks claim an importable ASGI module such as `app.py` and may claim skill-owned HTML/CSS/JavaScript assets. Neither runtime may claim Personal Agent frontend files, custom Dockerfiles, or startup commands.
+
 The blueprint does not define package file paths. ProductManager assigns Builder-owned paths directly to task nodes in `task_dag.json`; the backend does not invent omitted task outputs. `README.md` and `SKILL.md` are not universal package requirements; `manifest.json` remains backend-owned and is always validated, including any entrypoint or instructions file it declares.
 
 ### Task Node Execution
@@ -158,7 +161,7 @@ After approval and DAG validation, the backend builds the DAG data structure and
 2. A node is ready when all `depends_on` nodes are `done`.
 3. The backend groups non-overlapping `parallel_safe` ready nodes into one admitted batch. The current shared-workspace executor processes that batch serially; true concurrent execution remains deferred.
 4. Each active node creates one Builder step.
-5. After each Builder step, the backend deterministically fills missing manifest fields from the approved blueprint and permission plan when possible.
+5. After each Builder step, the backend deterministically fills missing approved package declarations when possible and removes legacy backend-owned lifecycle/risk/provenance keys. It does not infer permissions from source.
 6. If `requires_tests` is true, the Builder step is followed immediately by a Tester step for the same node.
 7. A node is `done` only after Builder succeeds, the backend validates and moves its skill-local `interface_artifact.json` into the task's run-artifact folder, and required tests pass.
 8. A node with `requires_tests = false` is still subject to deterministic package validation before it can be marked `done`.
@@ -307,7 +310,7 @@ Behavior:
 
 Each task node has its own fix counter. After more than three failed test/fix attempts for one node, ProductManager writes a stuck user-facing summary and the run stops as `blocked`.
 
-When a build run fails after a task has already produced a validated interface artifact, Retry Current Task reuses the persisted DAG, task contract, skill workspace, and failure count. It reruns only that task's repair/test loop and then continues with remaining tasks and final E2E; it does not regenerate ProductManager artifacts or repeat completed Builder work.
+For `task_dag` only, when a build run fails after a task has already produced a validated interface artifact, Retry Current Task reuses the persisted DAG, task contract, skill workspace, and failure count. It reruns only that task's repair/test loop and then continues with remaining tasks and final E2E; it does not regenerate ProductManager artifacts or repeat completed Builder work. Single-Codex errors expose no run-level or step-level retry action.
 
 The final end-to-end loop has a separate failure counter. After more than three backend validation failures, deterministic backend logic stops the run as `blocked`; final validation does not invoke ProductManager for a summary.
 
@@ -315,8 +318,8 @@ The final end-to-end loop has a separate failure counter. After more than three 
 
 For `task_dag`, after all task nodes and the final end-to-end test pass:
 
-1. Backend deterministically finalizes any missing fields in the actual `manifest.json` from the approved blueprint and permission plan.
-2. Backend validates the actual `manifest.json`, declared package files, and tests.
+1. Backend deterministically finalizes missing approved package fields in the actual `manifest.json` from the blueprint and permission plan; backend lifecycle state and derived risk stay outside the manifest.
+2. Backend validates the actual manifest runtime against the blueprint, validates declared package files, scans capability mismatches, and runs tests.
 3. Backend creates runtime permission review from the actual manifest and dependencies.
 4. ProductManager does not write a completion summary unless the workflow is blocked or needs user input.
 5. Chat tells the user only that the project is finished and surfaces any runtime permission approval needed before install.

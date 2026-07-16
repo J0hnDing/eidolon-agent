@@ -659,7 +659,7 @@ class PermissionService:
                 agent_run.status = "pending" if approved else "cancelled"
                 agent_run.current_step = "product_manager"
                 if approved:
-                    agent_run.summary = "Build-time approval is approved. Resume the agent run to continue generation."
+                    agent_run.summary = "Build-time approval is approved. The controlled workflow will continue automatically."
                 if not approved:
                     agent_run.completed_at = utc_now()
                     agent_run.error_message = "Build-time approval was denied."

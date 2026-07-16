@@ -5,8 +5,10 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,12 +24,23 @@ from app.models import (
     SkillVersion,
 )
 from app.schemas.proposed_skill import ProposedSkillValidationRead, SkillFileRead
-from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
+from app.services.manifest_validator import ManifestValidationError, classify_permission_risk, validate_manifest_file
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
+from app.services.skill_package_files import SkillPackageFileError, read_skill_text, readable_skill_paths
 
 SAFE_SKILL_NAME = re.compile(r"^[a-zA-Z0-9_-]+$")
-READABLE_FILES = ("manifest.json", "README.md", "SKILL.md", "skill.py", "tests/test_skill.py")
 DEFAULT_TIMEOUT_SECONDS = 10
+INSTALL_IGNORE_PATTERNS = (
+    ".agents",
+    ".git",
+    ".pytest_cache",
+    ".pytest_tmp",
+    "__pycache__",
+    "*.pyc",
+    "codex_last_message.txt",
+    "codex_prompt.txt",
+    "interface_artifact.json",
+)
 
 
 class ProposedSkillError(ValueError):
@@ -62,14 +75,13 @@ class ProposedSkillService:
         skill = self.db.scalar(select(Skill).where(Skill.name == safe_name))
         values = {
             "description": "Sample skill created for review.",
-            "interface_type": "chat",
+            "runtime": "function",
             "status": "proposed",
             "risk_level": "low",
             "manifest_path": self._relative_path(proposed_dir / "manifest.json"),
             "instructions_path": None,
             "input_schema_json": None,
             "output_schema_json": None,
-            "tool_ui_schema_json": None,
             "installed_path": None,
             "enabled": False,
         }
@@ -128,29 +140,27 @@ class ProposedSkillService:
             if skill is not None:
                 if skill.status == "installed":
                     skill.description = manifest.description
-                    skill.interface_type = manifest.interface_type
-                    skill.risk_level = manifest.risk_level
+                    skill.runtime = manifest.runtime
+                    skill.risk_level = classify_permission_risk(manifest.permissions, manifest.dependencies)
                     skill.manifest_path = self._relative_path(manifest_path)
                     skill.instructions_path = manifest.instructions_path
                     skill.input_schema_json = manifest.input_schema
                     skill.output_schema_json = manifest.output_schema
-                    skill.tool_ui_schema_json = manifest.tool_ui_schema
                     skill.installed_path = self._relative_path(active_dir)
                     changed = True
                 continue
             skill = Skill(
                 name=manifest.name,
                 description=manifest.description,
-                interface_type=manifest.interface_type,
+                runtime=manifest.runtime,
                 status="installed",
-                risk_level=manifest.risk_level,
+                risk_level=classify_permission_risk(manifest.permissions, manifest.dependencies),
                 manifest_path=self._relative_path(manifest_path),
                 instructions_path=manifest.instructions_path,
                 input_schema_json=manifest.input_schema,
                 output_schema_json=manifest.output_schema,
-                tool_ui_schema_json=manifest.tool_ui_schema,
                 installed_path=self._relative_path(active_dir),
-                enabled=manifest.enabled,
+                enabled=False,
             )
             self.db.add(skill)
             changed = True
@@ -159,24 +169,18 @@ class ProposedSkillService:
 
     def read_skill_files(self, skill: Skill) -> list[SkillFileRead]:
         skill_dir = self.skill_dir_for_record(skill)
-        files = []
-        for relative_path in READABLE_FILES:
-            path = skill_dir / relative_path
-            if path.is_file():
-                files.append(SkillFileRead(path=relative_path, content=path.read_text(encoding="utf-8")))
-        return files
+        return [
+            SkillFileRead(path=relative_path, content=read_skill_text(skill_dir, relative_path))
+            for relative_path in readable_skill_paths(skill_dir)
+        ]
 
     def read_skill_file(self, skill: Skill, relative_path: str) -> SkillFileRead:
         normalized = relative_path.replace("\\", "/")
-        if normalized not in READABLE_FILES:
-            raise ProposedSkillError("Requested file is not readable through this workflow")
         skill_dir = self.skill_dir_for_record(skill)
-        path = (skill_dir / normalized).resolve()
-        if not path.is_relative_to(skill_dir.resolve()):
-            raise ProposedSkillError("Requested file must stay inside the skill folder")
-        if not path.is_file():
-            raise ProposedSkillError("Requested file does not exist")
-        return SkillFileRead(path=normalized, content=path.read_text(encoding="utf-8"))
+        try:
+            return SkillFileRead(path=normalized, content=read_skill_text(skill_dir, normalized))
+        except SkillPackageFileError as exc:
+            raise ProposedSkillError(str(exc)) from exc
 
     def validate_proposed_skill(self, skill: Skill) -> ProposedSkillValidationRead:
         skill_dir = self.skill_dir_for_record(skill)
@@ -187,6 +191,15 @@ class ProposedSkillService:
                 ok=False,
                 manifest_valid=False,
                 error_message=str(exc),
+            )
+        if manifest.name != skill.name:
+            return ProposedSkillValidationRead(
+                ok=False,
+                manifest_valid=False,
+                tests_run=False,
+                error_message=(
+                    f"Manifest name {manifest.name!r} does not match the controlled skill name {skill.name!r}"
+                ),
             )
         warnings = []
         if manifest.permissions.network:
@@ -220,6 +233,8 @@ class ProposedSkillService:
         )
 
     def install_proposed_skill(self, skill: Skill) -> Skill:
+        if skill.status == "installed":
+            return skill
         try:
             with SkillOperationGuard(self.db).locked(skill, "install", reason="Installing proposed skill"):
                 return self._install_proposed_skill_locked(skill)
@@ -236,18 +251,28 @@ class ProposedSkillService:
         proposed_dir = self.skill_dir_for_record(skill)
         safe_name = self.validate_skill_name(skill.name)
         installed_dir = self.installed_dir(safe_name)
-        if installed_dir.exists():
-            raise ProposedSkillError(f"Installed skill already exists: {safe_name}")
         version_dir = installed_dir / "versions" / "v1"
-
-        shutil.copytree(
-            proposed_dir,
-            version_dir,
-            ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", "*.pyc"),
-        )
-        shutil.rmtree(proposed_dir)
-
-        manifest = validate_manifest_file(version_dir / "manifest.json")
+        displaced_install: tuple[Path, Path] | None = None
+        if installed_dir.exists():
+            displaced_install = (installed_dir, self._quarantine_tree(installed_dir, "partial-install"))
+        try:
+            shutil.copytree(
+                proposed_dir,
+                version_dir,
+                ignore=shutil.ignore_patterns(*INSTALL_IGNORE_PATTERNS),
+            )
+            manifest = validate_manifest_file(version_dir / "manifest.json")
+            if manifest.name != skill.name:
+                raise ProposedSkillError(
+                    f"Manifest name {manifest.name!r} does not match the controlled skill name {skill.name!r}"
+                )
+        except Exception as exc:
+            self._remove_tree_best_effort(installed_dir)
+            if displaced_install is not None:
+                self._restore_quarantined_tree(*displaced_install)
+            if isinstance(exc, OSError):
+                raise ProposedSkillError(f"Could not stage the installed skill package: {exc}") from exc
+            raise
         manifest_json = manifest.model_dump(mode="json")
         version = SkillVersion(
             skill_id=skill.id,
@@ -265,20 +290,31 @@ class ProposedSkillService:
         )
         self.db.add(version)
         self.db.flush()
-        skill.interface_type = manifest.interface_type
+        skill.runtime = manifest.runtime
         skill.status = "installed"
-        skill.risk_level = manifest.risk_level
+        skill.risk_level = classify_permission_risk(manifest.permissions, manifest.dependencies)
         skill.manifest_path = self._relative_path(version_dir / "manifest.json")
         skill.instructions_path = manifest.instructions_path
         skill.input_schema_json = manifest.input_schema
         skill.output_schema_json = manifest.output_schema
-        skill.tool_ui_schema_json = manifest.tool_ui_schema
         skill.installed_path = self._relative_path(version_dir)
         skill.active_version_id = version.id
         skill.enabled = False
-        self.db.commit()
-        self.db.refresh(skill)
-        self._register_manifest_schedule(skill)
+        try:
+            self._register_manifest_schedule(skill)
+            self.db.commit()
+            self.db.refresh(skill)
+        except Exception:
+            self.db.rollback()
+            self._remove_tree_best_effort(installed_dir)
+            if displaced_install is not None:
+                self._restore_quarantined_tree(*displaced_install)
+            raise
+        proposed_trash = self._quarantine_tree(proposed_dir, "installed-source", required=False)
+        if proposed_trash is not None:
+            self._remove_tree_best_effort(proposed_trash)
+        if displaced_install is not None:
+            self._remove_tree_best_effort(displaced_install[1])
         return skill
 
     def reject_proposed_skill(self, skill: Skill) -> None:
@@ -292,10 +328,17 @@ class ProposedSkillService:
             guard.acquire(skill, "delete", reason="Deleting skill")
         except SkillOperationConflict as exc:
             raise ProposedSkillError(str(exc)) from exc
+        staged_trees: list[tuple[Path, Path]] = []
         try:
-            skill_dir = self.installed_dir(skill.name) if skill.status == "installed" else self.skill_dir_for_record(skill)
-            if skill_dir.exists():
-                shutil.rmtree(skill_dir)
+            for path, label in (
+                (self.proposed_dir(skill.name), "deleted-proposed"),
+                (self.installed_dir(skill.name), "deleted-installed"),
+            ):
+                if path.exists():
+                    staged_trees.append((path, self._quarantine_tree(path, label)))
+            from app.services.web_app_runtime_service import WebAppRuntimeService
+
+            WebAppRuntimeService(self.db, project_root=self.project_root).delete_skill_runtime_records(skill)
             self.db.query(ApprovalRequest).filter(ApprovalRequest.skill_id == skill.id).delete(synchronize_session=False)
             self.db.query(SkillSchedule).filter(SkillSchedule.skill_id == skill.id).delete(synchronize_session=False)
             self.db.query(SkillRun).filter(SkillRun.skill_id == skill.id).delete(synchronize_session=False)
@@ -313,8 +356,13 @@ class ProposedSkillService:
             self.db.delete(skill)
             self.db.commit()
         except Exception:
+            self.db.rollback()
+            for original, quarantined in reversed(staged_trees):
+                self._restore_quarantined_tree(original, quarantined)
             guard.release(skill.id)
             raise
+        for _original, quarantined in staged_trees:
+            self._remove_tree_best_effort(quarantined)
 
     def validate_skill_name(self, name: str) -> str:
         if not SAFE_SKILL_NAME.fullmatch(name):
@@ -326,6 +374,52 @@ class ProposedSkillService:
 
     def installed_dir(self, name: str) -> Path:
         return self._safe_child(self.installed_root, name)
+
+    def prepare_generation_workspace(self, name: str) -> Path:
+        workspace = self.proposed_dir(self.validate_skill_name(name))
+        displaced = self._quarantine_tree(workspace, "replaced-generation", required=True)
+        try:
+            workspace.mkdir(parents=True)
+        except OSError as exc:
+            if displaced is not None:
+                self._restore_quarantined_tree(workspace, displaced)
+            raise ProposedSkillError(f"Could not create a clean generation workspace: {workspace}") from exc
+        if displaced is not None:
+            self._remove_tree_best_effort(displaced)
+        return workspace
+
+    def _quarantine_tree(self, path: Path, label: str, *, required: bool = True) -> Path | None:
+        if not path.exists():
+            return None
+        trash_root = (self.project_root / "runtime" / "file_trash").resolve()
+        trash_root.mkdir(parents=True, exist_ok=True)
+        destination = trash_root / f"{label}-{path.name}-{uuid4().hex}"
+        try:
+            os.replace(path, destination)
+        except OSError as exc:
+            if not required:
+                return None
+            raise ProposedSkillError(
+                f"Could not safely stage skill folder for cleanup: {path}. Close processes using it and retry."
+            ) from exc
+        return destination
+
+    @staticmethod
+    def _restore_quarantined_tree(original: Path, quarantined: Path) -> None:
+        if not quarantined.exists() or original.exists():
+            return
+        original.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(quarantined, original)
+
+    @staticmethod
+    def _remove_tree_best_effort(path: Path) -> None:
+        try:
+            shutil.rmtree(path)
+        except OSError:
+            # The folder is already outside active skill roots. Windows may keep
+            # sandbox-created pytest directories locked or ACL-restricted; a
+            # later cleanup pass can retry without corrupting lifecycle state.
+            return
 
     def skill_dir_for_record(self, skill: Skill) -> Path:
         raw_path = skill.installed_path or skill.manifest_path
@@ -374,15 +468,14 @@ class ProposedSkillService:
 
     def _sample_manifest(self, name: str) -> dict:
         return {
+            "manifest_version": 1,
             "name": name,
             "description": "Sample skill for the proposed skill workflow.",
-            "interface_type": "chat",
+            "runtime": "function",
             "entrypoint": "skill.py",
             "instructions_path": None,
             "input_schema": None,
             "output_schema": None,
-            "tool_ui_schema": None,
-            "risk_level": "low",
             "permissions": {
                 "network": [],
                 "filesystem_read": [],
@@ -391,8 +484,6 @@ class ProposedSkillService:
                 "shell": False,
             },
             "schedule": None,
-            "created_by": "manual_sample",
-            "enabled": False,
         }
 
     def _sample_readme(self, name: str) -> str:
@@ -566,12 +657,22 @@ class ProposedSkillService:
         return env
 
     def _run_tests(self, skill_dir: Path) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [sys.executable, "-m", "pytest", str(skill_dir / "tests")],
-            cwd=skill_dir,
-            capture_output=True,
-            text=True,
-            env=self._test_env(skill_dir),
-            timeout=self.timeout_seconds,
-            shell=False,
-        )
+        with tempfile.TemporaryDirectory(prefix=f"personal-agent-pytest-{skill_dir.name}-") as basetemp:
+            return subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pytest",
+                    "-p",
+                    "no:cacheprovider",
+                    "--basetemp",
+                    basetemp,
+                    str(skill_dir / "tests"),
+                ],
+                cwd=skill_dir,
+                capture_output=True,
+                text=True,
+                env=self._test_env(skill_dir),
+                timeout=self.timeout_seconds,
+                shell=False,
+            )

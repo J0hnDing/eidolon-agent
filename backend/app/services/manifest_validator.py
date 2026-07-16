@@ -37,7 +37,12 @@ def validate_manifest_file(path: Path) -> SkillManifest:
 def validate_manifest_package(skill_dir: Path, manifest: SkillManifest) -> None:
     if not (skill_dir / "tests").is_dir():
         raise ManifestValidationError("skills require tests/")
-    for relative_path in (manifest.entrypoint, manifest.instructions_path):
+    entrypoint_path = (
+        manifest.entrypoint
+        if manifest.runtime == "function"
+        else _web_app_entrypoint_path(skill_dir, manifest.entrypoint)
+    )
+    for relative_path in (entrypoint_path, manifest.instructions_path):
         if relative_path is None:
             continue
         resolved = (skill_dir / relative_path).resolve()
@@ -45,6 +50,18 @@ def validate_manifest_package(skill_dir: Path, manifest: SkillManifest) -> None:
             raise ManifestValidationError("Declared skill files must stay inside the skill folder")
         if not resolved.is_file():
             raise ManifestValidationError(f"Declared file is missing: {relative_path}")
+
+
+def _web_app_entrypoint_path(skill_dir: Path, entrypoint: str) -> str:
+    module, _, _attribute = entrypoint.partition(":")
+    module_path = module.replace(".", "/")
+    file_candidate = skill_dir / f"{module_path}.py"
+    package_candidate = skill_dir / module_path / "__init__.py"
+    if file_candidate.is_file():
+        return f"{module_path}.py"
+    if package_candidate.is_file():
+        return f"{module_path}/__init__.py"
+    raise ManifestValidationError(f"Declared web_app module is missing: {module}")
 
 
 __all__ = [

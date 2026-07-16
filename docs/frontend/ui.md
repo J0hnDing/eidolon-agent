@@ -9,8 +9,8 @@ Routes are defined in `frontend/src/App.tsx`:
 - `/chat`
 - `/memory`
 - `/skills`
-- `/tools`
-- `/tools/:skillId`
+- `/apps`
+- `/apps/:skillId`
 - `/skills/:skillId`
 - `/schedules`
 - `/agent-runs`
@@ -20,7 +20,7 @@ Routes are defined in `frontend/src/App.tsx`:
 
 ## API Client
 
-`frontend/src/api/client.ts` defines API types and request helpers. Frontend types mirror backend schemas for skills, runs, versions, approvals, schedules, tools, generation requests, and agent runs.
+`frontend/src/api/client.ts` defines API types and request helpers. Frontend types mirror backend schemas for skills, runs, versions, approvals, schedules, generation requests, and agent runs.
 
 ## Chat Page
 
@@ -29,16 +29,18 @@ Chat supports explicit modes:
 - `chat`: direct conversation only.
 - `project`: starts ProductManager intent refinement and plausibility review for a reusable skill request. ProductManager may ask a clarification question before any blueprint, permission, or task DAG artifacts are created; the next reply in the same chat continues the same generation request.
 
-Build-time and runtime approvals are rendered inline in the chat transcript. Approval messages must remain in chat history when the user navigates away and returns.
+Build-time and runtime approvals are rendered inline in the chat transcript. Approval messages must remain in chat history when the user navigates away and returns. Project chat synchronizes its conversation-scoped generation request, linked agent run, proposed skill, and latest build/runtime approvals from the backend, so a response lost after a committed request or a decision made on the global Approval Requests page is recovered inline without duplicating messages.
 
 Chat persistence is local frontend storage managed by `frontend/src/lib/chatStore.ts`. Project conversations also store the pending generation request id while ProductManager is waiting for clarification so the user's next reply stays attached to the same request.
 Users can delete any chat conversation from the chat list. Deletion removes the local transcript and asks the backend to remove any persisted message rows for the same frontend conversation id; Project-mode approval records remain available through the approval pages.
+
+Approving a Project build-time request from either its inline chat card or the global Approval Requests page continues the linked agent run automatically. A separate Agent Run resume click is reserved for quota pauses, recoverable workflow failures, or explicit user-action blockers rather than ordinary permission approval.
 
 `ChatPage` retains route-level API orchestration. `features/chat/useChatConversations.ts` owns local conversation selection, creation, deletion, drafts, modes, and message transitions; it persists the synthesized first conversation before accepting edits. `features/chat/ChatWorkspace.tsx` owns the sidebar, mode selector, transcript, approval cards, and composer presentation.
 
 ## Skills Page
 
-Lists skills in one list. User-facing creation goes through the proposed-skill workflow, not bare database record creation.
+Lists skills in one list with their `function` or `web_app` runtime. Installed enabled web applications expose an Open Application action. User-facing creation goes through the proposed-skill workflow, not bare database record creation.
 
 ## Skill Detail Page
 
@@ -55,18 +57,22 @@ Shows:
 - update suggestion chat;
 - schedules.
 
-Installed skills may be run manually only when backend checks pass.
+Installed function skills may be run manually only when backend checks pass. Web application details replace bounded-run input/history and schedule controls with an Open Application action while retaining files, validation, permission, version, update, and agent-run controls.
 Run history shows each run's separate runtime Codex token total, honest partial/failed status and error summary, and the latest-run detail includes its token breakdown, call count, and persisted Codex invocation diagnostics.
 
 `SkillDetailPage` retains route loading, polling, and mutation orchestration. Cohesive update-chat, version, comparison, schedule, validation, and run-detail presentation lives under `features/skill-detail/SkillDetailPanels.tsx`. Feature tests cover conversation state transitions, chat workspace interactions, schedule delegation, version empty state, and run-input validation; `npm test` is the frontend regression command and `npm run build` remains the production type/build check.
 
-## Tools Pages
+## Applications Pages
 
-`ToolsPage` lists installed enabled skills with `interface_type = "tool"`. `ToolDetailPage` renders a form from declarative `tool_ui_schema` when present, otherwise it falls back to JSON input. Tool runs use the same backend runner and permission checks as skill runs.
+`ApplicationsPage` lists only `runtime = web_app` skills. Function skills do not appear there and have no separate interface page in the current milestone. Installed enabled web applications open through `/apps/:skillId`.
+
+`WebAppPage` asks the backend for a ready, version-pinned application session and keeps trusted identity, version, lifecycle status, containment disclosures, stop control, logs, and bounded audit status outside the frame. It embeds only an HTTP(S) hostname under the configured `*.web-app.localhost` gateway domain; ordinary external or credential-bearing URLs are rejected. The iframe uses `sandbox="allow-scripts allow-forms allow-same-origin"`, an empty browser-feature allowlist, and `no-referrer`. The backend supplies the complementary CSP and Permissions Policy. The page polls diagnostics while the application is healthy and displays readiness/failure details without trusting application-rendered status.
+
+If the backend gateway domain is customized, `VITE_WEB_APP_GATEWAY_DOMAIN` must match it. The application runtime and containment contract is documented in [Sandboxed web applications](../runtime/web_applications.md).
 
 ## Agent Runs Pages
 
-Agent Runs list and detail pages show run status, current task node or parallel active nodes, current step, step logs, structured inputs/outputs, DAG progress, node failures, and retry/cancel controls. The detail page has Build Details and Skill Run History tabs. Build Details renders the recorded task DAG with task node status, dependencies, expected output paths, file write claims, backend API ids, per-node Codex tokens, build totals, usage pause reason, and resume control. Skill Run History lists runs for the linked skill with separate runtime Codex totals and per-invocation success/failure metadata, including retained CLI diagnostics for failed calls. Skill detail shows completed agent-run token totals.
+Agent Runs list and detail pages show run status, current task node or parallel active nodes, current step, step logs, structured inputs/outputs, DAG progress, node failures, and applicable retry/cancel controls. Task-DAG failures expose run-level and failed-step retry actions. Single-Codex errors are terminal and expose no retry action; only a pre-invocation quota pause may resume. The detail page has Build Details and Skill Run History tabs. Build Details renders the recorded task DAG with task node status, dependencies, expected output paths, file write claims, backend API ids, per-node Codex tokens, build totals, usage pause reason, and resume control. Skill Run History lists runs for the linked skill with separate runtime Codex totals and per-invocation success/failure metadata, including retained CLI diagnostics for failed calls. Skill detail shows completed agent-run token totals.
 
 ## Codex Settings
 

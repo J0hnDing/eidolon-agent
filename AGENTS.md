@@ -8,14 +8,14 @@ This repository builds a local-first assistant that can chat with the user, stor
 
 All skills contain executable Python code and tests. A skill may optionally include `SKILL.md` reusable instructions or operating guidance.
 
-A user-facing tool is an installed, enabled skill with `interface_type = "tool"` and optional declarative `tool_ui_schema`.
+Runtime determines interface exposure. A `web_app` skill is an importable ASGI runtime opened through the sandboxed Applications surface. A `function` skill is a bounded JSON capability and has no dedicated interface surface in the current milestone.
 
 ## Current Stack
 
 - Backend: FastAPI, SQLite, SQLAlchemy, Pydantic schemas, pytest, Ruff.
 - Frontend: React, Vite, TypeScript, plain CSS.
 - Skill language: Python.
-- Skill execution: Docker sandbox by default when available, explicit local/dev fallback.
+- Skill execution: bounded `function` runs and persistent `web_app` instances, with Docker sandboxing by default and explicit local/dev fallback.
 - Scheduling: APScheduler.
 - Skill generation and agents: Codex CLI through backend service adapters.
 
@@ -70,7 +70,7 @@ Read the relevant files under `docs/` before making non-trivial changes. Start a
 - Skill lifecycle and versioning: [docs/skills/lifecycle.md](docs/skills/lifecycle.md), [docs/skills/versioning.md](docs/skills/versioning.md)
 - Agent workflows: [docs/agents/overview.md](docs/agents/overview.md), [docs/workflows/project_build_workflow.md](docs/workflows/project_build_workflow.md), [docs/workflows/update_workflow.md](docs/workflows/update_workflow.md)
 - Permissions and sandboxing: [docs/security/permissions.md](docs/security/permissions.md), [docs/security/sandbox_execution.md](docs/security/sandbox_execution.md)
-- Scheduling and tools: [docs/runtime/scheduling.md](docs/runtime/scheduling.md), [docs/runtime/tools.md](docs/runtime/tools.md)
+- Scheduling: [docs/runtime/scheduling.md](docs/runtime/scheduling.md)
 - Codex CLI integration: [docs/integrations/codex_cli.md](docs/integrations/codex_cli.md)
 - Confirmed unfinished work: [docs/todo.md](docs/todo.md)
 - Working history log format: [docs/working_history.md](docs/working_history.md)

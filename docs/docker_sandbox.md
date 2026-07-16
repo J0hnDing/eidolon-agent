@@ -7,7 +7,7 @@ This is a short compatibility page for the Milestone 8 Docker runner notes. The 
 
 ## Current Behavior
 
-Installed skills run through the selected runner mode:
+Installed function runs and persistent web-application instances use the selected runner mode:
 
 ```powershell
 $env:PERSONAL_AGENT_RUNNER_MODE = "auto"   # auto, docker, local, or dev
@@ -20,7 +20,7 @@ The Docker runner uses the trusted image from `backend/docker/skill-runner.Docke
 
 ## Restrictions
 
-Each Docker run uses a disposable container with:
+Each bounded function run uses a disposable container with:
 
 - the skill folder mounted read-only at `/skill`;
 - a per-skill cache mounted writable at `/skill/cache`;
@@ -35,10 +35,12 @@ Network mode is permission-dependent:
 
 Important limitation: approved domains are currently a policy record, not a Docker egress firewall. Domain-level network enforcement is not implemented yet.
 
+Web applications use the same trusted image but run in a version-pinned persistent container with a read-only root, tmpfs, PID/resource limits, dropped capabilities, loopback gateway ingress, and a separate application instance/session lifecycle. The application always starts on an internal network; a separate trusted relay container bridges loopback ingress and the single scoped backend capability without mounting skill code. Without approved domains the application has no other network. Approved domains attach bridge as a secondary egress network with the documented domain/direct-IP enforcement limitation. See [Sandboxed web applications](runtime/web_applications.md).
+
 ## Manual Verification
 
 1. Start the backend with `PERSONAL_AGENT_RUNNER_MODE=auto` or `docker`.
 2. Confirm Docker is running.
 3. Open an installed, enabled skill with approved runtime permissions.
-4. Run it from Skill Detail or Tools.
-5. Inspect run history, stdout, stderr, output JSON, and sandbox/image status.
+4. Run a function from Skill Detail or open a web application from Applications.
+5. Inspect bounded run history or web-application lifecycle/audit diagnostics and sandbox state.

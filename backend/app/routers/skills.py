@@ -80,6 +80,11 @@ def run_skill(
 
     if skill.status != "installed":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only installed skills can be run")
+    if skill.runtime != "function":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="web_app skills are opened as persistent application sessions, not bounded runs",
+        )
     if not skill.enabled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Skill is disabled")
     permission_decision = PermissionService(db).can_run(skill)
@@ -117,6 +122,11 @@ def call_codex_for_skill(
         manifest = validate_manifest_file(skill_dir / "manifest.json")
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if manifest.runtime != "function":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="web_app skills must use a scoped instance capability for privileged backend calls",
+        )
 
     if payload.codex_permissions.call_response is False:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Codex call_response permission is required")
@@ -129,6 +139,11 @@ def call_codex_for_skill(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Codex internet access requires approved runtime network permission",
+        )
+    if internet_requested and not manifest.permissions.codex.internet_access:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Skill manifest does not allow Codex internet access",
         )
 
     try:
@@ -364,7 +379,17 @@ def update_skill(skill_id: int, payload: SkillUpdate, db: Session = Depends(get_
     if skill.status != "installed":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only installed skills can be enabled or disabled")
     if payload.enabled is not None:
-        skill.enabled = payload.enabled
+        if skill.enabled and not payload.enabled:
+            from app.services.web_app_runtime_service import WebAppRuntimeService
+
+            try:
+                with SkillOperationGuard(db).locked(skill, "disable", reason="Disabling installed skill"):
+                    WebAppRuntimeService(db).stop_skill_instances(skill, "Skill disabled")
+                    skill.enabled = False
+            except SkillOperationConflict as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        else:
+            skill.enabled = payload.enabled
     db.commit()
     db.refresh(skill)
     return skill

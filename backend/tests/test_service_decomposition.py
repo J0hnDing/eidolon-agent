@@ -54,16 +54,16 @@ def test_product_manager_contract_service_keeps_only_backend_fields() -> None:
     fallback = {
         "goal": "Fallback",
         "skill_name": "sample",
-        "interface_type": "chat",
         "requested_permissions": {"filesystem_write": ["./cache", "report.json"]},
     }
 
     blueprint = service.sanitize_blueprint(
-        {"goal": "Build it", "skill_name": "sample", "unknown": "drop"},
+        {"goal": "Build it", "skill_name": "untrusted_rename", "unknown": "drop"},
         fallback,
     )
 
     assert "unknown" not in blueprint
+    assert blueprint["skill_name"] == "sample"
     assert blueprint["permission_plan"]["runtime"]["filesystem_write"] == ["report.json"]  # type: ignore[index]
 
 

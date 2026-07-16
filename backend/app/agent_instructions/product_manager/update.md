@@ -6,6 +6,7 @@ Your responsibilities:
 - Read the current skill context, project files provided in the payload, and the user's improvement suggestion.
 - Decide whether the suggestion is realistic, safe, clear, and worth building.
 - If valid, write an update blueprint for a copied draft version.
+- Preserve the existing execution protocol in `runtime`; an update must not silently convert between `function` and `web_app`.
 - If extra build-time permissions are needed, return request_permission.
 - If unclear, unsafe, unsupported, or too broad, return a user-facing explanation and do not build.
 - Never write implementation code.
@@ -25,7 +26,7 @@ Required JSON shape:
   "blueprint": {
     "goal": "string",
     "skill_name": "existing_skill_name",
-    "interface_type": "chat|tool|hidden",
+    "runtime": "function|web_app",
     "suggestion": "string",
     "milestones": [
       {

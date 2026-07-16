@@ -1,6 +1,6 @@
 # Architecture Overview
 
-The project is a local-first control plane for reusable application skills. The assistant can chat, store explicit memory, propose skills, build them with Codex-backed agents, validate them, request approvals, install them, run them in a sandbox, schedule them, and update them through versioned drafts.
+The project is a local-first control plane for reusable application skills. The assistant can chat, store explicit memory, propose skills, build them with Codex-backed agents, validate them, request approvals, install them, run bounded function skills, host persistent sandboxed web applications, schedule bounded functions, and update skills through versioned drafts.
 
 ## Main Parts
 
@@ -13,6 +13,7 @@ Frontend React UI
       -> runtime artifacts
       -> Codex CLI adapters
       -> Docker/local skill runners
+      -> trusted web-app gateway and scoped capabilities
 ```
 
 ## Backend
@@ -33,12 +34,12 @@ The frontend is a local control UI. It exposes:
 - Chat with chat/project modes;
 - Memory CRUD;
 - Skills list and skill detail;
-- Tools list/detail;
 - Schedules;
 - Approval Requests;
 - Agent Runs and step logs.
+- Applications list and trusted application chrome around isolated skill-owned UI.
 
-Targeted polling refreshes changing workflow state. The MVP does not use SSE or WebSockets.
+Targeted polling refreshes changing workflow and application lifecycle state. The MVP does not use SSE or WebSockets.
 
 ## Skill Filesystem
 
@@ -56,10 +57,20 @@ Runtime artifacts live under:
 runtime/
   agent_runs/
   skill_cache/
+  web_apps/
   docker_runner_build.json
 ```
 
 Generated skills must not modify backend/frontend app source.
+
+## Skill Runtime Protocols
+
+The manifest `runtime` discriminator selects an execution protocol:
+
+- `function`: the existing bounded Python JSON stdin/stdout runner and optional scheduling;
+- `web_app`: a version-pinned importable ASGI service with separate application-instance, browser-session, gateway, and bounded audit records.
+
+The backend is the control plane for both protocols. Web-app content remains on a distinct untrusted origin inside a sandboxed iframe; the React UI retains trusted navigation, lifecycle, version, and permission controls. See [Sandboxed web applications](../runtime/web_applications.md).
 
 ## Current Constraints
 

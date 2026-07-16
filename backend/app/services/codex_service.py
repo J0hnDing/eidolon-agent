@@ -17,10 +17,11 @@ from app.services.codex_cli_service import codex_cli_service, should_use_real_co
 from app.services.codex_invocation_recorder import CodexInvocationRecorder
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
 from app.services.default_permissions import default_build_time_dependencies
-from app.services.manifest_validator import validate_manifest_file
+from app.services.manifest_validator import classify_permission_risk, validate_manifest_file
 from app.services.permission_service import PermissionService
 from app.services.product_manager_contract_service import ProductManagerContractService
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
+from app.services.skill_package_files import snapshot_skill_files
 from app.workflows.base import DEFAULT_BUILD_WORKFLOW
 from app.workflows.common.prompts import build_product_manager_prompt as build_common_product_manager_prompt
 from app.workflows.single_codex.prompts import build_prompt as build_single_codex_prompt
@@ -44,6 +45,49 @@ class CodexGenerationError(RuntimeError):
 
 PRODUCT_MANAGER_SANDBOX = "read-only"
 WRITABLE_SKILL_SANDBOX = "workspace-write"
+
+
+def _web_app_smoke_test_source(expected_text: str | None = None) -> str:
+    expected_assertion = f"    assert {expected_text!r} in body\n" if expected_text else ""
+    return (
+        "import asyncio\n"
+        "import importlib\n"
+        "import json\n"
+        "import sys\n"
+        "from pathlib import Path\n\n"
+        "ROOT = Path(__file__).resolve().parents[1]\n"
+        "MANIFEST = json.loads((ROOT / 'manifest.json').read_text(encoding='utf-8'))\n"
+        "MODULE_NAME, ATTRIBUTE = MANIFEST['entrypoint'].split(':', 1)\n"
+        "sys.path.insert(0, str(ROOT))\n"
+        "MODULE = importlib.import_module(MODULE_NAME)\n"
+        "APP = getattr(MODULE, ATTRIBUTE)\n\n"
+        "async def request_root():\n"
+        "    messages = []\n"
+        "    received = False\n"
+        "    async def receive():\n"
+        "        nonlocal received\n"
+        "        if not received:\n"
+        "            received = True\n"
+        "            return {'type': 'http.request', 'body': b'', 'more_body': False}\n"
+        "        return {'type': 'http.disconnect'}\n"
+        "    async def send(message):\n"
+        "        messages.append(message)\n"
+        "    scope = {\n"
+        "        'type': 'http', 'asgi': {'version': '3.0'}, 'http_version': '1.1',\n"
+        "        'method': 'GET', 'scheme': 'http', 'path': '/', 'raw_path': b'/',\n"
+        "        'query_string': b'', 'headers': [], 'client': ('test', 1), 'server': ('test', 80),\n"
+        "    }\n"
+        "    await APP(scope, receive, send)\n"
+        "    status = next(message['status'] for message in messages if message['type'] == 'http.response.start')\n"
+        "    body = b''.join(message.get('body', b'') for message in messages if message['type'] == 'http.response.body')\n"
+        "    return status, body.decode('utf-8')\n\n"
+        "def test_web_app_manifest_and_rendering_contract():\n"
+        "    assert MANIFEST['runtime'] == 'web_app'\n"
+        "    status, body = asyncio.run(request_root())\n"
+        "    assert status == 200\n"
+        "    assert '<html' in body.lower()\n"
+        + expected_assertion
+    )
 
 
 class CodexAdapter(Protocol):
@@ -294,7 +338,7 @@ class FakeCodexAdapter:
             blueprint = {
                 "goal": plan.get("user_request") or f"Repair {plan['skill_name']}.",
                 "skill_name": plan["skill_name"],
-                "interface_type": plan.get("interface_type", "chat"),
+                "runtime": plan.get("runtime", "function"),
                 "milestones": [
                     {
                         "name": "repair_skill",
@@ -372,21 +416,20 @@ class FakeCodexAdapter:
                 stderr="",
             )
         permissions = plan["requested_permissions"]
+        runtime = str(plan.get("runtime") or "function")
+        entrypoint = "app:app" if runtime == "web_app" else "skill.py"
         manifest = {
+            "manifest_version": 1,
             "name": plan["skill_name"],
             "description": plan["goal"],
-            "interface_type": plan.get("interface_type", "chat"),
-            "entrypoint": "skill.py",
+            "runtime": runtime,
+            "entrypoint": entrypoint,
             "instructions_path": self._instructions_path_for_plan(plan),
             "input_schema": plan.get("input_schema"),
             "output_schema": plan.get("output_schema"),
-            "tool_ui_schema": plan.get("tool_ui_schema"),
             "dependencies": plan.get("requested_dependencies", []),
-            "risk_level": plan["risk_level"],
             "permissions": permissions,
             "schedule": plan.get("schedule"),
-            "created_by": "codex",
-            "enabled": False,
         }
         (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         (output_dir / "README.md").write_text(f"# {plan['display_name']}\n\n{plan['goal']}\n", encoding="utf-8")
@@ -395,19 +438,37 @@ class FakeCodexAdapter:
                 "# Instructions\n\nUse this reusable capability with care. Do not perform unsafe actions.\n",
                 encoding="utf-8",
             )
-        (output_dir / "skill.py").write_text(
+        implementation_path = output_dir / ("app.py" if runtime == "web_app" else "skill.py")
+        implementation_source = (
+            "from fastapi import FastAPI\n"
+            "from fastapi.responses import HTMLResponse\n\n"
+            "app = FastAPI()\n\n"
+            "@app.get('/', response_class=HTMLResponse)\n"
+            "def index():\n"
+            "    return '''<!doctype html><html><head><meta charset=\"utf-8\"><title>Generated Web App</title>"
+            "<style>body{font-family:system-ui;margin:2rem}button{padding:.6rem 1rem}</style></head>"
+            "<body><h1>Generated Web Application</h1><p id=\"state\">Ready</p>"
+            "<button onclick=\"document.getElementById('state').textContent='Updated by the app'\">Interact</button>"
+            "</body></html>'''\n"
+            if runtime == "web_app"
+            else (
                 "import json\n"
                 "import sys\n\n"
                 "def main():\n"
                 "    payload = json.loads(sys.stdin.read() or '{}')\n"
                 "    print(json.dumps({'title': 'Generated Proposed Skill', 'items': [], 'input': payload, 'warnings': []}))\n\n"
                 "if __name__ == '__main__':\n"
-                "    main()\n",
-                encoding="utf-8",
+                "    main()\n"
+            )
         )
+        implementation_path.write_text(implementation_source, encoding="utf-8")
         if plan.get("builder_writes_tests", True):
             tests_dir = output_dir / "tests"
-            (tests_dir / "test_skill.py").write_text(
+            test_path = tests_dir / ("test_app.py" if runtime == "web_app" else "test_skill.py")
+            test_source = (
+                _web_app_smoke_test_source("Generated Web Application")
+                if runtime == "web_app"
+                else (
                     "import json\n"
                     "import subprocess\n"
                     "import sys\n"
@@ -416,9 +477,10 @@ class FakeCodexAdapter:
                     "    skill_path = Path(__file__).resolve().parents[1] / 'skill.py'\n"
                     "    result = subprocess.run([sys.executable, str(skill_path)], input='{}', capture_output=True, text=True, timeout=5, shell=False)\n"
                     "    assert result.returncode == 0\n"
-                    "    assert isinstance(json.loads(result.stdout), dict)\n",
-                    encoding="utf-8",
+                    "    assert isinstance(json.loads(result.stdout), dict)\n"
+                )
             )
+            test_path.write_text(test_source, encoding="utf-8")
         self._write_interface_artifact(output_dir, plan)
         return subprocess.CompletedProcess(args=["fake-codex"], returncode=0, stdout="fake generation complete", stderr="")
 
@@ -441,11 +503,24 @@ class FakeCodexAdapter:
             for key in ("created_paths", "updated_paths"):
                 parent_paths.update(str(path) for path in parent.get(key, []) or [])
         update_paths = parent_paths | {"manifest.json"}
+        declared_entrypoint = None
+        manifest_path = output_dir / "manifest.json"
+        if manifest_path.is_file():
+            try:
+                manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if isinstance(manifest_payload, dict):
+                    declared_entrypoint = manifest_payload.get("entrypoint")
+            except json.JSONDecodeError:
+                declared_entrypoint = None
         artifact = {
             "created_paths": [path for path in expected_paths if path not in update_paths],
             "updated_paths": [path for path in expected_paths if path in update_paths],
             "interfaces": {
-                "entrypoint": "skill.py" if (output_dir / "skill.py").is_file() else None,
+                "entrypoint": (
+                    declared_entrypoint
+                    or ("app:app" if (output_dir / "app.py").is_file() else None)
+                    or ("skill.py" if (output_dir / "skill.py").is_file() else None)
+                ),
                 "input_schema": plan.get("input_schema") or {},
                 "output_schema": plan.get("output_schema") or {},
             },
@@ -513,14 +588,16 @@ class FakeCodexAdapter:
             "manifest.json is valid",
             "required skill files exist",
             "skill tests pass",
-            "skills use JSON stdin/stdout",
+            (
+                "web application exposes its self-rendered ASGI interface"
+                if plan.get("runtime") == "web_app"
+                else "function skill uses JSON stdin/stdout"
+            ),
         ]
-        if plan.get("interface_type") == "tool":
-            acceptance_criteria.append("tool_ui_schema is present so the Tools page can render a user-friendly UI")
         return {
             "goal": plan.get("goal") or user_message,
             "skill_name": plan.get("skill_name"),
-            "interface_type": plan.get("interface_type", "chat"),
+            "runtime": plan.get("runtime", "function"),
             "expected_behavior": plan.get("expected_output", {}),
             "schedule": plan.get("schedule"),
             "acceptance_criteria": acceptance_criteria,
@@ -546,7 +623,11 @@ class FakeCodexAdapter:
                     "manifest.json is valid",
                     "required skill files exist",
                     "skill tests pass",
-                    "skills use JSON stdin/stdout",
+                    (
+                        "web application exposes its declared ASGI entrypoint"
+                        if plan.get("runtime") == "web_app"
+                        else "function skill uses JSON stdin/stdout"
+                    ),
                 ]
             ),
             "test_expectations": ["validate manifest and generated skill behavior"],
@@ -587,7 +668,7 @@ class FakeCodexAdapter:
         decision["blueprint"] = {
             "goal": decision["summary"],
             "skill_name": plan["skill_name"],
-            "interface_type": plan.get("interface_type", "chat"),
+            "runtime": plan.get("runtime", "function"),
             "suggestion": suggestion,
             "permission_plan": {
                 "build_time": {
@@ -637,17 +718,22 @@ class FakeCodexAdapter:
         elif task_id:
             test_relative_path = f"tests/test_{task_id}.py"
         else:
-            test_relative_path = "tests/test_skill.py"
+            test_relative_path = "tests/test_app.py" if plan.get("runtime") == "web_app" else "tests/test_skill.py"
         test_path = output_dir / test_relative_path
         if not tests_dir.is_dir() or test_path.parent != tests_dir:
             raise CodexGenerationError("Tester requires the backend-created tests/ directory")
+        if plan.get("runtime") == "web_app":
+            test_path.write_text(
+                _web_app_smoke_test_source(),
+                encoding="utf-8",
+            )
+            return
         test_path.write_text(
             "import json\n"
             "import subprocess\n"
             "import sys\n"
             "from pathlib import Path\n\n"
             f"EXPECTED_NAME = {json.dumps(plan.get('skill_name'))}\n"
-            f"EXPECTED_INTERFACE_TYPE = {json.dumps(plan.get('interface_type', 'chat'))}\n"
             f"SAMPLE_INPUT_JSON = {json.dumps(json.dumps(sample_input))}\n"
             f"REQUIRED_OUTPUT_FIELDS = {json.dumps(required_output_fields)}\n\n"
             "ROOT = Path(__file__).resolve().parents[1]\n\n"
@@ -668,13 +754,10 @@ class FakeCodexAdapter:
             "def test_manifest_matches_blueprint_and_safe_contract():\n"
             "    manifest = json.loads((ROOT / 'manifest.json').read_text(encoding='utf-8'))\n"
             "    assert manifest['name'] == EXPECTED_NAME\n"
-            "    assert manifest.get('interface_type', 'chat') == EXPECTED_INTERFACE_TYPE\n"
             "    assert manifest['permissions']['shell'] is False\n"
             "    assert manifest['permissions']['secrets'] == []\n"
             "    assert isinstance(manifest.get('dependencies', []), list)\n"
-            "    if EXPECTED_INTERFACE_TYPE == 'tool':\n"
-            "        assert isinstance(manifest.get('tool_ui_schema'), dict)\n"
-            "        assert manifest['tool_ui_schema'].get('fields')\n\n"
+            "\n"
             "def test_skill_accepts_representative_input_and_outputs_json_object():\n"
             "    result = run_skill(SAMPLE_INPUT_JSON)\n"
             "    assert result.returncode == 0, result.stderr\n"
@@ -1052,7 +1135,6 @@ class CodexService:
         payload = {
             "codex_task": "product_manager_repair_blueprint",
             "skill_name": skill.name,
-            "interface_type": skill.interface_type,
             "user_request": user_request or f"Repair skill {skill.name}.",
         }
         fallback = self._fallback_repair_blueprint(skill, user_request)
@@ -1067,7 +1149,6 @@ class CodexService:
         payload = {
             "codex_task": "product_manager_update_review",
             "skill_name": skill.name,
-            "interface_type": skill.interface_type,
             "description": skill.description,
             "suggestion": suggestion,
             "project_files": self._read_skill_files(skill),
@@ -1244,9 +1325,7 @@ class CodexService:
         self._assert_proposed_skill_workspace(proposed_dir)
         if self.proposed_service.installed_dir(skill_name).exists():
             raise CodexGenerationError(f"Installed skill already exists: {skill_name}")
-        if proposed_dir.exists():
-            shutil.rmtree(proposed_dir)
-        proposed_dir.mkdir(parents=True)
+        proposed_dir = self.proposed_service.prepare_generation_workspace(skill_name)
         workflow_context = {
             "blueprint_json": blueprint,
             "permission_plan": permission_plan,
@@ -1397,7 +1476,6 @@ class CodexService:
             "workspace_paths": tester_context.get("workspace_paths", []),
             "input_schema": skill.input_schema_json,
             "output_schema": skill.output_schema_json,
-            "tool_ui_schema": skill.tool_ui_schema_json,
             **({"blueprint_contract": tester_context["blueprint_contract"]} if "blueprint_contract" in tester_context else {}),
             **({"milestone": tester_context["milestone"]} if "milestone" in tester_context else {}),
         }
@@ -1433,7 +1511,6 @@ class CodexService:
             "code_files": tester_context.get("code_files", {}),
             "input_schema": skill.input_schema_json,
             "output_schema": skill.output_schema_json,
-            "tool_ui_schema": skill.tool_ui_schema_json,
             **({"blueprint_json": tester_context["blueprint_json"]} if "blueprint_json" in tester_context else {}),
             **({"permission_plan": tester_context["permission_plan"]} if "permission_plan" in tester_context else {}),
             **({"milestone": tester_context["milestone"]} if "milestone" in tester_context else {}),
@@ -1449,10 +1526,9 @@ class CodexService:
             "goal": failure_context.get("user_request") or f"Repair skill {skill.name}.",
             "skill_name": skill.name,
             "display_name": skill.name.replace("_", " ").title(),
-            "interface_type": skill.interface_type,
+            "runtime": skill.runtime,
             "input_schema": skill.input_schema_json,
             "output_schema": skill.output_schema_json,
-            "tool_ui_schema": skill.tool_ui_schema_json,
             "requested_permissions": failure_context.get(
                 "requested_permissions",
                 {
@@ -1476,26 +1552,16 @@ class CodexService:
         return self._read_files_from_dir(skill_dir)
 
     def _read_files_from_dir(self, root: Path) -> dict[str, str]:
-        files: dict[str, str] = {}
-        readable_paths = ["manifest.json", "README.md", "SKILL.md", "skill.py"]
-        tests_dir = root / "tests"
-        if tests_dir.is_dir():
-            readable_paths.extend(path.relative_to(root).as_posix() for path in sorted(tests_dir.rglob("test_*.py")))
-        for relative_path in readable_paths:
-            path = root / relative_path
-            if path.is_file():
-                files[relative_path] = path.read_text(encoding="utf-8")[:12000]
-        return files
+        return snapshot_skill_files(root)
 
     def update_skill_record_from_manifest(self, skill: Skill, proposed_dir: Path) -> None:
         manifest = validate_manifest_file(proposed_dir / "manifest.json")
         skill.description = manifest.description
-        skill.interface_type = manifest.interface_type
-        skill.risk_level = manifest.risk_level
+        skill.runtime = manifest.runtime
+        skill.risk_level = classify_permission_risk(manifest.permissions, manifest.dependencies)
         skill.instructions_path = manifest.instructions_path
         skill.input_schema_json = manifest.input_schema
         skill.output_schema_json = manifest.output_schema
-        skill.tool_ui_schema_json = manifest.tool_ui_schema
         skill.enabled = False
         self.db.commit()
         self.db.refresh(skill)
@@ -1504,14 +1570,13 @@ class CodexService:
         skill = self.db.scalar(select(Skill).where(Skill.name == plan["skill_name"]))
         values = {
             "description": plan["goal"],
-            "interface_type": plan.get("interface_type", "chat"),
+            "runtime": plan.get("runtime", "function"),
             "status": status,
             "risk_level": plan["risk_level"],
             "manifest_path": self.relative_path(proposed_dir / "manifest.json"),
             "instructions_path": self._planned_instructions_path(plan),
             "input_schema_json": plan.get("input_schema"),
             "output_schema_json": plan.get("output_schema"),
-            "tool_ui_schema_json": plan.get("tool_ui_schema"),
             "installed_path": None,
             "enabled": False,
         }
@@ -1558,6 +1623,8 @@ class CodexService:
             if not isinstance(raw, dict):
                 return
             manifest = dict(raw)
+            for backend_owned_key in ("risk_level", "created_by", "enabled", "active_version", "installed"):
+                manifest.pop(backend_owned_key, None)
             for key, value in skeleton.items():
                 if key not in manifest:
                     manifest[key] = value
@@ -1576,54 +1643,40 @@ class CodexService:
     ) -> dict[str, object]:
         blueprint = self._context_blueprint(plan, task_context)
         permission_plan = self._context_permission_plan(plan, task_context)
-        runtime = permission_plan.get("runtime") if isinstance(permission_plan.get("runtime"), dict) else {}
-        permissions = self._runtime_permissions(runtime)
+        runtime_plan = permission_plan.get("runtime") if isinstance(permission_plan.get("runtime"), dict) else {}
+        permissions = self._runtime_permissions(runtime_plan)
         sanitized_permission_plan = self.product_manager_contracts.sanitize_permission_plan(
-            {"runtime": {**permissions, "dependencies": runtime.get("dependencies", [])}},
+            {"runtime": {**permissions, "dependencies": runtime_plan.get("dependencies", [])}},
             plan,
         )
         sanitized_permissions = self._runtime_permissions(sanitized_permission_plan["runtime"])
-        interface_type = str(blueprint.get("interface_type") or plan.get("interface_type") or "chat")
+        runtime = str(blueprint.get("runtime") or plan.get("runtime") or "function")
         dependencies = list(
-            (runtime.get("dependencies") if isinstance(runtime, dict) else None)
+            runtime_plan.get("dependencies")
             or plan.get("requested_dependencies", [])
             or []
         )
         manifest = {
+            "manifest_version": 1,
             "name": str(blueprint.get("skill_name") or plan.get("skill_name")),
             "display_name": plan.get("display_name"),
             "description": str(blueprint.get("goal") or plan.get("goal") or plan.get("skill_name")),
-            "interface_type": interface_type,
-            "entrypoint": "skill.py",
+            "runtime": runtime,
+            "entrypoint": "app:app" if runtime == "web_app" else "skill.py",
             "instructions_path": self._planned_instructions_path(plan),
             "input_schema": plan.get("input_schema"),
             "output_schema": plan.get("output_schema"),
-            "tool_ui_schema": plan.get("tool_ui_schema"),
             "dependencies": dependencies,
-            "risk_level": str(plan.get("risk_level") or self._risk_level_for_permissions(sanitized_permissions)),
             "permissions": sanitized_permissions,
-            "schedule": blueprint.get("schedule") if isinstance(blueprint.get("schedule"), dict) else plan.get("schedule"),
-            "created_by": "codex",
-            "enabled": False,
+            "schedule": (
+                None
+                if runtime == "web_app"
+                else blueprint.get("schedule") if isinstance(blueprint.get("schedule"), dict) else plan.get("schedule")
+            ),
         }
         if manifest["display_name"] is None:
             manifest.pop("display_name")
         return manifest
-
-    def _risk_level_for_permissions(self, permissions: dict[str, object]) -> str:
-        if permissions.get("shell") or permissions.get("secrets"):
-            return "high"
-        read_paths = {
-            str(path).replace("\\", "/").removeprefix("./").rstrip("/")
-            for path in permissions.get("filesystem_read", []) or []
-        }
-        write_paths = {
-            str(path).replace("\\", "/").removeprefix("./").rstrip("/")
-            for path in permissions.get("filesystem_write", []) or []
-        }
-        if read_paths - {"cache"} or write_paths - {"cache"}:
-            return "medium"
-        return "low"
 
     def _planned_instructions_path(self, plan: dict) -> str | None:
         files = plan.get("files_to_generate")
@@ -1691,7 +1744,7 @@ class CodexService:
         return {
             "goal": plan.get("goal"),
             "skill_name": plan.get("skill_name"),
-            "interface_type": plan.get("interface_type", "chat"),
+            "runtime": plan.get("runtime", "function"),
         }
 
     def _context_permission_plan(
@@ -1713,7 +1766,7 @@ class CodexService:
 
 Skill:
 - name: {skill.name}
-- interface_type: {skill.interface_type}
+- runtime: {skill.runtime}
 
 Controlled skill folder:
 {output_dir}
@@ -1751,7 +1804,7 @@ Tester context:
 
 Skill:
 - name: {skill.name}
-- interface_type: {skill.interface_type}
+- runtime: {skill.runtime}
 
 Draft version:
 - version: {version.version}
@@ -1826,10 +1879,12 @@ Payload:
             "manifest.json is valid",
             "required skill files exist",
             "skill tests pass",
-            "skills use JSON stdin/stdout",
+            (
+                "web application exposes its self-rendered ASGI interface"
+                if plan.get("runtime") == "web_app"
+                else "function skill uses JSON stdin/stdout"
+            ),
         ]
-        if plan.get("interface_type") == "tool":
-            acceptance_criteria.append("tool_ui_schema is present so the Tools page can render a user-friendly UI")
         runtime_dependencies = list(plan.get("requested_dependencies", []) or [])
         permission_plan = {
             "build_time": {
@@ -1848,7 +1903,7 @@ Payload:
         return {
             "goal": plan.get("goal") or generation_request.user_message,
             "skill_name": plan.get("skill_name"),
-            "interface_type": plan.get("interface_type", "chat"),
+            "runtime": plan.get("runtime", "function"),
             "expected_behavior": plan.get("expected_output", {}),
             "permission_plan": permission_plan,
             "schedule": plan.get("schedule"),
@@ -1882,7 +1937,11 @@ Payload:
                     "manifest.json is valid",
                     "required skill files exist",
                     "skill tests pass",
-                    "skills use JSON stdin/stdout",
+                    (
+                        "web application exposes its declared ASGI entrypoint"
+                        if plan.get("runtime") == "web_app"
+                        else "function skill uses JSON stdin/stdout"
+                    ),
                 ]
             ),
             "test_expectations": ["validate manifest and generated skill behavior"],
@@ -1894,7 +1953,7 @@ Payload:
         return {
             "goal": user_request or f"Repair {skill.name}.",
             "skill_name": skill.name,
-            "interface_type": skill.interface_type,
+            "runtime": skill.runtime,
             "milestones": [
                 {
                     "name": "repair_skill",
@@ -1915,7 +1974,7 @@ Payload:
         decision["blueprint"] = {
             "goal": decision["summary"],
             "skill_name": skill.name,
-            "interface_type": skill.interface_type,
+            "runtime": skill.runtime,
             "suggestion": suggestion,
             "permission_plan": {
                 "build_time": {

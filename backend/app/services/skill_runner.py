@@ -270,6 +270,10 @@ class LocalSkillRunner:
         skill_dir = skill_dir.resolve()
         try:
             manifest = self._load_manifest(skill_dir)
+            if manifest.runtime != "function":
+                raise UnsupportedSkillPermissionError(
+                    "web_app skills must use the persistent web application runtime"
+                )
             validate_supported_permissions(manifest)
             entrypoint = self._resolve_entrypoint(skill_dir, manifest.entrypoint)
             self._run_tests(skill_dir, run)
@@ -473,6 +477,10 @@ class DockerSkillRunner:
                     "Set PERSONAL_AGENT_RUNNER_MODE=local only for explicit dev fallback."
                 )
             manifest = self._load_manifest(skill_dir)
+            if manifest.runtime != "function":
+                raise UnsupportedSkillPermissionError(
+                    "web_app skills must use the persistent web application runtime"
+                )
             validate_supported_permissions(manifest)
             entrypoint = self._resolve_entrypoint(skill_dir, manifest.entrypoint)
             self.image_manager.ensure_image()

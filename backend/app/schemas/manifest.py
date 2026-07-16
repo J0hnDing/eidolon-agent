@@ -3,7 +3,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 RiskLevel = Literal["low", "medium", "high"]
-InterfaceType = Literal["chat", "tool", "hidden"]
+SkillRuntime = Literal["function", "web_app"]
 ScheduleType = Literal["daily", "weekly", "interval"]
 IntervalUnit = Literal["minutes", "hours", "days"]
 Weekday = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -115,23 +115,35 @@ class ManifestSchedule(BaseModel):
 class SkillManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    manifest_version: Literal[1] = 1
     name: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
     display_name: str | None = Field(default=None, min_length=1, max_length=256)
     description: str = Field(min_length=1)
-    interface_type: InterfaceType = "chat"
-    entrypoint: str | None = Field(default=None, min_length=1)
+    runtime: SkillRuntime = "function"
+    entrypoint: str = Field(min_length=1)
     instructions_path: str | None = Field(default=None, min_length=1)
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
-    tool_ui_schema: dict[str, Any] | None = None
     dependencies: list[str] = Field(default_factory=list)
-    risk_level: RiskLevel
     permissions: ManifestPermissions
     schedule: ManifestSchedule | None = None
-    created_by: str = Field(min_length=1)
-    enabled: bool
 
-    @field_validator("entrypoint", "instructions_path")
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_backend_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        # Compatibility only: these legacy package fields are backend-owned state
+        # and are deliberately absent from the canonical serialized manifest.
+        normalized.pop("risk_level", None)
+        normalized.pop("created_by", None)
+        normalized.pop("enabled", None)
+        if normalized.get("entrypoint") is None:
+            raise ValueError("skills require entrypoint")
+        return normalized
+
+    @field_validator("instructions_path")
     @classmethod
     def validate_relative_file_path(cls, path: str | None) -> str | None:
         if path is None:
@@ -165,14 +177,26 @@ class SkillManifest(BaseModel):
 
     @model_validator(mode="after")
     def validate_skill_contract(self) -> "SkillManifest":
-        if not self.entrypoint:
-            raise ValueError("skills require entrypoint")
-        if not self.entrypoint.endswith(".py"):
-            raise ValueError("entrypoint must point to a Python file")
-
-        required_risk = classify_permission_risk(self.permissions)
-        if risk_rank(self.risk_level) < risk_rank(required_risk):
-            raise ValueError(f"risk_level must be at least {required_risk} for requested permissions")
+        if self.runtime == "function":
+            normalized = self.entrypoint.replace("\\", "/")
+            if normalized.startswith("/") or normalized.startswith("~") or ":" in normalized:
+                raise ValueError("function entrypoint must be a relative Python file")
+            if normalized == ".." or normalized.startswith("../") or "/../" in normalized:
+                raise ValueError("function entrypoint cannot traverse parent directories")
+            if not normalized.endswith(".py"):
+                raise ValueError("function entrypoint must point to a Python file")
+        else:
+            module, separator, attribute = self.entrypoint.partition(":")
+            module_parts = module.split(".")
+            if (
+                separator != ":"
+                or not attribute.isidentifier()
+                or not module_parts
+                or any(not part.isidentifier() for part in module_parts)
+            ):
+                raise ValueError("web_app entrypoint must use importable module:attribute syntax")
+            if self.schedule is not None:
+                raise ValueError("web_app skills cannot declare bounded-run schedules")
         return self
 
 
@@ -180,7 +204,10 @@ def risk_rank(risk_level: RiskLevel) -> int:
     return {"low": 0, "medium": 1, "high": 2}[risk_level]
 
 
-def classify_permission_risk(permissions: ManifestPermissions) -> RiskLevel:
+def classify_permission_risk(
+    permissions: ManifestPermissions,
+    dependencies: list[str] | None = None,
+) -> RiskLevel:
     if permissions.shell or permissions.secrets:
         return "high"
     read_paths = {
@@ -194,5 +221,7 @@ def classify_permission_risk(permissions: ManifestPermissions) -> RiskLevel:
         for path in permissions.filesystem_write
     } - {"cache"}
     if unsafe_writes:
+        return "medium"
+    if permissions.network or permissions.codex.internet_access or dependencies:
         return "medium"
     return "low"

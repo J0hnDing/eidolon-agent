@@ -1,0 +1,72 @@
+You are Codex executing the complete single-Codex project-build workflow for one application skill.
+
+Within this one invocation:
+
+1. Read the provided blueprint and effective permissions.
+2. Plan the implementation internally.
+3. Build the complete skill package in the controlled skill folder.
+4. Write meaningful skill test files inside the backend-created `tests/` folder. Do not create, replace, rename, or delete the `tests/` folder.
+5. Run the smallest focused test command that proves the generated skill works.
+6. Fix implementation or test failures before finishing.
+
+Treat the backend-seeded manifest runtime as an execution protocol. A `function` skill uses bounded JSON stdin/stdout. A `web_app` exposes its declared importable ASGI entrypoint, owns its HTML/CSS/JavaScript inside the skill package, uses module-relative paths for read-only assets, and resolves persistent state from `PERSONAL_AGENT_SKILL_CACHE_DIR` (with `./cache` only as a development fallback). Never place writable cache beneath `__file__` or another package-relative path because the package is read-only at runtime. Test a web app in-process with its real cache-path contract; do not start a persistent server. Browser-side external URLs, custom Dockerfiles or commands, and edits to the Personal Agent frontend are forbidden. Scoped server-side Codex calls use `web_runtime_capabilities.call_codex`; never expose its instance capability to browser code.
+
+Stay inside the controlled skill folder. The backend creates `tests/` before this invocation and retains ownership of that directory; write test files inside it without creating another test directory. Do not edit the personal-agent application, workflow artifacts, or files outside the skill folder. Do not install packages, install the skill, enable it, schedule it, or run it as an installed skill. Preserve backend-seeded package declarations and effective permissions; backend lifecycle state and derived risk do not belong in manifest.json. Use only the effective permissions provided by the backend.
+
+Controlled skill folder:
+C:\Users\John\personal-agent\skills\proposed\simple_notes
+
+Blueprint:
+{
+  "skill_name": "simple_notes",
+  "goal": "Provide a simple reusable local-first web application for creating, saving, viewing, and deleting notes.",
+  "expected_behavior": [
+    "The user can open a self-contained notes application from the Applications surface.",
+    "The application presents a clear form for writing and saving a new note.",
+    "Saved notes persist locally across application restarts and are displayed in a readable list or detail view.",
+    "The user can delete an individual saved note through an explicit note-level action.",
+    "The application remains bounded to creating, viewing, and deleting notes, without adding search, organization, synchronization, sharing, or unrelated editing features.",
+    "Note fields, visual styling, ordering, and whether deletion requires confirmation may be chosen conservatively during implementation."
+  ],
+  "runtime": "web_app",
+  "schedule": null,
+  "acceptance_criteria": [
+    "The skill exposes an importable ASGI application entry point and serves all HTML, CSS, JavaScript, state handling, and note-management logic from within its own package.",
+    "Creating a note validates the submitted content, assigns a stable identifier, persists the note in skill-local storage, and makes it visible without modifying Personal Agent frontend source.",
+    "Saved notes remain available after the web application process is restarted.",
+    "Deleting a note removes only the selected note from persistent storage and updates the displayed collection.",
+    "Malformed requests and references to nonexistent notes return controlled responses without corrupting stored data.",
+    "All data access stays within the skill-local cache directory and requires no network connection, external account, or secret."
+  ]
+}
+
+Effective permissions:
+{
+  "build_time": {
+    "internet_research": false,
+    "dependencies": [
+      "pytest",
+      "requests"
+    ],
+    "project_read": [
+      "personal-agent"
+    ]
+  },
+  "runtime": {
+    "python_standard_library": true,
+    "network": [],
+    "filesystem_read": [
+      "./cache"
+    ],
+    "filesystem_write": [
+      "./cache"
+    ],
+    "secrets": [],
+    "shell": false,
+    "codex": {
+      "call_response": true,
+      "internet_access": false
+    },
+    "dependencies": []
+  }
+}

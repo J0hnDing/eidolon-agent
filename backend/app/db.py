@@ -48,21 +48,23 @@ def ensure_local_schema() -> None:
                 connection.execute(text("ALTER TABLE approval_requests ADD COLUMN schedule_id INTEGER"))
         if "skills" in table_names:
             columns = {column["name"] for column in inspector.get_columns("skills")}
-            if "interface_type" not in columns:
+            if "runtime" not in columns:
                 connection.execute(
-                    text("ALTER TABLE skills ADD COLUMN interface_type VARCHAR(16) NOT NULL DEFAULT 'chat'")
+                    text("ALTER TABLE skills ADD COLUMN runtime VARCHAR(32) NOT NULL DEFAULT 'function'")
                 )
             if "input_schema_json" not in columns:
                 connection.execute(text("ALTER TABLE skills ADD COLUMN input_schema_json JSON"))
             if "output_schema_json" not in columns:
                 connection.execute(text("ALTER TABLE skills ADD COLUMN output_schema_json JSON"))
-            if "tool_ui_schema_json" not in columns:
-                connection.execute(text("ALTER TABLE skills ADD COLUMN tool_ui_schema_json JSON"))
             if "active_version_id" not in columns:
                 connection.execute(text("ALTER TABLE skills ADD COLUMN active_version_id INTEGER"))
             connection.execute(text("UPDATE skills SET status = 'installed', enabled = 0 WHERE status = 'disabled'"))
             if "skill_type" in columns:
                 connection.execute(text("ALTER TABLE skills DROP COLUMN skill_type"))
+            if "interface_type" in columns:
+                connection.execute(text("ALTER TABLE skills DROP COLUMN interface_type"))
+            if "tool_ui_schema_json" in columns:
+                connection.execute(text("ALTER TABLE skills DROP COLUMN tool_ui_schema_json"))
         if "skill_generation_requests" in table_names:
             columns = {column["name"] for column in inspector.get_columns("skill_generation_requests")}
             if "proposed_skill_type" in columns:
@@ -103,6 +105,10 @@ def ensure_local_schema() -> None:
             ):
                 if column not in columns:
                     connection.execute(text(f"ALTER TABLE skill_runs ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"))
+        if "web_app_instances" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("web_app_instances")}
+            if "relay_container_id" not in columns:
+                connection.execute(text("ALTER TABLE web_app_instances ADD COLUMN relay_container_id VARCHAR(128)"))
         if "agent_runs" in table_names:
             columns = {column["name"] for column in inspector.get_columns("agent_runs")}
             if "current_task_id" not in columns:
@@ -162,10 +168,10 @@ def ensure_local_schema() -> None:
             connection.execute(text("UPDATE agent_run_steps SET step_name = 'product_manager' WHERE step_name IN ('planner', 'reviewer')"))
             connection.execute(text("UPDATE agent_run_steps SET step_name = 'product_manager' WHERE step_name IN ('permission_analyst', 'security_reviewer')"))
             connection.execute(text("UPDATE agent_run_steps SET step_name = 'builder' WHERE step_name = 'repairer'"))
-        _remove_legacy_skill_type_json(connection, table_names)
+        _remove_retired_skill_contract_json(connection, table_names)
 
 
-def _remove_legacy_skill_type_json(connection, table_names: set[str]) -> None:
+def _remove_retired_skill_contract_json(connection, table_names: set[str]) -> None:
     json_columns = {
         "skill_generation_requests": ("plan_json",),
         "skill_versions": ("manifest_json",),
@@ -189,7 +195,7 @@ def _remove_legacy_skill_type_json(connection, table_names: set[str]) -> None:
                     value = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
                 except (TypeError, json.JSONDecodeError):
                     continue
-                cleaned, changed = _without_skill_type(value)
+                cleaned, changed = _without_retired_skill_fields(value)
                 if changed:
                     connection.execute(
                         text(f"UPDATE {table_name} SET {column_name} = :value WHERE id = :row_id"),
@@ -197,14 +203,21 @@ def _remove_legacy_skill_type_json(connection, table_names: set[str]) -> None:
                     )
 
 
-def _without_skill_type(value):
+def _without_retired_skill_fields(value):
     if isinstance(value, dict):
-        changed = "skill_type" in value or "proposed_skill_type" in value
+        retired_fields = {
+            "interface_type",
+            "proposed_skill_type",
+            "skill_type",
+            "tool_ui_schema",
+            "tool_ui_schema_json",
+        }
+        changed = any(key in value for key in retired_fields)
         cleaned = {}
         for key, item in value.items():
-            if key in {"skill_type", "proposed_skill_type"}:
+            if key in retired_fields:
                 continue
-            cleaned_item, item_changed = _without_skill_type(item)
+            cleaned_item, item_changed = _without_retired_skill_fields(item)
             cleaned[key] = cleaned_item
             changed = changed or item_changed
         return cleaned, changed
@@ -212,7 +225,7 @@ def _without_skill_type(value):
         cleaned = []
         changed = False
         for item in value:
-            cleaned_item, item_changed = _without_skill_type(item)
+            cleaned_item, item_changed = _without_retired_skill_fields(item)
             cleaned.append(cleaned_item)
             changed = changed or item_changed
         return cleaned, changed

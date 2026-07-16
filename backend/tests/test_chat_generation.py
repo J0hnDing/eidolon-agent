@@ -155,13 +155,11 @@ def skill_plan(**overrides) -> dict:
         "goal": "Create a reusable local workflow skill.",
         "skill_name": "generated_skill",
         "display_name": "Generated Skill",
-        "interface_type": "chat",
         "files_to_generate": ["manifest.json", "README.md", "skill.py", "tests/test_skill.py"],
         "expected_input": {"input": "object"},
         "expected_output": {"title": "string", "items": [], "warnings": []},
         "input_schema": None,
         "output_schema": None,
-        "tool_ui_schema": None,
         "requested_permissions": {
             "network": [],
             "filesystem_read": [],
@@ -275,7 +273,7 @@ def test_project_mode_creates_skill_proposal(db_session: Session) -> None:
     permission_request = response["permission_request"]
     assert generation_request.status == "awaiting_approval"
     assert generation_request.plan_json["skill_name"] == "ai_infra_news_digest"
-    assert generation_request.plan_json["interface_type"] == "chat"
+    assert generation_request.plan_json["runtime"] == "function"
     assert plan_adapter.called is True
     assert permission_request.request_scope == "build_time"
     assert permission_request.status == "pending"
@@ -543,12 +541,11 @@ def test_stale_blocked_build_time_request_is_refreshed_before_approval(db_sessio
     assert approved.risk_level == "low"
 
 
-def test_skill_plan_service_uses_adapter_decided_skill_and_interface_type() -> None:
+def test_skill_plan_service_uses_adapter_decided_runtime_and_io_schemas() -> None:
     adapter = FixedSkillPlanAdapter(
         skill_plan(
             skill_name="calculator_tool",
             display_name="Calculator Tool",
-            interface_type="tool",
             input_schema={
                 "type": "object",
                 "properties": {"expression": {"type": "string"}},
@@ -559,23 +556,16 @@ def test_skill_plan_service_uses_adapter_decided_skill_and_interface_type() -> N
                 "properties": {"result": {"type": "number"}},
                 "required": ["result"],
             },
-            tool_ui_schema={
-                "title": "Calculator",
-                "description": "Evaluate basic arithmetic.",
-                "submit_label": "Calculate",
-                "fields": [{"name": "expression", "label": "Expression", "type": "text"}],
-                "result_template": {"primary_field": "result", "primary_label": "Result"},
-            },
         )
     )
 
     plan = SkillPlanService(adapter=adapter).build_generation_plan("Build a calculator tool.")
 
     assert adapter.called is True
-    assert plan["interface_type"] == "tool"
+    assert plan["runtime"] == "function"
     assert plan["skill_name"] == "calculator_tool"
     assert plan["input_schema"]["properties"]["expression"]["type"] == "string"
-    assert plan["tool_ui_schema"]["fields"][0]["name"] == "expression"
+    assert plan["output_schema"]["properties"]["result"]["type"] == "number"
 
 
 def test_denying_generation_request_does_not_create_files(tmp_path: Path, db_session: Session) -> None:
@@ -1026,7 +1016,6 @@ def test_builder_repair_rejects_non_proposed_skill_workspace(tmp_path: Path, db_
     skill = Skill(
         name="installed_skill",
         description="Installed skills are not build-repair workspaces.",
-        interface_type="chat",
         risk_level="low",
         manifest_path="skills/installed/installed_skill/manifest.json",
         status="installed",
@@ -1059,7 +1048,6 @@ def test_builder_repair_restores_tester_owned_files(tmp_path: Path, db_session: 
     skill = Skill(
         name="guarded_skill",
         description="Exercise Builder ownership enforcement.",
-        interface_type="chat",
         risk_level="low",
         manifest_path="skills/proposed/guarded_skill/manifest.json",
         status="building",

@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import AgentRunStep, CodexRoutingSettings, MemoryFact, Skill, SkillGenerationRequest, SkillRun
+from app.models import AgentRun, AgentRunStep, CodexRoutingSettings, MemoryFact, Skill, SkillGenerationRequest, SkillRun
 from app.routers.agent_runs import delete_agent_run
 from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
 from app.services.backend_api_catalog import backend_api_index_file
@@ -406,6 +406,52 @@ def test_single_codex_workflow_runs_one_build_invocation_end_to_end(tmp_path: Pa
     assert isinstance(json.loads(skill_result.stdout), dict)
 
 
+def test_single_codex_workflow_builds_and_validates_web_app_protocol(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    generation_request = create_generation_request(db_session)
+    generation_request.plan_json = {
+        **generation_request.plan_json,
+        "runtime": "web_app",
+        "files_to_generate": ["manifest.json", "README.md", "app.py", "tests/test_app.py"],
+        "schedule": None,
+    }
+    db_session.commit()
+
+    class WebAppWorkflowAdapter(FakeCodexAdapter):
+        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            result = super().generate(prompt, output_dir, plan)
+            if plan.get("codex_task") == "product_manager_write_blueprint_and_permissions":
+                payload = json.loads(result.stdout)
+                payload["build_workflow"] = "single_codex"
+                payload["blueprint"]["runtime"] = "web_app"
+                payload["blueprint"]["schedule"] = None
+                return subprocess.CompletedProcess(args=result.args, returncode=0, stdout=json.dumps(payload), stderr="")
+            return result
+
+    service = AgentWorkflowService(
+        db_session,
+        codex_service=CodexService(db_session, adapter=WebAppWorkflowAdapter(), project_root=tmp_path),
+        project_root=tmp_path,
+    )
+    service.create_build_run(generation_request)
+    approve_generation(db_session, generation_request, tmp_path)
+
+    agent_run, skill, validation = service.continue_build_after_approval(generation_request)
+
+    skill_dir = tmp_path / "skills" / "proposed" / skill.name
+    manifest = json.loads((skill_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert validation.ok is True
+    assert agent_run.status == "succeeded"
+    assert skill.runtime == "web_app"
+    assert manifest["runtime"] == "web_app"
+    assert manifest["entrypoint"] == "app:app"
+    assert not {"risk_level", "created_by", "enabled"} & set(manifest)
+    assert (skill_dir / "app.py").is_file()
+    assert (skill_dir / "tests" / "test_app.py").is_file()
+
+
 def test_single_codex_static_scan_blocks_runtime_review_without_calling_more_agents(
     tmp_path: Path,
     db_session: Session,
@@ -426,7 +472,10 @@ def test_single_codex_static_scan_blocks_runtime_review_without_calling_more_age
                 return subprocess.CompletedProcess(args=result.args, returncode=0, stdout=json.dumps(payload), stderr="")
             if task == "single_codex_build":
                 skill_path = output_dir / "skill.py"
-                skill_path.write_text("import subprocess\n" + skill_path.read_text(encoding="utf-8"), encoding="utf-8")
+                skill_path.write_text(
+                    "import subprocess\nsubprocess.run(['blocked'])\n" + skill_path.read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
             return result
 
     adapter = UnsafeSingleWorkflowAdapter()
@@ -450,6 +499,32 @@ def test_single_codex_static_scan_blocks_runtime_review_without_calling_more_age
     assert "tester_write_tests" not in adapter.tasks
     assert "skill_repair" not in adapter.tasks
     assert not (run_dir / "runtime_permissions.json").exists()
+
+    with pytest.raises(AgentWorkflowError, match="cannot be retried after an error"):
+        service.retry_current_task(agent_run)
+
+    db_session.refresh(agent_run)
+    assert agent_run.status == "blocked"
+    assert adapter.tasks.count("single_codex_build") == 1
+
+
+def test_failed_single_codex_resume_does_not_restart_builder(tmp_path: Path, db_session: Session) -> None:
+    agent_run = AgentRun(
+        run_type="build_skill",
+        status="failed",
+        user_request="Build a small app",
+        build_workflow="single_codex",
+        current_task_id="single_codex",
+    )
+    db_session.add(agent_run)
+    db_session.commit()
+    service = AgentWorkflowService(db_session, project_root=tmp_path)
+
+    with pytest.raises(AgentWorkflowError, match="cannot be retried after an error"):
+        service.resume_run(agent_run)
+
+    db_session.refresh(agent_run)
+    assert agent_run.status == "failed"
 
 
 def test_final_capability_scan_uses_actual_manifest_permissions(
@@ -513,7 +588,7 @@ def test_backend_seeds_and_finalizes_manifest_json(tmp_path: Path, db_session: S
                 result = super().generate(prompt, output_dir, plan)
                 manifest_path = output_dir / "manifest.json"
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                for key in ("risk_level", "permissions", "schedule", "dependencies", "created_by", "enabled"):
+                for key in ("permissions", "schedule", "dependencies"):
                     manifest.pop(key, None)
                 manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
                 return result
@@ -533,12 +608,11 @@ def test_backend_seeds_and_finalizes_manifest_json(tmp_path: Path, db_session: S
     final_manifest = json.loads(
         (tmp_path / "skills" / "proposed" / skill.name / "manifest.json").read_text(encoding="utf-8")
     )
-    assert final_manifest["risk_level"] == generation_request.plan_json["risk_level"]
+    assert final_manifest["runtime"] == "function"
     assert final_manifest["permissions"]["shell"] is False
     assert final_manifest["schedule"] is None
     assert final_manifest["dependencies"] == generation_request.plan_json["requested_dependencies"]
-    assert final_manifest["created_by"] == "codex"
-    assert final_manifest["enabled"] is False
+    assert not {"risk_level", "created_by", "enabled"} & set(final_manifest)
 
 
 def test_backend_seeds_manifest_schedule_from_product_manager_blueprint(
@@ -1291,7 +1365,6 @@ def test_blueprint_sanitizer_removes_expected_files(db_session: Session) -> None
     fallback = {
         "goal": "Fallback goal",
         "skill_name": "fallback_skill",
-        "interface_type": "hidden",
         "schedule": None,
     }
     raw = {
@@ -1305,7 +1378,7 @@ def test_blueprint_sanitizer_removes_expected_files(db_session: Session) -> None
 
     sanitized = CodexService(db_session).product_manager_contracts.sanitize_blueprint(raw, fallback)
 
-    assert sanitized["skill_name"] == "generated_skill"
+    assert sanitized["skill_name"] == "fallback_skill"
     assert "expected_files" not in sanitized
     assert "summary" not in sanitized
     assert "decision" not in sanitized
@@ -1417,12 +1490,10 @@ def create_installed_skill(tmp_path: Path, db: Session, name: str) -> Skill:
     manifest = {
         "name": name,
         "description": "Broken skill for repair tests.",
-        "interface_type": "chat",
         "entrypoint": "skill.py",
         "instructions_path": None,
         "input_schema": None,
         "output_schema": None,
-        "tool_ui_schema": None,
         "risk_level": "low",
         "permissions": {
             "network": [],
@@ -1442,7 +1513,6 @@ def create_installed_skill(tmp_path: Path, db: Session, name: str) -> Skill:
     skill = Skill(
         name=name,
         description=manifest["description"],
-        interface_type="chat",
         status="installed",
         risk_level="low",
         manifest_path=f"skills/installed/{name}/manifest.json",

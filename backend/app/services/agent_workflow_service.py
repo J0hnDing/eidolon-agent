@@ -25,6 +25,7 @@ from app.services.manifest_validator import ManifestValidationError, validate_ma
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
 from app.services.skill_operation_guard import SkillOperationGuard
+from app.services.skill_package_files import snapshot_skill_files
 from app.services.skill_version_service import SkillVersionError, SkillVersionService
 from app.services.task_dag_service import TaskDagService
 from app.workflows.base import (
@@ -695,6 +696,14 @@ class AgentWorkflowService:
 
     def retry_current_task(self, agent_run: AgentRun) -> AgentRun:
         self._ensure_not_cancelled(agent_run)
+        if (
+            agent_run.run_type == "build_skill"
+            and agent_run.build_workflow == "single_codex"
+            and agent_run.status in {"failed", "blocked"}
+        ):
+            raise AgentWorkflowError(
+                "Single-Codex builds cannot be retried after an error. Start a new Project build instead."
+            )
         if agent_run.status == "failed":
             return self.resume_run(agent_run)
         if agent_run.run_type == "build_skill" and agent_run.generation_request_id:
@@ -821,6 +830,15 @@ class AgentWorkflowService:
         try:
             manifest = validate_manifest_file(skill_dir / "manifest.json")
             manifest_runtime = manifest.permissions.model_dump(mode="json")
+            planned_runtime = str(self._agent_blueprint(agent_run).get("runtime") or "function")
+            if manifest.runtime != planned_runtime:
+                raise ManifestValidationError(
+                    f"Manifest runtime {manifest.runtime!r} does not match approved blueprint runtime {planned_runtime!r}"
+                )
+            if manifest.name != skill.name:
+                raise ManifestValidationError(
+                    f"Manifest name {manifest.name!r} does not match the controlled skill name {skill.name!r}"
+                )
         except (FileNotFoundError, ManifestValidationError, OSError) as exc:
             manifest_failure = ProposedSkillValidationRead(
                 ok=False,
@@ -829,7 +847,11 @@ class AgentWorkflowService:
                 tests_passed=None,
                 error_message=str(exc),
             )
-        scan = StaticCapabilityScanner().scan(skill_dir, manifest_runtime)
+        scan = StaticCapabilityScanner().scan(
+            skill_dir,
+            manifest_runtime,
+            runtime=manifest.runtime if manifest_failure is None else "function",
+        )
         scan_payload = scan.model_dump()
         self.artifacts.write_json(agent_run, "capability_scan.json", scan_payload)
         if manifest_failure is not None:
@@ -1390,19 +1412,17 @@ class AgentWorkflowService:
         manifest_path = repair_dir / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["name"] = repair_name
-        manifest["enabled"] = False
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         repair_skill = Skill(
             name=repair_name,
             description=f"Repair proposal for {skill.name}.",
-            interface_type=skill.interface_type,
+            runtime=skill.runtime,
             status="proposed",
             risk_level=skill.risk_level,
             manifest_path=self.proposed_service._relative_path(manifest_path),
             instructions_path=skill.instructions_path,
             input_schema_json=skill.input_schema_json,
             output_schema_json=skill.output_schema_json,
-            tool_ui_schema_json=skill.tool_ui_schema_json,
             installed_path=None,
             enabled=False,
         )
@@ -1422,14 +1442,13 @@ class AgentWorkflowService:
         skill = self.db.scalar(select(Skill).where(Skill.name == skill_name))
         values = {
             "description": plan.get("goal") or generation_request.user_message,
-            "interface_type": plan.get("interface_type", "chat"),
+            "runtime": plan.get("runtime", "function"),
             "status": "building",
             "risk_level": plan["risk_level"],
             "manifest_path": self.proposed_service._relative_path(proposed_dir / "manifest.json"),
             "instructions_path": self._planned_instructions_path(plan),
             "input_schema_json": plan.get("input_schema"),
             "output_schema_json": plan.get("output_schema"),
-            "tool_ui_schema_json": plan.get("tool_ui_schema"),
             "installed_path": None,
             "enabled": False,
         }
@@ -1817,7 +1836,7 @@ class AgentWorkflowService:
 
     def _final_blueprint_contract(self, agent_run: AgentRun) -> dict[str, Any]:
         blueprint = self._agent_blueprint(agent_run)
-        fields = ("goal", "expected_behavior", "schedule", "acceptance_criteria")
+        fields = ("goal", "runtime", "expected_behavior", "schedule", "acceptance_criteria")
         return {field: blueprint[field] for field in fields if field in blueprint}
 
     def _compact_interface_artifacts(self, artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1932,12 +1951,7 @@ class AgentWorkflowService:
 
     def _version_file_snapshot(self, version: Any) -> dict[str, str]:
         version_dir = (self.project_root / version.folder_path).resolve()
-        snapshot: dict[str, str] = {}
-        for relative_path in ("manifest.json", "README.md", "SKILL.md", "skill.py"):
-            path = version_dir / relative_path
-            if path.is_file():
-                snapshot[relative_path] = path.read_text(encoding="utf-8")[:12000]
-        return snapshot
+        return snapshot_skill_files(version_dir)
 
     def _version_test_paths(self, version: Any) -> list[str]:
         version_dir = (self.project_root / version.folder_path).resolve()

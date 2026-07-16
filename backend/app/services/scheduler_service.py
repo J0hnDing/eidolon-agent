@@ -260,6 +260,8 @@ class SchedulerService:
     ) -> SkillRun:
         if skill.status != "installed":
             return self._blocked_run(skill.id, input_json, "Only installed skills can be run by a schedule")
+        if skill.runtime != "function":
+            return self._blocked_run(skill.id, input_json, "Persistent web_app skills cannot use bounded schedules")
         if not skill.enabled:
             return self._blocked_run(skill.id, input_json, "Skill is disabled")
         approval = self._latest_schedule_approval_by_id(source_schedule_id)
@@ -293,6 +295,8 @@ class SchedulerService:
     def _validate_skill_can_be_scheduled(self, skill: Skill, *, allow_disabled: bool = False) -> None:
         if skill.status != "installed":
             raise ScheduleError("Only installed skills can be scheduled")
+        if skill.runtime != "function":
+            raise ScheduleError("Persistent web_app skills cannot be scheduled as bounded runs")
         if not skill.enabled and not allow_disabled:
             raise ScheduleError("Disabled skills cannot be scheduled")
 

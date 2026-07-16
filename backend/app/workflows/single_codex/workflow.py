@@ -110,4 +110,6 @@ class SingleCodexBuildWorkflow:
         return agent_run
 
     def retry_failed(self, service: AgentWorkflowService, agent_run: AgentRun) -> AgentRun:
-        return self.resume(service, agent_run)
+        raise ProjectBuildWorkflowError(
+            "Single-Codex builds cannot be retried after an error. Start a new Project build instead."
+        )

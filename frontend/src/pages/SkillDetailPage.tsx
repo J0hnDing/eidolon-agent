@@ -162,6 +162,17 @@ export default function SkillDetailPage() {
       setValidation(null);
       setFiles(await api.listSkillFiles(installed.id));
     } catch (err) {
+      try {
+        const recovered = await api.getSkill(skill.id);
+        if (recovered.status === "installed") {
+          setSkill(recovered);
+          setValidation(null);
+          setFiles(await api.listSkillFiles(recovered.id));
+          return;
+        }
+      } catch {
+        // Preserve the original mutation error when state cannot be reconciled.
+      }
       setError(err instanceof Error ? err.message : "Could not install skill");
     } finally {
       setIsWorking(false);
@@ -190,6 +201,15 @@ export default function SkillDetailPage() {
       await api.deleteSkill(skill.id);
       navigate("/skills");
     } catch (err) {
+      try {
+        const remaining = await api.listSkills();
+        if (!remaining.some((item) => item.id === skill.id)) {
+          navigate("/skills");
+          return;
+        }
+      } catch {
+        // Preserve the original mutation error when state cannot be reconciled.
+      }
       setError(err instanceof Error ? err.message : "Could not delete skill");
     } finally {
       setIsWorking(false);
@@ -507,8 +527,9 @@ export default function SkillDetailPage() {
   }
 
   const isInstalled = skill.status === "installed";
+  const isFunction = skill.runtime === "function";
   const runtimeApproved = runtimePermission?.status === "approved";
-  const canRun = isInstalled && skill.enabled && runtimeApproved;
+  const canRun = isFunction && isInstalled && skill.enabled && runtimeApproved;
   const isProposed = skill.status === "proposed";
 
   return (
@@ -525,8 +546,8 @@ export default function SkillDetailPage() {
         <p>{skill.description}</p>
         <dl className="detail-grid">
           <div>
-            <dt>Interface</dt>
-            <dd>{skill.interface_type}</dd>
+            <dt>Runtime</dt>
+            <dd>{skill.runtime}</dd>
           </div>
           <div>
             <dt>Status</dt>
@@ -715,6 +736,9 @@ export default function SkillDetailPage() {
         </div>
       ) : (
         <div className="button-row">
+          {!isFunction && isInstalled && skill.enabled && runtimeApproved && (
+            <Link className="button-link" to={`/apps/${skill.id}`}>Open Application</Link>
+          )}
           {canRun && (
             <button type="button" onClick={handleRun} disabled={isRunning}>
               {isRunning ? "Running..." : "Run"}
@@ -795,7 +819,7 @@ export default function SkillDetailPage() {
         )}
       </section>
 
-      <section className="detail-panel">
+      {isFunction && <section className="detail-panel">
         <header className="page-header">
           <div>
             <h2>Schedules</h2>
@@ -880,7 +904,7 @@ export default function SkillDetailPage() {
         ) : (
           <p className="muted">Only installed skills can request schedules.</p>
         )}
-      </section>
+      </section>}
 
       <section className="detail-panel">
         <h2>Skill Files</h2>
@@ -898,7 +922,7 @@ export default function SkillDetailPage() {
         )}
       </section>
 
-      {isInstalled && (
+      {isInstalled && isFunction && (
         <section className="detail-panel">
           <header className="page-header">
             <div>
@@ -922,7 +946,7 @@ export default function SkillDetailPage() {
         </section>
       )}
 
-      {isInstalled && (
+      {isInstalled && isFunction && (
         <>
           <section className="detail-panel">
             <h2>Latest Run</h2>

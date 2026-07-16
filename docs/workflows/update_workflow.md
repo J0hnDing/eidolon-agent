@@ -14,7 +14,7 @@ Updates are version-safe and do not use the new skill DAG build workflow in the 
 4. If build-time approval is required, backend creates a `build_time` approval request with `request_type = "update"` and pauses.
 5. If approved, or if no extra build-time approval is needed, backend copies the active version into a draft/proposed version folder.
 6. Builder modifies only the draft.
-7. Tester writes/updates tests and validates the draft.
+7. Tester writes/updates runtime-appropriate tests and validates the draft.
 8. Permission review compares active and draft manifest/dependencies.
 9. If runtime permissions are unchanged, activation can skip runtime reapproval.
 10. If permissions changed, user must approve runtime permissions before activation.
@@ -22,7 +22,9 @@ Updates are version-safe and do not use the new skill DAG build workflow in the 
 
 ## Important Rules
 
-- Active version is never edited in place.
+- Active version is never edited in place. A running web application remains pinned to that active version while a draft is updated or repaired.
+- Update/repair preserves the existing `function` or `web_app` execution protocol.
+- Activating another web-app version stops old-version instances before the pointer changes; a later open starts the new version.
 - No update auto-activates.
 - No update auto-runs.
 - No draft is created when ProductManager blocks/declines/asks for clarification.

@@ -16,8 +16,12 @@ Rules:
 - If the prompt includes `backend_api_context`, use only those backend APIs as documented there. Do not invent backend endpoints.
 - Honor each selected backend API's `runtime_budget`. For multi-item Codex work, batch bounded item contexts into one request, preserve one result per item, and keep caller timeouts within the documented budget. Do not issue one sequential Codex request per item.
 - To use Codex from generated skill code, call the backend Skill Codex Call API from `backend_api_context`; never shell out to the Codex CLI.
+- Follow the manifest runtime as an execution protocol. Function skills use bounded JSON stdin/stdout. Web applications expose the declared importable ASGI entrypoint and keep all rendered HTML, CSS, and JavaScript inside the skill package.
+- Web applications must use module-relative paths for read-only package assets and resolve persistent state from `PERSONAL_AGENT_SKILL_CACHE_DIR`, with `./cache` only as a development fallback. Never put writable cache beneath `__file__` or another package-relative path because the package is read-only at runtime. In-memory state is ephemeral across restarts.
+- Web applications must not contact arbitrary browser-side URLs or expose the instance capability token to browser code. For scoped server-side Codex access, import and use the trusted `web_runtime_capabilities.call_codex` helper.
+- Never create or modify Personal Agent frontend source, custom Dockerfiles, startup commands, or process-management code.
 - Every skill contains executable Python code and tests. A skill may include optional SKILL.md reusable instructions or operating guidance.
-- Interface types: chat means chat-facing, tool means an installed enabled skill appears in the Tools UI, and hidden means not user-facing by default.
+- Runtime is the only interface discriminator: web applications own package-local UI, while functions remain bounded JSON capabilities without a dedicated interface surface.
 - Write `interface_artifact.json` at the controlled skill-folder root for the current task. The backend validates it before moving it to the task's `runtime/agent_runs` folder. Never write directly under `runtime/agent_runs`.
 - Use relative skill-package paths in `created_paths` and `updated_paths`. Every declared path must exist, stay inside the skill folder, and be allowed by `file_write_claims`; `manifest.json` is also allowed.
 - Put files introduced by this task in `created_paths`. Put `manifest.json` or files declared by parent interface artifacts in `updated_paths`. A path cannot appear in both lists.
@@ -31,12 +35,12 @@ Required `interface_artifact.json` syntax:
   "created_paths": [xxx.py],
   "updated_paths": ["manifest.json"],
   "interfaces": {
-    "entrypoint": "xxx.py",
+    "entrypoint": "xxx.py for function or module:attribute for web_app",
     "input_schema": {},
     "output_schema": {}
   },
   "contracts_for_children": [
-    "xxx.py reads one JSON object from stdin and writes one JSON object to stdout"
+    "declare the runtime-specific callable or JSON stdin/stdout contract"
   ],
   "known_limitations": []
 }

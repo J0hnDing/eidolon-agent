@@ -13,13 +13,13 @@ from sqlalchemy.orm import Session
 
 from app.models import ApprovalRequest, Skill, SkillVersion
 from app.schemas.proposed_skill import ProposedSkillValidationRead
-from app.services.manifest_validator import validate_manifest_file
+from app.services.manifest_validator import classify_permission_risk, validate_manifest_file
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
+from app.services.skill_package_files import snapshot_skill_files
 
 MAX_SKILL_VERSIONS = 3
-READABLE_COMPARE_FILES = ("manifest.json", "README.md", "SKILL.md", "skill.py", "tests/test_skill.py")
 
 
 class SkillVersionError(ValueError):
@@ -219,6 +219,12 @@ class SkillVersionService:
 
         try:
             with SkillOperationGuard(self.db).locked(skill, "update", reason=f"Activating {version.version}"):
+                from app.services.web_app_runtime_service import WebAppRuntimeService
+
+                WebAppRuntimeService(self.db, project_root=self.project_root).stop_skill_instances(
+                    skill,
+                    f"Version {version.version} activated",
+                )
                 if active.id != version.id:
                     active.status = "archived"
                 version.status = "active"
@@ -249,15 +255,16 @@ class SkillVersionService:
         active = self.ensure_active_version(skill)
         active_dir = self._version_dir(active)
         candidate_dir = self._version_dir(version)
-        files = []
-        for relative_path in READABLE_COMPARE_FILES:
-            files.append(
-                {
-                    "path": relative_path,
-                    "active": self._read_optional(active_dir / relative_path),
-                    "candidate": self._read_optional(candidate_dir / relative_path),
-                }
-            )
+        active_files = snapshot_skill_files(active_dir)
+        candidate_files = snapshot_skill_files(candidate_dir)
+        files = [
+            {
+                "path": relative_path,
+                "active": active_files.get(relative_path),
+                "candidate": candidate_files.get(relative_path),
+            }
+            for relative_path in sorted(active_files.keys() | candidate_files.keys())
+        ]
         return {"active_version": active, "candidate_version": version, "files": files}
 
     def permission_fingerprint(self, manifest_json: dict[str, Any]) -> str:
@@ -301,12 +308,11 @@ class SkillVersionService:
         skill.installed_path = version.folder_path
         skill.manifest_path = self._relative_path(folder / "manifest.json")
         skill.description = manifest.description
-        skill.interface_type = manifest.interface_type
-        skill.risk_level = manifest.risk_level
+        skill.runtime = manifest.runtime
+        skill.risk_level = classify_permission_risk(manifest.permissions, manifest.dependencies)
         skill.instructions_path = manifest.instructions_path
         skill.input_schema_json = manifest.input_schema
         skill.output_schema_json = manifest.output_schema
-        skill.tool_ui_schema_json = manifest.tool_ui_schema
         self.db.commit()
         self.db.refresh(skill)
 

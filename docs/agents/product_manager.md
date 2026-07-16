@@ -11,7 +11,8 @@ ProductManagerAgent owns project judgment, intent refinement, build-workflow sel
 - If the request is unclear, ask one user-facing clarification question and wait for the next Project-mode chat reply on the same generation request.
 - If the request is infeasible or unsupported, explain why and stop without creating blueprint, permission, or task DAG artifacts.
 - Write a concise blueprint without tasks or milestones.
-- Include intended recurring schedule metadata in the blueprint when the user asks for scheduled execution.
+- Select `runtime = function` for bounded JSON stdin/stdout execution or `runtime = web_app` for a self-rendered interactive ASGI application.
+- Include intended recurring schedule metadata only for function skills. Web applications use `schedule = null` because their service lifetime is not a scheduled bounded run.
 - Draft build-time and expected runtime permission intent in a separate permission file.
 - Return one top-level `build_workflow` value: `single_codex` for a self-contained small or medium build, or `task_dag` when explicit dependency boundaries and independently retryable tasks are needed.
 - Keep `build_workflow` outside the blueprint because it is backend routing state and must not be written to `blueprint.json`.
@@ -66,7 +67,7 @@ Task node files describe product work only. They should not contain backend book
 
 Task node `backend_api_ids` are numeric references to backend APIs. ProductManager sees only id, title, and description. The backend resolves those ids into detailed Builder context before the node is built. Scheduling is not represented as a backend API id; it is manifest metadata.
 
-For tool skills, one or more task nodes must cover the declarative UI contract. Tool UI work means `tool_ui_schema`, input/output schemas, labels, fields, options/defaults, and acceptance criteria for Tools-page rendering. BuilderAgent must not create app frontend code for generated tools.
+For a web application, ProductManager may assign package-owned Python/HTML/CSS/JavaScript work but must never assign Personal Agent frontend files, custom Dockerfiles, or startup commands. Function skills keep the bounded JSON protocol and do not receive interface-specific task nodes.
 
 ## Decisions
 

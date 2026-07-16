@@ -51,6 +51,26 @@ def test_rejects_unsafe_skill_name(service: ProposedSkillService) -> None:
         service.create_sample("../unsafe")
 
 
+def test_prepare_generation_workspace_stages_existing_tree_before_cleanup(
+    service: ProposedSkillService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_workspace = service.proposed_dir("replace_build")
+    blocked_cache = old_workspace / ".pytest_cache"
+    blocked_cache.mkdir(parents=True)
+    (blocked_cache / "nodeids").write_text("sandbox-owned", encoding="utf-8")
+    monkeypatch.setattr(service, "_remove_tree_best_effort", lambda _path: None)
+
+    workspace = service.prepare_generation_workspace("replace_build")
+
+    assert workspace == old_workspace
+    assert workspace.is_dir()
+    assert list(workspace.iterdir()) == []
+    staged = list((service.project_root / "runtime" / "file_trash").iterdir())
+    assert len(staged) == 1
+    assert (staged[0] / ".pytest_cache" / "nodeids").read_text(encoding="utf-8") == "sandbox-owned"
+
+
 def test_reads_allowed_proposed_skill_files(service: ProposedSkillService) -> None:
     skill = service.create_sample("readable_skill")
 
@@ -209,6 +229,35 @@ def test_installs_valid_proposed_skill(service: ProposedSkillService) -> None:
     assert not service.proposed_dir("install_skill").exists()
 
 
+def test_install_recovers_partial_folder_and_does_not_fail_on_deferred_trash_cleanup(
+    service: ProposedSkillService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill = service.create_sample("recover_install")
+    partial_dir = service.installed_dir(skill.name)
+    partial_dir.mkdir(parents=True)
+    (partial_dir / "partial.txt").write_text("incomplete", encoding="utf-8")
+    monkeypatch.setattr(service, "_remove_tree_best_effort", lambda _path: None)
+
+    installed = service.install_proposed_skill(skill)
+
+    assert installed.status == "installed"
+    assert not service.proposed_dir(skill.name).exists()
+    assert not (partial_dir / "partial.txt").exists()
+    assert (partial_dir / "versions" / "v1" / "manifest.json").is_file()
+    assert list((service.project_root / "runtime" / "file_trash").iterdir())
+
+
+def test_install_is_idempotent_after_success(service: ProposedSkillService) -> None:
+    skill = service.create_sample("idempotent_install")
+    installed = service.install_proposed_skill(skill)
+
+    retried = service.install_proposed_skill(installed)
+
+    assert retried.id == installed.id
+    assert retried.status == "installed"
+
+
 def test_install_registers_manifest_declared_schedule(
     service: ProposedSkillService,
     db_session: Session,
@@ -256,6 +305,20 @@ def test_refuses_to_install_invalid_manifest(service: ProposedSkillService) -> N
         service.install_proposed_skill(skill)
 
 
+def test_validation_rejects_manifest_name_drift(service: ProposedSkillService) -> None:
+    skill = service.create_sample("stable_name")
+    manifest_path = service.proposed_dir(skill.name) / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["name"] = "renamed_by_agent"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = service.validate_proposed_skill(skill)
+
+    assert result.ok is False
+    assert result.manifest_valid is False
+    assert "controlled skill name" in (result.error_message or "")
+
+
 def test_refuses_to_run_proposed_skills(db_session: Session, service: ProposedSkillService) -> None:
     skill = service.create_sample("proposed_run_block")
 
@@ -288,6 +351,23 @@ def test_delete_removes_installed_skill_record_and_folder(
 
     assert db_session.get(Skill, installed_id) is None
     assert not service.installed_dir("delete_installed").exists()
+
+
+def test_delete_commits_after_staging_even_when_trash_cleanup_is_deferred(
+    db_session: Session,
+    service: ProposedSkillService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill = service.create_sample("delete_locked")
+    installed = service.install_proposed_skill(skill)
+    installed_id = installed.id
+    monkeypatch.setattr(service, "_remove_tree_best_effort", lambda _path: None)
+
+    service.delete_skill(installed)
+
+    assert db_session.get(Skill, installed_id) is None
+    assert not service.installed_dir("delete_locked").exists()
+    assert list((service.project_root / "runtime" / "file_trash").iterdir())
 
 
 def test_delete_removes_skill_schedules(

@@ -8,15 +8,15 @@ import MemoryPage from "./pages/MemoryPage";
 import SkillDetailPage from "./pages/SkillDetailPage";
 import SkillsPage from "./pages/SkillsPage";
 import SchedulesPage from "./pages/SchedulesPage";
-import ToolDetailPage from "./pages/ToolDetailPage";
-import ToolsPage from "./pages/ToolsPage";
 import UsageSettingsPage from "./pages/UsageSettingsPage";
+import WebAppPage from "./pages/WebAppPage";
+import WebAppsPage from "./pages/WebAppsPage";
 
 const navItems = [
   { to: "/chat", label: "Chat" },
   { to: "/memory", label: "Memory" },
   { to: "/skills", label: "Skills" },
-  { to: "/tools", label: "Tools" },
+  { to: "/apps", label: "Applications" },
   { to: "/schedules", label: "Schedules" },
   { to: "/agent-runs", label: "Agent Runs" },
   { to: "/approval-requests", label: "Approvals" },
@@ -53,8 +53,8 @@ export default function App() {
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/memory" element={<MemoryPage />} />
           <Route path="/skills" element={<SkillsPage />} />
-          <Route path="/tools" element={<ToolsPage />} />
-          <Route path="/tools/:skillId" element={<ToolDetailPage />} />
+          <Route path="/apps" element={<WebAppsPage />} />
+          <Route path="/apps/:skillId" element={<WebAppPage />} />
           <Route path="/skills/:skillId" element={<SkillDetailPage />} />
           <Route path="/schedules" element={<SchedulesPage />} />
           <Route path="/agent-runs" element={<AgentRunsPage />} />

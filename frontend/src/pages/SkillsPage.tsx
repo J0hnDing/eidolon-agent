@@ -55,6 +55,7 @@ function SkillTable({ skills }: { skills: Skill[] }) {
             <tr>
               <th>Name</th>
               <th>Status</th>
+              <th>Runtime</th>
               <th>Risk</th>
               <th>Enabled</th>
               <th>Detail</th>
@@ -70,18 +71,23 @@ function SkillTable({ skills }: { skills: Skill[] }) {
                 <td>
                   <span className={`badge status-${skill.status}`}>{skill.status}</span>
                 </td>
+                <td>{skill.runtime}</td>
                 <td>
                   <span className={`badge risk-${skill.risk_level}`}>{skill.risk_level}</span>
                 </td>
                 <td>{skill.enabled ? "enabled" : "disabled"}</td>
                 <td>
-                  <Link to={`/skills/${skill.id}`}>Open</Link>
+                  {skill.runtime === "web_app" && skill.status === "installed" && skill.enabled ? (
+                    <Link to={`/apps/${skill.id}`}>Open App</Link>
+                  ) : (
+                    <Link to={`/skills/${skill.id}`}>Open</Link>
+                  )}
                 </td>
               </tr>
             ))}
             {skills.length === 0 && (
               <tr>
-                <td colSpan={5} className="muted">
+                <td colSpan={6} className="muted">
                   Nothing here yet.
                 </td>
               </tr>

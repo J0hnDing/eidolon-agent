@@ -35,12 +35,10 @@ def write_installed_skill(project_root: Path, name: str = "versioned_skill") -> 
     manifest = {
         "name": name,
         "description": "Versioned skill",
-        "interface_type": "chat",
         "entrypoint": "skill.py",
         "instructions_path": None,
         "input_schema": None,
         "output_schema": None,
-        "tool_ui_schema": None,
         "dependencies": [],
         "risk_level": "low",
         "permissions": {
@@ -69,7 +67,6 @@ def create_installed_skill(db: Session, project_root: Path, name: str = "version
     skill = Skill(
         name=name,
         description="Versioned skill",
-        interface_type="chat",
         status="installed",
         risk_level="low",
         manifest_path=skill_dir.relative_to(project_root).as_posix() + "/manifest.json",
@@ -213,7 +210,6 @@ def test_pm_blocks_unrealistic_suggestion(tmp_path: Path, db_session: Session) -
                     "blueprint": {
                         "goal": "Do not build this update.",
                         "skill_name": skill.name,
-                        "interface_type": skill.interface_type,
                         "suggestion": plan["suggestion"],
                         "milestones": [],
                     },
@@ -246,7 +242,6 @@ def test_pm_can_propose_better_solution_for_broad_request(tmp_path: Path, db_ses
                     "blueprint": {
                         "goal": "Ask for a narrower update.",
                         "skill_name": skill.name,
-                        "interface_type": skill.interface_type,
                         "suggestion": plan["suggestion"],
                         "milestones": [],
                     },
@@ -320,7 +315,6 @@ def test_update_request_permission_waits_and_resumes_after_approval(tmp_path: Pa
                     "blueprint": {
                         "goal": "Add public documentation lookup support.",
                         "skill_name": skill.name,
-                        "interface_type": skill.interface_type,
                         "suggestion": plan["suggestion"],
                         "permission_plan": {
                             "build_time": {

@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
 import { SkillGenerationApprovalResponse, api } from "../api/client";
 import {
@@ -8,7 +8,9 @@ import {
   runtimeApprovalMessage,
 } from "../features/chat/ChatWorkspace";
 import { useChatConversations } from "../features/chat/useChatConversations";
+import { mergeProjectConversationState } from "../features/chat/projectConversationState";
 import { ChatMessage } from "../lib/chatStore";
+import { usePolling } from "../lib/usePolling";
 
 export default function ChatPage() {
   const chat = useChatConversations();
@@ -16,10 +18,42 @@ export default function ChatPage() {
   const [isSending, setIsSending] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [projectStateNeedsPolling, setProjectStateNeedsPolling] = useState(false);
   const hasPendingMessage = chat.messages.some(
     (message) => message.kind === "thinking" || message.actionStatus === "working",
   );
   const isBusy = isSending || isGenerating || hasPendingMessage;
+
+  async function syncProjectConversation(conversationId: string): Promise<boolean> {
+    try {
+      const state = await api.getProjectConversationState(conversationId);
+      setProjectStateNeedsPolling(Boolean(state?.needs_polling));
+      if (!state) return false;
+      chat.updateConversation(conversationId, (conversation) => {
+        const messages = mergeProjectConversationState(conversation.messages, state);
+        if (JSON.stringify(messages) === JSON.stringify(conversation.messages)) return conversation;
+        return { ...conversation, messages, updatedAt: new Date().toISOString() };
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  useEffect(() => {
+    setProjectStateNeedsPolling(chat.mode === "project");
+    if (chat.mode === "project") void syncProjectConversation(chat.activeConversationId);
+    // Conversation synchronization is keyed only by the active id and mode.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chat.activeConversationId, chat.mode]);
+
+  usePolling(
+    async () => {
+      await syncProjectConversation(chat.activeConversationId);
+    },
+    chat.mode === "project" && projectStateNeedsPolling,
+    3000,
+  );
 
   function handleNewChat() {
     chat.createNewConversation();
@@ -117,6 +151,10 @@ export default function ChatPage() {
       }
     } catch (err) {
       chat.removeMessageFromConversation(conversationId, thinkingId);
+      if (chat.mode === "project" && await syncProjectConversation(conversationId)) {
+        setError(null);
+        return;
+      }
       const message = err instanceof Error ? err.message : "Could not send chat message";
       chat.appendMessagesToConversation(conversationId, [
         { id: nextId + 3, role: "assistant", content: message },

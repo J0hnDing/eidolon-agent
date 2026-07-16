@@ -38,6 +38,61 @@ def test_static_capability_scan_blocks_undeclared_network_and_process_usage(tmp_
     }
 
 
+def test_static_capability_scan_does_not_block_capability_imports_without_calls(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skill"
+    write_skill_source(skill_dir, "import requests\nimport subprocess\n")
+
+    result = StaticCapabilityScanner().scan(skill_dir, {"network": [], "filesystem_write": [], "secrets": []})
+
+    assert result.ok is True
+    assert result.findings == []
+
+
+def test_static_capability_scan_allows_urllib_parse_without_network_permission(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skill"
+    write_skill_source(
+        skill_dir,
+        "from urllib.parse import unquote\nvalue = unquote('/notes%20manager')\n",
+    )
+
+    result = StaticCapabilityScanner().scan(skill_dir, {"network": [], "filesystem_write": [], "secrets": []})
+
+    assert result.ok is True
+    assert result.findings == []
+
+
+def test_static_capability_scan_blocks_urllib_request_call_without_network_permission(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skill"
+    write_skill_source(
+        skill_dir,
+        "import urllib.request\nurllib.request.urlopen('https://example.com/data')\n",
+    )
+
+    result = StaticCapabilityScanner().scan(skill_dir, {"network": [], "filesystem_write": [], "secrets": []})
+
+    assert result.ok is False
+    assert any(
+        finding.capability == "network" and finding.evidence == "calls urllib.request.urlopen with literal domain example.com"
+        for finding in result.findings
+    )
+
+
+def test_static_capability_scan_resolves_aliased_urllib_request_call(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skill"
+    write_skill_source(
+        skill_dir,
+        "from urllib.request import urlopen as fetch\nfetch('https://example.com/data')\n",
+    )
+
+    result = StaticCapabilityScanner().scan(skill_dir, {"network": [], "filesystem_write": [], "secrets": []})
+
+    assert result.ok is False
+    assert any(
+        finding.capability == "network" and finding.evidence == "calls urllib.request.urlopen with literal domain example.com"
+        for finding in result.findings
+    )
+
+
 def test_static_capability_scan_checks_domains_and_cache_writes(tmp_path: Path) -> None:
     skill_dir = tmp_path / "skill"
     write_skill_source(
@@ -55,13 +110,59 @@ def test_static_capability_scan_checks_domains_and_cache_writes(tmp_path: Path) 
     )
 
     assert result.ok is False
-    assert any(finding.status == "allowed" and finding.evidence == "imports requests" for finding in result.findings)
     assert any("other.example" in finding.message and finding.blocking for finding in result.findings)
     assert any(
         finding.capability == "filesystem_write" and "result.json" in finding.evidence
         for finding in result.findings
     )
     assert not any("./cache/result.json" in finding.evidence for finding in result.findings)
+
+
+def test_static_capability_scan_allows_dynamic_temporary_file_cleanup_in_approved_cache(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skill"
+    write_skill_source(
+        skill_dir,
+        "import os\nimport tempfile\n"
+        "handle, temporary_name = tempfile.mkstemp(dir='./cache')\n"
+        "os.close(handle)\nos.unlink(temporary_name)\n",
+    )
+
+    result = StaticCapabilityScanner().scan(
+        skill_dir,
+        {"network": [], "filesystem_write": ["./cache"], "secrets": []},
+    )
+
+    assert result.ok is True
+    assert result.findings == []
+
+
+def test_static_capability_scan_allows_literal_deletion_inside_approved_cache(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skill"
+    write_skill_source(skill_dir, "import os\nos.unlink('./cache/temporary.json')\n")
+
+    result = StaticCapabilityScanner().scan(
+        skill_dir,
+        {"network": [], "filesystem_write": ["./cache"], "secrets": []},
+    )
+
+    assert result.ok is True
+    assert result.findings == []
+
+
+def test_static_capability_scan_blocks_literal_deletion_outside_approved_cache(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skill"
+    write_skill_source(skill_dir, "from pathlib import Path\nPath('outside.json').unlink()\n")
+
+    result = StaticCapabilityScanner().scan(
+        skill_dir,
+        {"network": [], "filesystem_write": ["./cache"], "secrets": []},
+    )
+
+    assert result.ok is False
+    assert any(
+        finding.capability == "file_deletion" and finding.evidence == "deletes literal path outside.json"
+        for finding in result.findings
+    )
 
 
 def test_static_capability_scan_ignores_tests_and_dependency_folders(tmp_path: Path) -> None:
@@ -78,3 +179,39 @@ def test_static_capability_scan_ignores_tests_and_dependency_folders(tmp_path: P
 
     assert result.ok is True
     assert result.scanned_files == ["skill.py"]
+
+
+def test_web_app_scan_blocks_cache_beneath_read_only_package(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skill"
+    write_skill_source(
+        skill_dir,
+        "from pathlib import Path\n"
+        "PACKAGE_DIR = Path(__file__).resolve().parent\n"
+        "STATIC_DIR = PACKAGE_DIR / 'static'\n"
+        "CACHE_DIR = PACKAGE_DIR / 'cache'\n",
+    )
+
+    result = StaticCapabilityScanner().scan(
+        skill_dir,
+        {"network": [], "filesystem_write": ["./cache"], "secrets": []},
+        runtime="web_app",
+    )
+
+    assert result.ok is False
+    assert any(finding.capability == "web_app_cache_path" for finding in result.findings)
+
+
+def test_web_app_scan_allows_platform_cache_environment_path(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skill"
+    write_skill_source(
+        skill_dir,
+        "import os\nfrom pathlib import Path\nCACHE_DIR = Path(os.environ['PERSONAL_AGENT_SKILL_CACHE_DIR'])\n",
+    )
+
+    result = StaticCapabilityScanner().scan(
+        skill_dir,
+        {"network": [], "filesystem_write": ["./cache"], "secrets": []},
+        runtime="web_app",
+    )
+
+    assert result.ok is True

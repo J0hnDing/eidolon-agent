@@ -28,7 +28,6 @@ def make_skill(db: Session, *, status: str = "installed") -> Skill:
     skill = Skill(
         name=f"skill_{status}",
         description="Router safety test",
-        interface_type="chat",
         status=status,
         risk_level="low",
         manifest_path=f"skills/proposed/skill_{status}/manifest.json",

@@ -5,6 +5,7 @@ import pytest
 
 from app.services.manifest_validator import (
     ManifestValidationError,
+    classify_permission_risk,
     validate_manifest,
     validate_manifest_file,
 )
@@ -12,11 +13,12 @@ from app.services.manifest_validator import (
 
 def valid_manifest() -> dict:
     return {
+        "manifest_version": 1,
         "name": "ai_news_digest",
         "description": "Summarizes AI infrastructure news from approved public sources.",
+        "runtime": "function",
         "entrypoint": "skill.py",
         "instructions_path": None,
-        "risk_level": "low",
         "permissions": {
             "network": ["reuters.com", "apnews.com"],
             "filesystem_read": [],
@@ -25,8 +27,6 @@ def valid_manifest() -> dict:
             "shell": False,
         },
         "schedule": None,
-        "created_by": "codex",
-        "enabled": False,
     }
 
 
@@ -34,7 +34,7 @@ def test_valid_low_risk_manifest_passes() -> None:
     manifest = validate_manifest(valid_manifest())
 
     assert manifest.name == "ai_news_digest"
-    assert manifest.interface_type == "chat"
+    assert manifest.runtime == "function"
     assert manifest.permissions.network == ["reuters.com", "apnews.com"]
     assert manifest.permissions.codex.call_response is True
     assert manifest.permissions.codex.internet_access is False
@@ -66,29 +66,29 @@ def test_manifest_rejects_url_dependencies() -> None:
         validate_manifest(data)
 
 
-def test_manifest_accepts_tool_interface_and_io_schemas() -> None:
+def test_manifest_accepts_io_schemas() -> None:
     data = valid_manifest()
-    data["interface_type"] = "tool"
     data["input_schema"] = {"type": "object", "properties": {"expression": {"type": "string"}}}
     data["output_schema"] = {"type": "object", "properties": {"result": {"type": "number"}}}
-    data["tool_ui_schema"] = {
-        "title": "Calculator",
-        "fields": [{"name": "expression", "label": "Expression", "type": "text"}],
-    }
 
     manifest = validate_manifest(data)
 
-    assert manifest.interface_type == "tool"
     assert manifest.input_schema == {"type": "object", "properties": {"expression": {"type": "string"}}}
     assert manifest.output_schema == {"type": "object", "properties": {"result": {"type": "number"}}}
-    assert manifest.tool_ui_schema["title"] == "Calculator"
 
 
-def test_manifest_rejects_unknown_interface_type() -> None:
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("interface_type", "tool"),
+        ("tool_ui_schema", {"title": "Calculator", "fields": []}),
+    ],
+)
+def test_manifest_rejects_removed_interface_fields(field: str, value: object) -> None:
     data = valid_manifest()
-    data["interface_type"] = "dashboard"
+    data[field] = value
 
-    with pytest.raises(ManifestValidationError, match="interface_type"):
+    with pytest.raises(ManifestValidationError, match=field):
         validate_manifest(data)
 
 
@@ -150,40 +150,96 @@ def test_manifest_rejects_parent_directory_filesystem_permission() -> None:
         validate_manifest(data)
 
 
-def test_manifest_requires_risk_level_to_match_permissions() -> None:
+def test_manifest_risk_is_derived_from_permissions() -> None:
     data = valid_manifest()
     data["permissions"]["filesystem_read"] = ["selected_notes"]
 
-    with pytest.raises(ManifestValidationError, match="at least medium"):
-        validate_manifest(data)
+    manifest = validate_manifest(data)
+
+    assert classify_permission_risk(manifest.permissions) == "medium"
 
 
 def test_manifest_treats_own_cache_read_as_low_risk() -> None:
     data = valid_manifest()
+    data["permissions"]["network"] = []
     data["permissions"]["filesystem_read"] = ["./cache"]
     data["permissions"]["filesystem_write"] = ["./cache"]
 
     manifest = validate_manifest(data)
 
-    assert manifest.risk_level == "low"
+    assert classify_permission_risk(manifest.permissions) == "low"
 
 
-def test_manifest_accepts_declared_medium_risk_for_filesystem_read() -> None:
+def test_manifest_network_and_dependencies_are_deterministically_medium_risk() -> None:
+    data = valid_manifest()
+    data["permissions"]["network"] = ["example.com"]
+    manifest = validate_manifest(data)
+    assert classify_permission_risk(manifest.permissions, manifest.dependencies) == "medium"
+
+    dependency_manifest = validate_manifest({**valid_manifest(), "dependencies": ["feedparser"]})
+    assert classify_permission_risk(
+        dependency_manifest.permissions,
+        dependency_manifest.dependencies,
+    ) == "medium"
+
+
+def test_manifest_legacy_backend_state_is_not_part_of_canonical_output() -> None:
     data = valid_manifest()
     data["risk_level"] = "medium"
-    data["permissions"]["filesystem_read"] = ["selected_notes"]
+    data["created_by"] = "legacy"
+    data["enabled"] = True
 
     manifest = validate_manifest(data)
 
-    assert manifest.risk_level == "medium"
+    assert set(manifest.model_dump()) >= {"manifest_version", "runtime", "entrypoint", "permissions"}
+    assert not {"risk_level", "created_by", "enabled"} & set(manifest.model_dump())
 
 
 def test_manifest_requires_entrypoint() -> None:
     data = valid_manifest()
     data["entrypoint"] = None
 
-    with pytest.raises(ManifestValidationError, match="skills require entrypoint"):
+    with pytest.raises(ManifestValidationError, match="entrypoint"):
         validate_manifest(data)
+
+
+def test_web_app_manifest_requires_importable_asgi_entrypoint() -> None:
+    data = valid_manifest()
+    data["runtime"] = "web_app"
+    data["entrypoint"] = "app.py"
+
+    with pytest.raises(ManifestValidationError, match="module:attribute"):
+        validate_manifest(data)
+
+
+def test_web_app_manifest_rejects_bounded_run_schedule() -> None:
+    data = valid_manifest()
+    data["runtime"] = "web_app"
+    data["entrypoint"] = "app:app"
+    data["schedule"] = {
+        "type": "daily",
+        "time": "09:00",
+        "timezone": "America/Toronto",
+        "input": {},
+    }
+
+    with pytest.raises(ManifestValidationError, match="cannot declare bounded-run schedules"):
+        validate_manifest(data)
+
+
+def test_web_app_manifest_file_resolves_module_entrypoint(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "web_app"
+    skill_dir.mkdir()
+    (skill_dir / "tests").mkdir()
+    data = valid_manifest()
+    data["runtime"] = "web_app"
+    data["entrypoint"] = "app:app"
+    (skill_dir / "manifest.json").write_text(json.dumps(data), encoding="utf-8")
+    (skill_dir / "app.py").write_text("async def app(scope, receive, send):\n    pass\n", encoding="utf-8")
+
+    manifest = validate_manifest_file(skill_dir / "manifest.json")
+
+    assert manifest.runtime == "web_app"
 
 
 def test_manifest_allows_optional_instructions_path() -> None:

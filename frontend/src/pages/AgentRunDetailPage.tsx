@@ -2,6 +2,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 
 import { AgentRunDetail, SkillRun, api } from "../api/client";
+import { canRetryAgentRun } from "../features/agent-run/agentRunActions";
 import { usePolling } from "../lib/usePolling";
 
 const LIVE_RUN_STATUSES = new Set(["pending", "running", "waiting_for_approval"]);
@@ -172,6 +173,7 @@ export default function AgentRunDetailPage() {
 
   const taskDag = extractTaskDag(run);
   const taskStatuses = extractTaskStatuses(run);
+  const canRetry = canRetryAgentRun(run);
 
   return (
     <section className="page stack">
@@ -234,14 +236,16 @@ export default function AgentRunDetailPage() {
           >
             Resume
           </button>
-          <button
-            type="button"
-            className="secondary"
-            onClick={handleRetryCurrentMilestone}
-            disabled={isWorking || !["failed", "blocked"].includes(run.status)}
-          >
-            Retry Current Task
-          </button>
+          {canRetry && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={handleRetryCurrentMilestone}
+              disabled={isWorking}
+            >
+              Retry Current Task
+            </button>
+          )}
           <button
             type="button"
             className="secondary"
@@ -342,7 +346,7 @@ export default function AgentRunDetailPage() {
                 <summary>Output JSON</summary>
                 <pre>{JSON.stringify(step.output_json ?? {}, null, 2)}</pre>
               </details>
-              {(step.status === "failed" || step.status === "blocked") && (
+              {canRetry && (step.status === "failed" || step.status === "blocked") && (
                 <div className="button-row">
                   <button type="button" onClick={() => handleRetry(step.id)} disabled={isWorking}>
                     Retry Current Task

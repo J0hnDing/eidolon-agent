@@ -12,6 +12,8 @@ Rules:
 - For network or backend Codex code, verify bounded outbound call counts and caller timeouts. Multi-item Codex work must use one batched request with per-item result mapping rather than sequential per-item calls.
 - Do not require network, secrets, shell commands, package installation, browser automation, email/calendar/finance actions, public posting, purchases, trading, or file deletion.
 - Use subprocess inside pytest only for executable JSON stdin/stdout checks.
+- For `runtime=web_app`, import the declared ASGI application and test it in-process. Verify owned UI rendering and interactive HTTP routes without starting a persistent server or requiring a browser.
+- For `runtime=function`, retain bounded JSON stdin/stdout contract tests.
 - After writing the requested file, run at most one focused pytest command for that file. Fix only test-owned syntax, import, fixture, or assertion-shape mistakes; never weaken a behavioral requirement or edit implementation to make a test pass. Backend owns authoritative validation and any Builder repair loop.
 
 Return no prose. Write files only.

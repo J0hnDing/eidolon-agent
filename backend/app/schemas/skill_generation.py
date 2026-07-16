@@ -75,6 +75,15 @@ class SkillGenerationApprovalResponse(BaseModel):
     runtime_permission_request: ApprovalRequestRead | None = None
 
 
+class ProjectConversationStateRead(BaseModel):
+    generation_request: SkillGenerationRequestRead
+    permission_request: ApprovalRequestRead | None = None
+    proposed_skill: SkillRead | None = None
+    agent_run: AgentRunRead | None = None
+    runtime_permission_request: ApprovalRequestRead | None = None
+    needs_polling: bool = False
+
+
 ChatResponse = (
     DirectChatResponse
     | SkillGenerationPlanResponse

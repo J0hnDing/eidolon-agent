@@ -60,14 +60,13 @@ class Skill(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
-    interface_type: Mapped[str] = mapped_column(String(16), default="chat", nullable=False)
+    runtime: Mapped[str] = mapped_column(String(32), default="function", nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), default="proposed", nullable=False, index=True)
     risk_level: Mapped[str] = mapped_column(String(16), default="low", nullable=False)
     manifest_path: Mapped[str] = mapped_column(String(512), nullable=False)
     instructions_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     input_schema_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     output_schema_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    tool_ui_schema_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     installed_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     active_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
@@ -84,6 +83,10 @@ class Skill(Base):
     approval_requests: Mapped[list["ApprovalRequest"]] = relationship(back_populates="skill")
     generation_requests: Mapped[list["SkillGenerationRequest"]] = relationship(back_populates="proposed_skill")
     schedules: Mapped[list["SkillSchedule"]] = relationship(back_populates="skill")
+    web_app_instances: Mapped[list["WebAppInstance"]] = relationship(
+        back_populates="skill",
+        cascade="all, delete-orphan",
+    )
 
 
 class SkillVersion(Base):
@@ -131,6 +134,81 @@ class SkillRun(Base):
     total_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     skill: Mapped["Skill"] = relationship(back_populates="runs")
+
+
+class WebAppInstance(Base):
+    __tablename__ = "web_app_instances"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id"), nullable=False, index=True)
+    version_id: Mapped[int] = mapped_column(ForeignKey("skill_versions.id"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="starting", nullable=False, index=True)
+    runner_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    upstream_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    container_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    relay_container_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    process_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    capability_token_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    logs: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+    skill: Mapped["Skill"] = relationship(back_populates="web_app_instances")
+    version: Mapped["SkillVersion"] = relationship()
+    sessions: Mapped[list["WebAppSession"]] = relationship(
+        back_populates="instance",
+        cascade="all, delete-orphan",
+    )
+    audit_records: Mapped[list["WebAppAuditRecord"]] = relationship(
+        back_populates="instance",
+        cascade="all, delete-orphan",
+    )
+
+
+class WebAppSession(Base):
+    __tablename__ = "web_app_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    instance_id: Mapped[str] = mapped_column(ForeignKey("web_app_instances.id"), nullable=False, index=True)
+    skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    gateway_host: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    last_accessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    instance: Mapped["WebAppInstance"] = relationship(back_populates="sessions")
+    skill: Mapped["Skill"] = relationship()
+
+
+class WebAppAuditRecord(Base):
+    __tablename__ = "web_app_audit_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    instance_id: Mapped[str] = mapped_column(ForeignKey("web_app_instances.id"), nullable=False, index=True)
+    session_id: Mapped[str | None] = mapped_column(ForeignKey("web_app_sessions.id"), nullable=True, index=True)
+    operation: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    request_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    response_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    instance: Mapped["WebAppInstance"] = relationship(back_populates="audit_records")
+    session: Mapped["WebAppSession | None"] = relationship()
 
 
 class SkillOperationLock(Base):

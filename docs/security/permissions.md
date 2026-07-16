@@ -14,7 +14,7 @@ ProductManager returns only permissions that need user approval. Backend-owned d
 
 ### Runtime
 
-Runtime approval is based on the actual generated `manifest.json`. It is required before install/run when permissions or dependencies require review.
+Runtime approval is based on the actual generated `manifest.json`. Installation remains a separate decision, and neither an installed function run nor an installed web-application session may start until the corresponding runtime declaration is approved.
 
 ### Schedule
 
@@ -28,8 +28,8 @@ low, medium, high, blocked
 
 Examples:
 
-- Low: no requested permissions, explicit public domains, own `./cache` read/write.
-- Medium: package dependencies, web scraping, scheduled jobs.
+- Low: no requested permissions, own `./cache` read/write, backend-mediated Codex call/response without internet.
+- Medium: explicit public domains, package dependencies, web scraping, or Codex internet access.
 - High/blocked in MVP: secrets, shell, arbitrary file access, broad writes, dangerous third-party actions.
 
 ## Supported Runtime Permissions
@@ -63,6 +63,8 @@ Allowed:
 
 Important limitation: approved network domains currently enable container network access but are not domain-firewalled. The UI must disclose this.
 
+For web applications, browser-side external traffic is not derived from `runtime.network` and is blocked entirely. Browser code must call same-origin application routes; approved server-side code may then use the declared network capability. Application ingress remains available through a private gateway channel even when runtime network domains are empty.
+
 Blocked:
 
 - wildcard network;
@@ -78,11 +80,11 @@ Blocked:
 - purchases;
 - trading;
 - public posting;
-- file deletion.
+- file deletion outside approved `./cache` storage; cache-local replacement and cleanup are covered by cache write access.
 
 ## Static Capability Validation
 
-Every completed Project build passes through the same backend-owned static capability scan before the backend runs generated tests and creates runtime permission review. The scanner inspects generated implementation Python while excluding tests, installed dependency code, caches, and metadata. DAG Tester may already have authored a final test file, but test authoring is outside this deterministic validator.
+Every completed Project build passes through the same backend-owned static capability scan before the backend runs generated tests and creates runtime permission review. The scanner inspects generated implementation Python plus literal browser URLs in HTML/CSS/JavaScript while excluding tests, installed dependency code, caches, and metadata. DAG Tester may already have authored a final test file, but test authoring is outside this deterministic validator.
 
 Recognized evidence includes:
 
@@ -92,12 +94,13 @@ Recognized evidence includes:
 - literal filesystem writes outside approved runtime write paths;
 - absolute or parent-traversing literal file access;
 - sensitive environment-variable names;
-- direct file-deletion APIs;
+- literal file-deletion targets proven to be outside approved runtime write roots;
 - Python files that cannot be parsed or exceed the bounded scan size.
+- literal absolute HTTP(S) URLs in browser assets, which are blocked regardless of server-side domains.
 
-Allowed network evidence is recorded when the actual generated manifest declares runtime network domains. A literal URL domain must match a manifest-declared domain. Recognized undeclared or blocked evidence fails final validation and prevents runtime permission review. A single-Codex workflow blocks immediately; a DAG workflow may use its bounded Builder repair loop and rescan. Results are persisted as `capability_scan.json` in the agent-run artifacts. The later runtime review separately compares the actual manifest with the earlier approved plan and requests approval for meaningful expansion.
+Network imports alone are not findings. Network evidence is recorded only for recognized calls with literal domains, and a literal URL domain must match a manifest-declared domain. Import aliases are resolved, while local URL string helpers such as `urllib.parse` are not network evidence. Process imports likewise do not block unless a recognized execution API is called. File cleanup with a dynamic target is not treated as proof of out-of-bounds deletion; literal deletion is blocked only when its target is provably outside approved runtime write roots. Recognized undeclared or blocked evidence fails final validation and prevents runtime permission review. A single-Codex workflow blocks immediately; a DAG workflow may use its bounded Builder repair loop and rescan. Results are persisted as `capability_scan.json` in the agent-run artifacts. The later runtime review separately compares the actual manifest with the earlier approved plan and requests approval for meaningful expansion.
 
-This scan does not grant permissions and does not replace sandbox enforcement. It cannot reliably analyze dynamic imports, reflection, encoded source, dependency internals, runtime-built paths or domains, non-Python executables, or behavior hidden behind external services. Absence of a finding is not proof that code has no side effects.
+This scan does not grant permissions and does not replace sandbox enforcement. It is intentionally evidence-based rather than fail-closed when a path, domain, or call target cannot be proven statically. It cannot reliably analyze dynamic imports, reflection, encoded source, dependency internals, runtime-built paths or domains, Python-embedded browser assets, non-Python executables, or behavior hidden behind external services. Absence of a finding is not proof that code has no side effects.
 
 ## Permission Expansion
 

@@ -66,7 +66,7 @@ def build_repair_prompt(skill: Any, output_dir: Path, failure_context: dict) -> 
 
 Skill:
 - name: {skill.name}
-- interface_type: {skill.interface_type}
+- runtime: {skill.runtime}
 
 Controlled skill folder:
 {output_dir}

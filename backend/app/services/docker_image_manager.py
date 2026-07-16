@@ -9,6 +9,11 @@ from typing import Any, Callable
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TRUSTED_DOCKERFILE = PROJECT_ROOT / "backend" / "docker" / "skill-runner.Dockerfile"
 TRUSTED_BUILD_CONTEXT = PROJECT_ROOT
+TRUSTED_RUNTIME_FILES = (
+    PROJECT_ROOT / "backend" / "web_runtime_host.py",
+    PROJECT_ROOT / "backend" / "web_runtime_capabilities.py",
+    PROJECT_ROOT / "backend" / "web_runtime_relay.py",
+)
 DEFAULT_METADATA_PATH = PROJECT_ROOT / "runtime" / "docker_runner_build.json"
 
 
@@ -131,6 +136,8 @@ class DockerImageManager:
             self.build_command(),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             shell=False,
         )
         combined_log = "\n".join(part for part in [result.stdout, result.stderr] if part)
@@ -171,13 +178,17 @@ class DockerImageManager:
             self.inspect_command(),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             shell=False,
         )
         return result.returncode == 0
 
     def _dockerfile_hash(self) -> str:
         digest = hashlib.sha256()
-        digest.update(self.dockerfile.read_bytes())
+        for path in (self.dockerfile, *TRUSTED_RUNTIME_FILES):
+            digest.update(path.relative_to(self.project_root).as_posix().encode("utf-8"))
+            digest.update(path.read_bytes())
         return digest.hexdigest()
 
     def _read_metadata(self) -> dict[str, Any]:

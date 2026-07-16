@@ -13,7 +13,7 @@ class ProductManagerContractService:
         allowed_fields = {
             "goal",
             "skill_name",
-            "interface_type",
+            "runtime",
             "expected_behavior",
             "schedule",
             "acceptance_criteria",
@@ -23,13 +23,19 @@ class ProductManagerContractService:
         }
         blueprint = {key: fallback[key] for key in allowed_fields if key in fallback}
         blueprint.update({key: value[key] for key in allowed_fields if key in value})
-        for key in ("goal", "skill_name"):
-            if not blueprint.get(key):
-                blueprint[key] = fallback.get(key)
-        blueprint["interface_type"] = blueprint.get("interface_type") or fallback.get("interface_type", "chat")
+        if not blueprint.get("goal"):
+            blueprint["goal"] = fallback.get("goal")
+        # The backend-selected package identity is stable across every PM action.
+        # ProductManager may improve the display/goal wording but cannot rename
+        # the controlled folder or database record mid-workflow.
+        blueprint["skill_name"] = fallback.get("skill_name")
+        runtime = blueprint.get("runtime") or fallback.get("runtime", "function")
+        blueprint["runtime"] = runtime if runtime in {"function", "web_app"} else "function"
         if not isinstance(blueprint.get("schedule"), dict):
             fallback_schedule = fallback.get("schedule")
             blueprint["schedule"] = fallback_schedule if isinstance(fallback_schedule, dict) else None
+        if blueprint["runtime"] == "web_app":
+            blueprint["schedule"] = None
         milestones = blueprint.get("milestones")
         if isinstance(milestones, list) and milestones:
             sanitized_milestones = []
@@ -52,11 +58,6 @@ class ProductManagerContractService:
         criteria = blueprint.get("acceptance_criteria")
         if not isinstance(criteria, list):
             blueprint["acceptance_criteria"] = list(fallback.get("acceptance_criteria", []) or [])
-        tool_criterion = "tool_ui_schema is present so the Tools page can render a user-friendly UI"
-        if blueprint.get("interface_type") == "tool":
-            criteria = blueprint.setdefault("acceptance_criteria", [])
-            if isinstance(criteria, list) and tool_criterion not in criteria:
-                criteria.append(tool_criterion)
         blueprint["permission_plan"] = self.sanitize_permission_plan(blueprint.get("permission_plan"), fallback)
         return blueprint
 
@@ -136,7 +137,7 @@ class ProductManagerContractService:
         blueprint.update(
             {
                 "skill_name": skill.name,
-                "interface_type": skill.interface_type,
+                "runtime": skill.runtime,
                 "suggestion": suggestion,
             }
         )

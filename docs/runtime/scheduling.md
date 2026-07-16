@@ -12,7 +12,7 @@ Supported schedule forms:
 
 ## Schedule Creation
 
-Schedules can be created from the UI or from manifest-declared schedule intent. Skills do not register schedules by executing code. BuilderAgent does not receive a Scheduling API. ProductManager expresses recurring intent in the manifest schedule field, Builder preserves that field, and the backend registers it during install.
+Schedules can be created for `function` skills from the UI or from manifest-declared schedule intent. Skills do not register schedules by executing code. BuilderAgent does not receive a Scheduling API. ProductManager expresses recurring function intent in the manifest schedule field, Builder preserves that field, and the backend registers it during install. `web_app` manifests reject schedules because a persistent service is not a bounded scheduled run.
 
 Manifest-declared schedules are created as pending schedule records, even if a skill is installed disabled by default. The schedule does not become active until approved, and scheduled execution still requires the skill to be enabled.
 
@@ -33,6 +33,7 @@ Schedule approval shows:
 A scheduled run may execute only if:
 
 - skill is installed;
+- skill runtime is `function`;
 - skill is enabled;
 - runtime permissions are approved;
 - runtime permissions are supported by the runner;

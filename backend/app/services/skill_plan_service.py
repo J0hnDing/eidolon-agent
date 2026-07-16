@@ -10,8 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from sqlalchemy.orm import Session
 
 from app.schemas.codex_routing import ResolvedInvocationSettings
-from app.schemas.common import InterfaceType, RiskLevel
-from app.schemas.manifest import ManifestPermissions
+from app.schemas.common import RiskLevel, SkillRuntime
+from app.schemas.manifest import ManifestPermissions, classify_permission_risk
 from app.services.codex_cli_service import codex_cli_service, should_use_real_codex
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
 
@@ -28,13 +28,12 @@ class SkillGenerationPlan(BaseModel):
     goal: str = Field(min_length=1)
     skill_name: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
     display_name: str = Field(min_length=1)
-    interface_type: InterfaceType = "chat"
+    runtime: SkillRuntime = "function"
     files_to_generate: list[str]
     expected_input: dict[str, Any]
     expected_output: dict[str, Any]
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
-    tool_ui_schema: dict[str, Any] | None = None
     requested_permissions: ManifestPermissions
     requested_network_domains: list[str]
     requested_dependencies: list[str]
@@ -65,10 +64,14 @@ class SkillGenerationPlan(BaseModel):
 
     @model_validator(mode="after")
     def validate_plan_contract(self) -> "SkillGenerationPlan":
-        required_files = {"manifest.json", "skill.py", "tests/test_skill.py"}
+        required_files = {"manifest.json", "skill.py" if self.runtime == "function" else "app.py"}
         missing = required_files - set(self.files_to_generate)
         if missing:
             raise ValueError(f"files_to_generate missing required files: {sorted(missing)}")
+        if not any(path.startswith("tests/test_") and path.endswith(".py") for path in self.files_to_generate):
+            raise ValueError("files_to_generate must include at least one Python test file")
+        if self.runtime == "web_app" and self.schedule is not None:
+            raise ValueError("web_app plans cannot use bounded-run schedules")
         if not self.tests_required:
             raise ValueError("skill plans must require tests")
         if self.requested_network_domains != self.requested_permissions.network:
@@ -84,13 +87,16 @@ class SkillPlanAdapter(Protocol):
 class FakeSkillPlanAdapter:
     def build_plan(self, prompt: str, message: str) -> dict[str, Any]:
         identity = _infer_skill_identity(message)
-        schedule = _infer_schedule(message)
+        runtime = _infer_runtime(message)
+        schedule = _infer_schedule(message) if runtime == "function" else None
+        implementation = "app.py" if runtime == "web_app" else "skill.py"
+        test_file = "tests/test_app.py" if runtime == "web_app" else "tests/test_skill.py"
         return {
             "goal": message,
             "skill_name": identity["skill_name"],
             "display_name": identity["display_name"],
-            "interface_type": "chat",
-            "files_to_generate": ["manifest.json", "README.md", "skill.py", "tests/test_skill.py"],
+            "runtime": runtime,
+            "files_to_generate": ["manifest.json", "README.md", implementation, test_file],
             "expected_input": {"input": "object"},
             "expected_output": {
                 "title": "string",
@@ -100,7 +106,6 @@ class FakeSkillPlanAdapter:
             },
             "input_schema": None,
             "output_schema": None,
-            "tool_ui_schema": None,
             "requested_permissions": {
                 "network": [],
                 "filesystem_read": [],
@@ -226,7 +231,9 @@ class SkillPlanService:
             plan = SkillGenerationPlan.model_validate(raw_plan)
         except ValidationError as exc:
             raise SkillPlanError(str(exc)) from exc
-        return plan.model_dump(mode="json")
+        payload = plan.model_dump(mode="json")
+        payload["risk_level"] = classify_permission_risk(plan.requested_permissions, plan.requested_dependencies)
+        return payload
 
     def build_prompt(self, message: str) -> str:
         return f"""
@@ -236,20 +243,18 @@ Return only one JSON object. Do not write files. Do not install packages. Do not
 
 Definitions:
 - A skill is a reusable capability package.
+- runtime=function is a bounded Python JSON stdin/stdout execution protocol.
+- runtime=web_app is a persistent ASGI application protocol using an importable app:app-style entrypoint.
 - Skills contain executable Python code and tests.
 - Skills may include an optional SKILL.md for reusable instructions or operating notes.
-- interface_type must be exactly one of: chat, tool, hidden.
-- interface_type=tool means an installed runnable skill should appear on the Tools page as a manual form/tool.
-- interface_type=chat means the skill is primarily used through chat.
-- interface_type=hidden means it should not be user-facing by default.
-- Tool UIs must be declarative JSON in tool_ui_schema. Do not generate React, HTML, JavaScript, or frontend app code.
-- For interface_type=tool, tool_ui_schema should describe a simple form the app can safely render.
-- Supported tool_ui_schema field types: text, number, textarea, checkbox, select.
+- A web_app owns its HTML, CSS, JavaScript, rendering, interaction, state, and domain behavior inside its skill folder.
+- A web_app must never edit or inject files into the Personal Agent React frontend.
+- Runtime alone determines interface exposure: web_app skills appear in Applications; function skills have no dedicated interface surface in this milestone.
 
 Safety requirements:
 - shell must be false.
 - secrets must be [].
-- skills must include tests/test_skill.py.
+- skills must include at least one tests/test_*.py file; use tests/test_app.py for web applications and tests/test_skill.py for function skills.
 - Use filesystem_write ["./cache"] only when useful; otherwise [].
 - Use explicit network domains only when the user request genuinely needs future runtime network access.
 - Do not request package dependencies unless genuinely needed.
@@ -259,11 +264,10 @@ Safety requirements:
 Choose all skill properties yourself based on the request:
 - skill_name: safe snake_case, matching ^[a-zA-Z0-9_-]+$.
 - display_name: human readable.
-- interface_type.
+- runtime: choose web_app only when the requested capability needs a self-rendered interactive application; otherwise function.
 - input_schema and output_schema as JSON Schema objects when useful; otherwise null.
-- tool_ui_schema for interface_type=tool; otherwise null.
 - permissions, dependencies, risk level, expected input/output, files, and validation steps.
-- If the user asks for recurring execution, include schedule as manifest intent. Otherwise set schedule to null.
+- If the user asks for recurring bounded function execution, include schedule as manifest intent. Always set schedule to null for web_app.
 - Supported schedule shapes:
   - {{"type": "daily", "time": "HH:MM", "timezone": "IANA timezone", "input": {{}}}}
   - {{"type": "weekly", "day": "weekday", "time": "HH:MM", "timezone": "IANA timezone", "input": {{}}}}
@@ -274,13 +278,12 @@ Return JSON with exactly this shape:
   "goal": "string",
   "skill_name": "safe_name",
   "display_name": "Display Name",
-  "interface_type": "chat | tool | hidden",
+  "runtime": "function | web_app",
   "files_to_generate": ["manifest.json", "README.md"],
   "expected_input": {{}},
   "expected_output": {{}},
   "input_schema": null,
   "output_schema": null,
-  "tool_ui_schema": null,
   "requested_permissions": {{
     "network": [],
     "filesystem_read": [],
@@ -299,29 +302,6 @@ Return JSON with exactly this shape:
     "running the skill",
     "installing packages without approval"
   ]
-}}
-
-For a tool, use this tool_ui_schema shape:
-{{
-  "title": "Human tool title",
-  "description": "One sentence explaining what this tool does.",
-  "submit_label": "Run",
-  "fields": [
-    {{
-      "name": "input_key",
-      "label": "Input Label",
-      "type": "text | number | textarea | checkbox | select",
-      "placeholder": "Optional placeholder",
-      "help_text": "Optional helper text",
-      "required": true,
-      "default": "",
-      "options": ["Only for select fields"]
-    }}
-  ],
-  "result_template": {{
-    "primary_field": "result",
-    "primary_label": "Result"
-  }}
 }}
 
 User Project mode request:
@@ -405,6 +385,12 @@ def _infer_skill_identity(message: str) -> dict[str, str]:
         "skill_name": safe_name,
         "display_name": safe_name.replace("_", " ").title(),
     }
+
+
+def _infer_runtime(message: str) -> str:
+    lowered = message.lower()
+    web_app_markers = ("web app", "web application", "interactive dashboard", "browser application")
+    return "web_app" if any(marker in lowered for marker in web_app_markers) else "function"
 
 
 def _infer_schedule(message: str) -> dict[str, Any] | None:

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Persistent Counter</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="counter-card" aria-labelledby="title">
+      <p class="eyebrow">Local counter</p>
+      <h1 id="title">Persistent Counter</h1>
+      <output id="count" class="count" aria-live="polite" aria-label="Current count">0</output>
+      <button id="increment" type="button">Add one</button>
+      <p id="status" class="status" role="status">Saved locally after every click.</p>
+    </main>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

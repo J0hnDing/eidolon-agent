@@ -1,7 +1,8 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import SessionLocal, create_db_and_tables
@@ -14,11 +15,26 @@ from app.routers import (
     schedules,
     skill_generation_requests,
     skills,
-    tools,
     usage,
+    web_apps,
 )
 from app.services.codex_usage_service import codex_usage_service
 from app.services.scheduler_service import SchedulerService
+from app.services.web_app_runtime_service import WebAppRuntimeConfig, WebAppRuntimeService
+
+
+def stop_idle_web_app_instances(config: WebAppRuntimeConfig) -> None:
+    maintenance_db = SessionLocal()
+    try:
+        WebAppRuntimeService(maintenance_db, config=config).stop_idle_instances()
+    finally:
+        maintenance_db.close()
+
+
+async def web_app_runtime_maintenance(config: WebAppRuntimeConfig) -> None:
+    while True:
+        await asyncio.sleep(max(1, min(config.maintenance_interval_seconds, 60)))
+        await asyncio.to_thread(stop_idle_web_app_instances, config)
 
 
 @asynccontextmanager
@@ -30,9 +46,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.scheduler_service = scheduler_service
     codex_usage_service.start()
     app.state.codex_usage_service = codex_usage_service
+    web_app_config = WebAppRuntimeConfig.from_env()
+    web_app_db = SessionLocal()
+    WebAppRuntimeService(web_app_db, config=web_app_config).recover_stale_instances()
+    web_app_maintenance = asyncio.create_task(web_app_runtime_maintenance(web_app_config))
     try:
         yield
     finally:
+        web_app_maintenance.cancel()
+        try:
+            await web_app_maintenance
+        except asyncio.CancelledError:
+            pass
+        WebAppRuntimeService(web_app_db, config=web_app_config).shutdown_all()
+        web_app_db.close()
         codex_usage_service.stop()
         scheduler_service.shutdown()
         scheduler_db.close()
@@ -56,9 +83,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def enforce_web_app_gateway_origin(request: Request, call_next):
+    config = WebAppRuntimeConfig.from_env()
+    hostname = request.headers.get("host", "").partition(":")[0].lower().rstrip(".")
+    is_gateway_origin = hostname.endswith(f".{config.gateway_domain.lower()}")
+    internal_prefix = "/__web_app_gateway"
+    if is_gateway_origin:
+        original_path = request.scope.get("path", "/")
+        request.scope["path"] = f"{internal_prefix}{original_path}"
+        request.scope["raw_path"] = request.scope["path"].encode("utf-8")
+    elif request.url.path.startswith(internal_prefix):
+        return Response(status_code=404)
+    return await call_next(request)
+
 app.include_router(memory_facts.router)
 app.include_router(skills.router)
-app.include_router(tools.router)
 app.include_router(agent_runs.router)
 app.include_router(chat.router)
 app.include_router(skill_generation_requests.router)
@@ -66,6 +107,8 @@ app.include_router(permission_requests.router)
 app.include_router(schedules.router)
 app.include_router(usage.router)
 app.include_router(codex_settings.router)
+app.include_router(web_apps.router)
+app.include_router(web_apps.gateway_router)
 
 
 @app.get("/health")

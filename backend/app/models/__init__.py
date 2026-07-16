@@ -11,6 +11,9 @@ from app.models.entities import (
     SkillRun,
     SkillSchedule,
     SkillVersion,
+    WebAppAuditRecord,
+    WebAppInstance,
+    WebAppSession,
 )
 
 __all__ = [
@@ -26,4 +29,7 @@ __all__ = [
     "SkillRun",
     "SkillSchedule",
     "SkillVersion",
+    "WebAppAuditRecord",
+    "WebAppInstance",
+    "WebAppSession",
 ]

@@ -92,13 +92,15 @@ Codex must not modify backend/frontend app source when generating application sk
 
 ## Skill Runtime Calls
 
-Skills must not shell out to the Codex CLI. Installed enabled skills may call the backend Skill Codex Call API:
+Skills must not shell out to the Codex CLI. Installed enabled function skills may call the backend Skill Codex Call API:
 
 ```text
 POST /skills/{skill_id}/codex
 ```
 
 The runner sets `PERSONAL_AGENT_SKILL_ID` and `PERSONAL_AGENT_BACKEND_URL` for generated skill code. The backend validates runtime approval and manifest `permissions.codex` before invoking Codex. `codex_permissions.internet_access=true` is accepted only when runtime `network` entries were approved for the skill.
+
+Web applications do not use the caller-supplied skill-id route. Their server process uses `web_runtime_capabilities.call_codex`, which authenticates `/web-apps/capabilities/codex` with a scoped instance token and rechecks the enabled active version plus manifest declarations. Browser code never receives the token.
 
 During an active skill run, the backend appends a success or failure invocation record to that `skill_runs` row. Success records include adapter/model identity, the invoked CLI path when applicable, and token breakdowns and update the runtime aggregate counters. Failure records include the resolved CLI path/version/source, exit code, error type, concise error detail, and a bounded stderr tail; token counters remain zero when no completed turn was emitted. Per-skill operation locking makes the active row unambiguous. Calls made outside an active run are not attributed to run history.
 

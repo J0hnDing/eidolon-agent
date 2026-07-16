@@ -62,3 +62,19 @@ Suggested design:
 8. Persist per-node status, logs, failures, and token usage without sharing mutable database sessions or usage accumulators across workers.
 9. Apply one quota decision to the admitted batch, then recheck reserves before admitting the next batch.
 10. Clean up isolated workspaces safely on pause, failure, cancellation, or restart while preserving diagnostics.
+
+## TODO-009 - Dynamic Function Registry And Cross-Skill Invocation
+
+- **Priority:** Medium
+- **Status:** Planned
+- **Area:** Backend / skill composition
+- **Rationale:** The runtime discriminator now identifies bounded function skills, but discovery, typed registration, controlled cross-skill function calls, and any dedicated function-facing surface belong to Milestone 2 and were explicitly excluded from the web-application milestone.
+- **Acceptance criteria:** Installed enabled function skills expose one backend-owned typed discovery contract; callers cannot trust arbitrary package commands or caller-supplied permissions; cross-skill calls enforce target approval, operation locks, bounded execution, input/output validation, version identity, and audit records; recursive or cyclic invocation is bounded; existing direct runs, schedules, and web applications remain compatible; and interface work is implemented only through an explicitly approved follow-up.
+
+## TODO-010 - Domain-Level Runtime Egress Enforcement
+
+- **Priority:** High
+- **Status:** Planned
+- **Area:** Backend / sandbox networking
+- **Rationale:** Runtime approvals name explicit server-side network domains, but any approved domain currently enables Docker bridge egress without domain-level filtering. Web-application browser traffic is separately blocked, and no-network application ingress is isolated, but approved server egress still has this disclosed enforcement gap.
+- **Acceptance criteria:** Docker runtime egress is restricted to the approved manifest domains for both bounded functions and web applications; DNS rebinding, direct IP access, redirects, IPv4/IPv6 differences, and dependency traffic have explicit tested policy; the trusted gateway and scoped backend capability channel continue to work without granting internet access; local-development fallback remains clearly disclosed; and UI/runtime diagnostics report the effective enforcement mode.

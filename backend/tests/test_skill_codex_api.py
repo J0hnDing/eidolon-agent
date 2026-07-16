@@ -37,7 +37,6 @@ def write_installed_skill(project_root: Path, *, network: list[str] | None = Non
     manifest = {
         "name": "codex_skill",
         "description": "Calls Codex through the backend.",
-        "interface_type": "chat",
         "entrypoint": "skill.py",
         "instructions_path": None,
         "risk_level": "medium" if network else "low",
@@ -63,7 +62,6 @@ def create_skill(db: Session) -> Skill:
     skill = Skill(
         name="codex_skill",
         description="Calls Codex through the backend.",
-        interface_type="chat",
         status="installed",
         risk_level="low",
         manifest_path="skills/installed/codex_skill/manifest.json",

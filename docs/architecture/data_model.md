@@ -22,15 +22,15 @@ The central skill record. Important fields:
 
 - `name`
 - `description`
-- `interface_type`: `chat`, `tool`, or `hidden`
+- `runtime`: `function` or `web_app`
 - `status`: `building`, `proposed`, `installed`, `failed`, or legacy tombstone `deleted`
 - `risk_level`
 - manifest/instructions/installed paths
-- input/output/tool UI schemas
+- input/output schemas
 - `active_version_id`
 - `enabled`
 
-Enabled state is represented only by `enabled`; `disabled` is not a lifecycle status. Local schema migration converts legacy `status = disabled` rows to `status = installed, enabled = false`.
+Enabled state is represented only by `enabled`; `disabled` is not a lifecycle status. Local schema migration converts legacy `status = disabled` rows to `status = installed, enabled = false`. Existing rows created before the runtime split migrate to `runtime = function`; filesystem synchronization refreshes installed records from the active manifest.
 
 ### skill_versions
 
@@ -38,7 +38,7 @@ Tracks versioned installed skill folders. Active installed skills point to an ac
 
 ### skill_runs
 
-Stores manual, tool, or scheduled run results:
+Stores manual or scheduled function-run results:
 
 - input/output JSON
 - stdout/stderr
@@ -47,6 +47,20 @@ Stores manual, tool, or scheduled run results:
 - status and error message
 - ordered runtime Codex invocation records with success/failure status, adapter/model identity, CLI diagnostics, and token breakdowns
 - aggregate input, cached-input, output, reasoning-output, and total token counts
+
+`skill_runs` is intentionally bounded and is not used to represent a persistent web server.
+
+### web_app_instances
+
+Stores persistent version-pinned service instances separately from bounded runs. It includes skill/version ids, startup/readiness/access/stop timestamps, lifecycle status, runner mode, loopback upstream, application and optional trusted-relay Docker identities or a local process identity, a hash of the scoped capability token, and bounded logs/error diagnostics.
+
+### web_app_sessions
+
+Stores distinct browser/application sessions attached to an instance. It includes active/closed/expired status, a hash of the opaque hostname bearer, a non-secret gateway-origin identity, access/expiry timestamps, and closure time. The full bearer hostname is returned once and is not persisted.
+
+### web_app_audit_records
+
+Stores capped lifecycle, gateway-interaction, and privileged-operation metadata. Request/response bodies and Codex prompt/response contents are not stored in this table.
 
 ### skill_operation_locks
 
@@ -102,6 +116,18 @@ Run statuses:
 
 ```text
 pending, running, succeeded, partial, failed, blocked
+```
+
+Web application instance statuses:
+
+```text
+starting, ready, healthy, unhealthy, stopped, failed
+```
+
+Web application session statuses:
+
+```text
+active, closed, expired
 ```
 
 Approval statuses:

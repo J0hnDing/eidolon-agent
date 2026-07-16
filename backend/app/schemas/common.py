@@ -11,9 +11,11 @@ MemoryCategory = Literal[
     "risk_tolerance",
 ]
 RiskLevel = Literal["low", "medium", "high", "blocked"]
-InterfaceType = Literal["chat", "tool", "hidden"]
+SkillRuntime = Literal["function", "web_app"]
 SkillStatus = Literal["building", "proposed", "installed", "failed", "deleted"]
 SkillRunStatus = Literal["pending", "running", "succeeded", "partial", "failed", "blocked"]
+WebAppInstanceStatus = Literal["starting", "ready", "healthy", "unhealthy", "stopped", "failed"]
+WebAppSessionStatus = Literal["active", "closed", "expired"]
 ApprovalStatus = Literal["pending", "approved", "denied", "expired", "superseded"]
 PermissionRequestScope = Literal["build_time", "runtime"]
 ScheduleStatus = Literal["pending", "active", "paused", "denied"]

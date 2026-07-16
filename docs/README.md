@@ -30,8 +30,8 @@ This folder is the detailed source of truth for current behavior, confirmed futu
 
 - [Permission system](security/permissions.md)
 - [Sandbox execution](security/sandbox_execution.md)
+- [Sandboxed web applications](runtime/web_applications.md)
 - [Scheduling](runtime/scheduling.md)
-- [Tools](runtime/tools.md)
 
 ## Integrations, Roadmap, and History
 

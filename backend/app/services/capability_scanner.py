@@ -1,22 +1,12 @@
 import ast
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
-NETWORK_MODULES = {
-    "aiohttp",
-    "ftplib",
-    "httpx",
-    "imaplib",
-    "poplib",
-    "requests",
-    "smtplib",
-    "socket",
-    "urllib",
-    "urllib3",
-    "websockets",
-}
+from app.services.skill_package_files import iter_skill_files
+
 BROWSER_MODULES = {"playwright", "pyppeteer", "selenium"}
 PROCESS_CALLS = {
     "asyncio.create_subprocess_exec",
@@ -38,11 +28,13 @@ PROCESS_CALLS = {
     "subprocess.run",
 }
 NETWORK_CALL_PREFIXES = ("aiohttp.", "httpx.", "requests.", "urllib.request.", "urllib3.")
-DESTRUCTIVE_CALL_SUFFIXES = {".rmdir", ".rmtree", ".unlink"}
-DESTRUCTIVE_CALLS = {"os.remove", "os.removedirs", "os.rmdir", "shutil.rmtree"}
+DESTRUCTIVE_METHODS = {"rmdir", "rmtree", "unlink"}
+DESTRUCTIVE_CALLS = {"os.remove", "os.removedirs", "os.rmdir", "os.unlink", "shutil.rmtree"}
 SENSITIVE_NAME_PARTS = {"api_key", "credential", "password", "secret", "token"}
 EXCLUDED_PARTS = {".deps", ".git", ".pytest_cache", "__pycache__", "cache", "tests"}
 MAX_SOURCE_BYTES = 1_000_000
+WEB_ASSET_SUFFIXES = {".css", ".html", ".htm", ".js", ".mjs"}
+ABSOLUTE_BROWSER_URL = re.compile(r"https?://[^\s\"'<>)}]+", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -76,7 +68,13 @@ class CapabilityScanResult:
 
 
 class StaticCapabilityScanner:
-    def scan(self, skill_dir: Path, approved_runtime: dict[str, Any]) -> CapabilityScanResult:
+    def scan(
+        self,
+        skill_dir: Path,
+        approved_runtime: dict[str, Any],
+        *,
+        runtime: str = "function",
+    ) -> CapabilityScanResult:
         skill_root = skill_dir.resolve()
         scanned_files: list[str] = []
         findings: list[CapabilityFinding] = []
@@ -87,7 +85,8 @@ class StaticCapabilityScanner:
             for path in approved_runtime.get("filesystem_write", []) or []
         }
 
-        for source_path in sorted(skill_root.rglob("*.py")):
+        package_files = iter_skill_files(skill_root)
+        for source_path in (path for path in package_files if path.suffix.lower() == ".py"):
             relative_path = source_path.relative_to(skill_root)
             if any(part in EXCLUDED_PARTS or part.startswith(".") for part in relative_path.parts):
                 continue
@@ -127,8 +126,56 @@ class StaticCapabilityScanner:
                     approved_domains=approved_domains,
                     approved_secrets=approved_secrets,
                     approved_writes=approved_writes,
+                    runtime=runtime,
                 )
             )
+
+        for asset_path in (path for path in package_files if path.suffix.lower() in WEB_ASSET_SUFFIXES):
+            relative_path = asset_path.relative_to(skill_root)
+            if any(part in EXCLUDED_PARTS or part.startswith(".") for part in relative_path.parts):
+                continue
+            relative = relative_path.as_posix()
+            scanned_files.append(relative)
+            if asset_path.stat().st_size > MAX_SOURCE_BYTES:
+                findings.append(
+                    CapabilityFinding(
+                        capability="scan_error",
+                        status="blocked",
+                        path=relative,
+                        line=1,
+                        evidence=f"web asset exceeds {MAX_SOURCE_BYTES} bytes",
+                        message="Static capability scan cannot safely inspect an oversized browser asset.",
+                    )
+                )
+                continue
+            try:
+                source = asset_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                findings.append(
+                    CapabilityFinding(
+                        capability="scan_error",
+                        status="blocked",
+                        path=relative,
+                        line=1,
+                        evidence=type(exc).__name__,
+                        message="Static capability scan could not read this browser asset.",
+                    )
+                )
+                continue
+            for match in ABSOLUTE_BROWSER_URL.finditer(source):
+                findings.append(
+                    CapabilityFinding(
+                        capability="browser_network",
+                        status="blocked",
+                        path=relative,
+                        line=source.count("\n", 0, match.start()) + 1,
+                        evidence=f"references absolute browser URL {match.group(0)[:200]}",
+                        message=(
+                            "Browser-side external network references are blocked; web applications must use "
+                            "same-origin application routes backed by approved server-side permissions."
+                        ),
+                    )
+                )
 
         findings = self._deduplicate(findings)
         return CapabilityScanResult(
@@ -136,9 +183,9 @@ class StaticCapabilityScanner:
             scanned_files=scanned_files,
             findings=findings,
             limitations=[
-                "The scan recognizes only direct Python syntax and selected standard library or common package patterns.",
-                "It does not analyze dependency internals, dynamic imports, reflection, encoded source, runtime-built domains, or non-Python executables.",
-                "An allowed finding is evidence that code references an approved capability, not proof that runtime use stays within the declaration.",
+                "The scan blocks only selected direct Python evidence plus literal absolute URLs in browser assets.",
+                "Unknown dynamic paths, imports without recognized calls, and runtime-built domains are intentionally not findings.",
+                "The runtime sandbox remains authoritative when static evidence is ambiguous or absent.",
             ],
         )
 
@@ -150,11 +197,15 @@ class StaticCapabilityScanner:
         approved_domains: set[str],
         approved_secrets: set[str],
         approved_writes: set[str],
+        runtime: str = "function",
     ) -> list[CapabilityFinding]:
         findings: list[CapabilityFinding] = []
+        import_aliases = self._import_aliases(tree)
+        if runtime == "web_app":
+            findings.extend(self._web_app_cache_findings(tree, relative_path))
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
-                findings.extend(self._import_findings(node, relative_path, approved_domains))
+                findings.extend(self._import_findings(node, relative_path))
             if isinstance(node, ast.Call):
                 finding = self._call_finding(
                     node,
@@ -162,6 +213,7 @@ class StaticCapabilityScanner:
                     approved_domains=approved_domains,
                     approved_secrets=approved_secrets,
                     approved_writes=approved_writes,
+                    import_aliases=import_aliases,
                 )
                 if finding is not None:
                     findings.append(finding)
@@ -171,13 +223,66 @@ class StaticCapabilityScanner:
                     findings.append(finding)
         return findings
 
+    def _web_app_cache_findings(self, tree: ast.AST, relative_path: str) -> list[CapabilityFinding]:
+        package_path_names: set[str] = set()
+        findings: list[CapabilityFinding] = []
+        assignments = [node for node in ast.walk(tree) if isinstance(node, (ast.Assign, ast.AnnAssign))]
+        for node in assignments:
+            value = node.value
+            if value is None or not self._contains_name(value, "__file__"):
+                continue
+            package_path_names.update(self._assignment_names(node))
+            if self._joins_cache(value, package_path_names):
+                findings.append(self._package_cache_finding(relative_path, node.lineno))
+        for node in assignments:
+            value = node.value
+            if value is None or not self._joins_cache(value, package_path_names):
+                continue
+            findings.append(self._package_cache_finding(relative_path, node.lineno))
+        return findings
+
+    @staticmethod
+    def _assignment_names(node: ast.Assign | ast.AnnAssign) -> set[str]:
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        return {target.id for target in targets if isinstance(target, ast.Name)}
+
+    def _joins_cache(self, node: ast.AST, package_path_names: set[str]) -> bool:
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Div):
+            return False
+        if self._literal_string(node.right) != "cache":
+            return False
+        return self._contains_name(node.left, "__file__") or any(
+            self._contains_name(node.left, name) for name in package_path_names
+        )
+
+    @staticmethod
+    def _contains_name(node: ast.AST, name: str) -> bool:
+        return any(isinstance(child, ast.Name) and child.id == name for child in ast.walk(node))
+
+    @staticmethod
+    def _package_cache_finding(relative_path: str, line: int) -> CapabilityFinding:
+        return CapabilityFinding(
+            capability="web_app_cache_path",
+            status="blocked",
+            path=relative_path,
+            line=line,
+            evidence="resolves cache beneath the read-only package directory",
+            message=(
+                "Web applications must resolve persistent state from PERSONAL_AGENT_SKILL_CACHE_DIR or ./cache, "
+                "not relative to __file__ or another package path."
+            ),
+        )
+
     def _import_findings(
         self,
         node: ast.Import | ast.ImportFrom,
         relative_path: str,
-        approved_domains: set[str],
     ) -> list[CapabilityFinding]:
-        modules = [alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module or ""]
+        if isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+        else:
+            parent = node.module or ""
+            modules = [f"{parent}.{alias.name}".strip(".") for alias in node.names]
         findings: list[CapabilityFinding] = []
         for module in modules:
             root = module.split(".", 1)[0]
@@ -192,26 +297,6 @@ class StaticCapabilityScanner:
                         message="Browser automation is blocked by backend policy.",
                     )
                 )
-            elif root == "subprocess":
-                findings.append(
-                    CapabilityFinding(
-                        capability="shell_process",
-                        status="blocked",
-                        path=relative_path,
-                        line=node.lineno,
-                        evidence=f"imports {module}",
-                        message="Process execution is blocked by the current shell permission policy.",
-                    )
-                )
-            elif root in NETWORK_MODULES:
-                findings.append(
-                    self._network_finding(
-                        relative_path,
-                        node.lineno,
-                        approved_domains,
-                        evidence=f"imports {module}",
-                    )
-                )
         return findings
 
     def _call_finding(
@@ -222,8 +307,9 @@ class StaticCapabilityScanner:
         approved_domains: set[str],
         approved_secrets: set[str],
         approved_writes: set[str],
+        import_aliases: dict[str, str],
     ) -> CapabilityFinding | None:
-        call_name = self._call_name(node.func)
+        call_name = self._resolve_import_alias(self._call_name(node.func), import_aliases)
         if call_name.startswith(NETWORK_CALL_PREFIXES) and node.args:
             url = self._literal_string(node.args[0])
             domain = self._url_domain(url or "")
@@ -244,14 +330,17 @@ class StaticCapabilityScanner:
                 evidence=f"calls {call_name}",
                 message="Process execution is blocked by the current shell permission policy.",
             )
-        if call_name in DESTRUCTIVE_CALLS or any(call_name.endswith(suffix) for suffix in DESTRUCTIVE_CALL_SUFFIXES):
+        deletion_path = self._literal_deletion_path(node, call_name)
+        if deletion_path is not None and (
+            self._unsafe_path(deletion_path) or not self._write_path_allowed(deletion_path, approved_writes)
+        ):
             return CapabilityFinding(
                 capability="file_deletion",
                 status="blocked",
                 path=relative_path,
                 line=node.lineno,
-                evidence=f"calls {call_name}",
-                message="File deletion is blocked by backend policy.",
+                evidence=f"deletes literal path {deletion_path}",
+                message="Code explicitly deletes a path outside approved runtime filesystem write roots.",
             )
         if call_name in {"os.getenv", "os.environ.get"}:
             secret_name = self._literal_string(node.args[0]) if node.args else None
@@ -281,6 +370,40 @@ class StaticCapabilityScanner:
                 message="Code appears to access an absolute or parent-traversing filesystem path.",
             )
         return None
+
+    def _literal_deletion_path(self, node: ast.Call, call_name: str) -> str | None:
+        if call_name in DESTRUCTIVE_CALLS:
+            return self._literal_string(node.args[0]) if node.args else None
+        if not isinstance(node.func, ast.Attribute) or node.func.attr not in DESTRUCTIVE_METHODS:
+            return None
+        receiver = node.func.value
+        if not isinstance(receiver, ast.Call) or self._call_name(receiver.func) not in {"Path", "pathlib.Path"}:
+            return None
+        return self._literal_string(receiver.args[0]) if receiver.args else None
+
+    def _import_aliases(self, tree: ast.AST) -> dict[str, str]:
+        aliases: dict[str, str] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    local_name = alias.asname or alias.name.split(".", 1)[0]
+                    aliases[local_name] = alias.name if alias.asname else local_name
+            elif isinstance(node, ast.ImportFrom):
+                parent = node.module or ""
+                for alias in node.names:
+                    if alias.name == "*":
+                        continue
+                    local_name = alias.asname or alias.name
+                    aliases[local_name] = f"{parent}.{alias.name}".strip(".")
+        return aliases
+
+    @staticmethod
+    def _resolve_import_alias(call_name: str, aliases: dict[str, str]) -> str:
+        root, separator, remainder = call_name.partition(".")
+        resolved_root = aliases.get(root)
+        if resolved_root is None:
+            return call_name
+        return f"{resolved_root}.{remainder}" if separator else resolved_root
 
     def _environment_subscript_finding(
         self,

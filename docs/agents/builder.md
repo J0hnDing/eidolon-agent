@@ -26,7 +26,7 @@ Builder implements the current task node only. It must not jump ahead to child n
 
 Builder reads only the named workspace paths plus the backend-seeded manifest. It does not recursively inventory internal metadata, initialize version control, run tests, or repeatedly reread unchanged files; backend validation and Tester own those actions.
 
-When backend API context is present, Builder may use only those documented backend APIs. Generated skill code must call the backend Skill Codex Call API for Codex responses and must not invoke the Codex CLI, shell commands, or arbitrary subprocesses.
+When backend API context is present, Builder may use only those documented backend APIs. Function code uses the backend Skill Codex Call API as documented. Web-application server code uses the trusted `web_runtime_capabilities.call_codex` helper and never exposes the instance capability to browser code. Generated code must not invoke the Codex CLI, shell commands, or arbitrary subprocesses.
 
 Builder must honor runtime budgets in backend API context. Multi-item Codex work uses one bounded batched request with per-item result mapping instead of sequential per-item calls.
 
@@ -34,7 +34,9 @@ For new build workflows, the backend creates a skeleton `manifest.json` and the 
 
 After each successful task build, Builder writes `interface_artifact.json` at the controlled skill-folder root for child nodes. The artifact must name created/updated paths, schemas, entrypoints, functions, data contracts, and known limitations relevant to downstream work. The backend validates the sidecar before moving it to `runtime/agent_runs/run_<id>/tasks/<task_id>/interface_artifact.json`; Builder never writes under `runtime`.
 
-When `interface_type = "tool"`, Builder implements ProductManager UI-schema task nodes as declarative skill metadata only: `tool_ui_schema`, matching input/output schemas where useful, field labels, options/defaults, and result rendering hints. Builder must not generate React, HTML, JavaScript, or application frontend files for a tool skill.
+For `runtime = function`, Builder preserves bounded JSON stdin/stdout and does not add a user-facing interface. For `runtime = web_app`, Builder owns package-local interface files while leaving Personal Agent frontend source unchanged.
+
+For `runtime = web_app`, Builder exposes the manifest-declared importable ASGI application and may create package-owned HTML/CSS/JavaScript. Read-only assets use module-relative paths. Persistent state resolves from `PERSONAL_AGENT_SKILL_CACHE_DIR`, with `./cache` only as a development fallback; writable cache must never be placed beneath `__file__` because the package is read-only at runtime. Browser code uses same-origin application routes only. Builder never creates Personal Agent React source, custom Dockerfiles, startup commands, or process-management code.
 
 ## Repair Mode
 

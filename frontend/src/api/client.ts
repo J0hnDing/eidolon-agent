@@ -11,7 +11,7 @@ export type MemoryCategory =
   | "risk_tolerance";
 
 export type RiskLevel = "low" | "medium" | "high" | "blocked";
-export type InterfaceType = "chat" | "tool" | "hidden";
+export type SkillRuntime = "function" | "web_app";
 export type SkillStatus = "building" | "proposed" | "installed" | "failed" | "deleted";
 export type ChatMode = "chat" | "project";
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired" | "superseded";
@@ -57,14 +57,13 @@ export interface Skill {
   id: number;
   name: string;
   description: string;
-  interface_type: InterfaceType;
+  runtime: SkillRuntime;
   status: SkillStatus;
   risk_level: RiskLevel;
   manifest_path: string;
   instructions_path: string | null;
   input_schema_json: Record<string, unknown> | null;
   output_schema_json: Record<string, unknown> | null;
-  tool_ui_schema_json: Record<string, unknown> | null;
   installed_path: string | null;
   active_version_id: number | null;
   enabled: boolean;
@@ -94,6 +93,70 @@ export interface SkillRun {
   output_tokens: number;
   reasoning_output_tokens: number;
   total_tokens: number;
+}
+
+export type WebAppInstanceStatus = "starting" | "ready" | "healthy" | "unhealthy" | "stopped" | "failed";
+
+export interface WebAppInstance {
+  id: string;
+  skill_id: number;
+  version_id: number;
+  status: WebAppInstanceStatus;
+  runner_mode: string;
+  container_id: string | null;
+  relay_container_id: string | null;
+  process_id: number | null;
+  error_message: string | null;
+  logs: string | null;
+  created_at: string;
+  started_at: string | null;
+  ready_at: string | null;
+  last_accessed_at: string | null;
+  stopped_at: string | null;
+  updated_at: string;
+}
+
+export interface WebAppSession {
+  id: string;
+  instance_id: string;
+  skill_id: number;
+  status: "active" | "closed" | "expired";
+  gateway_host: string;
+  created_at: string;
+  last_accessed_at: string;
+  expires_at: string;
+  closed_at: string | null;
+}
+
+export interface WebAppContainmentPolicy {
+  iframe_sandbox: string;
+  content_security_policy: string;
+  permissions_policy: string;
+  browser_network: string;
+  origin_isolation: string;
+  websocket_support: string;
+  runner_isolation: string;
+  server_network_enforcement: string;
+}
+
+export interface WebAppOpenResponse {
+  instance: WebAppInstance;
+  session: WebAppSession;
+  embed_url: string;
+  containment: WebAppContainmentPolicy;
+}
+
+export interface WebAppAuditRecord {
+  id: number;
+  instance_id: string;
+  session_id: string | null;
+  operation: string;
+  status: string;
+  request_json: Record<string, unknown>;
+  response_json: Record<string, unknown>;
+  error_message: string | null;
+  started_at: string;
+  ended_at: string | null;
 }
 
 export type SkillVersionStatus = "active" | "draft" | "proposed_update" | "archived" | "discarded";
@@ -129,17 +192,6 @@ export interface SkillVersionComparison {
   active_version: SkillVersion;
   candidate_version: SkillVersion;
   files: Array<{ path: string; active: string | null; candidate: string | null }>;
-}
-
-export interface Tool {
-  skill: Skill;
-  runtime_permission_status: string;
-  runtime_blocked_reason: string | null;
-}
-
-export interface ToolRunResponse {
-  skill: Skill;
-  run: SkillRun;
 }
 
 export interface AgentRunStep {
@@ -450,6 +502,15 @@ export interface SkillGenerationApprovalResponse {
   runtime_permission_request: ApprovalRequest | null;
 }
 
+export interface ProjectConversationState {
+  generation_request: SkillGenerationRequest;
+  permission_request: ApprovalRequest | null;
+  proposed_skill: Skill | null;
+  agent_run: AgentRun | null;
+  runtime_permission_request: ApprovalRequest | null;
+  needs_polling: boolean;
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   let response: Response;
   try {
@@ -523,6 +584,10 @@ export const api = {
     request<SkillGenerationRequest>(`/skill-generation-requests/${id}/deny-generation`, {
       method: "POST",
     }),
+  getProjectConversationState: (conversationId: string) =>
+    request<ProjectConversationState | null>(
+      `/skill-generation-requests/conversation/${encodeURIComponent(conversationId)}`,
+    ),
   listPermissionRequests: (params: {
     status?: ApprovalStatus;
     request_scope?: PermissionRequestScope;
@@ -562,6 +627,12 @@ export const api = {
       method: "DELETE",
     }),
   listSkills: () => request<Skill[]>("/skills"),
+  openWebApp: (skillId: number) =>
+    request<WebAppOpenResponse>(`/web-apps/${skillId}/sessions`, { method: "POST" }),
+  listWebAppInstances: (skillId: number) => request<WebAppInstance[]>(`/web-apps/${skillId}/instances`),
+  listWebAppAudit: (skillId: number) => request<WebAppAuditRecord[]>(`/web-apps/${skillId}/audit`),
+  stopWebApp: (skillId: number) =>
+    request<WebAppInstance[]>(`/web-apps/${skillId}/stop`, { method: "POST" }),
   getCodexUsage: () => request<CodexAccountUsage>("/usage/codex"),
   getCodexCliStatus: (refresh = false) => request<CodexCliStatus>(`/usage/codex/cli?refresh=${refresh}`),
   getCodexRoutingSettings: () => request<CodexRoutingSettings>("/settings/codex-routing"),
@@ -593,13 +664,6 @@ export const api = {
   retryAgentRunStep: (agentRunId: number, stepId: number) =>
     request<AgentRun>(`/agent-runs/${agentRunId}/retry-step/${stepId}`, {
       method: "POST",
-    }),
-  listTools: () => request<Tool[]>("/tools"),
-  getTool: (id: number) => request<Tool>(`/tools/${id}`),
-  runTool: (id: number, input: Record<string, unknown> = {}) =>
-    request<ToolRunResponse>(`/tools/${id}/run`, {
-      method: "POST",
-      body: JSON.stringify({ input }),
     }),
   listProposedSkills: () => request<Skill[]>("/skills/proposed"),
   getRunnerStatus: () => request<RunnerStatus>("/skills/runner-status"),

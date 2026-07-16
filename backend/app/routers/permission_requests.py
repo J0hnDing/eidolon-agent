@@ -3,9 +3,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import ApprovalRequest
+from app.models import AgentRun, ApprovalRequest
 from app.routers.schedules import get_scheduler_service
 from app.schemas.approval_request import ApprovalDecision, ApprovalRequestRead
+from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
+from app.services.codex_service import CodexGenerationError
 from app.services.permission_service import PermissionError, PermissionService
 from app.services.scheduler_service import ScheduleError
 
@@ -56,8 +58,22 @@ def approve_permission_request(
             scheduler_service.approve_schedule(request.schedule)
             db.refresh(request)
             return request
-        return PermissionService(db).approve_request(request, payload.decision_notes if payload else None)
-    except (PermissionError, ScheduleError) as exc:
+        request = PermissionService(db).approve_request(request, payload.decision_notes if payload else None)
+        if request.request_scope == "build_time" and request.generation_request_id is not None:
+            agent_run = db.scalar(
+                select(AgentRun)
+                .where(AgentRun.generation_request_id == request.generation_request_id)
+                .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
+            )
+            if agent_run is not None and agent_run.status in {
+                "waiting_for_approval",
+                "pending",
+                "paused",
+            }:
+                AgentWorkflowService(db).resume_run(agent_run)
+                db.refresh(request)
+        return request
+    except (AgentWorkflowError, CodexGenerationError, PermissionError, ScheduleError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
