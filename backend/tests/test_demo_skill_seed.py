@@ -26,7 +26,6 @@ def test_register_personal_news_digest_creates_installed_skill(db_session: Sessi
     skill = register_personal_news_digest(db_session)
 
     assert skill.name == "personal_news_digest"
-    assert skill.skill_type == "automation"
     assert skill.status == "installed"
     assert skill.enabled is True
     assert skill.instructions_path is None
@@ -38,7 +37,6 @@ def test_register_personal_news_digest_updates_existing_skill(db_session: Sessio
     original = Skill(
         name="personal_news_digest",
         description="Old",
-        skill_type="instruction",
         status="installed",
         risk_level="low",
         manifest_path="old/manifest.json",
@@ -54,7 +52,6 @@ def test_register_personal_news_digest_updates_existing_skill(db_session: Sessio
 
     assert count == 1
     assert skill.id == original.id
-    assert skill.skill_type == "automation"
     assert skill.status == "installed"
     assert skill.enabled is True
     assert skill.instructions_path is None

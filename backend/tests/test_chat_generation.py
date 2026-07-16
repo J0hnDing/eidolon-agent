@@ -62,29 +62,18 @@ def use_fake_codex_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
 class RecordingCodexAdapter:
     def __init__(
         self,
-        skill_type: str = "automation",
         network: list[str] | None = None,
         shell: bool = False,
         include_instructions: bool = False,
     ) -> None:
         self.called = False
-        self.skill_type = skill_type
         self.network = network
         self.shell = shell
         self.include_instructions = include_instructions
 
     def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
         self.called = True
-        skill_type = self.skill_type
         permissions = dict(plan["requested_permissions"])
-        if skill_type == "instruction":
-            permissions = {
-                "network": [],
-                "filesystem_read": [],
-                "filesystem_write": [],
-                "secrets": [],
-                "shell": False,
-            }
         if self.network is not None:
             permissions["network"] = self.network
         if self.shell:
@@ -92,9 +81,8 @@ class RecordingCodexAdapter:
         manifest = {
             "name": plan["skill_name"],
             "description": plan["goal"],
-            "skill_type": skill_type,
-            "entrypoint": "skill.py" if skill_type == "automation" else None,
-            "instructions_path": "SKILL.md" if skill_type == "instruction" or self.include_instructions else None,
+            "entrypoint": "skill.py",
+            "instructions_path": "SKILL.md" if self.include_instructions else None,
             "risk_level": "high" if permissions["shell"] else "medium" if permissions["network"] else "low",
             "permissions": permissions,
             "schedule": None,
@@ -103,17 +91,16 @@ class RecordingCodexAdapter:
         }
         (output_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         (output_dir / "README.md").write_text("# Generated Skill\n", encoding="utf-8")
-        if skill_type == "instruction" or self.include_instructions:
+        if self.include_instructions:
             (output_dir / "SKILL.md").write_text("# Instructions\n", encoding="utf-8")
-        if skill_type == "automation":
-            (output_dir / "skill.py").write_text(
-                "from pathlib import Path\n"
-                "Path('task_executed.txt').write_text('executed', encoding='utf-8')\n",
-                encoding="utf-8",
-            )
-            tests_dir = output_dir / "tests"
-            assert tests_dir.is_dir()
-            (tests_dir / "test_skill.py").write_text("def test_generated():\n    assert True\n", encoding="utf-8")
+        (output_dir / "skill.py").write_text(
+            "from pathlib import Path\n"
+            "Path('task_executed.txt').write_text('executed', encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+        tests_dir = output_dir / "tests"
+        assert tests_dir.is_dir()
+        (tests_dir / "test_skill.py").write_text("def test_generated():\n    assert True\n", encoding="utf-8")
         return subprocess.CompletedProcess(args=["recording-codex"], returncode=0, stdout="ok", stderr="")
 
 
@@ -168,7 +155,6 @@ def skill_plan(**overrides) -> dict:
         "goal": "Create a reusable local workflow skill.",
         "skill_name": "generated_skill",
         "display_name": "Generated Skill",
-        "skill_type": "automation",
         "interface_type": "chat",
         "files_to_generate": ["manifest.json", "README.md", "skill.py", "tests/test_skill.py"],
         "expected_input": {"input": "object"},
@@ -189,7 +175,7 @@ def skill_plan(**overrides) -> dict:
         "validation_steps": [
             "validate manifest.json",
             "inspect generated files",
-            "run tests for automation skills",
+            "run skill tests",
         ],
         "risk_level": "low",
         "automatic_actions_blocked": [
@@ -216,7 +202,7 @@ def test_skill_plan_requires_manifest_but_not_readme_or_optional_instructions() 
 
 def test_fake_skill_plan_names_github_trending_request_and_keeps_weekly_schedule() -> None:
     plan = SkillPlanService(adapter=FakeSkillPlanAdapter()).build_generation_plan(
-        "Build a weekly ran automation skill that parse top 10 trending github projects and let codex analyze each of them."
+        "Build a weekly skill that parses the top 10 trending GitHub projects and lets Codex analyze each of them."
     )
 
     assert plan["skill_name"] == "weekly_github_trending_insights"
@@ -289,7 +275,6 @@ def test_project_mode_creates_skill_proposal(db_session: Session) -> None:
     permission_request = response["permission_request"]
     assert generation_request.status == "awaiting_approval"
     assert generation_request.plan_json["skill_name"] == "ai_infra_news_digest"
-    assert generation_request.plan_json["skill_type"] == "automation"
     assert generation_request.plan_json["interface_type"] == "chat"
     assert plan_adapter.called is True
     assert permission_request.request_scope == "build_time"
@@ -390,7 +375,7 @@ def test_unsupported_project_reports_pm_reason_without_artifacts(db_session: Ses
                         stdout=json.dumps(
                             {
                                 "decision": "stop_inplausible",
-                                "user_prompt": "File deletion is blocked. Create an instruction skill that explains safe cleanup steps instead.",
+                                "user_prompt": "File deletion is blocked. Ask for safe cleanup guidance in normal chat instead.",
                             }
                     ),
                     stderr="",
@@ -405,7 +390,7 @@ def test_unsupported_project_reports_pm_reason_without_artifacts(db_session: Ses
     assert response == {
         "type": "project_not_plausible",
         "message": "I would not turn that into a skill yet.",
-        "reason": "File deletion is blocked. Create an instruction skill that explains safe cleanup steps instead.",
+        "reason": "File deletion is blocked. Ask for safe cleanup guidance in normal chat instead.",
     }
     generation_request = db_session.query(SkillGenerationRequest).one()
     assert generation_request.status == "failed"
@@ -587,7 +572,6 @@ def test_skill_plan_service_uses_adapter_decided_skill_and_interface_type() -> N
     plan = SkillPlanService(adapter=adapter).build_generation_plan("Build a calculator tool.")
 
     assert adapter.called is True
-    assert plan["skill_type"] == "automation"
     assert plan["interface_type"] == "tool"
     assert plan["skill_name"] == "calculator_tool"
     assert plan["input_schema"]["properties"]["expression"]["type"] == "string"
@@ -863,12 +847,12 @@ def test_generated_skill_is_not_installed_or_run_automatically(tmp_path: Path, d
     assert not (skill_dir / "task_executed.txt").exists()
 
 
-def test_generated_automation_with_optional_instructions_runs_tests_but_not_skill_task(
+def test_generated_skill_with_optional_instructions_runs_tests_but_not_skill_task(
     tmp_path: Path,
     db_session: Session,
 ) -> None:
     generation_request = ChatOrchestrator(db_session).create_generation_request(
-        "Create an automation workflow skill with reusable instructions."
+        "Create a workflow skill with reusable instructions."
     )
     generation_request.plan_json["files_to_generate"].append("SKILL.md")
     approve_build_time_permissions(db_session, generation_request)
@@ -880,7 +864,6 @@ def test_generated_automation_with_optional_instructions_runs_tests_but_not_skil
     ).generate_from_request(generation_request)
 
     skill_dir = ProposedSkillService(db_session, project_root=tmp_path).skill_dir_for_record(skill)
-    assert skill.skill_type == "automation"
     assert skill.instructions_path == "SKILL.md"
     assert (skill_dir / "SKILL.md").is_file()
     assert validation.tests_run is True
@@ -912,39 +895,6 @@ def test_network_requesting_generated_skill_can_be_approved_for_runtime(
 
     assert runtime_request.requested_network_domains_json == ["nvidia.com"]
     assert permission_service.can_run(skill).allowed is True
-
-
-def test_generated_instruction_skill_does_not_require_tests_and_cannot_run(
-    tmp_path: Path,
-    db_session: Session,
-) -> None:
-    generation_request = ChatOrchestrator(db_session).create_generation_request(
-        "I want a reusable instruction for how you analyze stocks."
-    )
-    approve_build_time_permissions(db_session, generation_request)
-    skill, validation = CodexService(
-        db_session,
-        adapter=RecordingCodexAdapter(skill_type="instruction"),
-        project_root=tmp_path,
-    ).generate_from_request(generation_request)
-
-    assert skill.skill_type == "instruction"
-    assert validation.ok is True
-    assert validation.tests_run is False
-
-    installed = ProposedSkillService(db_session, project_root=tmp_path).install_proposed_skill(skill)
-    assert installed.enabled is True
-
-    from app.services.skill_runner import SkillRunner
-
-    run = SkillRunner(db_session).run(
-        skill_id=installed.id,
-        skill_dir=ProposedSkillService(db_session, project_root=tmp_path).skill_dir_for_record(installed),
-        input_json={},
-    )
-
-    assert run.status == "blocked"
-    assert run.error_message == "instruction skills cannot be executed"
 
 
 def test_real_codex_adapter_uses_restricted_exec_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -999,7 +949,6 @@ def test_product_manager_codex_calls_force_read_only_sandbox(
         user_message="Create a reusable local workflow skill.",
         proposed_skill_name=plan["skill_name"],
         proposed_display_name=plan["display_name"],
-        proposed_skill_type=plan["skill_type"],
         plan_json=plan,
         requested_permissions_json=plan["requested_permissions"],
         requested_dependencies_json=plan["requested_dependencies"],
@@ -1049,7 +998,6 @@ def test_skill_generation_codex_call_forces_workspace_write_inside_skill_folder(
         user_message="Create a reusable local workflow skill.",
         proposed_skill_name=plan["skill_name"],
         proposed_display_name=plan["display_name"],
-        proposed_skill_type=plan["skill_type"],
         plan_json=plan,
         requested_permissions_json=plan["requested_permissions"],
         requested_dependencies_json=plan["requested_dependencies"],
@@ -1078,7 +1026,6 @@ def test_builder_repair_rejects_non_proposed_skill_workspace(tmp_path: Path, db_
     skill = Skill(
         name="installed_skill",
         description="Installed skills are not build-repair workspaces.",
-        skill_type="automation",
         interface_type="chat",
         risk_level="low",
         manifest_path="skills/installed/installed_skill/manifest.json",
@@ -1112,7 +1059,6 @@ def test_builder_repair_restores_tester_owned_files(tmp_path: Path, db_session: 
     skill = Skill(
         name="guarded_skill",
         description="Exercise Builder ownership enforcement.",
-        skill_type="automation",
         interface_type="chat",
         risk_level="low",
         manifest_path="skills/proposed/guarded_skill/manifest.json",
@@ -1263,10 +1209,9 @@ def test_real_skill_plan_adapter_uses_read_only_codex_exec(
     monkeypatch.setattr("app.services.skill_plan_service.subprocess.run", fake_run)
 
     adapter = RealSkillPlanAdapter(command="codex", timeout_seconds=10, workdir=tmp_path)
-    plan = adapter.build_plan("Return a plan.", "Build a skill.")
+    adapter.build_plan("Return a plan.", "Build a skill.")
 
     command = captured["command"]
-    assert plan["skill_type"] == "automation"
     assert command[0] == "codex"
     assert command.index("--ask-for-approval") < command.index("exec")
     assert command[command.index("-C") + 1] == str(tmp_path)

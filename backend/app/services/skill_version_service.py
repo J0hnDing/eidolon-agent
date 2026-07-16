@@ -124,20 +124,12 @@ class SkillVersionService:
         version.manifest_json = manifest.model_dump(mode="json")
         version.permission_fingerprint = self.permission_fingerprint(version.manifest_json)
         version.validation_status = "passed"
-        if manifest.skill_type == "instruction":
-            version.test_status = "not_required"
-            version.status = "proposed_update"
-            self.db.commit()
-            self.db.refresh(version)
-            return ProposedSkillValidationRead(ok=True, skill_type="instruction", manifest_valid=True, tests_run=False)
-
         tests_dir = skill_dir / "tests"
         if not tests_dir.is_dir():
             version.test_status = "failed"
             self.db.commit()
             return ProposedSkillValidationRead(
                 ok=False,
-                skill_type=manifest.skill_type,
                 manifest_valid=True,
                 tests_run=False,
                 error_message="Skill tests directory is missing",
@@ -158,7 +150,6 @@ class SkillVersionService:
         self.db.refresh(version)
         return ProposedSkillValidationRead(
             ok=passed,
-            skill_type=manifest.skill_type,
             manifest_valid=True,
             tests_run=True,
             tests_passed=passed,
@@ -217,7 +208,7 @@ class SkillVersionService:
             raise SkillVersionError("Version does not belong to this skill")
         if version.status not in {"proposed_update", "archived"}:
             raise SkillVersionError("Only proposed update or archived versions can be activated")
-        if version.validation_status != "passed" or version.test_status not in {"passed", "not_required"}:
+        if version.validation_status != "passed" or version.test_status != "passed":
             raise SkillVersionError("Version must pass validation and tests before activation")
         active = self.ensure_active_version(skill)
         if active.permission_fingerprint != version.permission_fingerprint:
@@ -310,7 +301,6 @@ class SkillVersionService:
         skill.installed_path = version.folder_path
         skill.manifest_path = self._relative_path(folder / "manifest.json")
         skill.description = manifest.description
-        skill.skill_type = manifest.skill_type
         skill.interface_type = manifest.interface_type
         skill.risk_level = manifest.risk_level
         skill.instructions_path = manifest.instructions_path

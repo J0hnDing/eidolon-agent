@@ -52,7 +52,6 @@ def write_skill(
     manifest = {
         "name": "demo_skill",
         "description": "A trusted local demo skill.",
-        "skill_type": "automation",
         "entrypoint": "skill.py",
         "instructions_path": None,
         "risk_level": "low",
@@ -243,32 +242,6 @@ def test_own_cache_read_permission_is_supported(tmp_path: Path, db_session: Sess
 
     assert run.status == "succeeded"
     assert run.output_json["cache"] == "empty"
-
-
-def test_instruction_skill_is_blocked_from_execution(tmp_path: Path, db_session: Session) -> None:
-    skill_dir = tmp_path / "instruction_skill"
-    write_skill(
-        skill_dir,
-        manifest_overrides={
-            "skill_type": "instruction",
-            "entrypoint": None,
-            "instructions_path": "README.md",
-            "permissions": {
-                "network": [],
-                "filesystem_read": [],
-                "filesystem_write": [],
-                "secrets": [],
-                "shell": False,
-            },
-        },
-    )
-    (skill_dir / "README.md").write_text("Reusable instruction text.", encoding="utf-8")
-
-    run = run_skill(db_session, skill_dir)
-
-    assert run.status == "blocked"
-    assert run.error_message == "instruction skills cannot be executed"
-    assert run.exit_code is None
 
 
 def test_failing_skill_tests_block_entrypoint(tmp_path: Path, db_session: Session) -> None:

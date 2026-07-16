@@ -66,10 +66,6 @@ export default function ToolsPage() {
               </div>
               <dl className="tool-card-meta">
                 <div>
-                  <dt>Type</dt>
-                  <dd>{tool.skill.skill_type}</dd>
-                </div>
-                <div>
                   <dt>Risk</dt>
                   <dd>{tool.skill.risk_level}</dd>
                 </div>

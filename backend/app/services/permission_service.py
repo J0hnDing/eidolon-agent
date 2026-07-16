@@ -577,7 +577,7 @@ class PermissionService:
         blocked_reasons: list[str],
     ) -> str:
         parts = [
-            f"Codex wants to generate a proposed {plan.get('skill_type')} skill named {plan.get('skill_name')}.",
+            f"Codex wants to generate a proposed skill named {plan.get('skill_name')}.",
             "Approving this only allows proposed skill generation; it does not install, run, or install packages.",
         ]
         if network:

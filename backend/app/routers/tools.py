@@ -26,7 +26,6 @@ def list_tools(db: Session = Depends(get_db)) -> list[ToolRead]:
             select(Skill)
             .where(Skill.status == "installed")
             .where(Skill.enabled.is_(True))
-            .where(Skill.skill_type == "automation")
             .where(Skill.interface_type == "tool")
             .order_by(Skill.name.asc())
         ).all()
@@ -45,8 +44,6 @@ def get_tool(skill_id: int, db: Session = Depends(get_db)) -> ToolRead:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only installed tools are available")
     if not skill.enabled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tool is disabled")
-    if skill.skill_type == "instruction":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Instruction skills cannot be tools")
     return serialize_tool(skill, PermissionService(db))
 
 
@@ -65,9 +62,6 @@ def run_tool(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only installed tools can be run")
     if not skill.enabled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tool is disabled")
-    if skill.skill_type == "instruction":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Instruction skills cannot be run as tools")
-
     permission_decision = PermissionService(db).can_run(skill)
     if not permission_decision.allowed:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=permission_decision.reason)

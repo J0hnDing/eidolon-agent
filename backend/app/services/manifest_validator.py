@@ -35,8 +35,8 @@ def validate_manifest_file(path: Path) -> SkillManifest:
 
 
 def validate_manifest_package(skill_dir: Path, manifest: SkillManifest) -> None:
-    if manifest.skill_type == "automation" and not (skill_dir / "tests").is_dir():
-        raise ManifestValidationError("automation skills require tests/")
+    if not (skill_dir / "tests").is_dir():
+        raise ManifestValidationError("skills require tests/")
     for relative_path in (manifest.entrypoint, manifest.instructions_path):
         if relative_path is None:
             continue

@@ -1,3 +1,5 @@
+import json
+
 from sqlalchemy import create_engine, inspect, text
 
 import app.db as db_module
@@ -9,11 +11,30 @@ def test_application_engine_enables_sqlite_foreign_keys() -> None:
         assert connection.execute(text("PRAGMA foreign_keys")).scalar_one() == 1
 
 
-def test_local_schema_migrates_legacy_statuses_and_task_columns(tmp_path, monkeypatch) -> None:
+def test_local_schema_migrates_legacy_statuses_task_columns_and_skill_type(tmp_path, monkeypatch) -> None:
     legacy_engine = create_engine(f"sqlite:///{tmp_path / 'legacy.db'}")
     with legacy_engine.begin() as connection:
-        connection.execute(text("CREATE TABLE skills (id INTEGER PRIMARY KEY, status VARCHAR(32), enabled BOOLEAN)"))
-        connection.execute(text("INSERT INTO skills (id, status, enabled) VALUES (1, 'disabled', 1)"))
+        connection.execute(
+            text(
+                "CREATE TABLE skills ("
+                "id INTEGER PRIMARY KEY, status VARCHAR(32), enabled BOOLEAN, skill_type VARCHAR(16))"
+            )
+        )
+        connection.execute(
+            text("INSERT INTO skills (id, status, enabled, skill_type) VALUES (1, 'disabled', 1, 'automation')")
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE skill_generation_requests ("
+                "id INTEGER PRIMARY KEY, proposed_skill_type VARCHAR(16), plan_json JSON)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO skill_generation_requests (id, proposed_skill_type, plan_json) "
+                "VALUES (1, 'automation', '{\"skill_type\": \"automation\", \"nested\": {\"skill_type\": \"automation\"}}')"
+            )
+        )
         connection.execute(text("CREATE TABLE skill_schedules (id INTEGER PRIMARY KEY, status VARCHAR(32))"))
         connection.execute(text("INSERT INTO skill_schedules (id, status) VALUES (1, 'deleted')"))
         connection.execute(
@@ -42,6 +63,10 @@ def test_local_schema_migrates_legacy_statuses_and_task_columns(tmp_path, monkey
     db_module.ensure_local_schema()
 
     inspector = inspect(legacy_engine)
+    assert "skill_type" not in {column["name"] for column in inspector.get_columns("skills")}
+    assert "proposed_skill_type" not in {
+        column["name"] for column in inspector.get_columns("skill_generation_requests")
+    }
     assert "current_task_id" in {column["name"] for column in inspector.get_columns("agent_runs")}
     assert "task_node_id" in {column["name"] for column in inspector.get_columns("agent_run_steps")}
     with legacy_engine.connect() as connection:
@@ -49,3 +74,7 @@ def test_local_schema_migrates_legacy_statuses_and_task_columns(tmp_path, monkey
         assert connection.execute(text("SELECT COUNT(*) FROM skill_schedules")).scalar_one() == 0
         assert connection.execute(text("SELECT current_task_id FROM agent_runs WHERE id = 1")).scalar_one() == "legacy_task"
         assert connection.execute(text("SELECT task_node_id FROM agent_run_steps WHERE id = 1")).scalar_one() == "legacy_task"
+        plan_json = connection.execute(
+            text("SELECT plan_json FROM skill_generation_requests WHERE id = 1")
+        ).scalar_one()
+        assert json.loads(plan_json) == {"nested": {}}

@@ -262,8 +262,6 @@ class SchedulerService:
             return self._blocked_run(skill.id, input_json, "Only installed skills can be run by a schedule")
         if not skill.enabled:
             return self._blocked_run(skill.id, input_json, "Skill is disabled")
-        if skill.skill_type == "instruction":
-            return self._blocked_run(skill.id, input_json, "Instruction skills cannot be scheduled")
         approval = self._latest_schedule_approval_by_id(source_schedule_id)
         if approval is None or approval.status != "approved":
             return self._blocked_run(skill.id, input_json, "Schedule approval is required before scheduled execution")
@@ -297,8 +295,6 @@ class SchedulerService:
             raise ScheduleError("Only installed skills can be scheduled")
         if not skill.enabled and not allow_disabled:
             raise ScheduleError("Disabled skills cannot be scheduled")
-        if skill.skill_type == "instruction":
-            raise ScheduleError("Instruction skills cannot be scheduled for execution")
 
     def _validated_schedule(self, payload: SchedulePayload) -> SchedulePayload:
         if payload.timezone not in KNOWN_TIMEZONES:
@@ -314,7 +310,7 @@ class SchedulerService:
             f"Approve schedule '{schedule.name}' for skill {skill.name}. "
             f"It will run {self.human_schedule(schedule)} with input JSON {schedule.input_json}. "
             "Approving this schedule does not bypass runtime permission checks; every scheduled run must still pass "
-            "installed/enabled/type/runtime-permission/runner support checks."
+            "installed/enabled/runtime-permission/runner support checks."
         )
         request = ApprovalRequest(
             skill_id=skill.id,
@@ -370,7 +366,6 @@ def serialize_schedule(schedule: SkillSchedule) -> dict[str, Any]:
         "id": schedule.id,
         "skill_id": schedule.skill_id,
         "skill_name": schedule.skill.name if schedule.skill else None,
-        "skill_type": schedule.skill.skill_type if schedule.skill else None,
         "name": schedule.name,
         "status": schedule.status,
         "schedule_type": schedule.schedule_type,

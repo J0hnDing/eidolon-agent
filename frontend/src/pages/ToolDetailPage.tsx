@@ -142,10 +142,6 @@ export default function ToolDetailPage() {
             <dd>{tool.runtime_permission_status}</dd>
           </div>
           <div>
-            <dt>Skill Type</dt>
-            <dd>{tool.skill.skill_type}</dd>
-          </div>
-          <div>
             <dt>Risk</dt>
             <dd>{tool.skill.risk_level}</dd>
           </div>

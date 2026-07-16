@@ -14,7 +14,6 @@ def valid_manifest() -> dict:
     return {
         "name": "ai_news_digest",
         "description": "Summarizes AI infrastructure news from approved public sources.",
-        "skill_type": "automation",
         "entrypoint": "skill.py",
         "instructions_path": None,
         "risk_level": "low",
@@ -35,7 +34,6 @@ def test_valid_low_risk_manifest_passes() -> None:
     manifest = validate_manifest(valid_manifest())
 
     assert manifest.name == "ai_news_digest"
-    assert manifest.skill_type == "automation"
     assert manifest.interface_type == "chat"
     assert manifest.permissions.network == ["reuters.com", "apnews.com"]
     assert manifest.permissions.codex.call_response is True
@@ -180,86 +178,34 @@ def test_manifest_accepts_declared_medium_risk_for_filesystem_read() -> None:
     assert manifest.risk_level == "medium"
 
 
-def test_instruction_manifest_requires_instructions_path() -> None:
-    data = valid_manifest()
-    data["skill_type"] = "instruction"
-    data["entrypoint"] = None
-    data["permissions"] = no_permissions()
-
-    with pytest.raises(ManifestValidationError, match="instructions_path"):
-        validate_manifest(data)
-
-
-def test_instruction_manifest_rejects_entrypoint() -> None:
-    data = valid_manifest()
-    data["skill_type"] = "instruction"
-    data["instructions_path"] = "README.md"
-    data["permissions"] = no_permissions()
-
-    with pytest.raises(ManifestValidationError, match="cannot declare entrypoint"):
-        validate_manifest(data)
-
-
-def test_instruction_manifest_requires_no_permissions() -> None:
-    data = valid_manifest()
-    data["skill_type"] = "instruction"
-    data["entrypoint"] = None
-    data["instructions_path"] = "README.md"
-    data["permissions"] = {
-        "network": [],
-        "filesystem_read": [],
-        "filesystem_write": ["./cache"],
-        "secrets": [],
-        "shell": False,
-    }
-
-    with pytest.raises(ManifestValidationError, match="must request no permissions"):
-        validate_manifest(data)
-
-
-def test_valid_instruction_manifest_passes() -> None:
-    data = valid_manifest()
-    data["skill_type"] = "instruction"
-    data["entrypoint"] = None
-    data["instructions_path"] = "README.md"
-    data["permissions"] = no_permissions()
-
-    manifest = validate_manifest(data)
-
-    assert manifest.skill_type == "instruction"
-    assert manifest.entrypoint is None
-    assert manifest.instructions_path == "README.md"
-
-
-def test_automation_manifest_requires_entrypoint() -> None:
+def test_manifest_requires_entrypoint() -> None:
     data = valid_manifest()
     data["entrypoint"] = None
 
-    with pytest.raises(ManifestValidationError, match="automation skills require entrypoint"):
+    with pytest.raises(ManifestValidationError, match="skills require entrypoint"):
         validate_manifest(data)
 
 
-def test_automation_manifest_allows_optional_instructions_path() -> None:
+def test_manifest_allows_optional_instructions_path() -> None:
     data = valid_manifest()
     data["instructions_path"] = "SKILL.md"
 
     manifest = validate_manifest(data)
 
-    assert manifest.skill_type == "automation"
     assert manifest.instructions_path == "SKILL.md"
 
 
-def test_automation_manifest_file_requires_tests_directory(tmp_path: Path) -> None:
-    skill_dir = tmp_path / "automation_without_tests"
+def test_manifest_file_requires_tests_directory(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skill_without_tests"
     skill_dir.mkdir()
     (skill_dir / "manifest.json").write_text(json.dumps(valid_manifest()), encoding="utf-8")
 
-    with pytest.raises(ManifestValidationError, match="automation skills require tests"):
+    with pytest.raises(ManifestValidationError, match="skills require tests"):
         validate_manifest_file(skill_dir / "manifest.json")
 
 
 def test_manifest_file_requires_declared_entrypoint(tmp_path: Path) -> None:
-    skill_dir = tmp_path / "automation_without_entrypoint_file"
+    skill_dir = tmp_path / "skill_without_entrypoint_file"
     skill_dir.mkdir()
     (skill_dir / "tests").mkdir()
     (skill_dir / "manifest.json").write_text(json.dumps(valid_manifest()), encoding="utf-8")
@@ -269,25 +215,20 @@ def test_manifest_file_requires_declared_entrypoint(tmp_path: Path) -> None:
 
 
 def test_manifest_file_requires_declared_instructions_file(tmp_path: Path) -> None:
-    skill_dir = tmp_path / "instruction_without_file"
+    skill_dir = tmp_path / "skill_without_instructions_file"
     skill_dir.mkdir()
+    (skill_dir / "tests").mkdir()
     data = valid_manifest()
-    data.update(
-        {
-            "skill_type": "instruction",
-            "entrypoint": None,
-            "instructions_path": "SKILL.md",
-            "permissions": no_permissions(),
-        }
-    )
+    data["instructions_path"] = "SKILL.md"
     (skill_dir / "manifest.json").write_text(json.dumps(data), encoding="utf-8")
+    (skill_dir / "skill.py").write_text("print('{}')\n", encoding="utf-8")
 
     with pytest.raises(ManifestValidationError, match="Declared file is missing: SKILL.md"):
         validate_manifest_file(skill_dir / "manifest.json")
 
 
-def test_automation_manifest_file_accepts_declared_instructions_file(tmp_path: Path) -> None:
-    skill_dir = tmp_path / "automation_with_instructions"
+def test_manifest_file_accepts_declared_instructions_file(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skill_with_instructions"
     skill_dir.mkdir()
     (skill_dir / "tests").mkdir()
     data = valid_manifest()
@@ -302,19 +243,9 @@ def test_automation_manifest_file_accepts_declared_instructions_file(tmp_path: P
     assert manifest.instructions_path == "SKILL.md"
 
 
-def test_manifest_rejects_removed_hybrid_skill_type() -> None:
+def test_manifest_rejects_removed_skill_type_field() -> None:
     data = valid_manifest()
-    data["skill_type"] = "hybrid"
+    data["skill_type"] = "automation"
 
     with pytest.raises(ManifestValidationError, match="skill_type"):
         validate_manifest(data)
-
-
-def no_permissions() -> dict:
-    return {
-        "network": [],
-        "filesystem_read": [],
-        "filesystem_write": [],
-        "secrets": [],
-        "shell": False,
-    }

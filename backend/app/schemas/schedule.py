@@ -3,7 +3,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.schemas.common import ScheduleStatus, ScheduleType, SkillType
+from app.schemas.common import ScheduleStatus, ScheduleType
 
 IntervalUnit = Literal["minutes", "hours", "days"]
 Weekday = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -56,7 +56,6 @@ class ScheduleRead(BaseModel):
     id: int
     skill_id: int
     skill_name: str | None = None
-    skill_type: SkillType | None = None
     name: str
     status: ScheduleStatus
     schedule_type: ScheduleType

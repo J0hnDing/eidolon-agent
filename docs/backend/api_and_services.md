@@ -77,7 +77,7 @@ Selects Docker or local/dev runner. Runners validate manifests, enforce supporte
 
 ## Skill Codex API
 
-Installed enabled executable skills may call:
+Installed enabled skills may call:
 
 ```text
 POST /skills/{skill_id}/codex

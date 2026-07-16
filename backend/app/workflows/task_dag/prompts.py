@@ -48,17 +48,14 @@ Product structure:
 - The backend seeds manifest.json from approved product and permission artifacts. Preserve its security fields and complete only fields owned by this task.
 - TesterAgent owns test files in this workflow unless builder_writes_tests is explicitly true.
 
-Executable skill requirements:
+Skill runtime requirements:
 - read JSON from stdin
 - write JSON object to stdout
 - handle errors by returning JSON where possible
 - no side effects on import
 - use a main guard
 {test_requirement}
-
-Instruction skill requirements:
-- no skill.py required
-- include SKILL.md with reusable instructions
+- include SKILL.md only when reusable instructions or operating guidance are useful
 """.strip()
 
 
@@ -69,7 +66,6 @@ def build_repair_prompt(skill: Any, output_dir: Path, failure_context: dict) -> 
 
 Skill:
 - name: {skill.name}
-- skill_type: {skill.skill_type}
 - interface_type: {skill.interface_type}
 
 Controlled skill folder:

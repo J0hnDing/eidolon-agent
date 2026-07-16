@@ -45,7 +45,7 @@ export default function SchedulesPage() {
     <section className="page stack">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Approved automation only</p>
+          <p className="eyebrow">Approved recurring runs</p>
           <h1>Schedules</h1>
         </div>
       </header>
@@ -71,7 +71,6 @@ export default function SchedulesPage() {
                 <tr key={schedule.id}>
                   <td>
                     <strong>{schedule.skill_name ?? `Skill #${schedule.skill_id}`}</strong>
-                    <span className="table-subtitle">{schedule.skill_type ?? "unknown"}</span>
                   </td>
                   <td>
                     <strong>{schedule.name}</strong>

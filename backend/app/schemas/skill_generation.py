@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.schemas.agent_run import AgentRunRead
 from app.schemas.approval_request import ApprovalRequestRead
-from app.schemas.common import GenerationRequestStatus, RiskLevel, SkillType
+from app.schemas.common import GenerationRequestStatus, RiskLevel
 from app.schemas.proposed_skill import ProposedSkillValidationRead
 from app.schemas.skill import SkillRead
 
@@ -24,7 +24,6 @@ class SkillGenerationRequestRead(BaseModel):
     user_message: str
     proposed_skill_name: str
     proposed_display_name: str
-    proposed_skill_type: SkillType
     plan_json: dict[str, Any]
     requested_permissions_json: dict[str, Any]
     requested_dependencies_json: list[str]

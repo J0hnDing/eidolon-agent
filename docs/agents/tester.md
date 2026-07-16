@@ -13,7 +13,7 @@ TesterAgent writes tests that exercise generated or updated skill code against t
 - For DAG builds, write one final end-to-end pytest file after all task nodes are done, based on the approved blueprint acceptance criteria.
 - Validate manifest schema.
 - Run tests through the existing safe validation path.
-- Check JSON stdin/stdout behavior for executable skills.
+- Check JSON stdin/stdout behavior.
 - Report failures clearly.
 - Record failure logs in agent steps and artifacts when practical.
 - For network or backend Codex behavior, verify outbound call count and timeout budgets; multi-item analysis must be batched rather than implemented as sequential per-item Codex calls.
@@ -22,7 +22,7 @@ TesterAgent writes tests that exercise generated or updated skill code against t
 
 ## Test Scope
 
-Automation skills should have tests for:
+Skills should have tests for:
 
 - manifest contract;
 - representative successful input;

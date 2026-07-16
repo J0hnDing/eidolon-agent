@@ -16,7 +16,6 @@ Required JSON shape:
   "blueprint": {
     "goal": "string",
     "skill_name": "safe_name",
-    "skill_type": "instruction|automation",
     "interface_type": "chat|tool|hidden",
     "milestones": [
       {

@@ -16,8 +16,8 @@ Rules:
 - If the prompt includes `backend_api_context`, use only those backend APIs as documented there. Do not invent backend endpoints.
 - Honor each selected backend API's `runtime_budget`. For multi-item Codex work, batch bounded item contexts into one request, preserve one result per item, and keep caller timeouts within the documented budget. Do not issue one sequential Codex request per item.
 - To use Codex from generated skill code, call the backend Skill Codex Call API from `backend_api_context`; never shell out to the Codex CLI.
-- Skill types: instruction means reusable instructions only; automation means executable Python automation. Automation may include optional SKILL.md instructions.
-- Interface types: chat means chat-facing, tool means an installed enabled automation skill appears in the Tools UI, and hidden means not user-facing by default.
+- Every skill contains executable Python code and tests. A skill may include optional SKILL.md reusable instructions or operating guidance.
+- Interface types: chat means chat-facing, tool means an installed enabled skill appears in the Tools UI, and hidden means not user-facing by default.
 - Write `interface_artifact.json` at the controlled skill-folder root for the current task. The backend validates it before moving it to the task's `runtime/agent_runs` folder. Never write directly under `runtime/agent_runs`.
 - Use relative skill-package paths in `created_paths` and `updated_paths`. Every declared path must exist, stay inside the skill folder, and be allowed by `file_write_claims`; `manifest.json` is also allowed.
 - Put files introduced by this task in `created_paths`. Put `manifest.json` or files declared by parent interface artifacts in `updated_paths`. A path cannot appear in both lists.

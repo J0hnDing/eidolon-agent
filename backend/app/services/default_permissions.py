@@ -27,8 +27,6 @@ def default_build_time_dependencies() -> set[str]:
 
 def effective_permission_plan(
     permission_plan: dict[str, Any],
-    *,
-    skill_type: str | None = None,
 ) -> dict[str, Any]:
     runtime = permission_plan.get("runtime") if isinstance(permission_plan.get("runtime"), dict) else {}
     build_time = permission_plan.get("build_time") if isinstance(permission_plan.get("build_time"), dict) else {}
@@ -52,13 +50,12 @@ def effective_permission_plan(
         if key not in effective_codex:
             effective_codex[str(key)] = bool(value)
 
-    if skill_type != "instruction":
-        for path in default_runtime.get("filesystem_read", []) or []:
-            if path not in filesystem_read:
-                filesystem_read.append(path)
-        for path in default_runtime.get("filesystem_write", []) or []:
-            if path not in filesystem_write:
-                filesystem_write.append(path)
+    for path in default_runtime.get("filesystem_read", []) or []:
+        if path not in filesystem_read:
+            filesystem_read.append(path)
+    for path in default_runtime.get("filesystem_write", []) or []:
+        if path not in filesystem_write:
+            filesystem_write.append(path)
 
     return {
         "build_time": {

@@ -294,7 +294,6 @@ class FakeCodexAdapter:
             blueprint = {
                 "goal": plan.get("user_request") or f"Repair {plan['skill_name']}.",
                 "skill_name": plan["skill_name"],
-                "skill_type": plan["skill_type"],
                 "interface_type": plan.get("interface_type", "chat"),
                 "milestones": [
                     {
@@ -372,15 +371,13 @@ class FakeCodexAdapter:
                 stdout=json.dumps({"response": "Fake Codex response.", "notes": []}),
                 stderr="",
             )
-        skill_type = plan["skill_type"]
         permissions = plan["requested_permissions"]
         manifest = {
             "name": plan["skill_name"],
             "description": plan["goal"],
-            "skill_type": skill_type,
             "interface_type": plan.get("interface_type", "chat"),
-            "entrypoint": "skill.py" if skill_type == "automation" else None,
-            "instructions_path": self._instructions_path_for_plan(plan, skill_type),
+            "entrypoint": "skill.py",
+            "instructions_path": self._instructions_path_for_plan(plan),
             "input_schema": plan.get("input_schema"),
             "output_schema": plan.get("output_schema"),
             "tool_ui_schema": plan.get("tool_ui_schema"),
@@ -398,8 +395,7 @@ class FakeCodexAdapter:
                 "# Instructions\n\nUse this reusable capability with care. Do not perform unsafe actions.\n",
                 encoding="utf-8",
             )
-        if skill_type == "automation":
-            (output_dir / "skill.py").write_text(
+        (output_dir / "skill.py").write_text(
                 "import json\n"
                 "import sys\n\n"
                 "def main():\n"
@@ -408,10 +404,10 @@ class FakeCodexAdapter:
                 "if __name__ == '__main__':\n"
                 "    main()\n",
                 encoding="utf-8",
-            )
-            if plan.get("builder_writes_tests", True):
-                tests_dir = output_dir / "tests"
-                (tests_dir / "test_skill.py").write_text(
+        )
+        if plan.get("builder_writes_tests", True):
+            tests_dir = output_dir / "tests"
+            (tests_dir / "test_skill.py").write_text(
                     "import json\n"
                     "import subprocess\n"
                     "import sys\n"
@@ -422,7 +418,7 @@ class FakeCodexAdapter:
                     "    assert result.returncode == 0\n"
                     "    assert isinstance(json.loads(result.stdout), dict)\n",
                     encoding="utf-8",
-                )
+            )
         self._write_interface_artifact(output_dir, plan)
         return subprocess.CompletedProcess(args=["fake-codex"], returncode=0, stdout="fake generation complete", stderr="")
 
@@ -516,15 +512,14 @@ class FakeCodexAdapter:
         acceptance_criteria = [
             "manifest.json is valid",
             "required skill files exist",
-            "automation tests pass",
-            "executable skills use JSON stdin/stdout",
+            "skill tests pass",
+            "skills use JSON stdin/stdout",
         ]
         if plan.get("interface_type") == "tool":
             acceptance_criteria.append("tool_ui_schema is present so the Tools page can render a user-friendly UI")
         return {
             "goal": plan.get("goal") or user_message,
             "skill_name": plan.get("skill_name"),
-            "skill_type": plan.get("skill_type"),
             "interface_type": plan.get("interface_type", "chat"),
             "expected_behavior": plan.get("expected_output", {}),
             "schedule": plan.get("schedule"),
@@ -532,18 +527,16 @@ class FakeCodexAdapter:
         }
 
     def _build_task_dag_from_plan(self, blueprint: dict, plan: dict) -> dict:
-        skill_type = blueprint.get("skill_type") or plan.get("skill_type")
         expected_files = self._skill_package_files(plan.get("files_to_generate") or ["manifest.json"])
         if "manifest.json" not in expected_files:
             expected_files.insert(0, "manifest.json")
-        requires_tests = skill_type == "automation"
         node = {
             "id": "core_skill",
             "title": "Core skill package",
             "summary": "Create the core proposed skill package.",
             "depends_on": [],
             "difficulty": "easy",
-            "requires_tests": requires_tests,
+            "requires_tests": True,
             "parallel_safe": True,
             "expected_output_paths": expected_files,
             "file_write_claims": [path for path in expected_files if path != "manifest.json"],
@@ -552,11 +545,11 @@ class FakeCodexAdapter:
                 or [
                     "manifest.json is valid",
                     "required skill files exist",
-                    "automation tests pass",
-                    "executable skills use JSON stdin/stdout",
+                    "skill tests pass",
+                    "skills use JSON stdin/stdout",
                 ]
             ),
-            "test_expectations": ["validate manifest and generated skill behavior"] if requires_tests else [],
+            "test_expectations": ["validate manifest and generated skill behavior"],
             "interface_artifact_expectations": ["declare generated files and exposed entrypoints"],
         }
         return {"schema_version": 1, "nodes": [node]}
@@ -577,9 +570,7 @@ class FakeCodexAdapter:
                 files.append(path)
         return files
 
-    def _instructions_path_for_plan(self, plan: dict, skill_type: str) -> str | None:
-        if skill_type == "instruction":
-            return "SKILL.md"
+    def _instructions_path_for_plan(self, plan: dict) -> str | None:
         files = plan.get("files_to_generate")
         if isinstance(files, list) and any(str(path).replace("\\", "/") == "SKILL.md" for path in files):
             return "SKILL.md"
@@ -596,7 +587,6 @@ class FakeCodexAdapter:
         decision["blueprint"] = {
             "goal": decision["summary"],
             "skill_name": plan["skill_name"],
-            "skill_type": plan["skill_type"],
             "interface_type": plan.get("interface_type", "chat"),
             "suggestion": suggestion,
             "permission_plan": {
@@ -632,10 +622,6 @@ class FakeCodexAdapter:
         return decision
 
     def _write_tester_tests(self, output_dir: Path, plan: dict) -> None:
-        skill_type = plan.get("skill_type")
-        if skill_type not in {"automation"}:
-            return
-
         input_schema = plan.get("input_schema")
         output_schema = plan.get("output_schema")
         sample_input = self._sample_input_from_schema(input_schema)
@@ -661,7 +647,6 @@ class FakeCodexAdapter:
             "import sys\n"
             "from pathlib import Path\n\n"
             f"EXPECTED_NAME = {json.dumps(plan.get('skill_name'))}\n"
-            f"EXPECTED_SKILL_TYPE = {json.dumps(skill_type)}\n"
             f"EXPECTED_INTERFACE_TYPE = {json.dumps(plan.get('interface_type', 'chat'))}\n"
             f"SAMPLE_INPUT_JSON = {json.dumps(json.dumps(sample_input))}\n"
             f"REQUIRED_OUTPUT_FIELDS = {json.dumps(required_output_fields)}\n\n"
@@ -683,7 +668,6 @@ class FakeCodexAdapter:
             "def test_manifest_matches_blueprint_and_safe_contract():\n"
             "    manifest = json.loads((ROOT / 'manifest.json').read_text(encoding='utf-8'))\n"
             "    assert manifest['name'] == EXPECTED_NAME\n"
-            "    assert manifest['skill_type'] == EXPECTED_SKILL_TYPE\n"
             "    assert manifest.get('interface_type', 'chat') == EXPECTED_INTERFACE_TYPE\n"
             "    assert manifest['permissions']['shell'] is False\n"
             "    assert manifest['permissions']['secrets'] == []\n"
@@ -1068,7 +1052,6 @@ class CodexService:
         payload = {
             "codex_task": "product_manager_repair_blueprint",
             "skill_name": skill.name,
-            "skill_type": skill.skill_type,
             "interface_type": skill.interface_type,
             "user_request": user_request or f"Repair skill {skill.name}.",
         }
@@ -1084,7 +1067,6 @@ class CodexService:
         payload = {
             "codex_task": "product_manager_update_review",
             "skill_name": skill.name,
-            "skill_type": skill.skill_type,
             "interface_type": skill.interface_type,
             "description": skill.description,
             "suggestion": suggestion,
@@ -1467,7 +1449,6 @@ class CodexService:
             "goal": failure_context.get("user_request") or f"Repair skill {skill.name}.",
             "skill_name": skill.name,
             "display_name": skill.name.replace("_", " ").title(),
-            "skill_type": skill.skill_type,
             "interface_type": skill.interface_type,
             "input_schema": skill.input_schema_json,
             "output_schema": skill.output_schema_json,
@@ -1477,7 +1458,7 @@ class CodexService:
                 {
                     "network": [],
                     "filesystem_read": [],
-                    "filesystem_write": ["./cache"] if skill.skill_type == "automation" else [],
+                    "filesystem_write": ["./cache"],
                     "secrets": [],
                     "shell": False,
                 },
@@ -1509,7 +1490,6 @@ class CodexService:
     def update_skill_record_from_manifest(self, skill: Skill, proposed_dir: Path) -> None:
         manifest = validate_manifest_file(proposed_dir / "manifest.json")
         skill.description = manifest.description
-        skill.skill_type = manifest.skill_type
         skill.interface_type = manifest.interface_type
         skill.risk_level = manifest.risk_level
         skill.instructions_path = manifest.instructions_path
@@ -1524,7 +1504,6 @@ class CodexService:
         skill = self.db.scalar(select(Skill).where(Skill.name == plan["skill_name"]))
         values = {
             "description": plan["goal"],
-            "skill_type": plan["skill_type"],
             "interface_type": plan.get("interface_type", "chat"),
             "status": status,
             "risk_level": plan["risk_level"],
@@ -1604,7 +1583,6 @@ class CodexService:
             plan,
         )
         sanitized_permissions = self._runtime_permissions(sanitized_permission_plan["runtime"])
-        skill_type = str(blueprint.get("skill_type") or plan.get("skill_type") or "automation")
         interface_type = str(blueprint.get("interface_type") or plan.get("interface_type") or "chat")
         dependencies = list(
             (runtime.get("dependencies") if isinstance(runtime, dict) else None)
@@ -1615,10 +1593,9 @@ class CodexService:
             "name": str(blueprint.get("skill_name") or plan.get("skill_name")),
             "display_name": plan.get("display_name"),
             "description": str(blueprint.get("goal") or plan.get("goal") or plan.get("skill_name")),
-            "skill_type": skill_type,
             "interface_type": interface_type,
-            "entrypoint": "skill.py" if skill_type == "automation" else None,
-            "instructions_path": self._planned_instructions_path(plan, skill_type),
+            "entrypoint": "skill.py",
+            "instructions_path": self._planned_instructions_path(plan),
             "input_schema": plan.get("input_schema"),
             "output_schema": plan.get("output_schema"),
             "tool_ui_schema": plan.get("tool_ui_schema"),
@@ -1648,10 +1625,7 @@ class CodexService:
             return "medium"
         return "low"
 
-    def _planned_instructions_path(self, plan: dict, skill_type: str | None = None) -> str | None:
-        resolved_skill_type = skill_type or str(plan.get("skill_type") or "")
-        if resolved_skill_type == "instruction":
-            return "SKILL.md"
+    def _planned_instructions_path(self, plan: dict) -> str | None:
         files = plan.get("files_to_generate")
         if isinstance(files, list) and any(str(path).replace("\\", "/") == "SKILL.md" for path in files):
             return "SKILL.md"
@@ -1717,7 +1691,6 @@ class CodexService:
         return {
             "goal": plan.get("goal"),
             "skill_name": plan.get("skill_name"),
-            "skill_type": plan.get("skill_type"),
             "interface_type": plan.get("interface_type", "chat"),
         }
 
@@ -1740,7 +1713,6 @@ class CodexService:
 
 Skill:
 - name: {skill.name}
-- skill_type: {skill.skill_type}
 - interface_type: {skill.interface_type}
 
 Controlled skill folder:
@@ -1779,7 +1751,6 @@ Tester context:
 
 Skill:
 - name: {skill.name}
-- skill_type: {skill.skill_type}
 - interface_type: {skill.interface_type}
 
 Draft version:
@@ -1854,8 +1825,8 @@ Payload:
         acceptance_criteria = [
             "manifest.json is valid",
             "required skill files exist",
-            "automation tests pass",
-            "executable skills use JSON stdin/stdout",
+            "skill tests pass",
+            "skills use JSON stdin/stdout",
         ]
         if plan.get("interface_type") == "tool":
             acceptance_criteria.append("tool_ui_schema is present so the Tools page can render a user-friendly UI")
@@ -1877,7 +1848,6 @@ Payload:
         return {
             "goal": plan.get("goal") or generation_request.user_message,
             "skill_name": plan.get("skill_name"),
-            "skill_type": plan.get("skill_type"),
             "interface_type": plan.get("interface_type", "chat"),
             "expected_behavior": plan.get("expected_output", {}),
             "permission_plan": permission_plan,
@@ -1891,20 +1861,18 @@ Payload:
         blueprint: dict[str, object],
     ) -> dict[str, object]:
         plan = generation_request.plan_json
-        skill_type = blueprint.get("skill_type") or plan.get("skill_type")
         expected_files = self.product_manager_contracts.skill_package_files(
             plan.get("files_to_generate") or ["manifest.json"]
         )
         if "manifest.json" not in expected_files:
             expected_files.insert(0, "manifest.json")
-        requires_tests = skill_type == "automation"
         node = {
             "id": "core_skill",
             "title": "Core skill package",
             "summary": "Create the core proposed skill package.",
             "depends_on": [],
             "difficulty": "easy",
-            "requires_tests": requires_tests,
+            "requires_tests": True,
             "parallel_safe": True,
             "expected_output_paths": expected_files,
             "file_write_claims": [path for path in expected_files if path != "manifest.json"],
@@ -1913,11 +1881,11 @@ Payload:
                 or [
                     "manifest.json is valid",
                     "required skill files exist",
-                    "automation tests pass",
-                    "executable skills use JSON stdin/stdout",
+                    "skill tests pass",
+                    "skills use JSON stdin/stdout",
                 ]
             ),
-            "test_expectations": ["validate manifest and generated skill behavior"] if requires_tests else [],
+            "test_expectations": ["validate manifest and generated skill behavior"],
             "interface_artifact_expectations": ["declare generated files and exposed entrypoints"],
         }
         return {"schema_version": 1, "nodes": [node]}
@@ -1926,7 +1894,6 @@ Payload:
         return {
             "goal": user_request or f"Repair {skill.name}.",
             "skill_name": skill.name,
-            "skill_type": skill.skill_type,
             "interface_type": skill.interface_type,
             "milestones": [
                 {
@@ -1948,7 +1915,6 @@ Payload:
         decision["blueprint"] = {
             "goal": decision["summary"],
             "skill_name": skill.name,
-            "skill_type": skill.skill_type,
             "interface_type": skill.interface_type,
             "suggestion": suggestion,
             "permission_plan": {

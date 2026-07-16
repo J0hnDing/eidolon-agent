@@ -55,14 +55,14 @@ Shows:
 - update suggestion chat;
 - schedules.
 
-Installed executable skills may be run manually only when backend checks pass.
+Installed skills may be run manually only when backend checks pass.
 Run history shows each run's separate runtime Codex token total, honest partial/failed status and error summary, and the latest-run detail includes its token breakdown, call count, and persisted Codex invocation diagnostics.
 
 `SkillDetailPage` retains route loading, polling, and mutation orchestration. Cohesive update-chat, version, comparison, schedule, validation, and run-detail presentation lives under `features/skill-detail/SkillDetailPanels.tsx`. Feature tests cover conversation state transitions, chat workspace interactions, schedule delegation, version empty state, and run-input validation; `npm test` is the frontend regression command and `npm run build` remains the production type/build check.
 
 ## Tools Pages
 
-`ToolsPage` lists installed enabled automation skills with `interface_type = "tool"`. `ToolDetailPage` renders a form from declarative `tool_ui_schema` when present, otherwise it falls back to JSON input. Tool runs use the same backend runner and permission checks as skill runs.
+`ToolsPage` lists installed enabled skills with `interface_type = "tool"`. `ToolDetailPage` renders a form from declarative `tool_ui_schema` when present, otherwise it falls back to JSON input. Tool runs use the same backend runner and permission checks as skill runs.
 
 ## Agent Runs Pages
 

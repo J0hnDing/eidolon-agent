@@ -10,7 +10,6 @@ For new Project-mode builds, the backend derives an initial skeleton `manifest.j
 {
   "name": "example_skill",
   "description": "What this skill does.",
-  "skill_type": "automation",
   "interface_type": "chat",
   "entrypoint": "skill.py",
   "instructions_path": null,
@@ -44,27 +43,19 @@ For new Project-mode builds, the backend derives an initial skeleton `manifest.j
 
 On install, the backend registers a manifest-declared schedule as a pending schedule record and creates a schedule approval request. It does not activate the schedule automatically.
 
-## Skill Type Rules
-
-Instruction skills:
-
-- require `instructions_path`;
-- do not require `entrypoint`;
-- must request no executable permissions;
-- are not runnable.
-
-Automation skills:
+## Runtime Rules
 
 - require `entrypoint`;
+- require a Python entrypoint;
 - require the declared entrypoint file to exist;
 - require tests;
 - may request supported runtime permissions.
 
-Automation skills may optionally include reusable instructions:
+Skills may optionally include reusable instructions:
 
 - set `instructions_path` only when an instructions file is present;
 - usually use `SKILL.md` for that optional instructions file;
-- still require `entrypoint`, tests, and supported runtime permissions review.
+- optional instructions do not change the executable entrypoint, test, or runtime permission requirements.
 
 ## Interface Type Rules
 

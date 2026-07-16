@@ -3,13 +3,12 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.common import InterfaceType, RiskLevel, SkillStatus, SkillType
+from app.schemas.common import InterfaceType, RiskLevel, SkillStatus
 
 
 class SkillBase(BaseModel):
     name: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
     description: str = Field(min_length=1)
-    skill_type: SkillType = "automation"
     interface_type: InterfaceType = "chat"
     status: SkillStatus = "proposed"
     risk_level: RiskLevel = "low"

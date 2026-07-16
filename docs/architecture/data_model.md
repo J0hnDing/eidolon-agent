@@ -22,7 +22,6 @@ The central skill record. Important fields:
 
 - `name`
 - `description`
-- `skill_type`: `instruction` or `automation`
 - `interface_type`: `chat`, `tool`, or `hidden`
 - `status`: `building`, `proposed`, `installed`, `failed`, or legacy tombstone `deleted`
 - `risk_level`
@@ -55,7 +54,7 @@ Backend-enforced local locks for per-skill operation safety. These prevent overl
 
 ### skill_schedules
 
-Stores schedule definitions for installed executable skills. Canonical statuses are `pending`, `active`, `paused`, and `denied`. Deletion removes the row; it is not a persisted schedule status.
+Stores schedule definitions for installed skills. Canonical statuses are `pending`, `active`, `paused`, and `denied`. Deletion removes the row; it is not a persisted schedule status.
 
 ### approval_requests
 

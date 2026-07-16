@@ -1,6 +1,6 @@
 # Sandbox Execution
 
-Installed automation skills execute through the selected skill runner.
+Installed skills execute through the selected skill runner.
 
 ## Runner Selection
 
@@ -44,14 +44,13 @@ The local runner remains available only for explicit development fallback. It is
 
 ## Run Preconditions
 
-Executable skill runs require:
+Skill runs require:
 
 - installed status;
 - enabled skill;
-- automation type;
 - runtime permissions approved;
 - runtime permissions supported;
 - operation lock available;
 - tests pass before task execution.
 
-Instruction-only and proposed skills cannot run.
+Proposed skills cannot run.

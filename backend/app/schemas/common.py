@@ -11,7 +11,6 @@ MemoryCategory = Literal[
     "risk_tolerance",
 ]
 RiskLevel = Literal["low", "medium", "high", "blocked"]
-SkillType = Literal["instruction", "automation"]
 InterfaceType = Literal["chat", "tool", "hidden"]
 SkillStatus = Literal["building", "proposed", "installed", "failed", "deleted"]
 SkillRunStatus = Literal["pending", "running", "succeeded", "partial", "failed", "blocked"]

@@ -92,7 +92,7 @@ Codex must not modify backend/frontend app source when generating application sk
 
 ## Skill Runtime Calls
 
-Skills must not shell out to the Codex CLI. Installed enabled executable skills may call the backend Skill Codex Call API:
+Skills must not shell out to the Codex CLI. Installed enabled skills may call the backend Skill Codex Call API:
 
 ```text
 POST /skills/{skill_id}/codex
@@ -100,7 +100,7 @@ POST /skills/{skill_id}/codex
 
 The runner sets `PERSONAL_AGENT_SKILL_ID` and `PERSONAL_AGENT_BACKEND_URL` for generated skill code. The backend validates runtime approval and manifest `permissions.codex` before invoking Codex. `codex_permissions.internet_access=true` is accepted only when runtime `network` entries were approved for the skill.
 
-During an active executable skill run, the backend appends a success or failure invocation record to that `skill_runs` row. Success records include adapter/model identity, the invoked CLI path when applicable, and token breakdowns and update the runtime aggregate counters. Failure records include the resolved CLI path/version/source, exit code, error type, concise error detail, and a bounded stderr tail; token counters remain zero when no completed turn was emitted. Per-skill operation locking makes the active row unambiguous. Calls made outside an active run are not attributed to run history.
+During an active skill run, the backend appends a success or failure invocation record to that `skill_runs` row. Success records include adapter/model identity, the invoked CLI path when applicable, and token breakdowns and update the runtime aggregate counters. Failure records include the resolved CLI path/version/source, exit code, error type, concise error detail, and a bounded stderr tail; token counters remain zero when no completed turn was emitted. Per-skill operation locking makes the active row unambiguous. Calls made outside an active run are not attributed to run history.
 
 For a failed runtime call, inspect the run's `error_message` and `codex_invocations_json` through Skill Run History or `GET /skills/{skill_id}/runs`. Compare its recorded `cli_version` and `cli_path` with `GET /usage/codex/cli` or the Codex Settings page. This preserves the historical executable identity even if Codex Desktop updates before the failure is investigated.
 

@@ -42,7 +42,7 @@ def test_task_dag_service_validates_and_batches_ready_nodes() -> None:
         ]
     }
 
-    service.validate(task_dag, {"skill_type": "automation"})
+    service.validate(task_dag, {})
     assert [[node["id"] for node in batch] for batch in service.execution_batches(task_dag)] == [
         ["alpha", "beta"],
         ["merge"],
@@ -54,13 +54,12 @@ def test_product_manager_contract_service_keeps_only_backend_fields() -> None:
     fallback = {
         "goal": "Fallback",
         "skill_name": "sample",
-        "skill_type": "automation",
         "interface_type": "chat",
         "requested_permissions": {"filesystem_write": ["./cache", "report.json"]},
     }
 
     blueprint = service.sanitize_blueprint(
-        {"goal": "Build it", "skill_name": "sample", "skill_type": "automation", "unknown": "drop"},
+        {"goal": "Build it", "skill_name": "sample", "unknown": "drop"},
         fallback,
     )
 

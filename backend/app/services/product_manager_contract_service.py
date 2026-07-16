@@ -13,7 +13,6 @@ class ProductManagerContractService:
         allowed_fields = {
             "goal",
             "skill_name",
-            "skill_type",
             "interface_type",
             "expected_behavior",
             "schedule",
@@ -24,7 +23,7 @@ class ProductManagerContractService:
         }
         blueprint = {key: fallback[key] for key in allowed_fields if key in fallback}
         blueprint.update({key: value[key] for key in allowed_fields if key in value})
-        for key in ("goal", "skill_name", "skill_type"):
+        for key in ("goal", "skill_name"):
             if not blueprint.get(key):
                 blueprint[key] = fallback.get(key)
         blueprint["interface_type"] = blueprint.get("interface_type") or fallback.get("interface_type", "chat")
@@ -137,7 +136,6 @@ class ProductManagerContractService:
         blueprint.update(
             {
                 "skill_name": skill.name,
-                "skill_type": skill.skill_type,
                 "interface_type": skill.interface_type,
                 "suggestion": suggestion,
             }

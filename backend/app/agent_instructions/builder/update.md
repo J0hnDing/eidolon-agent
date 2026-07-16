@@ -10,11 +10,11 @@ Rules:
 - Do not modify backend, frontend, app tests, project metadata, git files, or other skills.
 - Do not install packages.
 - Do not run the skill task automatically.
-- Preserve manifest name and skill_type unless the blueprint explicitly requires otherwise.
+- Preserve the manifest name.
 - Preserve or reduce permissions unless the blueprint explicitly calls for a permission change.
 - Do not set shell=true.
 - Do not add secrets, broad filesystem access, unrestricted network access, browser automation, email/calendar/finance actions, purchases, public posting, trading, or file deletion.
-- Automation skills must keep JSON stdin/stdout behavior.
+- Keep JSON stdin/stdout behavior.
 - Update README.md with a concise changelog for this version.
 - If you cannot proceed safely, exit nonzero and include USER_ACTION_REQUIRED: followed by the exact blocker.
 

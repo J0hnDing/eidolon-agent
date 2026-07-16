@@ -506,10 +506,9 @@ export default function SkillDetailPage() {
     );
   }
 
-  const isExecutable = skill.skill_type === "automation";
-  const isInstalledExecutable = skill.status === "installed" && isExecutable;
+  const isInstalled = skill.status === "installed";
   const runtimeApproved = runtimePermission?.status === "approved";
-  const canRun = isInstalledExecutable && skill.enabled && runtimeApproved;
+  const canRun = isInstalled && skill.enabled && runtimeApproved;
   const isProposed = skill.status === "proposed";
 
   return (
@@ -525,10 +524,6 @@ export default function SkillDetailPage() {
       <section className="detail-panel">
         <p>{skill.description}</p>
         <dl className="detail-grid">
-          <div>
-            <dt>Skill Type</dt>
-            <dd>{skill.skill_type}</dd>
-          </div>
           <div>
             <dt>Interface</dt>
             <dd>{skill.interface_type}</dd>
@@ -725,12 +720,12 @@ export default function SkillDetailPage() {
               {isRunning ? "Running..." : "Run"}
             </button>
           )}
-          {isInstalledExecutable && skill.enabled && !runtimeApproved && (
+          {isInstalled && skill.enabled && !runtimeApproved && (
             <button type="button" onClick={() => handleReviewRuntimePermissions(true)} disabled={isWorking}>
               Review Before Run
             </button>
           )}
-          {isInstalledExecutable && !skill.enabled && (
+          {isInstalled && !skill.enabled && (
             <button type="button" disabled>
               Run Disabled
             </button>
@@ -818,7 +813,7 @@ export default function SkillDetailPage() {
           onDelete={(id) => handleScheduleAction(() => api.deleteSchedule(id))}
           onRunNow={(id) => handleScheduleAction(() => api.runScheduleNow(id))}
         />
-        {isInstalledExecutable ? (
+        {isInstalled ? (
           <form className="form-panel" onSubmit={handleCreateSchedule}>
             <h3>Create Schedule Request</h3>
             <div className="form-grid">
@@ -883,7 +878,7 @@ export default function SkillDetailPage() {
             </div>
           </form>
         ) : (
-          <p className="muted">Only installed automation skills can request schedules.</p>
+          <p className="muted">Only installed skills can request schedules.</p>
         )}
       </section>
 
@@ -903,7 +898,7 @@ export default function SkillDetailPage() {
         )}
       </section>
 
-      {isInstalledExecutable && (
+      {isInstalled && (
         <section className="detail-panel">
           <header className="page-header">
             <div>
@@ -927,7 +922,7 @@ export default function SkillDetailPage() {
         </section>
       )}
 
-      {isInstalledExecutable && (
+      {isInstalled && (
         <>
           <section className="detail-panel">
             <h2>Latest Run</h2>

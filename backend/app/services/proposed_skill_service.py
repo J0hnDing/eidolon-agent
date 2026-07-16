@@ -21,7 +21,6 @@ from app.models import (
     SkillSchedule,
     SkillVersion,
 )
-from app.schemas.common import SkillType
 from app.schemas.proposed_skill import ProposedSkillValidationRead, SkillFileRead
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
@@ -48,10 +47,8 @@ class ProposedSkillService:
         self.proposed_root = self.project_root / "skills" / "proposed"
         self.installed_root = self.project_root / "skills" / "installed"
 
-    def create_sample(self, name: str, skill_type: SkillType) -> Skill:
+    def create_sample(self, name: str) -> Skill:
         safe_name = self.validate_skill_name(name)
-        if skill_type not in {"instruction", "automation"}:
-            raise ProposedSkillError("Skill type must be instruction or automation")
         proposed_dir = self.proposed_dir(safe_name)
         installed_dir = self.installed_dir(safe_name)
         if installed_dir.exists():
@@ -60,17 +57,16 @@ class ProposedSkillService:
             raise ProposedSkillError(f"Proposed skill already exists: {safe_name}")
 
         proposed_dir.mkdir(parents=True)
-        self._write_sample_files(proposed_dir, safe_name, skill_type)
+        self._write_sample_files(proposed_dir, safe_name)
 
         skill = self.db.scalar(select(Skill).where(Skill.name == safe_name))
         values = {
-            "description": f"Sample {skill_type} skill created for review.",
-            "skill_type": skill_type,
+            "description": "Sample skill created for review.",
             "interface_type": "chat",
             "status": "proposed",
             "risk_level": "low",
             "manifest_path": self._relative_path(proposed_dir / "manifest.json"),
-            "instructions_path": "SKILL.md" if skill_type == "instruction" else None,
+            "instructions_path": None,
             "input_schema_json": None,
             "output_schema_json": None,
             "tool_ui_schema_json": None,
@@ -132,7 +128,6 @@ class ProposedSkillService:
             if skill is not None:
                 if skill.status == "installed":
                     skill.description = manifest.description
-                    skill.skill_type = manifest.skill_type
                     skill.interface_type = manifest.interface_type
                     skill.risk_level = manifest.risk_level
                     skill.manifest_path = self._relative_path(manifest_path)
@@ -146,7 +141,6 @@ class ProposedSkillService:
             skill = Skill(
                 name=manifest.name,
                 description=manifest.description,
-                skill_type=manifest.skill_type,
                 interface_type=manifest.interface_type,
                 status="installed",
                 risk_level=manifest.risk_level,
@@ -204,7 +198,6 @@ class ProposedSkillService:
             if dependency_result.returncode != 0:
                 return ProposedSkillValidationRead(
                     ok=False,
-                    skill_type=manifest.skill_type,
                     manifest_valid=True,
                     tests_run=False,
                     stdout=dependency_result.stdout,
@@ -214,23 +207,9 @@ class ProposedSkillService:
                 )
             warnings.append("Installed approved Python dependencies into the skill-local .deps folder.")
 
-        if manifest.skill_type == "instruction":
-            tests_result = self._run_optional_instruction_tests(skill_dir)
-            if tests_result is not None:
-                tests_result.warnings = warnings
-                return tests_result
-            return ProposedSkillValidationRead(
-                ok=True,
-                skill_type=manifest.skill_type,
-                manifest_valid=True,
-                tests_run=False,
-                warnings=warnings,
-            )
-
         result = self._run_tests(skill_dir)
         return ProposedSkillValidationRead(
             ok=result.returncode == 0,
-            skill_type=manifest.skill_type,
             manifest_valid=True,
             tests_run=True,
             tests_passed=result.returncode == 0,
@@ -281,12 +260,11 @@ class ProposedSkillService:
             changelog="Initial installed version.",
             created_by="system",
             permission_fingerprint=self._permission_fingerprint(manifest_json),
-            test_status="passed" if manifest.skill_type == "automation" else "not_required",
+            test_status="passed",
             validation_status="passed",
         )
         self.db.add(version)
         self.db.flush()
-        skill.skill_type = manifest.skill_type
         skill.interface_type = manifest.interface_type
         skill.status = "installed"
         skill.risk_level = manifest.risk_level
@@ -297,7 +275,7 @@ class ProposedSkillService:
         skill.tool_ui_schema_json = manifest.tool_ui_schema
         skill.installed_path = self._relative_path(version_dir)
         skill.active_version_id = version.id
-        skill.enabled = manifest.skill_type == "instruction"
+        skill.enabled = False
         self.db.commit()
         self.db.refresh(skill)
         self._register_manifest_schedule(skill)
@@ -385,26 +363,22 @@ class ProposedSkillService:
 
         SchedulerService(self.db, project_root=self.project_root).create_from_manifest_if_present(skill)
 
-    def _write_sample_files(self, skill_dir: Path, name: str, skill_type: SkillType) -> None:
-        manifest = self._sample_manifest(name, skill_type)
+    def _write_sample_files(self, skill_dir: Path, name: str) -> None:
+        manifest = self._sample_manifest(name)
         (skill_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        (skill_dir / "README.md").write_text(self._sample_readme(name, skill_type), encoding="utf-8")
-        if skill_type == "instruction":
-            (skill_dir / "SKILL.md").write_text(self._sample_instructions(name), encoding="utf-8")
-        if skill_type == "automation":
-            (skill_dir / "skill.py").write_text(self._sample_skill_py(), encoding="utf-8")
-            tests_dir = skill_dir / "tests"
-            tests_dir.mkdir()
-            (tests_dir / "test_skill.py").write_text(self._sample_test_py(), encoding="utf-8")
+        (skill_dir / "README.md").write_text(self._sample_readme(name), encoding="utf-8")
+        (skill_dir / "skill.py").write_text(self._sample_skill_py(), encoding="utf-8")
+        tests_dir = skill_dir / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_skill.py").write_text(self._sample_test_py(), encoding="utf-8")
 
-    def _sample_manifest(self, name: str, skill_type: SkillType) -> dict:
+    def _sample_manifest(self, name: str) -> dict:
         return {
             "name": name,
-            "description": f"Sample {skill_type} skill for the proposed skill workflow.",
-            "skill_type": skill_type,
+            "description": "Sample skill for the proposed skill workflow.",
             "interface_type": "chat",
-            "entrypoint": "skill.py" if skill_type == "automation" else None,
-            "instructions_path": "SKILL.md" if skill_type == "instruction" else None,
+            "entrypoint": "skill.py",
+            "instructions_path": None,
             "input_schema": None,
             "output_schema": None,
             "tool_ui_schema": None,
@@ -412,7 +386,7 @@ class ProposedSkillService:
             "permissions": {
                 "network": [],
                 "filesystem_read": [],
-                "filesystem_write": ["./cache"] if skill_type == "automation" else [],
+                "filesystem_write": ["./cache"],
                 "secrets": [],
                 "shell": False,
             },
@@ -421,33 +395,22 @@ class ProposedSkillService:
             "enabled": False,
         }
 
-    def _sample_readme(self, name: str, skill_type: SkillType) -> str:
-        readme = (
-            f"# {name}\n\n"
-            f"Sample `{skill_type}` skill created by the local proposed skill workflow.\n"
-        )
-        if skill_type == "automation":
-            readme += (
-                "\n## Input\n\n"
-                "Send a JSON object. The friendliest input is:\n\n"
-                "```json\n"
-                "{\n"
-                '  "message": "Hello, assistant",\n'
-                '  "label": "Manual test"\n'
-                "}\n"
-                "```\n\n"
-                "`message` is echoed back. `label` is optional and is used in the summary.\n\n"
-                "## Output\n\n"
-                "The skill returns readable JSON with `title`, `summary`, `echoed_message`, "
-                "`received_input`, `suggested_next_input`, and `warnings`.\n"
-            )
-        return readme
-
-    def _sample_instructions(self, name: str) -> str:
+    def _sample_readme(self, name: str) -> str:
         return (
-            f"# {name} Instructions\n\n"
-            "Use this capability to answer with a short, structured response. "
-            "Do not access files, network, secrets, or shell commands.\n"
+            f"# {name}\n\n"
+            "Sample skill created by the local proposed skill workflow.\n"
+            "\n## Input\n\n"
+            "Send a JSON object. The friendliest input is:\n\n"
+            "```json\n"
+            "{\n"
+            '  "message": "Hello, assistant",\n'
+            '  "label": "Manual test"\n'
+            "}\n"
+            "```\n\n"
+            "`message` is echoed back. `label` is optional and is used in the summary.\n\n"
+            "## Output\n\n"
+            "The skill returns readable JSON with `title`, `summary`, `echoed_message`, "
+            "`received_input`, `suggested_next_input`, and `warnings`.\n"
         )
 
     def _sample_skill_py(self) -> str:
@@ -531,28 +494,6 @@ class ProposedSkillService:
             "    output = json.loads(result.stdout)\n"
             "    assert output['summary'] == 'The input was not valid JSON.'\n"
             "    assert output['warnings']\n"
-        )
-
-    def _run_optional_instruction_tests(
-        self,
-        skill_dir: Path,
-    ) -> ProposedSkillValidationRead | None:
-        tests_dir = skill_dir / "tests"
-        if not tests_dir.is_dir() or not any(
-            path.is_file() and (path.name.startswith("test_") or path.name.endswith("_test.py"))
-            for path in tests_dir.rglob("*.py")
-        ):
-            return None
-        result = self._run_tests(skill_dir)
-        return ProposedSkillValidationRead(
-            ok=result.returncode == 0,
-            skill_type="instruction",
-            manifest_valid=True,
-            tests_run=True,
-            tests_passed=result.returncode == 0,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            error_message=None if result.returncode == 0 else "Instruction skill tests failed",
         )
 
     def _ensure_dependencies_installed(

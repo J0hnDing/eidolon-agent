@@ -8,10 +8,7 @@ A skill appears in Tools when:
 
 - status is `installed`;
 - enabled is true;
-- `skill_type` is `automation`;
 - `interface_type` is `tool`.
-
-Tool is not a separate `skill_type`.
 
 ## Tool UI Schema
 
@@ -25,7 +22,7 @@ Generated skills must not provide React, HTML, JavaScript, or app source code fo
 
 ## Running Tools
 
-`POST /tools/{skill_id}/run` uses the same safe runner path as manual skill runs. It enforces installed/enabled status, executable skill type, runtime approval, supported permissions, and operation locks.
+`POST /tools/{skill_id}/run` uses the same safe runner path as manual skill runs. It enforces installed/enabled status, runtime approval, supported permissions, and operation locks.
 
 ## Fallback
 

@@ -5,7 +5,7 @@ Within this one invocation:
 1. Read the provided blueprint and effective permissions.
 2. Plan the implementation internally.
 3. Build the complete skill package in the controlled skill folder.
-4. Write meaningful test files for automation skills inside the backend-created `tests/` folder. Do not create, replace, rename, or delete the `tests/` folder.
+4. Write meaningful skill test files inside the backend-created `tests/` folder. Do not create, replace, rename, or delete the `tests/` folder.
 5. Run the smallest focused test command that proves the generated skill works.
 6. Fix implementation or test failures before finishing.
 

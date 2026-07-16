@@ -68,7 +68,6 @@ def write_installed_skill(
     project_root: Path,
     name: str,
     *,
-    skill_type: str = "automation",
     enabled: bool = True,
     permissions: dict[str, Any] | None = None,
     schedule: dict[str, Any] | None = None,
@@ -79,9 +78,8 @@ def write_installed_skill(
     manifest = {
         "name": name,
         "description": "Scheduled test skill",
-        "skill_type": skill_type,
-        "entrypoint": "skill.py" if skill_type != "instruction" else None,
-        "instructions_path": "SKILL.md" if skill_type == "instruction" else None,
+        "entrypoint": "skill.py",
+        "instructions_path": None,
         "risk_level": "low",
         "permissions": permissions
         or {
@@ -100,18 +98,15 @@ def write_installed_skill(
     (skill_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     (skill_dir / "skill.py").write_text("print('{\"ok\": true}')\n", encoding="utf-8")
     (skill_dir / "tests" / "test_skill.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
-    if skill_type == "instruction":
-        (skill_dir / "SKILL.md").write_text("Instructions", encoding="utf-8")
     return skill_dir
 
 
 def create_skill(db: Session, project_root: Path, name: str = "scheduled_skill", **kwargs: Any) -> Skill:
-    file_kwargs = {key: value for key, value in kwargs.items() if key in {"skill_type", "enabled", "permissions", "schedule"}}
+    file_kwargs = {key: value for key, value in kwargs.items() if key in {"enabled", "permissions", "schedule"}}
     skill_dir = write_installed_skill(project_root, name, **file_kwargs)
     skill = Skill(
         name=name,
         description="Scheduled test skill",
-        skill_type=kwargs.get("skill_type", "automation"),
         status=kwargs.get("status", "installed"),
         risk_level="medium" if kwargs.get("permissions", {}).get("network") else "low",
         manifest_path=skill_dir.relative_to(project_root).as_posix() + "/manifest.json",
@@ -189,14 +184,12 @@ def test_invalid_schedule_rejected(tmp_path: Path, db_session: Session) -> None:
         )
 
 
-def test_instruction_proposed_and_disabled_skills_cannot_be_scheduled(tmp_path: Path, db_session: Session) -> None:
-    instruction = create_skill(db_session, tmp_path, "instruction_skill", skill_type="instruction")
+def test_proposed_and_disabled_skills_cannot_be_scheduled(tmp_path: Path, db_session: Session) -> None:
     proposed = create_skill(db_session, tmp_path, "proposed_skill", status="proposed")
     disabled = create_skill(db_session, tmp_path, "disabled_skill", enabled=False)
     scheduler = service(db_session, tmp_path)
 
     for skill, message in [
-        (instruction, "Instruction skills cannot be scheduled"),
         (proposed, "Only installed skills can be scheduled"),
         (disabled, "Disabled skills cannot be scheduled"),
     ]:

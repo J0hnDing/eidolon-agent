@@ -46,8 +46,8 @@ class TaskDagService:
                         f"Task node {node['id']} depends on missing node {dependency}"
                     )
         self.topological_nodes(task_dag)
-        if blueprint.get("skill_type") == "automation" and not any(node.get("requires_tests") for node in nodes):
-            raise ProjectBuildWorkflowError("Automation skill DAG must include at least one tested node")
+        if not any(node.get("requires_tests") for node in nodes):
+            raise ProjectBuildWorkflowError("Skill DAG must include at least one tested node")
         for left in nodes:
             for right in nodes:
                 if left["id"] >= right["id"]:

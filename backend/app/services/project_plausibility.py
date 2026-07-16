@@ -159,10 +159,8 @@ class ProjectPlausibilityService:
 You are reviewing whether a user's Project mode request should become an application skill proposal.
 
 Application skill definition:
-- A skill is a reusable capability package.
-- instruction skills are reusable instructions only.
-- automation skills contain executable Python automation.
-- automation skills may include optional SKILL.md reusable instructions.
+- A skill is a reusable capability package with executable Python code and tests.
+- A skill may include optional SKILL.md reusable instructions or operating guidance.
 
 Evaluate only plausibility and fit. Do not generate files. Do not install packages. Do not run code.
 

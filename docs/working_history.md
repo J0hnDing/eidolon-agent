@@ -21,6 +21,11 @@ Do not add separate area, intention, changed-files, or verification fields. Impl
 
 ## Current Entries
 
+## 2026-07-15 22:23 - Executable-Only Skill Contract
+
+- Summary: Executable-only skill contract. Removed the former skill-kind field from manifests, SQLAlchemy records, generation requests, API schemas, ProductManager/Builder contracts, runner and scheduler branches, frontend types and displays, fixtures, and documentation. Every skill now requires a Python entrypoint and tests, while optional `SKILL.md` reusable instructions remain supported. The local SQLite migration drops both legacy columns and removes their exact keys recursively from persisted JSON artifacts; the current local database was migrated after confirming all existing rows used the executable variant. The installed GitHub Trending skill manifest was migrated and its 24 tests passed. Ruff passed, all 245 backend tests passed, all 5 frontend tests passed, and the frontend production build passed.
+- Limitations/Future implementations: None known.
+
 ## 2026-07-14 23:02 - Backend Service And Frontend Page Decomposition
 
 - Summary: Backend service and frontend page decomposition. Extracted task-DAG validation and ready-batch calculation into `TaskDagService`, run artifact persistence and interface-artifact validation into `AgentRunArtifactStore`, ProductManager output normalization into `ProductManagerContractService`, and separate build/runtime usage handling into `CodexInvocationRecorder`. `AgentWorkflowService` and `CodexService` remain orchestration facades and call the new narrow interfaces directly without private compatibility forwarders. Moved Chat conversation state into a tested hook, Chat presentation into a feature workspace, and Skill Detail update/version/schedule/validation/run panels into tested feature components while route pages retain API orchestration. Hook coverage also fixed the synthesized first chat not being persisted before its first edit. Ruff passed, all 258 backend tests passed, all 5 frontend feature tests passed, and the frontend production build passed.
@@ -86,10 +91,10 @@ Do not add separate area, intention, changed-files, or verification fields. Impl
 - Summary: ProductManager build instruction split. Separated blueprint/permissions from post-approval task-DAG planning, adopted flat runtime permission fields, removed ProductManager summary Codex calls and unsupported DAG-phase decisions, and aligned CodexService, AgentWorkflowService, PermissionService, tests, and documentation. Focused schema tests and the then-current 190-test backend suite passed.
 - Limitations/Future implementations: Existing compatibility DB/API fields such as `requested_network_domains_json` remain and are populated from `permission_plan.runtime.network`. Unrelated generated files under `skills/proposed/weekly_github_trend_analyzer/` remain untracked.
 
-## 2026-07-08 15:06 - Remove Hybrid Skill Type
+## 2026-07-08 15:06 - Remove Hybrid Skill Variant
 
-- Summary: Removed the hybrid skill type. Restricted executable skills to `automation`, retained optional `SKILL.md` support for automation packages, and updated shared schemas, manifest validation, prompts, agent instructions, tool filtering, frontend choices, and documentation. Focused backend suites and the frontend build passed.
-- Limitations/Future implementations: Persisted records or generated manifests using `skill_type = "hybrid"` require migration or regeneration as `automation`.
+- Summary: Removed the hybrid skill variant, retained optional `SKILL.md` support for executable packages, and updated shared schemas, manifest validation, prompts, agent instructions, tool filtering, frontend choices, and documentation. Focused backend suites and the frontend build passed.
+- Limitations/Future implementations: Superseded by the later executable-only skill contract.
 
 ## 2026-07-08 02:34 - Manifest Schedule Registration
 

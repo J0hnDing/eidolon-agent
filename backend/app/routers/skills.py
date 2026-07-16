@@ -82,8 +82,6 @@ def run_skill(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only installed skills can be run")
     if not skill.enabled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Skill is disabled")
-    if skill.skill_type == "instruction":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Instruction skills cannot be run")
     permission_decision = PermissionService(db).can_run(skill)
     if not permission_decision.allowed:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=permission_decision.reason)
@@ -387,7 +385,7 @@ def resolve_skill_dir(skill: Skill) -> Path:
     if not path.is_relative_to(installed_root):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Executable skills must live under skills/installed",
+            detail="Skills must live under skills/installed",
         )
     return path
 

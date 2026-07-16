@@ -1186,7 +1186,7 @@ def test_task_dag_validation_rejects_invalid_graphs(
     mutation(dag)
 
     with pytest.raises(AgentWorkflowError, match=message):
-        AgentWorkflowService(db_session).task_dags.validate(dag, {"skill_type": "automation"})
+        AgentWorkflowService(db_session).task_dags.validate(dag, {})
 
 
 def test_task_dag_sanitizer_removes_tester_owned_paths(db_session: Session) -> None:
@@ -1242,7 +1242,7 @@ def test_task_dag_sanitizer_removes_tester_owned_paths(db_session: Session) -> N
     assert sanitized["nodes"][0]["file_write_claims"] == []
     assert sanitized["nodes"][1]["expected_output_paths"] == ["skill.py"]
     assert sanitized["nodes"][1]["file_write_claims"] == ["skill.py"]
-    AgentWorkflowService(db_session).task_dags.validate(sanitized, {"skill_type": "automation"})
+    AgentWorkflowService(db_session).task_dags.validate(sanitized, {})
 
 
 def test_task_dag_sanitizer_does_not_read_package_files_from_blueprint(db_session: Session) -> None:
@@ -1291,7 +1291,6 @@ def test_blueprint_sanitizer_removes_expected_files(db_session: Session) -> None
     fallback = {
         "goal": "Fallback goal",
         "skill_name": "fallback_skill",
-        "skill_type": "automation",
         "interface_type": "hidden",
         "schedule": None,
     }
@@ -1418,7 +1417,6 @@ def create_installed_skill(tmp_path: Path, db: Session, name: str) -> Skill:
     manifest = {
         "name": name,
         "description": "Broken skill for repair tests.",
-        "skill_type": "automation",
         "interface_type": "chat",
         "entrypoint": "skill.py",
         "instructions_path": None,
@@ -1444,7 +1442,6 @@ def create_installed_skill(tmp_path: Path, db: Session, name: str) -> Skill:
     skill = Skill(
         name=name,
         description=manifest["description"],
-        skill_type="automation",
         interface_type="chat",
         status="installed",
         risk_level="low",

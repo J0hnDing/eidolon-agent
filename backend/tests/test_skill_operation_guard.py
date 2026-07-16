@@ -80,7 +80,7 @@ def test_delete_refuses_active_run_and_keeps_record(
     db_session: Session,
 ) -> None:
     service = ProposedSkillService(db_session, project_root=tmp_path)
-    skill = service.create_sample("delete_guard", "automation")
+    skill = service.create_sample("delete_guard")
     db_session.add(SkillRun(skill_id=skill.id, status="running", input_json={}))
     db_session.commit()
 

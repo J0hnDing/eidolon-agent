@@ -53,7 +53,6 @@ def write_skill(
     manifest = {
         "name": "docker_demo_skill",
         "description": "A trusted local demo skill.",
-        "skill_type": "automation",
         "entrypoint": "skill.py",
         "instructions_path": None,
         "risk_level": "low",
@@ -262,32 +261,6 @@ def test_docker_runner_blocks_unsafe_cache_mountpoint(tmp_path: Path, db_session
 
     assert run.status == "blocked"
     assert run.error_message == "Skill cache mountpoint must be a regular directory"
-
-
-def test_docker_runner_blocks_instruction_skills(tmp_path: Path, db_session: Session) -> None:
-    skill_dir = tmp_path / "instruction_skill"
-    write_skill(
-        skill_dir,
-        {
-            "skill_type": "instruction",
-            "entrypoint": None,
-            "instructions_path": "SKILL.md",
-            "permissions": {
-                "network": [],
-                "filesystem_read": [],
-                "filesystem_write": [],
-                "secrets": [],
-                "shell": False,
-            },
-        },
-    )
-    (skill_dir / "SKILL.md").write_text("Instruction text.", encoding="utf-8")
-    skill = create_skill_record(db_session, skill_dir)
-
-    run = make_runner(db_session, tmp_path, lambda command, **_: completed()).run(skill.id, skill_dir, {})
-
-    assert run.status == "blocked"
-    assert run.error_message == "instruction skills cannot be executed"
 
 
 def test_docker_runner_stores_failed_invalid_json_run(tmp_path: Path, db_session: Session) -> None:

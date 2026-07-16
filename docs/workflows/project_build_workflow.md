@@ -50,7 +50,7 @@ Output for PM does NOT mean agent writes files directly, instead backend receive
 3. `pm_write_blueprint_and_permissions`
    - Inputs: `intent_prompt.json`.
    - Output: one structured response containing top-level `build_workflow`, `blueprint`, and `permission_plan` fields. The backend writes only the latter two as `blueprint.json` and `permissions.json`.
-   - Purpose: choose `single_codex` or `task_dag`; describe the skill goal, skill type, interface type, expected user behavior, schedule intent, and high-level acceptance criteria; draft both build-time needs and expected runtime permissions/dependencies.
+   - Purpose: choose `single_codex` or `task_dag`; describe the skill goal, interface type, expected user behavior, schedule intent, and high-level acceptance criteria; draft both build-time needs and expected runtime permissions/dependencies.
    - `build_workflow` is backend routing state stored on the agent run. It must not appear inside `blueprint` or in `blueprint.json` because downstream DAG, Builder, and Tester inputs do not need it.
    - Must not enumerate generated package files. Builder-owned paths are defined later by task-node `expected_output_paths` and `file_write_claims` in `task_dag.json`.
    - Must not include task nodes, dependencies between tasks, or test files.
@@ -78,7 +78,7 @@ The Codex Settings page can persist a backend-owned workflow override. `Automati
 
 ## Single-Codex Workflow
 
-The `single_codex` workflow package contains `workflow.py`, `prompts.py`, and `instructions/run.md`. Before the writable invocation, the backend creates the controlled proposed-skill folder, seeds `manifest.json`, and creates its `tests/` directory. The prompt contains the approved blueprint, effective permissions, and fixed workflow instructions. Within that one invocation Codex plans internally, creates the complete skill package, writes automation test files inside the existing backend-created `tests/` directory, runs a focused test command, and fixes failures before returning. It must not create or replace the test directory.
+The `single_codex` workflow package contains `workflow.py`, `prompts.py`, and `instructions/run.md`. Before the writable invocation, the backend creates the controlled proposed-skill folder, seeds `manifest.json`, and creates its `tests/` directory. The prompt contains the approved blueprint, effective permissions, and fixed workflow instructions. Within that one invocation Codex plans internally, creates the complete skill package, writes test files inside the existing backend-created `tests/` directory, runs a focused test command, and fixes failures before returning. It must not create or replace the test directory.
 
 After the writable invocation returns, the backend runs the shared deterministic final validator: static capability scan, actual manifest/package validation, and authoritative execution of the generated tests. This validator does not invoke ProductManager, Builder, Tester, or another Codex agent. A validation failure blocks the single-Codex build; retry starts a new single writable invocation against a freshly prepared proposed-skill workspace. Runtime permission review is created only after final validation passes.
 
@@ -141,7 +141,7 @@ Backend validation must reject the graph when:
 - a node id is not a safe path segment;
 - a node omits acceptance criteria or expected output paths;
 - a node references a backend API id that is not in the backend API catalog;
-- an automation skill has no tested node;
+- the skill has no tested node;
 - two simultaneously ready nodes have overlapping `file_write_claims` without an explicit dependency ordering them.
 
 The `file_write_claims` field is added so the backend can parallelize independent nodes without allowing two builders to edit the same generated file at the same time.

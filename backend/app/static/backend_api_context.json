@@ -45,7 +45,7 @@
       "fields": ["interface_type", "input_schema", "output_schema", "tool_ui_schema"],
       "supported_field_types": ["text", "number", "textarea", "checkbox", "select"],
       "rules": [
-        "Set interface_type to tool for installed enabled automation skills that should appear in Tools.",
+        "Set interface_type to tool for installed enabled skills that should appear in Tools.",
         "Define tool_ui_schema with labels, field names, supported field types, options/defaults where needed, and result rendering hints.",
         "Do not generate React, HTML, JavaScript, or application frontend files for tool UI work."
       ]

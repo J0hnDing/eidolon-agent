@@ -31,7 +31,7 @@ Generated skills are not installed or run automatically. Manifest-declared sched
 Installing a proposed skill requires:
 
 - valid manifest;
-- applicable tests passing;
+- tests passing;
 - runtime permissions reviewed and approved when required;
 - supported runtime permissions;
 - no conflicting per-skill operation lock.
@@ -48,13 +48,10 @@ Installed skill deletion is also a controlled hard delete and must respect opera
 
 ## Manual Runs
 
-Installed enabled automation skills may run manually if:
+Installed enabled skills may run manually if:
 
 - status is `installed`;
 - `enabled` is true;
-- `skill_type` is executable;
 - runtime permissions are approved;
 - runtime permissions are supported;
 - no conflicting operation lock exists.
-
-Instruction-only skills cannot run.

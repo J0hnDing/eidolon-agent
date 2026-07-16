@@ -15,7 +15,6 @@ def register_personal_news_digest(db: Session) -> Skill:
     skill = db.scalar(select(Skill).where(Skill.name == DEMO_SKILL_NAME))
     values = {
         "description": DEMO_SKILL_DESCRIPTION,
-        "skill_type": "automation",
         "status": "installed",
         "risk_level": "low",
         "manifest_path": DEMO_MANIFEST_PATH.as_posix(),

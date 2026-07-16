@@ -6,13 +6,9 @@ Local-First Self-Extending Personal AI Assistant.
 
 This repository builds a local-first assistant that can chat with the user, store explicit editable memory, and turn repeated needs into safe reusable application skills. A skill is a reusable capability package that can be proposed, inspected, validated, installed, enabled, disabled, updated, scheduled, run, or deleted by the user.
 
-Skill types:
+All skills contain executable Python code and tests. A skill may optionally include `SKILL.md` reusable instructions or operating guidance.
 
-- `instruction`: reusable instructions only, no executable code.
-- `automation`: executable Python automation code.
-- Automation skills may optionally include `SKILL.md` reusable instructions.
-
-User-facing tools are not a separate skill type. A tool is an installed, enabled automation skill with `interface_type = "tool"` and optional declarative `tool_ui_schema`.
+A user-facing tool is an installed, enabled skill with `interface_type = "tool"` and optional declarative `tool_ui_schema`.
 
 ## Current Stack
 
@@ -148,7 +144,7 @@ Reading and writing a skill's own `./cache` directory is allowed as low-risk loc
 
 ### Test Before Install
 
-Automation skills must include tests. Proposed executable skills cannot be installed unless their manifest validates, permissions are understood, tests pass, and required approvals are satisfied.
+Skills must include tests. Proposed skills cannot be installed unless their manifest validates, permissions are understood, tests pass, and required approvals are satisfied.
 
 ### Version Safety
 

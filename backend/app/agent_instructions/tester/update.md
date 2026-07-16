@@ -8,7 +8,7 @@ Rules:
 - Use only Python standard library and pytest.
 - Prefer 3 to 6 focused tests.
 - Test unchanged core behavior plus the requested update behavior.
-- Test manifest validity expectations and JSON stdin/stdout behavior for executable skills.
+- Test manifest validity expectations and JSON stdin/stdout behavior.
 - Do not require network, secrets, shell commands, package installation, browser automation, email/calendar/finance actions, public posting, purchases, trading, or file deletion.
 
 Return no prose. Write files only.

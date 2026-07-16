@@ -3,7 +3,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 RiskLevel = Literal["low", "medium", "high"]
-SkillType = Literal["instruction", "automation"]
 InterfaceType = Literal["chat", "tool", "hidden"]
 ScheduleType = Literal["daily", "weekly", "interval"]
 IntervalUnit = Literal["minutes", "hours", "days"]
@@ -119,7 +118,6 @@ class SkillManifest(BaseModel):
     name: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
     display_name: str | None = Field(default=None, min_length=1, max_length=256)
     description: str = Field(min_length=1)
-    skill_type: SkillType = "automation"
     interface_type: InterfaceType = "chat"
     entrypoint: str | None = Field(default=None, min_length=1)
     instructions_path: str | None = Field(default=None, min_length=1)
@@ -167,24 +165,10 @@ class SkillManifest(BaseModel):
 
     @model_validator(mode="after")
     def validate_skill_contract(self) -> "SkillManifest":
-        if self.skill_type == "instruction":
-            if not self.instructions_path:
-                raise ValueError("instruction skills require instructions_path")
-            if self.entrypoint is not None:
-                raise ValueError("instruction skills cannot declare entrypoint")
-            if self.dependencies:
-                raise ValueError("instruction skills cannot declare dependencies")
-            if not has_no_permissions(self.permissions):
-                raise ValueError("instruction skills must request no permissions")
-            if self.schedule is not None:
-                raise ValueError("instruction skills cannot declare executable schedules")
-            return self
-
-        if self.skill_type == "automation":
-            if not self.entrypoint:
-                raise ValueError("automation skills require entrypoint")
-            if not self.entrypoint.endswith(".py"):
-                raise ValueError("entrypoint must point to a Python file")
+        if not self.entrypoint:
+            raise ValueError("skills require entrypoint")
+        if not self.entrypoint.endswith(".py"):
+            raise ValueError("entrypoint must point to a Python file")
 
         required_risk = classify_permission_risk(self.permissions)
         if risk_rank(self.risk_level) < risk_rank(required_risk):
@@ -194,18 +178,6 @@ class SkillManifest(BaseModel):
 
 def risk_rank(risk_level: RiskLevel) -> int:
     return {"low": 0, "medium": 1, "high": 2}[risk_level]
-
-
-def has_no_permissions(permissions: ManifestPermissions) -> bool:
-    return (
-        permissions.network == []
-        and permissions.filesystem_read == []
-        and permissions.filesystem_write == []
-        and permissions.secrets == []
-        and permissions.shell is False
-        and permissions.codex.call_response is True
-        and permissions.codex.internet_access is False
-    )
 
 
 def classify_permission_risk(permissions: ManifestPermissions) -> RiskLevel:

@@ -35,40 +35,24 @@ def service(tmp_path: Path, db_session: Session) -> ProposedSkillService:
     return ProposedSkillService(db_session, project_root=tmp_path)
 
 
-def test_create_proposed_instruction_skill(service: ProposedSkillService) -> None:
-    skill = service.create_sample("sample_instruction", "instruction")
-    skill_dir = service.proposed_dir("sample_instruction")
+def test_create_proposed_skill(service: ProposedSkillService) -> None:
+    skill = service.create_sample("sample_skill")
+    skill_dir = service.proposed_dir("sample_skill")
 
     assert skill.status == "proposed"
-    assert skill.skill_type == "instruction"
     assert (skill_dir / "manifest.json").is_file()
     assert (skill_dir / "README.md").is_file()
-    assert (skill_dir / "SKILL.md").is_file()
-    assert not (skill_dir / "skill.py").exists()
-
-
-def test_create_proposed_automation_skill(service: ProposedSkillService) -> None:
-    skill = service.create_sample("sample_automation", "automation")
-    skill_dir = service.proposed_dir("sample_automation")
-
-    assert skill.status == "proposed"
-    assert skill.skill_type == "automation"
     assert (skill_dir / "skill.py").is_file()
     assert (skill_dir / "tests" / "test_skill.py").is_file()
 
 
 def test_rejects_unsafe_skill_name(service: ProposedSkillService) -> None:
     with pytest.raises(ProposedSkillError, match="Skill name must match"):
-        service.create_sample("../unsafe", "instruction")
-
-
-def test_rejects_removed_hybrid_sample_type(service: ProposedSkillService) -> None:
-    with pytest.raises(ProposedSkillError, match="instruction or automation"):
-        service.create_sample("sample_hybrid", "hybrid")
+        service.create_sample("../unsafe")
 
 
 def test_reads_allowed_proposed_skill_files(service: ProposedSkillService) -> None:
-    skill = service.create_sample("readable_skill", "automation")
+    skill = service.create_sample("readable_skill")
 
     files = service.read_skill_files(skill)
     paths = {file.path for file in files}
@@ -76,9 +60,9 @@ def test_reads_allowed_proposed_skill_files(service: ProposedSkillService) -> No
     assert paths == {"manifest.json", "README.md", "skill.py", "tests/test_skill.py"}
 
 
-def test_validates_automation_with_optional_instructions_file(service: ProposedSkillService) -> None:
-    skill = service.create_sample("automation_with_instructions", "automation")
-    skill_dir = service.proposed_dir("automation_with_instructions")
+def test_validates_skill_with_optional_instructions_file(service: ProposedSkillService) -> None:
+    skill = service.create_sample("skill_with_instructions")
+    skill_dir = service.proposed_dir("skill_with_instructions")
     manifest_path = skill_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["instructions_path"] = "SKILL.md"
@@ -88,40 +72,27 @@ def test_validates_automation_with_optional_instructions_file(service: ProposedS
     result = service.validate_proposed_skill(skill)
 
     assert result.ok is True
-    assert result.skill_type == "automation"
 
 
 def test_blocks_reads_outside_skill_directory(service: ProposedSkillService) -> None:
-    skill = service.create_sample("blocked_read", "instruction")
+    skill = service.create_sample("blocked_read")
 
     with pytest.raises(ProposedSkillError, match="not readable"):
         service.read_skill_file(skill, "../AGENTS.md")
 
 
-def test_validates_proposed_instruction_skill(service: ProposedSkillService) -> None:
-    skill = service.create_sample("valid_instruction", "instruction")
+def test_validates_proposed_skill_with_passing_tests(service: ProposedSkillService) -> None:
+    skill = service.create_sample("valid_skill")
 
     result = service.validate_proposed_skill(skill)
 
     assert result.ok is True
-    assert result.skill_type == "instruction"
-    assert result.manifest_valid is True
-    assert result.tests_run is False
-
-
-def test_validates_proposed_automation_with_passing_tests(service: ProposedSkillService) -> None:
-    skill = service.create_sample("valid_automation", "automation")
-
-    result = service.validate_proposed_skill(skill)
-
-    assert result.ok is True
-    assert result.skill_type == "automation"
     assert result.tests_run is True
     assert result.tests_passed is True
 
 
 def test_validation_blocks_unapproved_dependencies(service: ProposedSkillService) -> None:
-    skill = service.create_sample("dependency_without_approval", "automation")
+    skill = service.create_sample("dependency_without_approval")
     skill_dir = service.proposed_dir("dependency_without_approval")
     manifest_path = skill_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -141,7 +112,7 @@ def test_validation_installs_approved_dependencies_locally(
     service: ProposedSkillService,
     db_session: Session,
 ) -> None:
-    skill = service.create_sample("dependency_with_approval", "automation")
+    skill = service.create_sample("dependency_with_approval")
     skill_dir = service.proposed_dir("dependency_with_approval")
     manifest_path = skill_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -151,7 +122,6 @@ def test_validation_installs_approved_dependencies_locally(
         user_message="Create a web scraper skill.",
         proposed_skill_name=skill.name,
         proposed_display_name="Dependency With Approval",
-        proposed_skill_type="automation",
         plan_json={
             "skill_name": skill.name,
             "requested_dependencies": ["requests"],
@@ -209,9 +179,9 @@ def test_validation_installs_approved_dependencies_locally(
     assert str(skill_dir / ".deps") in test_call["kwargs"]["env"]["PYTHONPATH"]
 
 
-def test_validation_fails_when_automation_tests_fail(service: ProposedSkillService) -> None:
-    skill = service.create_sample("failing_automation", "automation")
-    skill_dir = service.proposed_dir("failing_automation")
+def test_validation_fails_when_skill_tests_fail(service: ProposedSkillService) -> None:
+    skill = service.create_sample("failing_skill")
+    skill_dir = service.proposed_dir("failing_skill")
     (skill_dir / "tests" / "test_skill.py").write_text(
         "def test_failure():\n    assert False\n",
         encoding="utf-8",
@@ -225,38 +195,25 @@ def test_validation_fails_when_automation_tests_fail(service: ProposedSkillServi
     assert result.error_message == "Skill tests failed"
 
 
-def test_installs_valid_proposed_instruction_skill(service: ProposedSkillService) -> None:
-    skill = service.create_sample("install_instruction", "instruction")
+def test_installs_valid_proposed_skill(service: ProposedSkillService) -> None:
+    skill = service.create_sample("install_skill")
 
     installed = service.install_proposed_skill(skill)
 
     assert installed.status == "installed"
-    assert installed.skill_type == "instruction"
-    assert installed.enabled is True
-    assert service.installed_dir("install_instruction").is_dir()
-    assert not service.proposed_dir("install_instruction").exists()
-
-
-def test_installs_valid_proposed_automation_skill(service: ProposedSkillService) -> None:
-    skill = service.create_sample("install_automation", "automation")
-
-    installed = service.install_proposed_skill(skill)
-
-    assert installed.status == "installed"
-    assert installed.skill_type == "automation"
     assert installed.enabled is False
-    assert installed.installed_path == "skills/installed/install_automation/versions/v1"
-    assert service.installed_dir("install_automation").is_dir()
-    assert (service.installed_dir("install_automation") / "versions" / "v1").is_dir()
+    assert installed.installed_path == "skills/installed/install_skill/versions/v1"
+    assert service.installed_dir("install_skill").is_dir()
+    assert (service.installed_dir("install_skill") / "versions" / "v1").is_dir()
     assert installed.active_version_id is not None
-    assert not service.proposed_dir("install_automation").exists()
+    assert not service.proposed_dir("install_skill").exists()
 
 
 def test_install_registers_manifest_declared_schedule(
     service: ProposedSkillService,
     db_session: Session,
 ) -> None:
-    skill = service.create_sample("install_scheduled", "automation")
+    skill = service.create_sample("install_scheduled")
     skill_dir = service.proposed_dir("install_scheduled")
     manifest_path = skill_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -288,19 +245,19 @@ def test_install_registers_manifest_declared_schedule(
 
 
 def test_refuses_to_install_invalid_manifest(service: ProposedSkillService) -> None:
-    skill = service.create_sample("invalid_manifest", "automation")
+    skill = service.create_sample("invalid_manifest")
     skill_dir = service.proposed_dir("invalid_manifest")
     manifest_path = skill_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["entrypoint"] = None
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    with pytest.raises(ProposedSkillError, match="automation skills require entrypoint"):
+    with pytest.raises(ProposedSkillError, match="skills require entrypoint"):
         service.install_proposed_skill(skill)
 
 
 def test_refuses_to_run_proposed_skills(db_session: Session, service: ProposedSkillService) -> None:
-    skill = service.create_sample("proposed_run_block", "automation")
+    skill = service.create_sample("proposed_run_block")
 
     with pytest.raises(HTTPException) as exc_info:
         run_skill_route(skill.id, SkillRunRequest(input={}), db_session)
@@ -309,19 +266,8 @@ def test_refuses_to_run_proposed_skills(db_session: Session, service: ProposedSk
     assert exc_info.value.detail == "Only installed skills can be run"
 
 
-def test_refuses_to_run_instruction_only_skills(db_session: Session, service: ProposedSkillService) -> None:
-    skill = service.create_sample("instruction_run_block", "instruction")
-    installed = service.install_proposed_skill(skill)
-
-    with pytest.raises(HTTPException) as exc_info:
-        run_skill_route(installed.id, SkillRunRequest(input={}), db_session)
-
-    assert exc_info.value.status_code == 409
-    assert exc_info.value.detail == "Instruction skills cannot be run"
-
-
 def test_rejects_and_deletes_proposed_skill(service: ProposedSkillService) -> None:
-    skill = service.create_sample("reject_me", "automation")
+    skill = service.create_sample("reject_me")
     skill_id = skill.id
 
     service.reject_proposed_skill(skill)
@@ -334,7 +280,7 @@ def test_delete_removes_installed_skill_record_and_folder(
     db_session: Session,
     service: ProposedSkillService,
 ) -> None:
-    skill = service.create_sample("delete_installed", "automation")
+    skill = service.create_sample("delete_installed")
     installed = service.install_proposed_skill(skill)
     installed_id = installed.id
 
@@ -348,7 +294,7 @@ def test_delete_removes_skill_schedules(
     db_session: Session,
     service: ProposedSkillService,
 ) -> None:
-    skill = service.create_sample("delete_scheduled", "automation")
+    skill = service.create_sample("delete_scheduled")
     installed = service.install_proposed_skill(skill)
     schedule = SkillSchedule(
         skill_id=installed.id,
@@ -376,7 +322,6 @@ def test_sync_installed_from_filesystem_registers_hidden_installed_skill(
     manifest = {
         "name": "hidden_installed",
         "description": "Installed on disk but missing from the database.",
-        "skill_type": "automation",
         "entrypoint": "skill.py",
         "instructions_path": None,
         "risk_level": "low",

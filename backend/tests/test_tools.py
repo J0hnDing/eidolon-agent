@@ -68,7 +68,6 @@ def test_project_root(tmp_path: Path) -> Path:
     manifest = {
         "name": "simple_calculator_tool",
         "description": "Temporary calculator tool for tests.",
-        "skill_type": "automation",
         "interface_type": "tool",
         "entrypoint": "skill.py",
         "instructions_path": None,
@@ -101,7 +100,6 @@ def create_skill(
     db: Session,
     *,
     name: str,
-    skill_type: str = "automation",
     interface_type: str = "tool",
     status: str = "installed",
     enabled: bool = True,
@@ -109,7 +107,6 @@ def create_skill(
     skill = Skill(
         name=name,
         description=f"{name} description",
-        skill_type=skill_type,
         interface_type=interface_type,
         status=status,
         risk_level="low",
@@ -133,9 +130,8 @@ def approve_runtime(db: Session, skill: Skill, project_root: Path) -> None:
     permission_service.approve_request(request)
 
 
-def test_tools_list_only_installed_enabled_runnable_tool_skills(db_session: Session, test_project_root: Path) -> None:
+def test_tools_list_only_installed_enabled_tool_skills(db_session: Session, test_project_root: Path) -> None:
     included = create_skill(db_session, name="included_tool")
-    create_skill(db_session, name="instruction_tool", skill_type="instruction")
     create_skill(db_session, name="disabled_tool", enabled=False)
     create_skill(db_session, name="proposed_tool", status="proposed")
     create_skill(db_session, name="chat_skill", interface_type="chat")
@@ -145,7 +141,6 @@ def test_tools_list_only_installed_enabled_runnable_tool_skills(db_session: Sess
     names = {tool.skill.name for tool in tools}
 
     assert "included_tool" in names
-    assert "instruction_tool" not in names
     assert "disabled_tool" not in names
     assert "proposed_tool" not in names
     assert "chat_skill" not in names
@@ -212,16 +207,6 @@ def test_tool_run_uses_safe_runner_after_permission_approval(
 
     assert response.run.status == "succeeded"
     assert response.run.output_json == {"result": 3}
-
-
-def test_tool_run_rejects_instruction_skill(db_session: Session) -> None:
-    skill = create_skill(db_session, name="instruction_block", skill_type="instruction")
-
-    with pytest.raises(HTTPException) as exc_info:
-        run_tool(skill.id, SkillRunRequest(input={}), db_session)
-
-    assert exc_info.value.status_code == 409
-    assert exc_info.value.detail == "Instruction skills cannot be run as tools"
 
 
 def test_calculator_tool_outputs_result(test_project_root: Path) -> None:

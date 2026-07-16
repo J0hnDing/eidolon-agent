@@ -83,7 +83,6 @@ class ChatOrchestrator:
             user_message=message,
             proposed_skill_name=plan["skill_name"],
             proposed_display_name=plan["display_name"],
-            proposed_skill_type=plan["skill_type"],
             plan_json=plan,
             requested_permissions_json=plan["requested_permissions"],
             requested_dependencies_json=plan["requested_dependencies"],
@@ -143,7 +142,6 @@ class ChatOrchestrator:
         generation_request.user_message = combined_message
         generation_request.proposed_skill_name = plan["skill_name"]
         generation_request.proposed_display_name = plan["display_name"]
-        generation_request.proposed_skill_type = plan["skill_type"]
         generation_request.plan_json = plan
         generation_request.requested_permissions_json = plan["requested_permissions"]
         generation_request.requested_dependencies_json = plan["requested_dependencies"]

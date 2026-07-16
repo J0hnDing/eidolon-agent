@@ -1,3 +1,4 @@
+import json
 from collections.abc import Generator
 from pathlib import Path
 
@@ -60,6 +61,12 @@ def ensure_local_schema() -> None:
             if "active_version_id" not in columns:
                 connection.execute(text("ALTER TABLE skills ADD COLUMN active_version_id INTEGER"))
             connection.execute(text("UPDATE skills SET status = 'installed', enabled = 0 WHERE status = 'disabled'"))
+            if "skill_type" in columns:
+                connection.execute(text("ALTER TABLE skills DROP COLUMN skill_type"))
+        if "skill_generation_requests" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("skill_generation_requests")}
+            if "proposed_skill_type" in columns:
+                connection.execute(text("ALTER TABLE skill_generation_requests DROP COLUMN proposed_skill_type"))
         if "skill_schedules" in table_names:
             connection.execute(text("DELETE FROM skill_schedules WHERE status = 'deleted'"))
         if "skill_versions" in table_names:
@@ -155,6 +162,61 @@ def ensure_local_schema() -> None:
             connection.execute(text("UPDATE agent_run_steps SET step_name = 'product_manager' WHERE step_name IN ('planner', 'reviewer')"))
             connection.execute(text("UPDATE agent_run_steps SET step_name = 'product_manager' WHERE step_name IN ('permission_analyst', 'security_reviewer')"))
             connection.execute(text("UPDATE agent_run_steps SET step_name = 'builder' WHERE step_name = 'repairer'"))
+        _remove_legacy_skill_type_json(connection, table_names)
+
+
+def _remove_legacy_skill_type_json(connection, table_names: set[str]) -> None:
+    json_columns = {
+        "skill_generation_requests": ("plan_json",),
+        "skill_versions": ("manifest_json",),
+        "agent_runs": ("blueprint_json", "final_summary_json"),
+        "agent_run_steps": ("input_json", "output_json"),
+        "approval_requests": ("reason_json",),
+    }
+    inspector = inspect(engine)
+    for table_name, candidates in json_columns.items():
+        if table_name not in table_names:
+            continue
+        columns = {column["name"] for column in inspector.get_columns(table_name)}
+        for column_name in candidates:
+            if column_name not in columns:
+                continue
+            rows = connection.execute(
+                text(f"SELECT id, {column_name} FROM {table_name} WHERE {column_name} IS NOT NULL")
+            ).all()
+            for row_id, raw_value in rows:
+                try:
+                    value = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                cleaned, changed = _without_skill_type(value)
+                if changed:
+                    connection.execute(
+                        text(f"UPDATE {table_name} SET {column_name} = :value WHERE id = :row_id"),
+                        {"value": json.dumps(cleaned), "row_id": row_id},
+                    )
+
+
+def _without_skill_type(value):
+    if isinstance(value, dict):
+        changed = "skill_type" in value or "proposed_skill_type" in value
+        cleaned = {}
+        for key, item in value.items():
+            if key in {"skill_type", "proposed_skill_type"}:
+                continue
+            cleaned_item, item_changed = _without_skill_type(item)
+            cleaned[key] = cleaned_item
+            changed = changed or item_changed
+        return cleaned, changed
+    if isinstance(value, list):
+        cleaned = []
+        changed = False
+        for item in value:
+            cleaned_item, item_changed = _without_skill_type(item)
+            cleaned.append(cleaned_item)
+            changed = changed or item_changed
+        return cleaned, changed
+    return value, False
 
 
 def get_db() -> Generator[Session, None, None]:

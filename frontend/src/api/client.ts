@@ -11,7 +11,6 @@ export type MemoryCategory =
   | "risk_tolerance";
 
 export type RiskLevel = "low" | "medium" | "high" | "blocked";
-export type SkillType = "instruction" | "automation";
 export type InterfaceType = "chat" | "tool" | "hidden";
 export type SkillStatus = "building" | "proposed" | "installed" | "failed" | "deleted";
 export type ChatMode = "chat" | "project";
@@ -58,7 +57,6 @@ export interface Skill {
   id: number;
   name: string;
   description: string;
-  skill_type: SkillType;
   interface_type: InterfaceType;
   status: SkillStatus;
   risk_level: RiskLevel;
@@ -348,7 +346,6 @@ export interface SkillSchedule {
   id: number;
   skill_id: number;
   skill_name: string | null;
-  skill_type: SkillType | null;
   name: string;
   status: ScheduleStatus;
   schedule_type: ScheduleType;
@@ -369,7 +366,6 @@ export interface ScheduleCreateResponse {
 
 export interface ProposedSkillValidation {
   ok: boolean;
-  skill_type: SkillType | null;
   manifest_valid: boolean;
   tests_run: boolean;
   tests_passed: boolean | null;
@@ -384,7 +380,6 @@ export interface SkillGenerationRequest {
   user_message: string;
   proposed_skill_name: string;
   proposed_display_name: string;
-  proposed_skill_type: SkillType;
   plan_json: Record<string, unknown>;
   requested_permissions_json: Record<string, unknown>;
   requested_dependencies_json: string[];

@@ -1395,7 +1395,6 @@ class AgentWorkflowService:
         repair_skill = Skill(
             name=repair_name,
             description=f"Repair proposal for {skill.name}.",
-            skill_type=skill.skill_type,
             interface_type=skill.interface_type,
             status="proposed",
             risk_level=skill.risk_level,
@@ -1423,7 +1422,6 @@ class AgentWorkflowService:
         skill = self.db.scalar(select(Skill).where(Skill.name == skill_name))
         values = {
             "description": plan.get("goal") or generation_request.user_message,
-            "skill_type": plan["skill_type"],
             "interface_type": plan.get("interface_type", "chat"),
             "status": "building",
             "risk_level": plan["risk_level"],
@@ -1452,8 +1450,6 @@ class AgentWorkflowService:
         return skill
 
     def _planned_instructions_path(self, plan: dict[str, Any]) -> str | None:
-        if plan.get("skill_type") == "instruction":
-            return "SKILL.md"
         files = plan.get("files_to_generate")
         if isinstance(files, list) and any(str(path).replace("\\", "/") == "SKILL.md" for path in files):
             return "SKILL.md"
@@ -1461,7 +1457,7 @@ class AgentWorkflowService:
 
     def _pm_build_time_summary(self, blueprint: dict[str, Any]) -> str:
         return (
-            f"Build {blueprint.get('skill_name')} as a {blueprint.get('skill_type')} skill. "
+            f"Build the {blueprint.get('skill_name')} skill. "
             "ProductManager will define Builder-owned package files in the task DAG only after approval. "
             "Approval lets Codex generate proposed files only; it does not install or run the skill."
         )
@@ -1566,10 +1562,7 @@ class AgentWorkflowService:
         generation_request: SkillGenerationRequest,
     ) -> dict[str, Any]:
         raw_permission_plan = self.artifacts.read_json(agent_run, "permissions.json")
-        final_permission_plan = effective_permission_plan(
-            raw_permission_plan,
-            skill_type=str((agent_run.blueprint_json or {}).get("skill_type") or generation_request.proposed_skill_type),
-        )
+        final_permission_plan = effective_permission_plan(raw_permission_plan)
         permission_path = self.artifacts.write_json(agent_run, "permissions.json", final_permission_plan)
         runtime = final_permission_plan["runtime"]
         runtime_permissions = self._runtime_permissions_from_plan(final_permission_plan)

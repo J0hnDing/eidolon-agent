@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from sqlalchemy.orm import Session
 
 from app.schemas.codex_routing import ResolvedInvocationSettings
-from app.schemas.common import InterfaceType, RiskLevel, SkillType
+from app.schemas.common import InterfaceType, RiskLevel
 from app.schemas.manifest import ManifestPermissions
 from app.services.codex_cli_service import codex_cli_service, should_use_real_codex
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
@@ -28,7 +28,6 @@ class SkillGenerationPlan(BaseModel):
     goal: str = Field(min_length=1)
     skill_name: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
     display_name: str = Field(min_length=1)
-    skill_type: SkillType
     interface_type: InterfaceType = "chat"
     files_to_generate: list[str]
     expected_input: dict[str, Any]
@@ -66,27 +65,12 @@ class SkillGenerationPlan(BaseModel):
 
     @model_validator(mode="after")
     def validate_plan_contract(self) -> "SkillGenerationPlan":
-        required_files = {"manifest.json"}
-        if self.skill_type == "automation":
-            required_files.update({"skill.py", "tests/test_skill.py"})
+        required_files = {"manifest.json", "skill.py", "tests/test_skill.py"}
         missing = required_files - set(self.files_to_generate)
         if missing:
             raise ValueError(f"files_to_generate missing required files: {sorted(missing)}")
-        if self.skill_type == "instruction" and self.tests_required:
-            raise ValueError("instruction skill plans must not require tests")
-        if self.skill_type == "automation" and not self.tests_required:
-            raise ValueError(f"{self.skill_type} skill plans must require tests")
-        if self.skill_type == "instruction":
-            if not (
-                self.requested_permissions.network == []
-                and self.requested_permissions.filesystem_read == []
-                and self.requested_permissions.filesystem_write == []
-                and self.requested_permissions.secrets == []
-                and self.requested_permissions.shell is False
-            ):
-                raise ValueError("instruction skill plans must request no permissions")
-            if self.interface_type == "tool":
-                raise ValueError("instruction skills cannot use tool interface_type")
+        if not self.tests_required:
+            raise ValueError("skill plans must require tests")
         if self.requested_network_domains != self.requested_permissions.network:
             raise ValueError("requested_network_domains must match requested_permissions.network")
         return self
@@ -105,7 +89,6 @@ class FakeSkillPlanAdapter:
             "goal": message,
             "skill_name": identity["skill_name"],
             "display_name": identity["display_name"],
-            "skill_type": "automation",
             "interface_type": "chat",
             "files_to_generate": ["manifest.json", "README.md", "skill.py", "tests/test_skill.py"],
             "expected_input": {"input": "object"},
@@ -131,7 +114,7 @@ class FakeSkillPlanAdapter:
             "validation_steps": [
                 "validate manifest.json",
                 "inspect generated files",
-                "run tests for automation skills",
+                "run skill tests",
             ],
             "risk_level": "low",
             "automatic_actions_blocked": [
@@ -253,12 +236,10 @@ Return only one JSON object. Do not write files. Do not install packages. Do not
 
 Definitions:
 - A skill is a reusable capability package.
-- skill_type must be exactly one of: instruction, automation.
-- instruction: reusable instructions only, no executable code.
-- automation: executable Python automation.
-- Automation skills may include SKILL.md for reusable instructions or operating notes, but SKILL.md is optional for automation.
+- Skills contain executable Python code and tests.
+- Skills may include an optional SKILL.md for reusable instructions or operating notes.
 - interface_type must be exactly one of: chat, tool, hidden.
-- interface_type=tool means an installed runnable automation skill should appear on the Tools page as a manual form/tool. It is not a new skill_type.
+- interface_type=tool means an installed runnable skill should appear on the Tools page as a manual form/tool.
 - interface_type=chat means the skill is primarily used through chat.
 - interface_type=hidden means it should not be user-facing by default.
 - Tool UIs must be declarative JSON in tool_ui_schema. Do not generate React, HTML, JavaScript, or frontend app code.
@@ -268,8 +249,7 @@ Definitions:
 Safety requirements:
 - shell must be false.
 - secrets must be [].
-- instruction skills must request no permissions and cannot use interface_type=tool.
-- automation skills must include tests/test_skill.py.
+- skills must include tests/test_skill.py.
 - Use filesystem_write ["./cache"] only when useful; otherwise [].
 - Use explicit network domains only when the user request genuinely needs future runtime network access.
 - Do not request package dependencies unless genuinely needed.
@@ -279,7 +259,6 @@ Safety requirements:
 Choose all skill properties yourself based on the request:
 - skill_name: safe snake_case, matching ^[a-zA-Z0-9_-]+$.
 - display_name: human readable.
-- skill_type.
 - interface_type.
 - input_schema and output_schema as JSON Schema objects when useful; otherwise null.
 - tool_ui_schema for interface_type=tool; otherwise null.
@@ -295,7 +274,6 @@ Return JSON with exactly this shape:
   "goal": "string",
   "skill_name": "safe_name",
   "display_name": "Display Name",
-  "skill_type": "instruction | automation",
   "interface_type": "chat | tool | hidden",
   "files_to_generate": ["manifest.json", "README.md"],
   "expected_input": {{}},
@@ -313,7 +291,7 @@ Return JSON with exactly this shape:
   "requested_network_domains": [],
   "requested_dependencies": ["Python package names only, no URLs, no git refs, no local paths"],
   "schedule": null,
-  "tests_required": false,
+  "tests_required": true,
   "validation_steps": ["validate manifest.json", "inspect generated files"],
   "risk_level": "low | medium | high",
   "automatic_actions_blocked": [
@@ -388,7 +366,6 @@ def _infer_skill_identity(message: str) -> dict[str, str]:
         "an",
         "and",
         "app",
-        "automation",
         "build",
         "can",
         "create",
