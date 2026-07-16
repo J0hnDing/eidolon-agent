@@ -16,10 +16,13 @@ from app.schemas.skill_generation import ChatRequest, ChatResponse
 from app.services.agent_workflow_service import AgentWorkflowError
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.codex_service import (
+    CODEX_ACTION_TIMEOUT_SECONDS,
+    DEFAULT_CODEX_ACTION_TIMEOUT_SECONDS,
     CodexGenerationError,
     CodexService,
     FakeCodexAdapter,
     RealCodexAdapter,
+    codex_action_timeout_seconds,
     default_codex_adapter,
 )
 from app.services.direct_chat_service import DirectChatService, RealDirectChatAdapter
@@ -918,7 +921,57 @@ def test_real_codex_adapter_uses_restricted_exec_command(tmp_path: Path, monkeyp
     assert captured["kwargs"]["cwd"] == output_dir
     assert captured["kwargs"]["input"] == "Generate only this proposed skill."
     assert captured["kwargs"]["encoding"] == "utf-8"
+    assert captured["kwargs"]["timeout"] == 10
     assert (output_dir / "codex_prompt.txt").is_file()
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_timeout"),
+    [
+        ("product_manager_refine_intent", 120),
+        ("product_manager_build_review", 120),
+        ("product_manager_write_blueprint_and_permissions", 180),
+        ("product_manager_write_task_dag", 180),
+        ("product_manager_repair_blueprint", 180),
+        ("product_manager_update_review", 180),
+        ("single_codex_build", 900),
+        ("skill_generation", 600),
+        ("skill_build_task", 600),
+        ("skill_repair", 600),
+        ("skill_update_repair", 600),
+        ("skill_update", 600),
+        ("tester_write_tests", 300),
+        ("skill_runtime_codex", 45),
+    ],
+)
+def test_codex_action_timeout_policy(action: str, expected_timeout: int) -> None:
+    assert CODEX_ACTION_TIMEOUT_SECONDS[action] == expected_timeout
+    assert codex_action_timeout_seconds({"codex_task": action}) == expected_timeout
+
+
+def test_unknown_codex_action_uses_compatibility_timeout() -> None:
+    assert codex_action_timeout_seconds({"codex_task": "legacy_action"}) == DEFAULT_CODEX_ACTION_TIMEOUT_SECONDS
+
+
+def test_real_codex_adapter_applies_action_specific_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_run(command, **kwargs):
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("app.services.codex_service.subprocess.run", fake_run)
+
+    RealCodexAdapter(command="codex", enable_search="false").generate(
+        "Build and test the complete package.",
+        tmp_path / "generated",
+        {"codex_task": "single_codex_build"},
+    )
+
+    assert captured["kwargs"]["timeout"] == 900
 
 
 def test_product_manager_codex_calls_force_read_only_sandbox(

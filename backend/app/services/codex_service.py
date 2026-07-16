@@ -95,14 +95,29 @@ class CodexAdapter(Protocol):
         pass
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
+DEFAULT_CODEX_ACTION_TIMEOUT_SECONDS = 300
+
+CODEX_ACTION_TIMEOUT_SECONDS = {
+    "product_manager_refine_intent": 120,
+    "product_manager_build_review": 120,
+    "product_manager_write_blueprint_and_permissions": 180,
+    "product_manager_write_task_dag": 180,
+    "product_manager_repair_blueprint": 180,
+    "product_manager_update_review": 180,
+    "single_codex_build": 900,
+    "skill_generation": 600,
+    "skill_build_task": 600,
+    "skill_repair": 600,
+    "skill_update_repair": 600,
+    "skill_update": 600,
+    "tester_write_tests": 300,
+    "skill_runtime_codex": 45,
+}
+
+
+def codex_action_timeout_seconds(plan: dict[str, object]) -> int:
+    action = str(plan.get("codex_task") or plan.get("action") or "")
+    return CODEX_ACTION_TIMEOUT_SECONDS.get(action, DEFAULT_CODEX_ACTION_TIMEOUT_SECONDS)
 
 
 class RealCodexAdapter:
@@ -120,7 +135,7 @@ class RealCodexAdapter:
         invocation_settings: ResolvedInvocationSettings | None = None,
     ) -> None:
         self.command = command or codex_cli_service.command()
-        self.timeout_seconds = timeout_seconds or _env_int("PERSONAL_AGENT_CODEX_TIMEOUT_SECONDS", 300)
+        self.timeout_seconds = timeout_seconds
         self.sandbox_mode = sandbox_mode or os.getenv("PERSONAL_AGENT_CODEX_SANDBOX", "workspace-write")
         self.approval_policy = approval_policy or os.getenv("PERSONAL_AGENT_CODEX_APPROVAL_POLICY", "never")
         self.enable_search = enable_search or os.getenv("PERSONAL_AGENT_CODEX_ENABLE_SEARCH", "auto")
@@ -160,6 +175,7 @@ class RealCodexAdapter:
         if self.model:
             command.extend(["--model", self.model])
         command.append("-")
+        timeout_seconds = self.timeout_seconds if self.timeout_seconds is not None else codex_action_timeout_seconds(plan)
         result = subprocess.run(
             command,
             cwd=output_dir,
@@ -168,7 +184,7 @@ class RealCodexAdapter:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=self.timeout_seconds,
+            timeout=timeout_seconds,
             shell=False,
         )
         events = self._json_events(result.stdout)

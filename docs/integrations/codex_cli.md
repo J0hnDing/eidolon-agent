@@ -78,8 +78,26 @@ Optional overrides:
 $env:PERSONAL_AGENT_CODEX_MODE = "real"
 $env:PERSONAL_AGENT_CODEX_COMMAND = "C:\path\to\codex.exe"
 $env:PERSONAL_AGENT_CODEX_MODEL = "gpt-5"
-$env:PERSONAL_AGENT_CODEX_TIMEOUT_SECONDS = "300"
 ```
+
+## Hard Timeouts
+
+Project-build hard timeouts are backend-owned and action-specific. Each limit applies to one Codex CLI invocation,
+not to the complete workflow. Task-DAG nodes and retries therefore receive separate invocation limits, while the
+single-Codex workflow uses one larger limit for its combined planning, implementation, and focused testing call.
+
+| Codex action | Hard timeout |
+| --- | ---: |
+| ProductManager intent refinement and plausibility review | 120 seconds |
+| ProductManager blueprint/permissions, task-DAG planning, repair planning, and update review | 180 seconds |
+| Builder task, update, and repair | 600 seconds |
+| Tester task, final E2E authoring, and update testing | 300 seconds |
+| Single-Codex combined build | 900 seconds |
+| Installed-skill bounded Codex call | 45 seconds |
+
+Unknown legacy actions use a 300-second compatibility fallback. Direct chat, standalone plausibility review, and
+standalone skill planning retain their separate service-specific 120-second limits. Progress-aware idle timeouts,
+whole-workflow budgets, and partial recovery are not part of these hard limits and remain tracked in `TODO-012`.
 
 ## Sandbox Modes
 

@@ -1,8 +1,8 @@
 {
   "manifest_version": 1,
-  "name": "persistent_counter",
-  "display_name": "Persistent Counter",
-  "description": "Provide a simple reusable local-first counter web application that preserves its current count between uses.",
+  "name": "notes_web_app",
+  "display_name": "Notes Web App",
+  "description": "Build a reusable local-first notes web application skill for basic notes management with browser-based create, view, edit, and delete workflows.",
   "runtime": "web_app",
   "entrypoint": "app:app",
   "instructions_path": null,

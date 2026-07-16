@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Notes</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="notes-panel" aria-label="Notes">
+        <div class="panel-header">
+          <div>
+            <h1>Notes</h1>
+            <p id="note-count">0 notes</p>
+          </div>
+          <button id="new-note" type="button">New</button>
+        </div>
+        <div id="notes-list" class="notes-list" aria-live="polite"></div>
+      </section>
+
+      <section class="editor-panel" aria-label="Note editor">
+        <form id="note-form">
+          <div class="editor-toolbar">
+            <div class="metadata">
+              <span id="created-at">Created: -</span>
+              <span id="updated-at">Updated: -</span>
+            </div>
+            <button id="delete-note" class="danger" type="button" disabled>Delete</button>
+          </div>
+          <label>
+            <span>Title</span>
+            <input id="title" name="title" maxlength="200" autocomplete="off" />
+          </label>
+          <label class="body-field">
+            <span>Body</span>
+            <textarea id="body" name="body" rows="18"></textarea>
+          </label>
+          <div class="form-actions">
+            <span id="status" role="status"></span>
+            <button type="submit">Save</button>
+          </div>
+        </form>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
