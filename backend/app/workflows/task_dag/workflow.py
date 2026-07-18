@@ -104,6 +104,7 @@ class TaskDagBuildWorkflow:
                         initial_skill_status="building",
                         task_context=service._builder_task_context(agent_run, task_node, skill),
                         create_runtime_request=False,
+                        workspace_prepared=True,
                     )
                     builder_output = {"skill_id": skill.id, "skill_name": skill.name, "mode": "build_task"}
                 else:

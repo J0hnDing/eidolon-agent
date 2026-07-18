@@ -30,7 +30,7 @@ Agents communicate through platform artifacts:
 - `runtime_permissions.json`
 - `user_summary`
 
-Build workflows use task-node artifacts instead of linear milestone artifacts. Each agent action should be visible as an `agent_run_steps` row with the action name, task node id when applicable, structured inputs, structured outputs, logs, and status.
+Build workflows use task-node artifacts instead of linear milestone artifacts. Each Codex-backed action is visible as an `agent_run_steps` row with the action name, task node id when applicable, exact composed prompt, exact final response, logs, and status. Normalized JSON artifacts remain separate because backend validation may intentionally change or reject untrusted agent output. Deterministic platform work is recorded as a `backend` step with a fixed summary and no agent input/output.
 
 ## Codex Integration
 

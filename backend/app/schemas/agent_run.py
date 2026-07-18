@@ -12,10 +12,14 @@ class AgentRunStepRead(BaseModel):
     id: int
     agent_run_id: int
     step_name: AgentStepName
+    action: str | None
     task_node_id: str | None
+    approval_request_id: int | None
     status: AgentRunStepStatus
     input_json: dict[str, Any] | None
     output_json: dict[str, Any] | None
+    agent_input_text: str | None
+    agent_output_text: str | None
     logs: str | None
     started_at: datetime | None
     ended_at: datetime | None

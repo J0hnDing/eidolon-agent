@@ -56,6 +56,10 @@ def ensure_local_schema() -> None:
                 connection.execute(text("ALTER TABLE skills ADD COLUMN input_schema_json JSON"))
             if "output_schema_json" not in columns:
                 connection.execute(text("ALTER TABLE skills ADD COLUMN output_schema_json JSON"))
+            if "function_requirements_json" not in columns:
+                connection.execute(
+                    text("ALTER TABLE skills ADD COLUMN function_requirements_json JSON NOT NULL DEFAULT '[]'")
+                )
             if "active_version_id" not in columns:
                 connection.execute(text("ALTER TABLE skills ADD COLUMN active_version_id INTEGER"))
             connection.execute(text("UPDATE skills SET status = 'installed', enabled = 0 WHERE status = 'disabled'"))
@@ -105,6 +109,31 @@ def ensure_local_schema() -> None:
             ):
                 if column not in columns:
                     connection.execute(text(f"ALTER TABLE skill_runs ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"))
+            skill_run_columns = {
+                "version_id": "INTEGER",
+                "invocation_source": "VARCHAR(32) NOT NULL DEFAULT 'internal'",
+                "caller_skill_id": "INTEGER",
+                "caller_version_id": "INTEGER",
+                "source_schedule_id": "INTEGER",
+                "web_app_instance_id": "VARCHAR(64)",
+                "initiating_action": "VARCHAR(128)",
+                "function_capability_token_hash": "VARCHAR(128)",
+            }
+            for column, definition in skill_run_columns.items():
+                if column not in columns:
+                    connection.execute(text(f"ALTER TABLE skill_runs ADD COLUMN {column} {definition}"))
+            for column in (
+                "version_id",
+                "invocation_source",
+                "caller_skill_id",
+                "caller_version_id",
+                "source_schedule_id",
+                "web_app_instance_id",
+                "function_capability_token_hash",
+            ):
+                connection.execute(
+                    text(f"CREATE INDEX IF NOT EXISTS ix_skill_runs_{column} ON skill_runs ({column})")
+                )
         if "web_app_instances" in table_names:
             columns = {column["name"] for column in inspector.get_columns("web_app_instances")}
             if "relay_container_id" not in columns:
@@ -145,8 +174,25 @@ def ensure_local_schema() -> None:
             connection.execute(text("UPDATE agent_runs SET current_step = 'builder' WHERE current_step = 'repairer'"))
         if "agent_run_steps" in table_names:
             columns = {column["name"] for column in inspector.get_columns("agent_run_steps")}
+            if "action" not in columns:
+                connection.execute(text("ALTER TABLE agent_run_steps ADD COLUMN action VARCHAR(96)"))
             if "task_node_id" not in columns:
                 connection.execute(text("ALTER TABLE agent_run_steps ADD COLUMN task_node_id VARCHAR(128)"))
+            if "approval_request_id" not in columns:
+                connection.execute(text("ALTER TABLE agent_run_steps ADD COLUMN approval_request_id INTEGER"))
+            if "agent_input_text" not in columns:
+                connection.execute(text("ALTER TABLE agent_run_steps ADD COLUMN agent_input_text TEXT"))
+            if "agent_output_text" not in columns:
+                connection.execute(text("ALTER TABLE agent_run_steps ADD COLUMN agent_output_text TEXT"))
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_agent_run_steps_action ON agent_run_steps (action)")
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_agent_run_steps_approval_request_id "
+                    "ON agent_run_steps (approval_request_id)"
+                )
+            )
             if "milestone_name" in columns:
                 connection.execute(
                     text(

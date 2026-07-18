@@ -69,6 +69,32 @@ def test_trusted_capability_helper_reports_backend_rejection(monkeypatch: pytest
         capabilities.call_codex("Summarize")
 
 
+def test_web_capability_helper_invokes_declared_function(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = {}
+
+    def fake_urlopen(request, timeout: float):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return FakeCapabilityResponse(
+            {
+                "run": {"id": 7, "status": "succeeded"},
+                "output": {"result": "normalized"},
+                "error": None,
+            }
+        )
+
+    monkeypatch.setenv("PERSONAL_AGENT_BACKEND_URL", "http://function-relay:8001")
+    monkeypatch.setenv("PERSONAL_AGENT_WEB_INSTANCE_TOKEN", "instance-secret")
+    monkeypatch.setattr(capabilities, "urlopen", fake_urlopen)
+
+    result = capabilities.call_function("normalize_text", {"value": "Hello"}, timeout_seconds=8)
+
+    assert result == {"result": "normalized"}
+    assert captured["timeout"] == 8
+    assert captured["request"].full_url.endswith("/web-apps/capabilities/functions/normalize_text")
+    assert captured["request"].headers["Authorization"] == "Bearer instance-secret"
+
+
 def test_skill_package_text_snapshot_includes_web_assets_but_excludes_cache_and_dependencies(tmp_path: Path) -> None:
     (tmp_path / "static").mkdir()
     (tmp_path / "cache").mkdir()
@@ -85,7 +111,7 @@ def test_skill_package_text_snapshot_includes_web_assets_but_excludes_cache_and_
         read_skill_text(tmp_path, "../outside.py")
 
 
-def test_private_relay_exposes_only_the_scoped_codex_capability(
+def test_private_relay_exposes_only_scoped_backend_capabilities(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured = {}
@@ -133,4 +159,7 @@ def test_private_relay_exposes_only_the_scoped_codex_capability(
         route.path
         for route in relay.capability_app.routes
         if "POST" in getattr(route, "methods", set())
-    } == {relay.CODEX_CAPABILITY_PATH}
+    } == {
+        relay.CODEX_CAPABILITY_PATH,
+        "/web-apps/capabilities/functions/{function_name}",
+    }

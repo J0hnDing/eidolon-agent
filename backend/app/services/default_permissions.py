@@ -19,6 +19,16 @@ def default_banned_permissions() -> list[str]:
     return [str(item) for item in default_permission_policy().get("banned_permissions", [])]
 
 
+def default_web_app_permissions() -> dict[str, list[str]]:
+    policy = default_permission_policy().get("web_app", {})
+    if not isinstance(policy, dict):
+        return {"supported": [], "blocked": []}
+    return {
+        "supported": [str(item) for item in policy.get("supported", [])],
+        "blocked": [str(item) for item in policy.get("blocked", [])],
+    }
+
+
 def default_build_time_dependencies() -> set[str]:
     build_time = default_allowed_permissions().get("build_time", {})
     dependencies = build_time.get("dependencies", []) if isinstance(build_time, dict) else []

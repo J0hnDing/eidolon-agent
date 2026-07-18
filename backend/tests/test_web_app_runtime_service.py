@@ -179,6 +179,7 @@ def test_open_reuses_version_pinned_instance_but_creates_isolated_sessions(
     assert persisted_session is not None
     assert persisted_session.gateway_host != first.session.gateway_host
     assert first.session.gateway_host.startswith(persisted_session.gateway_host.split(".", 1)[0] + "-")
+    assert first.containment.iframe_sandbox == "allow-scripts allow-forms allow-same-origin allow-modals"
     assert launcher.starts == [first.instance.id]
     assert db_session.scalar(select(SkillOperationLock).where(SkillOperationLock.skill_id == skill.id)) is None
     assert db_session.scalars(select(SkillRun).where(SkillRun.skill_id == skill.id)).all() == []

@@ -10,7 +10,7 @@ Rules:
 - Do not run the skill task automatically.
 - Do not modify backend, frontend, project metadata, git files, or any app source code.
 - Preserve the manifest runtime protocol: bounded JSON stdin/stdout for `function`, or the declared importable ASGI entrypoint and package-owned assets for `web_app`.
-- Web-app repairs must not modify Personal Agent frontend source, custom Dockerfiles, startup commands, or process-management code.
+- Web-app repairs must not modify Eidolon frontend source, custom Dockerfiles, startup commands, or process-management code.
 - When the supplied repair context requires an interface artifact, write a complete replacement `interface_artifact.json` at the skill-folder root using this exact top-level shape: `{"created_paths":[],"updated_paths":[],"interfaces":{},"contracts_for_children":[],"known_limitations":[]}`. Preserve the created-versus-updated contract, not merely the files changed during this repair attempt.
 - `current_interface_artifact` is the last backend-validated contract for this task. Preserve its complete `created_paths` and `updated_paths` unless the repair intentionally changes the task interface; do not reduce them to only files edited during the repair.
 - The backend validates the sidecar before moving it to `runtime/agent_runs`. Never write directly under `runtime/agent_runs`.

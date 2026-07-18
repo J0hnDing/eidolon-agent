@@ -1,4 +1,4 @@
-# Project TODO
+# Eidolon TODO
 
 This file is the source of truth for confirmed, unfinished project work. Completed items are removed and summarized in [working_history.md](working_history.md).
 
@@ -63,14 +63,6 @@ Suggested design:
 9. Apply one quota decision to the admitted batch, then recheck reserves before admitting the next batch.
 10. Clean up isolated workspaces safely on pause, failure, cancellation, or restart while preserving diagnostics.
 
-## TODO-009 - Dynamic Function Registry And Cross-Skill Invocation
-
-- **Priority:** Medium
-- **Status:** Planned
-- **Area:** Backend / skill composition
-- **Rationale:** The runtime discriminator now identifies bounded function skills, but discovery, typed registration, controlled cross-skill function calls, and any dedicated function-facing surface belong to Milestone 2 and were explicitly excluded from the web-application milestone.
-- **Acceptance criteria:** Installed enabled function skills expose one backend-owned typed discovery contract; callers cannot trust arbitrary package commands or caller-supplied permissions; cross-skill calls enforce target approval, operation locks, bounded execution, input/output validation, version identity, and audit records; recursive or cyclic invocation is bounded; existing direct runs, schedules, and web applications remain compatible; and interface work is implemented only through an explicitly approved follow-up.
-
 ## TODO-010 - Domain-Level Runtime Egress Enforcement
 
 - **Priority:** High
@@ -79,14 +71,6 @@ Suggested design:
 - **Rationale:** Runtime approvals name explicit server-side network domains, but any approved domain currently enables Docker bridge egress without domain-level filtering. Web-application browser traffic is separately blocked, and no-network application ingress is isolated, but approved server egress still has this disclosed enforcement gap.
 - **Acceptance criteria:** Docker runtime egress is restricted to the approved manifest domains for both bounded functions and web applications; DNS rebinding, direct IP access, redirects, IPv4/IPv6 differences, and dependency traffic have explicit tested policy; the trusted gateway and scoped backend capability channel continue to work without granting internet access; local-development fallback remains clearly disclosed; and UI/runtime diagnostics report the effective enforcement mode.
 
-## TODO-011 - Backend-Owned Build Dependency Provisioning
-
-- **Priority:** Medium
-- **Status:** Planned
-- **Area:** Backend / project-build execution
-- **Rationale:** Effective build-time permissions currently identify dependencies such as `pytest` as allowed without guaranteeing that they are installed and available to the Codex build or authoritative backend validation. Missing tools can consume the single-Codex timeout while the agent searches for alternate interpreters, and allowing generated code to install packages would bypass the platform's approval and reproducibility boundaries.
-- **Acceptance criteria:** Before starting a Codex build invocation, the backend resolves the effective approved build dependencies, checks a controlled build environment, and automatically installs only missing approved dependencies; platform-standard test tooling such as `pytest` is provisioned as backend infrastructure; skill-specific dependencies are provisioned only when required and approved; installation occurs outside the Codex invocation timeout and is cached where safe; installation or import verification failure stops the workflow before Codex starts with an actionable diagnostic; Codex remains prohibited from installing packages; Codex focused tests and authoritative backend validation use the same provisioned interpreter and dependency environment; and tests cover already-installed, successful-install, denied, unavailable, and installation-failure cases.
-
 ## TODO-012 - Progress-Aware Workflow Budgets And Partial Recovery
 
 - **Priority:** Medium
@@ -94,3 +78,19 @@ Suggested design:
 - **Area:** Backend / Codex workflow reliability
 - **Rationale:** Action-specific hard timeouts bound individual Codex calls but cannot distinguish healthy ongoing work from an idle or stuck process, cap total workflow execution across many DAG calls, or recover useful workflow progress after an infrastructure interruption. These concerns need one coordinated execution-state design so recovery never treats partial generated output as validated or silently repeats completed work.
 - **Acceptance criteria:** Codex JSONL and relevant tool/file activity are streamed and persisted as invocation progress; an idle timeout terminates invocations only after a documented period without meaningful activity while a separate hard deadline remains authoritative; each project workflow has a backend-owned total execution budget that excludes user approval and deliberate pause time and is checked before admitting new work; timeout records preserve partial events, usage, last meaningful activity, command context, and structured timeout type; Task-DAG recovery resumes from the last backend-validated workflow state without rerunning completed nodes or accepting unmerged partial node output; single-Codex recovery has an explicit safe policy for reusing or discarding its partial workspace and never marks it valid without full deterministic validation; Windows termination covers the complete spawned process tree; restart, cancellation, timeout, and retry behavior are idempotent and covered by tests; and the UI reports whether a run exceeded idle, invocation-hard, or workflow-budget limits and what recovery action is available.
+
+## TODO-013 - Nested Function Invocation Policy
+
+- **Priority:** Medium
+- **Status:** Planned
+- **Area:** Backend / function composition
+- **Rationale:** Milestone 2 supports one direct caller-to-function hop and deliberately rejects a function invoked by another function or web application from invoking another target. Safe nesting needs explicit depth, cycle, budget, lock, approval, and audit-chain semantics rather than accidental recursive authority.
+- **Acceptance criteria:** Define and enforce a bounded maximum depth; reject cycles deterministically; evaluate every direct caller-target edge independently; propagate only newly scoped child capabilities; preserve per-skill operation safety and total time/resource budgets across the chain; store an inspectable parent/child run chain; attribute runtime Codex usage to the causing function run; handle partial failure and cancellation without orphaned active runs; and cover direct, scheduled, backend, and web-application origins without inventing synthetic caller skills.
+
+## TODO-014 - Memory Context And Long-Term Adaptation
+
+- **Priority:** Medium
+- **Status:** Planned
+- **Area:** Memory / adaptation
+- **Rationale:** Eidolon can store explicit editable memory and preserve skill/run history, but it does not yet select memory for chat or skills, capture structured outcome feedback, or turn accumulated evidence into safe adaptation proposals. Long-term usefulness must grow without silently collecting conversations, rewriting memory, or mutating active skills.
+- **Acceptance criteria:** Memory retrieval uses an inspectable backend-owned selection policy and includes only user-owned facts relevant to the current context; the UI shows which facts were used and allows exclusion, correction, and deletion; users can attach structured feedback and outcomes to skill runs; adaptation proposals cite the memory, feedback, and run evidence that caused them; proposed memory changes require explicit confirmation; proposed skill changes enter the existing versioned update, validation, comparison, permission, and activation workflow; no adaptation installs, enables, schedules, or activates itself; evaluation compares a proposal with its active predecessor against preserved acceptance criteria and regression tests; rejected adaptations remain auditable without repeatedly resurfacing; and all adaptation state remains local and deletable.

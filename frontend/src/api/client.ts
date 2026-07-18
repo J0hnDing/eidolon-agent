@@ -198,10 +198,14 @@ export interface AgentRunStep {
   id: number;
   agent_run_id: number;
   step_name: string;
+  action: string | null;
   task_node_id: string | null;
+  approval_request_id: number | null;
   status: AgentRunStepStatus;
   input_json: Record<string, unknown> | null;
   output_json: Record<string, unknown> | null;
+  agent_input_text: string | null;
+  agent_output_text: string | null;
   logs: string | null;
   started_at: string | null;
   ended_at: string | null;

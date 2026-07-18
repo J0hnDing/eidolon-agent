@@ -138,7 +138,7 @@ class CodexUsageService:
         response = self._send_locked(
             "initialize",
             {
-                "clientInfo": {"name": "personal-agent", "title": "Personal Agent", "version": "0.1.0"},
+                "clientInfo": {"name": "eidolon", "title": "Eidolon", "version": "0.1.0"},
                 "capabilities": {"experimentalApi": True},
             },
         )

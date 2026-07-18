@@ -22,6 +22,7 @@ READABLE_SUFFIXES = {
 }
 EXCLUDED_PARTS = {
     ".agents",
+    ".build-deps",
     ".deps",
     ".git",
     ".pytest_cache",

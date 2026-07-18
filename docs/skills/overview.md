@@ -6,10 +6,10 @@ Every skill contains executable Python code and tests. A skill may optionally in
 
 ## Runtime Protocols
 
-- `function` is the bounded one-shot Python JSON stdin/stdout protocol. Function skills may run directly or on approved schedules, but have no dedicated interface page in the current milestone.
+- `function` is the bounded one-shot Python JSON stdin/stdout protocol. Function skills may run directly, on approved schedules, or through the backend Function registry, but have no dedicated interface page.
 - `web_app` is a persistent importable ASGI protocol. It owns self-rendered HTML/CSS/JavaScript and interaction inside its package and is opened through the Applications UI on a controlled untrusted origin.
 
-Runtime is both the execution contract and the sole interface discriminator: `web_app` packages appear in Applications, while `function` packages do not receive a user-facing application interface. Dynamic function discovery/composition and cross-skill calls are not part of the current `function` contract.
+Runtime is both the execution contract and the sole interface discriminator: `web_app` packages appear in Applications, while `function` packages do not receive a user-facing application interface. Installed functions are dynamically discoverable through a backend-owned registry that is separate from the static trusted backend API catalog. Invocation still requires current runtime eligibility plus an explicit caller manifest relationship. See [Function registry and invocation](../runtime/functions.md).
 
 ## Skill Folders
 
@@ -39,4 +39,4 @@ Every skill needs an executable Python entrypoint referenced by `entrypoint` and
 
 ProductManager controls the product structure beyond these platform minimums. Workflow artifacts such as `intent_prompt.json`, `decision.json`, `blueprint.json`, `permissions.json`, `task_dag.json`, `tasks/*.json`, and task `interface_artifact.json` files are platform artifacts, not skill package files. Builder temporarily writes `interface_artifact.json` inside the controlled skill folder; the backend validates and moves it into the run-artifact folder before the package can proceed.
 
-Generated web applications never modify the Personal Agent frontend. See [Sandboxed web applications](../runtime/web_applications.md) for the ownership, gateway, state, and lifecycle contract.
+Generated web applications never modify the Eidolon frontend. See [Sandboxed web applications](../runtime/web_applications.md) for the ownership, gateway, state, and lifecycle contract.

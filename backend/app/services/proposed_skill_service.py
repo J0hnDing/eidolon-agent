@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.models import (
     AgentRun,
     ApprovalRequest,
+    FunctionAccessApproval,
     Skill,
     SkillGenerationRequest,
     SkillOperationLock,
@@ -24,6 +25,14 @@ from app.models import (
     SkillVersion,
 )
 from app.schemas.proposed_skill import ProposedSkillValidationRead, SkillFileRead
+from app.services.dependency_environment import (
+    DEPENDENCY_STATE_FILE,
+    DependencyRequirementError,
+    build_dependency_environment,
+    normalize_requirements,
+    read_dependency_state,
+    requirements_satisfied,
+)
 from app.services.manifest_validator import ManifestValidationError, classify_permission_risk, validate_manifest_file
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
 from app.services.skill_package_files import SkillPackageFileError, read_skill_text, readable_skill_paths
@@ -32,6 +41,7 @@ SAFE_SKILL_NAME = re.compile(r"^[a-zA-Z0-9_-]+$")
 DEFAULT_TIMEOUT_SECONDS = 10
 INSTALL_IGNORE_PATTERNS = (
     ".agents",
+    ".build-deps",
     ".git",
     ".pytest_cache",
     ".pytest_tmp",
@@ -82,6 +92,7 @@ class ProposedSkillService:
             "instructions_path": None,
             "input_schema_json": None,
             "output_schema_json": None,
+            "function_requirements_json": [],
             "installed_path": None,
             "enabled": False,
         }
@@ -146,6 +157,9 @@ class ProposedSkillService:
                     skill.instructions_path = manifest.instructions_path
                     skill.input_schema_json = manifest.input_schema
                     skill.output_schema_json = manifest.output_schema
+                    skill.function_requirements_json = [
+                        item.model_dump(mode="json") for item in manifest.function_requirements
+                    ]
                     skill.installed_path = self._relative_path(active_dir)
                     changed = True
                 continue
@@ -159,6 +173,9 @@ class ProposedSkillService:
                 instructions_path=manifest.instructions_path,
                 input_schema_json=manifest.input_schema,
                 output_schema_json=manifest.output_schema,
+                function_requirements_json=[
+                    item.model_dump(mode="json") for item in manifest.function_requirements
+                ],
                 installed_path=self._relative_path(active_dir),
                 enabled=False,
             )
@@ -201,25 +218,19 @@ class ProposedSkillService:
                     f"Manifest name {manifest.name!r} does not match the controlled skill name {skill.name!r}"
                 ),
             )
+        dependency_error = self._provisioned_dependency_error(skill_dir, manifest.dependencies)
+        if dependency_error is not None:
+            return ProposedSkillValidationRead(
+                ok=False,
+                manifest_valid=True,
+                tests_run=False,
+                error_message=dependency_error,
+            )
         warnings = []
         if manifest.permissions.network:
             warnings.append(
                 "This skill requests network access. Runtime execution requires explicit approval and uses container network access in the current MVP."
             )
-        dependency_result = self._ensure_dependencies_installed(skill, skill_dir, manifest)
-        if dependency_result is not None:
-            if dependency_result.returncode != 0:
-                return ProposedSkillValidationRead(
-                    ok=False,
-                    manifest_valid=True,
-                    tests_run=False,
-                    stdout=dependency_result.stdout,
-                    stderr=dependency_result.stderr,
-                    error_message="Skill dependency installation failed",
-                    warnings=warnings,
-                )
-            warnings.append("Installed approved Python dependencies into the skill-local .deps folder.")
-
         result = self._run_tests(skill_dir)
         return ProposedSkillValidationRead(
             ok=result.returncode == 0,
@@ -297,6 +308,9 @@ class ProposedSkillService:
         skill.instructions_path = manifest.instructions_path
         skill.input_schema_json = manifest.input_schema
         skill.output_schema_json = manifest.output_schema
+        skill.function_requirements_json = [
+            item.model_dump(mode="json") for item in manifest.function_requirements
+        ]
         skill.installed_path = self._relative_path(version_dir)
         skill.active_version_id = version.id
         skill.enabled = False
@@ -339,6 +353,25 @@ class ProposedSkillService:
             from app.services.web_app_runtime_service import WebAppRuntimeService
 
             WebAppRuntimeService(self.db, project_root=self.project_root).delete_skill_runtime_records(skill)
+            self.db.query(FunctionAccessApproval).filter(
+                (FunctionAccessApproval.caller_skill_id == skill.id)
+                | (FunctionAccessApproval.target_skill_id == skill.id)
+            ).delete(synchronize_session=False)
+            self.db.query(SkillRun).filter(SkillRun.caller_skill_id == skill.id).update(
+                {
+                    SkillRun.caller_skill_id: None,
+                    SkillRun.caller_version_id: None,
+                },
+                synchronize_session=False,
+            )
+            schedule_ids = list(
+                self.db.scalars(select(SkillSchedule.id).where(SkillSchedule.skill_id == skill.id)).all()
+            )
+            if schedule_ids:
+                self.db.query(SkillRun).filter(SkillRun.source_schedule_id.in_(schedule_ids)).update(
+                    {SkillRun.source_schedule_id: None},
+                    synchronize_session=False,
+                )
             self.db.query(ApprovalRequest).filter(ApprovalRequest.skill_id == skill.id).delete(synchronize_session=False)
             self.db.query(SkillSchedule).filter(SkillSchedule.skill_id == skill.id).delete(synchronize_session=False)
             self.db.query(SkillRun).filter(SkillRun.skill_id == skill.id).delete(synchronize_session=False)
@@ -448,6 +481,7 @@ class ProposedSkillService:
         payload = {
             "permissions": manifest_json.get("permissions", {}),
             "dependencies": manifest_json.get("dependencies", []),
+            "function_requirements": manifest_json.get("function_requirements", []),
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
@@ -476,6 +510,7 @@ class ProposedSkillService:
             "instructions_path": None,
             "input_schema": None,
             "output_schema": None,
+            "function_requirements": [],
             "permissions": {
                 "network": [],
                 "filesystem_read": [],
@@ -587,75 +622,6 @@ class ProposedSkillService:
             "    assert output['warnings']\n"
         )
 
-    def _ensure_dependencies_installed(
-        self,
-        skill: Skill,
-        skill_dir: Path,
-        manifest: object,
-    ) -> subprocess.CompletedProcess[str] | None:
-        dependencies = list(getattr(manifest, "dependencies", []) or [])
-        if not dependencies:
-            return None
-        approved = self._approved_build_dependencies(skill)
-        missing_approval = sorted(set(dependencies) - approved)
-        if missing_approval:
-            return subprocess.CompletedProcess(
-                args=[],
-                returncode=1,
-                stdout="",
-                stderr=(
-                    "Build-time dependency approval is missing for: "
-                    + ", ".join(missing_approval)
-                    + ". Approve these dependencies in the generation plan before installing packages."
-                ),
-            )
-        deps_dir = skill_dir / ".deps"
-        deps_dir.mkdir(exist_ok=True)
-        return subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "--disable-pip-version-check",
-                "--target",
-                str(deps_dir),
-                *dependencies,
-            ],
-            cwd=skill_dir,
-            capture_output=True,
-            text=True,
-            timeout=max(self.timeout_seconds, 60),
-            shell=False,
-        )
-
-    def _approved_build_dependencies(self, skill: Skill) -> set[str]:
-        generation_request = self.db.scalar(
-            select(SkillGenerationRequest)
-            .where(SkillGenerationRequest.proposed_skill_id == skill.id)
-            .order_by(SkillGenerationRequest.created_at.desc(), SkillGenerationRequest.id.desc())
-        )
-        if generation_request is None:
-            return set()
-        approval = self.db.scalar(
-            select(ApprovalRequest)
-            .where(ApprovalRequest.generation_request_id == generation_request.id)
-            .where(ApprovalRequest.request_scope == "build_time")
-            .where(ApprovalRequest.status == "approved")
-            .order_by(ApprovalRequest.created_at.desc(), ApprovalRequest.id.desc())
-        )
-        if approval is None:
-            return set()
-        return set(approval.requested_dependencies_json or [])
-
-    def _test_env(self, skill_dir: Path) -> dict[str, str]:
-        env = os.environ.copy()
-        deps_dir = skill_dir / ".deps"
-        if deps_dir.is_dir():
-            existing = env.get("PYTHONPATH")
-            env["PYTHONPATH"] = str(deps_dir) if not existing else f"{deps_dir}{os.pathsep}{existing}"
-        return env
-
     def _run_tests(self, skill_dir: Path) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory(prefix=f"personal-agent-pytest-{skill_dir.name}-") as basetemp:
             return subprocess.run(
@@ -672,7 +638,26 @@ class ProposedSkillService:
                 cwd=skill_dir,
                 capture_output=True,
                 text=True,
-                env=self._test_env(skill_dir),
+                env=build_dependency_environment(skill_dir),
                 timeout=self.timeout_seconds,
                 shell=False,
             )
+
+    @staticmethod
+    def _provisioned_dependency_error(skill_dir: Path, dependencies: list[str]) -> str | None:
+        try:
+            required = normalize_requirements(dependencies)
+        except DependencyRequirementError as exc:
+            return str(exc)
+        deps_dir = skill_dir / ".deps"
+        provisioned = read_dependency_state(deps_dir / DEPENDENCY_STATE_FILE)
+        if provisioned is None and not required:
+            return None
+        if provisioned != required:
+            return (
+                "Provisioned runtime dependencies do not match manifest.json. "
+                f"Provisioned: {provisioned or []}; manifest: {required}. Start a new approved build."
+            )
+        if not requirements_satisfied(required, paths=[deps_dir], include_global_environment=False):
+            return "Provisioned runtime dependencies are missing or do not satisfy manifest.json"
+        return None

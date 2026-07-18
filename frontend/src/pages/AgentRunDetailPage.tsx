@@ -198,7 +198,7 @@ export default function AgentRunDetailPage() {
           </div>
           <div>
             <dt>Current Step</dt>
-            <dd>{run.current_step ?? "none"}</dd>
+            <dd>{run.current_step ? formatStepName(run.current_step) : "none"}</dd>
           </div>
           <div>
             <dt>Current Task Node</dt>
@@ -317,11 +317,12 @@ export default function AgentRunDetailPage() {
             <article className="agent-step" key={step.id}>
               <header className="agent-step-header">
                 <div>
-                  <h3>{step.step_name}</h3>
+                  <h3>{formatStepName(step.step_name)}</h3>
                   <p className="muted">
                     {step.task_node_id ? `${step.task_node_id} / ` : ""}
                     {formatTimestamp(step.started_at, "not started")} - {formatTimestamp(step.ended_at, "not ended")}
                   </p>
+                  {step.action && <p className="muted">{step.action}</p>}
                 </div>
                 <span className={`badge status-${step.status}`}>{step.status}</span>
               </header>
@@ -338,14 +339,26 @@ export default function AgentRunDetailPage() {
                 </details>
               )}
               {step.error_message && <p className="error-text">{step.error_message}</p>}
-              <details>
-                <summary>Input JSON</summary>
-                <pre>{JSON.stringify(step.input_json ?? {}, null, 2)}</pre>
-              </details>
-              <details>
-                <summary>Output JSON</summary>
-                <pre>{JSON.stringify(step.output_json ?? {}, null, 2)}</pre>
-              </details>
+              {step.step_name !== "backend" && (
+                <>
+                  {step.agent_input_text !== null ? (
+                    <details>
+                      <summary>Exact Agent Input</summary>
+                      <pre>{step.agent_input_text}</pre>
+                    </details>
+                  ) : (
+                    <p className="muted">Exact agent input is unavailable for this historical step.</p>
+                  )}
+                  {step.agent_output_text !== null ? (
+                    <details>
+                      <summary>Exact Agent Output</summary>
+                      <pre>{step.agent_output_text}</pre>
+                    </details>
+                  ) : (
+                    <p className="muted">Exact agent output is unavailable for this historical step.</p>
+                  )}
+                </>
+              )}
               {canRetry && (step.status === "failed" || step.status === "blocked") && (
                 <div className="button-row">
                   <button type="button" onClick={() => handleRetry(step.id)} disabled={isWorking}>
@@ -543,6 +556,14 @@ function formatTimestamp(value: string | null, fallback: string): string {
   if (!value) return fallback;
   const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(value);
   return new Date(hasTimezone ? value : `${value}Z`).toLocaleString();
+}
+
+function formatStepName(value: string): string {
+  if (value === "product_manager") return "Product Manager";
+  if (value === "backend") return "Backend";
+  if (value === "builder") return "Builder";
+  if (value === "tester") return "Tester";
+  return value;
 }
 
 function formatTokens(value: number): string {

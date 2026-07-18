@@ -48,7 +48,7 @@ class PermissionService:
         runtime_plan = permission_plan["runtime"]
         build_time_plan = permission_plan["build_time"]
         future_permissions = self._runtime_permissions(runtime_plan)
-        dependencies = list(runtime_plan["dependencies"])
+        dependencies = self._build_dependencies_for_approval(permission_plan)
         network = list(future_permissions["network"])
         permissions = {
             "codex_generation": True,
@@ -77,11 +77,13 @@ class PermissionService:
             requested_filesystem_json=filesystem,
             reason_json={
                 "blocked_reasons": blocked_reasons,
-                "approval_means": "Codex may generate proposed skill files only.",
+                "function_requirements": list(plan.get("function_requirements", []) or []),
+                "approval_means": (
+                    "The backend may provision listed dependencies, then Codex may generate proposed skill files."
+                ),
                 "approval_does_not_mean": [
                     "installing the skill",
                     "running the skill",
-                    "installing packages",
                     "approving runtime permissions",
                 ],
             },
@@ -104,7 +106,7 @@ class PermissionService:
         runtime_plan = permission_plan["runtime"]
         build_time_plan = permission_plan["build_time"]
         future_permissions = self._runtime_permissions(runtime_plan)
-        dependencies = list(runtime_plan["dependencies"])
+        dependencies = self._build_dependencies_for_approval(permission_plan)
         network = list(future_permissions["network"])
         permissions = {
             "codex_generation": True,
@@ -128,11 +130,13 @@ class PermissionService:
         request.reason_json = {
             **previous_reason,
             "blocked_reasons": blocked_reasons,
-            "approval_means": "Codex may generate proposed skill files only.",
+            "function_requirements": list(plan.get("function_requirements", []) or []),
+            "approval_means": (
+                "The backend may provision listed dependencies, then Codex may generate proposed skill files."
+            ),
             "approval_does_not_mean": [
                 "installing the skill",
                 "running the skill",
-                "installing packages",
                 "approving runtime permissions",
             ],
         }
@@ -205,6 +209,7 @@ class PermissionService:
             reason_json={
                 "agent_run_id": agent_run.id,
                 "blueprint_json": blueprint,
+                "function_requirements": list(blueprint.get("function_requirements", []) or []),
                 "blocked_reasons": blocked_reasons,
                 "product_manager_summary": product_manager_summary,
                 "approval_means": "Builder may create a draft version folder for this update.",
@@ -227,7 +232,7 @@ class PermissionService:
     def create_runtime_request(self, skill: Skill) -> ApprovalRequest:
         existing = self._latest_request(skill_id=skill.id, scope="runtime", request_type="install")
         if existing and existing.status in {"pending", "approved", "denied"}:
-            return existing
+            return self._attach_function_requirement_review(existing, skill)
 
         skill_dir = self.proposed_service.skill_dir_for_record(skill)
         manifest = validate_manifest_file(skill_dir / "manifest.json")
@@ -255,6 +260,9 @@ class PermissionService:
             },
             reason_json={
                 "blocked_reasons": blocked_reasons,
+                "function_requirements": [
+                    item.model_dump(mode="json") for item in manifest.function_requirements
+                ],
                 "permission_expansion": expansion,
                 "dependency_expansion": dependency_expansion,
                 "runner_unsupported": self.unsupported_runtime_reasons(permissions),
@@ -272,7 +280,7 @@ class PermissionService:
         self.db.add(request)
         self.db.commit()
         self.db.refresh(request)
-        return request
+        return self._attach_function_requirement_review(request, skill, manifest=manifest)
 
     def detect_permission_expansion(self, skill: Skill, actual_permissions: dict[str, Any]) -> dict[str, Any]:
         generation_request = self.db.scalar(
@@ -513,6 +521,22 @@ class PermissionService:
             ),
         }
 
+    @staticmethod
+    def _build_dependencies_for_approval(permission_plan: dict[str, Any]) -> list[str]:
+        runtime = permission_plan.get("runtime") if isinstance(permission_plan.get("runtime"), dict) else {}
+        build_time = (
+            permission_plan.get("build_time") if isinstance(permission_plan.get("build_time"), dict) else {}
+        )
+        dependencies: list[str] = []
+        for dependency in [
+            *list(runtime.get("dependencies", []) or []),
+            *list(build_time.get("dependencies", []) or []),
+        ]:
+            normalized = str(dependency)
+            if normalized not in dependencies:
+                dependencies.append(normalized)
+        return dependencies
+
     def _risk_for_permissions(
         self,
         permissions: dict[str, Any],
@@ -578,7 +602,10 @@ class PermissionService:
     ) -> str:
         parts = [
             f"Codex wants to generate a proposed skill named {plan.get('skill_name')}.",
-            "Approving this only allows proposed skill generation; it does not install, run, or install packages.",
+            (
+                "Approving this allows the backend to provision the listed dependencies before Codex starts and "
+                "allows Codex to generate proposed skill files; it does not install or run the skill."
+            ),
         ]
         if network:
             parts.append(
@@ -590,7 +617,19 @@ class PermissionService:
             parts.append(
                 "The proposed design mentions package dependencies "
                 + ", ".join(dependencies)
-                + ". The app will not install them automatically."
+                + ". The backend will install and verify them in controlled dependency folders before Codex starts."
+            )
+        function_requirements = list(plan.get("function_requirements", []) or [])
+        names = [
+            str(item.get("name"))
+            for item in function_requirements
+            if isinstance(item, dict) and item.get("name")
+        ]
+        if names:
+            parts.append(
+                "The proposed skill explicitly requires installed functions "
+                + ", ".join(names)
+                + ". Build approval does not grant those caller-to-function relationships."
             )
         if blocked_reasons:
             parts.append("Blocked requests: " + " ".join(blocked_reasons))
@@ -625,6 +664,50 @@ class PermissionService:
             parts.append("Blocked requests: " + " ".join(blocked_reasons))
         return " ".join(parts)
 
+    def _attach_function_requirement_review(
+        self,
+        request: ApprovalRequest,
+        skill: Skill,
+        *,
+        manifest=None,
+        caller_version_id: int | None = None,
+    ) -> ApprovalRequest:
+        from app.services.function_registry_service import FunctionRegistryService
+
+        reviews = FunctionRegistryService(self.db, project_root=self.project_root).review_requirements(
+            skill,
+            manifest=manifest,
+            create_requests=True,
+            caller_version_id=caller_version_id,
+        )
+        serialized = [review.model_dump(mode="json") for review in reviews]
+        reason_json = dict(request.reason_json or {})
+        reason_json["function_requirements"] = serialized
+        request.reason_json = reason_json
+        if serialized:
+            low_risk = [item["name"] for item in serialized if not item["approval_required"]]
+            approval_required = [item["name"] for item in serialized if item["approval_required"]]
+            summary_parts = [
+                "Declared function requirements: " + ", ".join(item["name"] for item in serialized) + "."
+            ]
+            if low_risk:
+                summary_parts.append(
+                    "Low-risk functions need no additional caller-specific approval: " + ", ".join(low_risk) + "."
+                )
+            if approval_required:
+                summary_parts.append(
+                    "Medium/high-risk caller relationships require separate approval: "
+                    + ", ".join(approval_required)
+                    + "."
+                )
+            function_summary = " ".join(summary_parts)
+            if function_summary not in request.user_explanation:
+                request.user_explanation = f"{request.user_explanation} {function_summary}".strip()
+                request.reason = request.user_explanation
+        self.db.commit()
+        self.db.refresh(request)
+        return request
+
     def _sync_agent_permission_steps(self, request: ApprovalRequest, *, approved: bool) -> None:
         steps = self.db.scalars(
             select(AgentRunStep)
@@ -636,17 +719,6 @@ class PermissionService:
                 continue
             step.status = "succeeded" if approved else "failed"
             step.ended_at = utc_now()
-            output = dict(step.output_json or {})
-            if "permission_review_json" in output and isinstance(output["permission_review_json"], dict):
-                output["permission_review_json"] = {
-                    **output["permission_review_json"],
-                    "status": request.status,
-                }
-            elif "security_review_json" in output and isinstance(output["security_review_json"], dict):
-                output["security_review_json"] = {**output["security_review_json"], "status": request.status}
-            else:
-                output["status"] = request.status
-            step.output_json = output
             decision = "Approved" if approved else "Denied"
             step.logs = f"{step.logs or ''}\n\n{decision} by local user.".strip()
             changed_run_ids.add(step.agent_run_id)
@@ -657,7 +729,7 @@ class PermissionService:
                 continue
             if request.request_scope == "build_time":
                 agent_run.status = "pending" if approved else "cancelled"
-                agent_run.current_step = "product_manager"
+                agent_run.current_step = "backend"
                 if approved:
                     agent_run.summary = "Build-time approval is approved. The controlled workflow will continue automatically."
                 if not approved:
@@ -671,11 +743,4 @@ class PermissionService:
             self.db.commit()
 
     def _step_matches_permission_request(self, step: AgentRunStep, request_id: int) -> bool:
-        output = step.output_json or {}
-        if output.get("permission_request_id") == request_id:
-            return True
-        permission_review = output.get("permission_review_json")
-        if isinstance(permission_review, dict) and permission_review.get("permission_request_id") == request_id:
-            return True
-        security_review = output.get("security_review_json")
-        return isinstance(security_review, dict) and security_review.get("permission_request_id") == request_id
+        return step.approval_request_id == request_id

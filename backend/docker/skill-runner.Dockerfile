@@ -6,6 +6,8 @@ RUN mkdir -p /skill/cache
 
 COPY backend/web_runtime_host.py /runtime/web_runtime_host.py
 COPY backend/web_runtime_capabilities.py /runtime/web_runtime_capabilities.py
+COPY backend/function_runtime_capabilities.py /runtime/function_runtime_capabilities.py
+COPY backend/function_runtime_relay.py /runtime/function_runtime_relay.py
 COPY backend/web_runtime_relay.py /runtime/web_runtime_relay.py
 
 WORKDIR /skill

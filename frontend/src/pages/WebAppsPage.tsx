@@ -40,7 +40,7 @@ export default function WebAppsPage() {
         </div>
       </header>
       <p className="muted">
-        Application content runs on an isolated origin. Personal Agent keeps lifecycle, version, permission, and
+        Application content runs on an isolated origin. Eidolon keeps lifecycle, version, permission, and
         sandbox controls outside the application frame.
       </p>
       {error && <p className="error-text">{error}</p>}

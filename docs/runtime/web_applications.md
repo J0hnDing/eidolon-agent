@@ -1,6 +1,6 @@
 # Sandboxed Web Application Runtime
 
-`runtime = web_app` is a persistent execution protocol for self-rendered application skills. It is separate from `runtime = function`, which remains the bounded JSON stdin/stdout protocol. A web application package declares an importable ASGI entrypoint such as `app:app`; it does not add source to the Personal Agent React frontend.
+`runtime = web_app` is a persistent execution protocol for self-rendered application skills. It is separate from `runtime = function`, which remains the bounded JSON stdin/stdout protocol. A web application package declares an importable ASGI entrypoint such as `app:app`; it does not add source to the Eidolon React frontend.
 
 ## Ownership Boundary
 
@@ -25,10 +25,10 @@ Each session receives a unique origin under `*.web-app.localhost` on the backend
 The iframe sandbox is:
 
 ```text
-allow-scripts allow-forms allow-same-origin
+allow-scripts allow-forms allow-same-origin allow-modals
 ```
 
-`allow-same-origin` lets one isolated application origin use its own JavaScript state and same-origin routes. It does not make the frame same-origin with the React parent. The sandbox deliberately omits top navigation, popups, downloads, modals, pointer lock, presentation, and storage-access escape flags. The iframe grants no privileged browser feature through `allow` and sends no referrer.
+`allow-same-origin` lets one isolated application origin use its own JavaScript state and same-origin routes. It does not make the frame same-origin with the React parent. `allow-modals` permits application confirmation dialogs. The sandbox still omits top navigation, popups, downloads, pointer lock, presentation, and storage-access escape flags. The iframe grants no privileged browser feature through `allow` and sends no referrer.
 
 Every gateway response replaces upstream privilege-bearing headers and applies a platform policy that includes:
 
@@ -43,12 +43,12 @@ The gateway strips upstream cookies and redirects, forwards only a small header 
 
 Application ingress and internet egress are independent:
 
-- Every Docker web application starts on a private internal network. A separate trusted relay container attaches to that network and Docker bridge, publishes the ephemeral loopback ingress port, and exposes back to the application only the exact backend Codex-capability route. The relay has no skill package mount or instance token; arbitrary Personal Agent API paths are not proxied.
+- Every Docker web application starts on a private internal network. A separate trusted relay container attaches to that network and Docker bridge, publishes the ephemeral loopback ingress port, and exposes back to the application only the exact backend Codex-capability route. The relay has no skill package mount or instance token; arbitrary Eidolon API paths are not proxied.
 - Without approved manifest network domains, the untrusted application container remains only on that internal network and has no internet route.
-- With approved domains, the application container receives Docker bridge as a secondary egress network while ingress and Personal Agent capabilities still use the relay. Common Docker Desktop host aliases are suppressed inside the untrusted container. The manifest and runtime approval name explicit domains, but domain-level filtering and direct-IP/private-network enforcement are not implemented; this limitation is shown in the application containment details and tracked in TODO-010.
+- With approved domains, the application container receives Docker bridge as a secondary egress network while ingress and Eidolon capabilities still use the relay. Common Docker Desktop host aliases are suppressed inside the untrusted container. The manifest and runtime approval name explicit domains, but domain-level filtering and direct-IP/private-network enforcement are not implemented; this limitation is shown in the application containment details and tracked in TODO-010.
 - The explicit `local` or `dev` runner mode is marked `local_dev`. It binds only loopback but cannot provide Docker filesystem, process, resource, or network isolation.
 
-Generated browser code never receives a Personal Agent API credential. Approved server-side Codex access uses the trusted `web_runtime_capabilities.call_codex` helper. The helper reads the instance capability from the controlled process environment and calls `/web-apps/capabilities/codex`. The backend authenticates the hashed instance capability, rechecks the enabled skill and active version, enforces manifest Codex/network declarations, and records bounded metadata such as prompt/response character counts without storing prompt or response content in the web-app audit table. Caller-supplied skill ids are not trusted.
+Generated browser code never receives an Eidolon API credential. Approved server-side Codex access uses the trusted `web_runtime_capabilities.call_codex` helper. The helper reads the instance capability from the controlled process environment and calls `/web-apps/capabilities/codex`. The backend authenticates the hashed instance capability, rechecks the enabled skill and active version, enforces manifest Codex/network declarations, and records bounded metadata such as prompt/response character counts without storing prompt or response content in the web-app audit table. Caller-supplied skill ids are not trusted.
 
 ## State and Filesystem
 
@@ -93,4 +93,4 @@ Configuration uses the existing `PERSONAL_AGENT_RUNNER_MODE` plus `PERSONAL_AGEN
 - `POST /web-apps/{skill_id}/stop`: explicitly stop the application.
 - `POST /web-apps/capabilities/codex`: instance-capability-authenticated server-side Codex access.
 
-The host-routed proxy endpoint is internal and omitted from OpenAPI. Public hosting, remote multi-user access, dynamic function discovery/composition, cross-skill calls, browser automation, and WebSockets are outside this runtime contract.
+The host-routed proxy endpoint is internal and omitted from OpenAPI. A web application's server-side code may invoke manifest-declared functions through `web_runtime_capabilities.call_function`; the backend rechecks the instance, caller requirement, target availability, schema, risk approval, and normal runtime policy. This does not create a hybrid runtime and the instance capability is never exposed to browser code. Public hosting, remote multi-user access, arbitrary function selection, browser automation, nested function calls, and WebSockets are outside this runtime contract.

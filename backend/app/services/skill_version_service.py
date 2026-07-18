@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import ApprovalRequest, Skill, SkillVersion
+from app.schemas.manifest import SkillManifest
 from app.schemas.proposed_skill import ProposedSkillValidationRead
 from app.services.manifest_validator import classify_permission_risk, validate_manifest_file
 from app.services.permission_service import PermissionService
@@ -201,7 +202,12 @@ class SkillVersionService:
         self.db.add(request)
         self.db.commit()
         self.db.refresh(request)
-        return request
+        return permission_service._attach_function_requirement_review(
+            request,
+            skill,
+            manifest=SkillManifest.model_validate(manifest),
+            caller_version_id=version.id,
+        )
 
     def activate_version(self, skill: Skill, version: SkillVersion) -> Skill:
         if version.skill_id != skill.id:
@@ -271,6 +277,7 @@ class SkillVersionService:
         payload = {
             "permissions": manifest_json.get("permissions", {}),
             "dependencies": manifest_json.get("dependencies", []),
+            "function_requirements": manifest_json.get("function_requirements", []),
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
@@ -313,6 +320,9 @@ class SkillVersionService:
         skill.instructions_path = manifest.instructions_path
         skill.input_schema_json = manifest.input_schema
         skill.output_schema_json = manifest.output_schema
+        skill.function_requirements_json = [
+            item.model_dump(mode="json") for item in manifest.function_requirements
+        ]
         self.db.commit()
         self.db.refresh(skill)
 

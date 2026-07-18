@@ -9,9 +9,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db import SessionLocal
 from app.models import ApprovalRequest, Skill, SkillRun, SkillSchedule
 from app.schemas.schedule import ScheduleCreate, SchedulePayload
+from app.services.function_registry_service import FunctionRegistryService
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
-from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
 from app.services.skill_runner import get_skill_runner
 
 try:
@@ -168,6 +168,10 @@ class SchedulerService:
 
     def delete_schedule(self, schedule: SkillSchedule) -> None:
         self.remove_job(schedule.id)
+        self.db.query(SkillRun).filter(SkillRun.source_schedule_id == schedule.id).update(
+            {SkillRun.source_schedule_id: None},
+            synchronize_session=False,
+        )
         self.db.query(ApprovalRequest).filter(ApprovalRequest.schedule_id == schedule.id).delete(
             synchronize_session=False
         )
@@ -270,13 +274,18 @@ class SchedulerService:
         permission_decision = PermissionService(self.db, project_root=self.project_root).can_run(skill)
         if not permission_decision.allowed:
             return self._blocked_run(skill.id, input_json, permission_decision.reason)
-        skill_dir = self.proposed_service.skill_dir_for_record(skill)
         scheduled_input = {"_schedule": {"schedule_id": source_schedule_id}, **input_json}
-        try:
-            with SkillOperationGuard(self.db).locked(skill, "run", reason=f"Scheduled run {source_schedule_id}"):
-                return get_skill_runner(self.db).run(skill_id=skill.id, skill_dir=skill_dir, input_json=scheduled_input)
-        except SkillOperationConflict as exc:
-            return self._blocked_run(skill.id, scheduled_input, str(exc))
+        return FunctionRegistryService(
+            self.db,
+            project_root=self.project_root,
+            runner_factory=get_skill_runner,
+        ).invoke_direct(
+            skill,
+            scheduled_input,
+            source="schedule",
+            source_schedule_id=source_schedule_id,
+            initiating_action=f"Scheduled run {source_schedule_id}",
+        )
 
     def _blocked_run(self, skill_id: int, input_json: dict[str, Any], reason: str) -> SkillRun:
         run = SkillRun(

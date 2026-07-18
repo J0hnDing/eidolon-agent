@@ -77,6 +77,48 @@ def test_manifest_accepts_io_schemas() -> None:
     assert manifest.output_schema == {"type": "object", "properties": {"result": {"type": "number"}}}
 
 
+def test_manifest_validates_json_schemas_and_function_requirements() -> None:
+    data = valid_manifest()
+    data["input_schema"] = {"type": "object"}
+    data["output_schema"] = {"type": "object"}
+    data["function_requirements"] = [
+        {"name": "normalize_text", "reason": "Normalize text before analysis."}
+    ]
+
+    manifest = validate_manifest(data)
+
+    assert manifest.function_requirements[0].name == "normalize_text"
+
+
+def test_manifest_rejects_invalid_or_non_object_function_schema() -> None:
+    invalid = valid_manifest()
+    invalid["input_schema"] = {"type": "not-a-json-schema-type"}
+    with pytest.raises(ManifestValidationError, match="invalid JSON Schema"):
+        validate_manifest(invalid)
+
+    non_object = valid_manifest()
+    non_object["input_schema"] = {"type": "array"}
+    with pytest.raises(ManifestValidationError, match="type object"):
+        validate_manifest(non_object)
+
+
+def test_manifest_rejects_duplicate_and_self_function_requirements() -> None:
+    duplicate = valid_manifest()
+    duplicate["function_requirements"] = [
+        {"name": "normalize_text", "reason": "First use."},
+        {"name": "normalize_text", "reason": "Second use."},
+    ]
+    with pytest.raises(ManifestValidationError, match="duplicate"):
+        validate_manifest(duplicate)
+
+    self_reference = valid_manifest()
+    self_reference["function_requirements"] = [
+        {"name": self_reference["name"], "reason": "Recursive use."}
+    ]
+    with pytest.raises(ManifestValidationError, match="cannot require itself"):
+        validate_manifest(self_reference)
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

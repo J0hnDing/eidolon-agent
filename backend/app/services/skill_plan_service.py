@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.schemas.codex_routing import ResolvedInvocationSettings
 from app.schemas.common import RiskLevel, SkillRuntime
-from app.schemas.manifest import ManifestPermissions, classify_permission_risk
+from app.schemas.manifest import ManifestFunctionRequirement, ManifestPermissions, classify_permission_risk
 from app.services.codex_cli_service import codex_cli_service, should_use_real_codex
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
 
@@ -34,6 +34,7 @@ class SkillGenerationPlan(BaseModel):
     expected_output: dict[str, Any]
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
+    function_requirements: list[ManifestFunctionRequirement] = Field(default_factory=list)
     requested_permissions: ManifestPermissions
     requested_network_domains: list[str]
     requested_dependencies: list[str]
@@ -72,6 +73,11 @@ class SkillGenerationPlan(BaseModel):
             raise ValueError("files_to_generate must include at least one Python test file")
         if self.runtime == "web_app" and self.schedule is not None:
             raise ValueError("web_app plans cannot use bounded-run schedules")
+        if self.runtime == "function":
+            if self.input_schema is None or self.output_schema is None:
+                raise ValueError("function plans require explicit input_schema and output_schema contracts")
+            if self.input_schema.get("type") != "object" or self.output_schema.get("type") != "object":
+                raise ValueError("function input_schema and output_schema must declare type object")
         if not self.tests_required:
             raise ValueError("skill plans must require tests")
         if self.requested_network_domains != self.requested_permissions.network:
@@ -104,8 +110,9 @@ class FakeSkillPlanAdapter:
                 "warnings": [],
                 "schedule": schedule,
             },
-            "input_schema": None,
-            "output_schema": None,
+            "input_schema": {"type": "object", "additionalProperties": True},
+            "output_schema": {"type": "object", "additionalProperties": True},
+            "function_requirements": [],
             "requested_permissions": {
                 "network": [],
                 "filesystem_read": [],
@@ -236,6 +243,11 @@ class SkillPlanService:
         return payload
 
     def build_prompt(self, message: str) -> str:
+        available_functions: list[dict[str, Any]] = []
+        if self.db is not None:
+            from app.services.function_registry_service import FunctionRegistryService
+
+            available_functions = FunctionRegistryService(self.db).discovery_context()
         return f"""
 You are designing an application skill generation plan for the Local-First Self-Extending Personal AI Assistant.
 
@@ -248,8 +260,10 @@ Definitions:
 - Skills contain executable Python code and tests.
 - Skills may include an optional SKILL.md for reusable instructions or operating notes.
 - A web_app owns its HTML, CSS, JavaScript, rendering, interaction, state, and domain behavior inside its skill folder.
-- A web_app must never edit or inject files into the Personal Agent React frontend.
+- A web_app must never edit or inject files into the Eidolon React frontend.
 - Runtime alone determines interface exposure: web_app skills appear in Applications; function skills have no dedicated interface surface in this milestone.
+- Installed function skills are discovered through a dynamic backend Function registry, never through the static trusted backend API catalog.
+- A skill may use an installed function only when it declares that relationship in function_requirements with the exact function name and a clear reason.
 
 Safety requirements:
 - shell must be false.
@@ -265,7 +279,8 @@ Choose all skill properties yourself based on the request:
 - skill_name: safe snake_case, matching ^[a-zA-Z0-9_-]+$.
 - display_name: human readable.
 - runtime: choose web_app only when the requested capability needs a self-rendered interactive application; otherwise function.
-- input_schema and output_schema as JSON Schema objects when useful; otherwise null.
+- function skills require explicit object-shaped input_schema and output_schema JSON Schema contracts; web_app schemas may be null.
+- function_requirements: select only installed registry functions genuinely needed by this skill. Do not invent function names.
 - permissions, dependencies, risk level, expected input/output, files, and validation steps.
 - If the user asks for recurring bounded function execution, include schedule as manifest intent. Always set schedule to null for web_app.
 - Supported schedule shapes:
@@ -282,8 +297,11 @@ Return JSON with exactly this shape:
   "files_to_generate": ["manifest.json", "README.md"],
   "expected_input": {{}},
   "expected_output": {{}},
-  "input_schema": null,
-  "output_schema": null,
+  "input_schema": {{"type": "object", "properties": {{}}, "additionalProperties": true}},
+  "output_schema": {{"type": "object", "properties": {{}}, "additionalProperties": true}},
+  "function_requirements": [
+    {{"name": "installed_function_name", "reason": "why this skill needs this function"}}
+  ],
   "requested_permissions": {{
     "network": [],
     "filesystem_read": [],
@@ -303,6 +321,9 @@ Return JSON with exactly this shape:
     "installing packages without approval"
   ]
 }}
+
+Current dynamic Function registry (discovery does not grant invocation authority):
+{json.dumps(available_functions, indent=2)}
 
 User Project mode request:
 {message}

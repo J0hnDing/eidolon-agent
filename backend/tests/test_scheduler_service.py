@@ -11,7 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import Skill, SkillSchedule
+from app.models import Skill, SkillRun, SkillSchedule
 from app.routers.permission_requests import approve_permission_request
 from app.routers.schedules import run_schedule_now
 from app.schemas.schedule import ScheduleCreate, SchedulePayload
@@ -276,9 +276,19 @@ def test_pause_resume_and_delete_schedule_jobs(tmp_path: Path, db_session: Sessi
     assert resumed.status == "active"
     assert scheduler.job_id(schedule.id) in fake_scheduler.jobs
 
+    historical_run = SkillRun(
+        skill_id=skill.id,
+        status="succeeded",
+        source_schedule_id=schedule.id,
+        invocation_source="schedule",
+    )
+    db_session.add(historical_run)
+    db_session.commit()
+    run_id = historical_run.id
     schedule_id = schedule.id
     scheduler.delete_schedule(schedule)
     assert db_session.get(SkillSchedule, schedule_id) is None
+    assert db_session.get(SkillRun, run_id).source_schedule_id is None
     assert scheduler.job_id(schedule_id) not in fake_scheduler.jobs
 
 

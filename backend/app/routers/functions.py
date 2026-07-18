@@ -1,0 +1,60 @@
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from sqlalchemy.orm import Session
+
+from app.db import get_db
+from app.schemas.function_registry import (
+    FunctionContractRead,
+    FunctionInvocationRequest,
+    FunctionInvocationResponse,
+)
+from app.schemas.skill_run import SkillRunRead
+from app.services.function_registry_service import FunctionRegistryError, FunctionRegistryService
+
+router = APIRouter(prefix="/functions", tags=["functions"])
+
+
+@router.get("", response_model=list[FunctionContractRead])
+def list_functions(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> list[FunctionContractRead]:
+    service = FunctionRegistryService(db)
+    if authorization is None:
+        return service.list_contracts()
+    try:
+        caller = service.caller_from_capability(_bearer_token(authorization))
+    except FunctionRegistryError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    return service.list_contracts(caller.skill)
+
+
+@router.post("/{function_name}/invoke", response_model=FunctionInvocationResponse)
+def invoke_function(
+    function_name: str,
+    payload: FunctionInvocationRequest,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> FunctionInvocationResponse:
+    try:
+        run = FunctionRegistryService(db).invoke_from_capability(
+            _bearer_token(authorization),
+            function_name,
+            payload.input,
+        )
+    except FunctionRegistryError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return FunctionInvocationResponse(
+        run=SkillRunRead.model_validate(run),
+        output=run.output_json,
+        error=run.error_message,
+    )
+
+
+def _bearer_token(authorization: str | None) -> str:
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Bearer function caller capability is required",
+        )
+    return token.strip()

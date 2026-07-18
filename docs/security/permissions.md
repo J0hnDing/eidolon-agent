@@ -6,15 +6,19 @@ The permission system is deterministic backend logic. It is intentionally not de
 
 ### Build-Time
 
-Build-time approval lets Codex generate proposed files or draft update files. It does not approve installation, runtime permissions, package installation at runtime, schedules, or automatic execution.
+For a new Project build, build-time approval lets the backend provision the listed Python dependencies before Codex starts and lets Codex generate proposed files. It does not approve skill installation, runtime permissions, package installation at runtime, schedules, or automatic execution. Generated code and agents remain prohibited from installing packages.
 
 For DAG builds, ProductManager returns build-time intent and expected runtime intent as structured JSON after `blueprint.json` exists and before the task DAG is created. The backend writes `permissions.json`, reads `blueprint.json` and `permissions.json`, performs deterministic review, and presents one build-time approval prompt with the blueprint summary plus permission summary. ProductManager must not return task DAG JSON until this approval is granted; the backend writes `task_dag.json` after approval.
 
 ProductManager returns only permissions that need user approval. Backend-owned defaults and blocked capabilities live in `backend/app/static/default_permissions.json`. After build-time approval, the backend rewrites `permissions.json` as one minimal effective permission object with defaults already merged into its build-time and runtime fields. Builder receives that object once as compact `permission_bounds`; the static defaults and blocked policy are not duplicated into `permissions.json`.
 
+Immediately after approval, the backend creates a clean proposed-skill workspace and provisions approved runtime requirements into `.deps`. Missing build-only requirements are isolated in `.build-deps`; platform `pytest` availability is verified through the same backend interpreter. Both folders are placed on the Codex and authoritative-test `PYTHONPATH`, and the backend interpreter directory is first on `PATH`. Provisioning is atomic and reused after successful verification. Failure stops before any post-approval Codex invocation. `.build-deps` is never installed with the skill, while `.deps` is copied as part of the versioned runtime package.
+
 ### Runtime
 
 Runtime approval is based on the actual generated `manifest.json`. Installation remains a separate decision, and neither an installed function run nor an installed web-application session may start until the corresponding runtime declaration is approved.
+
+Declared `function_requirements` are shown during build-time and runtime review but are not permissions inherited from the target. Low-risk targets need no additional caller approval. Medium- and high-risk targets create a separate `function_access` approval tied to the caller and target. That approval is reusable only while the target risk, permissions, dependencies, and JSON callable schemas keep the same backend fingerprint. It never overrides a disabled target, missing runtime approval, unsupported permission, or blocked platform policy.
 
 ### Schedule
 
@@ -41,7 +45,7 @@ Allowed:
   "build_time": {
     "internet_research": false,
     "dependencies": ["pytest", "requests"],
-    "project_read": ["personal-agent"]
+    "project_read": ["Eidolon"]
   },
   "runtime": {
     "python_standard_library": true,
@@ -64,6 +68,8 @@ Allowed:
 Important limitation: approved network domains currently enable container network access but are not domain-firewalled. The UI must disclose this.
 
 For web applications, browser-side external traffic is not derived from `runtime.network` and is blocked entirely. Browser code must call same-origin application routes; approved server-side code may then use the declared network capability. Application ingress remains available through a private gateway channel even when runtime network domains are empty.
+
+The backend web-app policy supports scripts, forms, isolated same-origin routes, modals, and approved server-side network/Codex access. It blocks external browser traffic, top navigation, popups, downloads, privileged browser features, and WebSockets.
 
 Blocked:
 
@@ -105,5 +111,7 @@ This scan does not grant permissions and does not replace sandbox enforcement. I
 ## Permission Expansion
 
 Runtime permission review compares actual manifest permissions/dependencies against the approved build-time plan. Meaningful expansion requires explicit runtime review. Empty expansion should not be displayed as a warning.
+
+Runtime review also resolves every declared function requirement against the current dynamic registry. Missing, disabled, schema-less legacy, permission-blocked, or otherwise unavailable targets are reported explicitly. Discovery alone never grants invocation authority.
 
 Default Codex call/response is not treated as a permission expansion. New `codex.internet_access=true` is expansion unless it was already planned through runtime network access.

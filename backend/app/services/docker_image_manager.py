@@ -12,6 +12,8 @@ TRUSTED_BUILD_CONTEXT = PROJECT_ROOT
 TRUSTED_RUNTIME_FILES = (
     PROJECT_ROOT / "backend" / "web_runtime_host.py",
     PROJECT_ROOT / "backend" / "web_runtime_capabilities.py",
+    PROJECT_ROOT / "backend" / "function_runtime_capabilities.py",
+    PROJECT_ROOT / "backend" / "function_runtime_relay.py",
     PROJECT_ROOT / "backend" / "web_runtime_relay.py",
 )
 DEFAULT_METADATA_PATH = PROJECT_ROOT / "runtime" / "docker_runner_build.json"

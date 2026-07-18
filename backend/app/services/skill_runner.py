@@ -1,12 +1,15 @@
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
@@ -143,6 +146,24 @@ class RunnerConfig:
 
 
 @dataclass(frozen=True)
+class FunctionRunContext:
+    version_id: int | None = None
+    invocation_source: str = "internal"
+    caller_skill_id: int | None = None
+    caller_version_id: int | None = None
+    source_schedule_id: int | None = None
+    web_app_instance_id: str | None = None
+    initiating_action: str | None = None
+    capability_token: str | None = None
+
+    @property
+    def capability_token_hash(self) -> str | None:
+        if self.capability_token is None:
+            return None
+        return hashlib.sha256(self.capability_token.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
 class RunnerStatus:
     mode: str
     selected_mode: str
@@ -256,12 +277,27 @@ class LocalSkillRunner:
         self.db = db
         self.timeout_seconds = timeout_seconds
 
-    def run(self, skill_id: int, skill_dir: Path, input_json: dict[str, Any]) -> SkillRun:
+    def run(
+        self,
+        skill_id: int,
+        skill_dir: Path,
+        input_json: dict[str, Any],
+        context: FunctionRunContext | None = None,
+    ) -> SkillRun:
+        context = context or FunctionRunContext()
         run = SkillRun(
             skill_id=skill_id,
             status="running",
             input_json=input_json,
             started_at=utc_now(),
+            version_id=context.version_id,
+            invocation_source=context.invocation_source,
+            caller_skill_id=context.caller_skill_id,
+            caller_version_id=context.caller_version_id,
+            source_schedule_id=context.source_schedule_id,
+            web_app_instance_id=context.web_app_instance_id,
+            initiating_action=context.initiating_action,
+            function_capability_token_hash=context.capability_token_hash,
         )
         self.db.add(run)
         self.db.commit()
@@ -277,7 +313,7 @@ class LocalSkillRunner:
             validate_supported_permissions(manifest)
             entrypoint = self._resolve_entrypoint(skill_dir, manifest.entrypoint)
             self._run_tests(skill_dir, run)
-            self._run_entrypoint(entrypoint, skill_dir, input_json, run)
+            self._run_entrypoint(entrypoint, skill_dir, input_json, run, context.capability_token)
         except (ManifestValidationError, UnsupportedSkillPermissionError, FileNotFoundError) as exc:
             self._finish_run(run, status="blocked", error_message=str(exc))
         except subprocess.TimeoutExpired as exc:
@@ -314,7 +350,7 @@ class LocalSkillRunner:
             raise FileNotFoundError(f"Skill entrypoint not found at {resolved}")
         return resolved
 
-    def _run_tests(self, skill_dir: Path, run: SkillRun) -> None:
+    def _run_tests(self, skill_dir: Path, run: SkillRun, capability_token: str | None = None) -> None:
         tests_dir = skill_dir / "tests"
         if not tests_dir.exists():
             self._finish_run(run, status="blocked", error_message="Skill tests directory is missing")
@@ -325,7 +361,7 @@ class LocalSkillRunner:
             cwd=skill_dir,
             capture_output=True,
             text=True,
-            env=self._skill_env(skill_dir, run.skill_id),
+            env=self._skill_env(skill_dir, run.skill_id, capability_token),
             timeout=self.timeout_seconds,
             shell=False,
         )
@@ -346,6 +382,7 @@ class LocalSkillRunner:
         skill_dir: Path,
         input_json: dict[str, Any],
         run: SkillRun,
+        capability_token: str | None = None,
     ) -> None:
         result = subprocess.run(
             [sys.executable, str(entrypoint)],
@@ -353,7 +390,7 @@ class LocalSkillRunner:
             input=json.dumps(input_json),
             capture_output=True,
             text=True,
-            env=self._skill_env(skill_dir, run.skill_id),
+            env=self._skill_env(skill_dir, run.skill_id, capability_token),
             timeout=self.timeout_seconds,
             shell=False,
         )
@@ -428,14 +465,20 @@ class LocalSkillRunner:
         run.ended_at = utc_now()
         self.db.commit()
 
-    def _skill_env(self, skill_dir: Path, skill_id: int) -> dict[str, str]:
+    def _skill_env(self, skill_dir: Path, skill_id: int, capability_token: str | None = None) -> dict[str, str]:
         env = os.environ.copy()
         env.setdefault("PERSONAL_AGENT_SKILL_ID", str(skill_id))
         env.setdefault("PERSONAL_AGENT_BACKEND_URL", os.getenv("PERSONAL_AGENT_BACKEND_URL", DEFAULT_LOCAL_BACKEND_URL))
+        if capability_token is not None:
+            env["PERSONAL_AGENT_FUNCTION_CAPABILITY"] = capability_token
         deps_dir = skill_dir / ".deps"
+        python_paths = [str(Path(__file__).resolve().parents[2])]
         if deps_dir.is_dir():
-            existing = env.get("PYTHONPATH")
-            env["PYTHONPATH"] = str(deps_dir) if not existing else f"{deps_dir}{os.pathsep}{existing}"
+            python_paths.insert(0, str(deps_dir))
+        existing = env.get("PYTHONPATH")
+        if existing:
+            python_paths.append(existing)
+        env["PYTHONPATH"] = os.pathsep.join(python_paths)
         return env
 
 
@@ -458,12 +501,27 @@ class DockerSkillRunner:
             docker_runner=docker_runner,
         )
 
-    def run(self, skill_id: int, skill_dir: Path, input_json: dict[str, Any]) -> SkillRun:
+    def run(
+        self,
+        skill_id: int,
+        skill_dir: Path,
+        input_json: dict[str, Any],
+        context: FunctionRunContext | None = None,
+    ) -> SkillRun:
+        context = context or FunctionRunContext()
         run = SkillRun(
             skill_id=skill_id,
             status="running",
             input_json=input_json,
             started_at=utc_now(),
+            version_id=context.version_id,
+            invocation_source=context.invocation_source,
+            caller_skill_id=context.caller_skill_id,
+            caller_version_id=context.caller_version_id,
+            source_schedule_id=context.source_schedule_id,
+            web_app_instance_id=context.web_app_instance_id,
+            initiating_action=context.initiating_action,
+            function_capability_token_hash=context.capability_token_hash,
         )
         self.db.add(run)
         self.db.commit()
@@ -486,7 +544,15 @@ class DockerSkillRunner:
             self.image_manager.ensure_image()
             cache_dir = self._prepare_cache_dir(skill_id, skill_dir)
             self._run_tests(skill_dir, cache_dir, manifest, run)
-            self._run_entrypoint(entrypoint, skill_dir, cache_dir, manifest, input_json, run)
+            self._run_entrypoint(
+                entrypoint,
+                skill_dir,
+                cache_dir,
+                manifest,
+                input_json,
+                run,
+                context.capability_token,
+            )
         except DockerImageBuildError as exc:
             self._finish_run(run, status="blocked", error_message=str(exc))
         except (ManifestValidationError, UnsupportedSkillPermissionError, FileNotFoundError) as exc:
@@ -515,8 +581,13 @@ class DockerSkillRunner:
         cache_dir: Path,
         manifest: SkillManifest | None = None,
         skill_id: int | None = None,
+        capability_token: str | None = None,
+        network_mode_override: str | None = None,
+        backend_url_override: str | None = None,
     ) -> list[str]:
-        network_mode = "bridge" if manifest is not None and manifest.permissions.network else "none"
+        network_mode = network_mode_override or (
+            "bridge" if manifest is not None and manifest.permissions.network else "none"
+        )
         command = [
             "docker",
             "run",
@@ -536,8 +607,19 @@ class DockerSkillRunner:
             "PYTHONPATH=/skill/.deps",
             "-e",
             "PERSONAL_AGENT_BACKEND_URL="
-            + os.getenv("PERSONAL_AGENT_DOCKER_BACKEND_URL", os.getenv("PERSONAL_AGENT_BACKEND_URL", DEFAULT_DOCKER_BACKEND_URL)),
+            + (
+                backend_url_override
+                or os.getenv(
+                    "PERSONAL_AGENT_DOCKER_BACKEND_URL",
+                    os.getenv("PERSONAL_AGENT_BACKEND_URL", DEFAULT_DOCKER_BACKEND_URL),
+                )
+            ),
             *(["-e", f"PERSONAL_AGENT_SKILL_ID={skill_id}"] if skill_id is not None else []),
+            *(
+                ["-e", f"PERSONAL_AGENT_FUNCTION_CAPABILITY={capability_token}"]
+                if capability_token is not None
+                else []
+            ),
             "-v",
             f"{skill_dir.resolve()}:/skill:ro",
             "-v",
@@ -554,8 +636,19 @@ class DockerSkillRunner:
         cache_dir: Path,
         manifest: SkillManifest | None = None,
         skill_id: int | None = None,
+        capability_token: str | None = None,
+        network_mode_override: str | None = None,
+        backend_url_override: str | None = None,
     ) -> list[str]:
-        return self.build_base_docker_command(skill_dir, cache_dir, manifest, skill_id) + ["python", "-m", "pytest", "/skill/tests"]
+        return self.build_base_docker_command(
+            skill_dir,
+            cache_dir,
+            manifest,
+            skill_id,
+            capability_token,
+            network_mode_override,
+            backend_url_override,
+        ) + ["python", "-m", "pytest", "/skill/tests"]
 
     def build_entrypoint_command(
         self,
@@ -564,9 +657,20 @@ class DockerSkillRunner:
         entrypoint: Path,
         manifest: SkillManifest | None = None,
         skill_id: int | None = None,
+        capability_token: str | None = None,
+        network_mode_override: str | None = None,
+        backend_url_override: str | None = None,
     ) -> list[str]:
         relative_entrypoint = entrypoint.relative_to(skill_dir).as_posix()
-        return self.build_base_docker_command(skill_dir, cache_dir, manifest, skill_id) + ["python", f"/skill/{relative_entrypoint}"]
+        return self.build_base_docker_command(
+            skill_dir,
+            cache_dir,
+            manifest,
+            skill_id,
+            capability_token,
+            network_mode_override,
+            backend_url_override,
+        ) + ["python", f"/skill/{relative_entrypoint}"]
 
     def _load_manifest(self, skill_dir: Path) -> SkillManifest:
         manifest_path = skill_dir / "manifest.json"
@@ -599,14 +703,27 @@ class DockerSkillRunner:
         mountpoint.mkdir(exist_ok=True)
         return cache_dir
 
-    def _run_tests(self, skill_dir: Path, cache_dir: Path, manifest: SkillManifest, run: SkillRun) -> None:
+    def _run_tests(
+        self,
+        skill_dir: Path,
+        cache_dir: Path,
+        manifest: SkillManifest,
+        run: SkillRun,
+        capability_token: str | None = None,
+    ) -> None:
         tests_dir = skill_dir / "tests"
         if not tests_dir.exists():
             self._finish_run(run, status="blocked", error_message="Skill tests directory is missing")
             raise RunAlreadyFinalized("Skill tests directory is missing")
 
         result = self.docker_runner(
-            self.build_pytest_command(skill_dir, cache_dir, manifest, run.skill_id),
+            self.build_pytest_command(
+                skill_dir,
+                cache_dir,
+                manifest,
+                run.skill_id,
+                capability_token,
+            ),
             capture_output=True,
             text=True,
             timeout=self.timeout_seconds,
@@ -631,15 +748,32 @@ class DockerSkillRunner:
         manifest: SkillManifest,
         input_json: dict[str, Any],
         run: SkillRun,
+        capability_token: str | None = None,
     ) -> None:
-        result = self.docker_runner(
-            self.build_entrypoint_command(skill_dir, cache_dir, entrypoint, manifest, run.skill_id),
-            input=json.dumps(input_json),
-            capture_output=True,
-            text=True,
-            timeout=self.timeout_seconds,
-            shell=False,
-        )
+        relay: tuple[str, str] | None = None
+        try:
+            if capability_token is not None and not manifest.permissions.network:
+                relay = self._start_function_capability_relay(run.id)
+            result = self.docker_runner(
+                self.build_entrypoint_command(
+                    skill_dir,
+                    cache_dir,
+                    entrypoint,
+                    manifest,
+                    run.skill_id,
+                    capability_token,
+                    relay[0] if relay is not None else None,
+                    f"http://{relay[1]}:8000" if relay is not None else None,
+                ),
+                input=json.dumps(input_json),
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+                shell=False,
+            )
+        finally:
+            if relay is not None:
+                self._stop_function_capability_relay(*relay)
 
         if result.returncode != 0:
             self._finish_run(
@@ -687,6 +821,106 @@ class DockerSkillRunner:
             exit_code=result.returncode,
             error_message=error_message,
         )
+
+    def _start_function_capability_relay(self, run_id: int) -> tuple[str, str]:
+        suffix = uuid4().hex[:10]
+        network_name = f"personal-agent-function-{run_id}-{suffix}"
+        relay_name = f"personal-agent-function-relay-{run_id}-{suffix}"
+        create_network = self.docker_runner(
+            ["docker", "network", "create", "--internal", network_name],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            shell=False,
+        )
+        if create_network.returncode != 0:
+            raise UnsupportedSkillPermissionError(
+                create_network.stderr.strip() or "Could not create the private function capability network"
+            )
+        try:
+            start_relay = self.docker_runner(
+                [
+                    "docker",
+                    "run",
+                    "-d",
+                    "--rm",
+                    "--name",
+                    relay_name,
+                    "--network",
+                    "bridge",
+                    "--add-host",
+                    "host.docker.internal:host-gateway",
+                    "-e",
+                    "PERSONAL_AGENT_RELAY_BACKEND_URL="
+                    + os.getenv(
+                        "PERSONAL_AGENT_DOCKER_BACKEND_URL",
+                        os.getenv("PERSONAL_AGENT_BACKEND_URL", DEFAULT_DOCKER_BACKEND_URL),
+                    ),
+                    self.config.docker_image,
+                    "python",
+                    "/runtime/function_runtime_relay.py",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                shell=False,
+            )
+            if start_relay.returncode != 0:
+                raise UnsupportedSkillPermissionError(
+                    start_relay.stderr.strip() or "Could not start the trusted function capability relay"
+                )
+            connect_relay = self.docker_runner(
+                ["docker", "network", "connect", "--alias", relay_name, network_name, relay_name],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                shell=False,
+            )
+            if connect_relay.returncode != 0:
+                raise UnsupportedSkillPermissionError(
+                    connect_relay.stderr.strip() or "Could not attach the function capability relay"
+                )
+            for _attempt in range(20):
+                ready = self.docker_runner(
+                    [
+                        "docker",
+                        "exec",
+                        relay_name,
+                        "python",
+                        "-c",
+                        (
+                            "from urllib.request import urlopen; "
+                            "urlopen('http://127.0.0.1:8000/health', timeout=1).read()"
+                        ),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                    shell=False,
+                )
+                if ready.returncode == 0:
+                    return network_name, relay_name
+                time.sleep(0.1)
+            raise UnsupportedSkillPermissionError("Trusted function capability relay did not become ready")
+        except Exception:
+            self._stop_function_capability_relay(network_name, relay_name)
+            raise
+
+    def _stop_function_capability_relay(self, network_name: str, relay_name: str) -> None:
+        for command in (
+            ["docker", "rm", "-f", relay_name],
+            ["docker", "network", "rm", network_name],
+        ):
+            try:
+                self.docker_runner(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    shell=False,
+                )
+            except Exception:
+                pass
 
     def _finish_run(
         self,

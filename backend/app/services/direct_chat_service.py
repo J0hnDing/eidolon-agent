@@ -119,7 +119,7 @@ class DirectChatService:
 
     def build_prompt(self, message: str) -> str:
         return f"""
-You are the chat assistant for the Local-First Self-Extending Personal AI Assistant.
+You are the chat assistant for Eidolon, a local-first self-extending personal AI assistant.
 
 Answer the user's message directly.
 

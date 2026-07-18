@@ -1,5 +1,6 @@
 from typing import Any, Literal
 
+from jsonschema import Draft202012Validator, SchemaError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 RiskLevel = Literal["low", "medium", "high"]
@@ -112,6 +113,13 @@ class ManifestSchedule(BaseModel):
         return self
 
 
+class ManifestFunctionRequirement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 class SkillManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -124,6 +132,7 @@ class SkillManifest(BaseModel):
     instructions_path: str | None = Field(default=None, min_length=1)
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
+    function_requirements: list[ManifestFunctionRequirement] = Field(default_factory=list)
     dependencies: list[str] = Field(default_factory=list)
     permissions: ManifestPermissions
     schedule: ManifestSchedule | None = None
@@ -175,8 +184,24 @@ class SkillManifest(BaseModel):
                 raise ValueError("dependencies must be package names or simple version specifiers")
         return dependencies
 
+    @field_validator("input_schema", "output_schema")
+    @classmethod
+    def validate_json_schema(cls, schema: dict[str, Any] | None) -> dict[str, Any] | None:
+        if schema is None:
+            return None
+        try:
+            Draft202012Validator.check_schema(schema)
+        except SchemaError as exc:
+            raise ValueError(f"invalid JSON Schema: {exc.message}") from exc
+        return schema
+
     @model_validator(mode="after")
     def validate_skill_contract(self) -> "SkillManifest":
+        requirement_names = [requirement.name for requirement in self.function_requirements]
+        if len(requirement_names) != len(set(requirement_names)):
+            raise ValueError("function_requirements cannot contain duplicate function names")
+        if self.name in requirement_names:
+            raise ValueError("a skill cannot require itself as a function")
         if self.runtime == "function":
             normalized = self.entrypoint.replace("\\", "/")
             if normalized.startswith("/") or normalized.startswith("~") or ":" in normalized:
@@ -185,6 +210,12 @@ class SkillManifest(BaseModel):
                 raise ValueError("function entrypoint cannot traverse parent directories")
             if not normalized.endswith(".py"):
                 raise ValueError("function entrypoint must point to a Python file")
+            for schema_name, schema in (
+                ("input_schema", self.input_schema),
+                ("output_schema", self.output_schema),
+            ):
+                if schema is not None and schema.get("type") != "object":
+                    raise ValueError(f"function {schema_name} must declare type object")
         else:
             module, separator, attribute = self.entrypoint.partition(":")
             module_parts = module.split(".")

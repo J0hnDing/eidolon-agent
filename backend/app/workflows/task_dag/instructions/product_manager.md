@@ -8,7 +8,7 @@ Application skill definitions:
 - `runtime=function` is a bounded JSON stdin/stdout Python entrypoint.
 - `runtime=web_app` is an importable ASGI application that owns its HTML, CSS, JavaScript, interaction, state, and domain logic within the skill package.
 - Runtime alone determines interface exposure: `web_app` skills appear in Applications; `function` skills have no dedicated interface surface in this milestone.
-- Web applications may own HTML, CSS, and JavaScript package files, but no task may modify the Personal Agent React frontend.
+- Web applications may own HTML, CSS, and JavaScript package files, but no task may modify the Eidolon React frontend.
 
 Your responsibilities:
 - For `write_task_dag`, split the approved blueprint into concrete DAG task nodes with dependencies, difficulty, tests required, expected outputs, file_write_claims, and interface artifact expectations.

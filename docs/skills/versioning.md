@@ -26,7 +26,7 @@ The local MVP allows at most three non-discarded versions per skill. Archived ve
 
 ## Permission Reapproval
 
-If permissions and dependencies are unchanged, runtime reapproval can be skipped. If permissions or dependencies change, the app creates a runtime approval request for the candidate version before activation.
+If permissions, dependencies, and declared function requirements are unchanged, runtime reapproval can be skipped. A change to any of them creates a runtime review request for the candidate version before activation. Caller-target function approvals remain reusable only when each target's risk, permission/dependency contract, and JSON schemas retain the same backend fingerprint.
 
 ## User Controls
 

@@ -15,6 +15,7 @@ class CodexInvocationRecorder:
     def __init__(self, db: Session) -> None:
         self.db = db
         self._pending_build_invocations: list[dict[str, object]] = []
+        self._pending_build_transcripts: list[dict[str, str]] = []
 
     @staticmethod
     def from_result(
@@ -50,7 +51,15 @@ class CodexInvocationRecorder:
         plan: dict[str, object],
         *,
         default_adapter_name: str,
+        prompt: str,
     ) -> None:
+        self._pending_build_transcripts.append(
+            {
+                "action": str(plan.get("codex_task") or plan.get("action") or "codex_invocation"),
+                "input": prompt,
+                "output": result.stdout or "",
+            }
+        )
         invocation = self.from_result(result, plan, default_adapter_name=default_adapter_name)
         if invocation is not None:
             self._pending_build_invocations.append(invocation)
@@ -62,6 +71,11 @@ class CodexInvocationRecorder:
         invocations = self._pending_build_invocations
         self._pending_build_invocations = []
         return invocations
+
+    def consume_build_transcripts(self) -> list[dict[str, str]]:
+        transcripts = self._pending_build_transcripts
+        self._pending_build_transcripts = []
+        return transcripts
 
     def record_skill_runtime(self, skill_id: int, invocation: dict[str, object]) -> None:
         run = self.db.scalar(

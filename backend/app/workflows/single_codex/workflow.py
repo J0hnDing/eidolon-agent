@@ -47,6 +47,7 @@ class SingleCodexBuildWorkflow:
             generation_request,
             agent_run.blueprint_json or {},
             permission_plan,
+            workspace_prepared=True,
             prompt_builder=build_prompt,
         )
         service._finish_step(

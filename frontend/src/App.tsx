@@ -28,9 +28,9 @@ export default function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <span className="brand-mark">PA</span>
+          <span className="brand-mark">E</span>
           <div>
-            <strong>Personal Agent</strong>
+            <strong>Eidolon</strong>
             <span>Local-first control plane</span>
           </div>
         </div>

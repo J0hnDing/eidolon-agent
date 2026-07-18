@@ -19,7 +19,7 @@ from uuid import uuid4
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.models import Skill, WebAppAuditRecord, WebAppInstance, WebAppSession
+from app.models import Skill, SkillRun, WebAppAuditRecord, WebAppInstance, WebAppSession
 from app.schemas.manifest import SkillManifest
 from app.schemas.web_app import WebAppContainmentPolicy, WebAppOpenResponse, WebAppSessionRead
 from app.services.docker_image_manager import DockerImageManager
@@ -811,6 +811,10 @@ class WebAppRuntimeService:
             self.db.scalars(select(WebAppInstance.id).where(WebAppInstance.skill_id == skill.id)).all()
         )
         if instance_ids:
+            self.db.query(SkillRun).filter(SkillRun.web_app_instance_id.in_(instance_ids)).update(
+                {SkillRun.web_app_instance_id: None},
+                synchronize_session=False,
+            )
             self.db.execute(delete(WebAppAuditRecord).where(WebAppAuditRecord.instance_id.in_(instance_ids)))
             self.db.execute(delete(WebAppSession).where(WebAppSession.instance_id.in_(instance_ids)))
             self.db.execute(delete(WebAppInstance).where(WebAppInstance.id.in_(instance_ids)))
@@ -866,7 +870,7 @@ class WebAppRuntimeService:
         if runner_mode != "docker":
             server_network = "Explicit local development fallback is less isolated and does not enforce Docker networking."
         return WebAppContainmentPolicy(
-            iframe_sandbox="allow-scripts allow-forms allow-same-origin",
+            iframe_sandbox="allow-scripts allow-forms allow-same-origin allow-modals",
             content_security_policy=(
                 "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors http://localhost:* "
                 "http://127.0.0.1:*; form-action 'self'; navigate-to 'self'; connect-src 'self'; "

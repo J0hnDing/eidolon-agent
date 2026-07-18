@@ -27,6 +27,7 @@ The central skill record. Important fields:
 - `risk_level`
 - manifest/instructions/installed paths
 - input/output schemas
+- declared function requirements
 - `active_version_id`
 - `enabled`
 
@@ -47,8 +48,16 @@ Stores manual or scheduled function-run results:
 - status and error message
 - ordered runtime Codex invocation records with success/failure status, adapter/model identity, CLI diagnostics, and token breakdowns
 - aggregate input, cached-input, output, reasoning-output, and total token counts
+- target active version and invocation source
+- caller skill/version for cross-skill calls
+- schedule id or web-application instance attribution when applicable
+- a hash of the ephemeral caller capability while the run is active
 
 `skill_runs` is intentionally bounded and is not used to represent a persistent web server.
+
+### function_access_approvals
+
+Links one caller skill, one target function, the user-facing approval request, and the backend fingerprint of the approved target callable contract. Historical rows are invalidated rather than silently reused when target risk, permissions, dependencies, or input/output schemas change. Low-risk relationships do not need rows.
 
 ### web_app_instances
 
@@ -72,7 +81,7 @@ Stores schedule definitions for installed skills. Canonical statuses are `pendin
 
 ### approval_requests
 
-Stores build-time, runtime, schedule, and update approval requests. The approval request is the durable record of what was requested, why, risk level, and user decision.
+Stores build-time, runtime, schedule, update, and caller-target function-access approval requests. The approval request is the durable record of what was requested, why, risk level, and user decision.
 
 ### skill_generation_requests
 
@@ -80,7 +89,7 @@ Stores Project-mode skill generation requests and the initial/updated generation
 
 ### agent_runs and agent_run_steps
 
-Store bounded agent workflows and role-specific steps. Agent communication is persisted as structured artifacts rather than free-form hidden agent chat. New build runs persist backend-only `build_workflow` separately from `blueprint_json` so routing state does not leak into downstream product artifacts.
+Store bounded workflows with explicit ProductManager, Builder, Tester, and backend steps. Every Codex-backed step stores the exact prompt string supplied to the adapter and the exact final response string returned by it, separately from backend-normalized structured workflow artifacts. Backend steps store an action and fixed summary only; they do not expose agent input/output fields. New build runs persist backend-only `build_workflow` separately from `blueprint_json` so routing state does not leak into downstream product artifacts.
 
 DAG build runs should persist:
 
@@ -94,7 +103,7 @@ DAG build runs should persist:
 - per-task failure counts;
 - final end-to-end failure count.
 
-Agent run steps identify the explicit action and canonical `task_node_id` when applicable. Local schema migration copies values from the former physical columns into these canonical columns; the API exposes only task-node terminology.
+Agent run steps identify the explicit action and canonical `task_node_id` when applicable. Permission-review steps link their approval request through a dedicated column instead of hiding the id in input/output JSON. Local schema migration copies values from the former physical columns into these canonical columns; the API exposes only task-node terminology.
 
 Agent runs also persist aggregate build-token fields and an optional usage pause reason. Each step persists an ordered `codex_invocations_json` list with action, adapter, requested/effective model, requested/effective reasoning effort, route source, task difficulty when applicable, and token breakdown plus aggregate token columns. These fields describe build-agent activity only. Runtime Codex calls are recorded separately on the active `skill_runs` row and do not contribute to build totals.
 

@@ -11,7 +11,7 @@ Updates are version-safe and do not use the new skill DAG build workflow in the 
    - build-time approval required;
    - unclear and needs user input;
    - unsupported or blocked.
-4. If build-time approval is required, backend creates a `build_time` approval request with `request_type = "update"` and pauses.
+4. If build-time approval is required, backend creates a separate `backend` step and a `build_time` approval request with `request_type = "update"`, then pauses without relabeling the completed ProductManager step.
 5. If approved, or if no extra build-time approval is needed, backend copies the active version into a draft/proposed version folder.
 6. Builder modifies only the draft.
 7. Tester writes/updates runtime-appropriate tests and validates the draft.

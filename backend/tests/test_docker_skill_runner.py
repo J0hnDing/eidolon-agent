@@ -95,6 +95,33 @@ def test_default_runner_timeout_supports_bounded_network_workflows() -> None:
     assert RunnerConfig().timeout_seconds == 120
 
 
+def test_private_function_capability_command_uses_internal_network_and_relay_url(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill_dir = tmp_path / "private_capability_skill"
+    skill_dir.mkdir()
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    entrypoint = skill_dir / "skill.py"
+    entrypoint.write_text("", encoding="utf-8")
+    runner = make_runner(db_session, tmp_path, lambda *args, **kwargs: completed())
+
+    command = runner.build_entrypoint_command(
+        skill_dir,
+        cache_dir,
+        entrypoint,
+        skill_id=4,
+        capability_token="ephemeral-secret",
+        network_mode_override="private-function-network",
+        backend_url_override="http://trusted-function-relay:8000",
+    )
+
+    assert command[command.index("--network") + 1] == "private-function-network"
+    assert "PERSONAL_AGENT_BACKEND_URL=http://trusted-function-relay:8000" in command
+    assert "PERSONAL_AGENT_FUNCTION_CAPABILITY=ephemeral-secret" in command
+
+
 def completed(stdout: str = "", stderr: str = "", returncode: int = 0) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=["docker"], returncode=returncode, stdout=stdout, stderr=stderr)
 

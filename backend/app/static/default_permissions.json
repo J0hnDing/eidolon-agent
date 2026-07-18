@@ -2,7 +2,7 @@
   "default_allowed": {
     "build_time": {
       "dependencies": ["pytest", "requests"],
-      "project_read": ["personal-agent"]
+      "project_read": ["Eidolon"]
     },
     "runtime": {
       "python_standard_library": true,
@@ -20,5 +20,23 @@
     "DO NOT use unrestricted network access.",
     "DO NOT use browser automation.",
     "DO NOT perform email, calendar, finance, purchase, trading, public posting, file deletion, or arbitrary command actions."
-  ]
+  ],
+  "web_app": {
+    "supported": [
+      "scripts",
+      "forms",
+      "same_origin",
+      "modals",
+      "approved_server_network",
+      "approved_server_codex"
+    ],
+    "blocked": [
+      "external_browser_network",
+      "top_navigation",
+      "popups",
+      "downloads",
+      "privileged_browser_features",
+      "websockets"
+    ]
+  }
 }

@@ -67,6 +67,7 @@ class Skill(Base):
     instructions_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     input_schema_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     output_schema_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    function_requirements_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
     installed_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     active_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
@@ -79,12 +80,22 @@ class Skill(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     versions: Mapped[list["SkillVersion"]] = relationship(back_populates="skill")
-    runs: Mapped[list["SkillRun"]] = relationship(back_populates="skill")
+    runs: Mapped[list["SkillRun"]] = relationship(back_populates="skill", foreign_keys="SkillRun.skill_id")
     approval_requests: Mapped[list["ApprovalRequest"]] = relationship(back_populates="skill")
     generation_requests: Mapped[list["SkillGenerationRequest"]] = relationship(back_populates="proposed_skill")
     schedules: Mapped[list["SkillSchedule"]] = relationship(back_populates="skill")
     web_app_instances: Mapped[list["WebAppInstance"]] = relationship(
         back_populates="skill",
+        cascade="all, delete-orphan",
+    )
+    function_access_approvals_as_caller: Mapped[list["FunctionAccessApproval"]] = relationship(
+        foreign_keys="FunctionAccessApproval.caller_skill_id",
+        back_populates="caller_skill",
+        cascade="all, delete-orphan",
+    )
+    function_access_approvals_as_target: Mapped[list["FunctionAccessApproval"]] = relationship(
+        foreign_keys="FunctionAccessApproval.target_skill_id",
+        back_populates="target_skill",
         cascade="all, delete-orphan",
     )
 
@@ -132,8 +143,44 @@ class SkillRun(Base):
     output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     reasoning_output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    version_id: Mapped[int | None] = mapped_column(ForeignKey("skill_versions.id"), nullable=True, index=True)
+    invocation_source: Mapped[str] = mapped_column(String(32), default="internal", nullable=False, index=True)
+    caller_skill_id: Mapped[int | None] = mapped_column(ForeignKey("skills.id"), nullable=True, index=True)
+    caller_version_id: Mapped[int | None] = mapped_column(ForeignKey("skill_versions.id"), nullable=True, index=True)
+    source_schedule_id: Mapped[int | None] = mapped_column(ForeignKey("skill_schedules.id"), nullable=True, index=True)
+    web_app_instance_id: Mapped[str | None] = mapped_column(
+        ForeignKey("web_app_instances.id"), nullable=True, index=True
+    )
+    initiating_action: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    function_capability_token_hash: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
 
-    skill: Mapped["Skill"] = relationship(back_populates="runs")
+    skill: Mapped["Skill"] = relationship(back_populates="runs", foreign_keys=[skill_id])
+    version: Mapped["SkillVersion | None"] = relationship(foreign_keys=[version_id])
+    caller_skill: Mapped["Skill | None"] = relationship(foreign_keys=[caller_skill_id])
+    caller_version: Mapped["SkillVersion | None"] = relationship(foreign_keys=[caller_version_id])
+
+
+class FunctionAccessApproval(Base):
+    __tablename__ = "function_access_approvals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    caller_skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id"), nullable=False, index=True)
+    target_skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id"), nullable=False, index=True)
+    approval_request_id: Mapped[int] = mapped_column(ForeignKey("approval_requests.id"), nullable=False, index=True)
+    target_contract_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    invalidation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    caller_skill: Mapped["Skill"] = relationship(
+        foreign_keys=[caller_skill_id],
+        back_populates="function_access_approvals_as_caller",
+    )
+    target_skill: Mapped["Skill"] = relationship(
+        foreign_keys=[target_skill_id],
+        back_populates="function_access_approvals_as_target",
+    )
+    approval_request: Mapped["ApprovalRequest"] = relationship()
 
 
 class WebAppInstance(Base):
@@ -356,10 +403,18 @@ class AgentRunStep(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     agent_run_id: Mapped[int] = mapped_column(ForeignKey("agent_runs.id"), nullable=False, index=True)
     step_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    action: Mapped[str | None] = mapped_column(String(96), nullable=True, index=True)
     task_node_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    approval_request_id: Mapped[int | None] = mapped_column(
+        ForeignKey("approval_requests.id"),
+        nullable=True,
+        index=True,
+    )
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
     input_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     output_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    agent_input_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent_output_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     logs: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

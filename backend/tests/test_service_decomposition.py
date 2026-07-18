@@ -67,12 +67,36 @@ def test_product_manager_contract_service_keeps_only_backend_fields() -> None:
     assert blueprint["permission_plan"]["runtime"]["filesystem_write"] == ["report.json"]  # type: ignore[index]
 
 
+def test_product_manager_contract_keeps_web_app_approval_requests() -> None:
+    service = ProductManagerContractService()
+    fallback = {
+        "goal": "Web app",
+        "runtime": "web_app",
+        "skill_name": "web_app",
+        "requested_permissions": {
+            "network": ["example.com"],
+            "codex": {"internet_access": True},
+        },
+    }
+
+    blueprint = service.sanitize_blueprint({"runtime": "web_app"}, fallback)
+    runtime = blueprint["permission_plan"]["runtime"]  # type: ignore[index]
+
+    assert runtime["network"] == ["example.com"]  # type: ignore[index]
+    assert runtime["codex"] == {"internet_access": True}  # type: ignore[index]
+
+
 def test_codex_invocation_recorder_keeps_build_usage_buffer_separate() -> None:
     result = CompletedProcess(args=["codex"], returncode=0, stdout="", stderr="")
     result.codex_usage = {"input_tokens": 10, "total_tokens": 12}  # type: ignore[attr-defined]
     recorder = CodexInvocationRecorder(db=None)  # type: ignore[arg-type]
 
-    recorder.record_build_result(result, {"codex_task": "builder"}, default_adapter_name="test")
+    recorder.record_build_result(
+        result,
+        {"codex_task": "builder"},
+        default_adapter_name="test",
+        prompt="exact prompt",
+    )
 
     assert recorder.consume_build_usage() == [
         {
@@ -95,6 +119,10 @@ def test_codex_invocation_recorder_keeps_build_usage_buffer_separate() -> None:
         }
     ]
     assert recorder.consume_build_usage() == []
+    assert recorder.consume_build_transcripts() == [
+        {"action": "builder", "input": "exact prompt", "output": ""}
+    ]
+    assert recorder.consume_build_transcripts() == []
 
 
 def test_agent_run_artifact_store_round_trips_controlled_json(tmp_path: Path) -> None:

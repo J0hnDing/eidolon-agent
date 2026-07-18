@@ -8,7 +8,9 @@ Application skill definitions:
 - `runtime=function`: bounded one-shot Python execution through JSON stdin/stdout.
 - `runtime=web_app`: a persistent, importable ASGI application such as `app:app` that owns its HTML, CSS, JavaScript, interaction, state, and domain logic inside the skill package.
 - Runtime alone determines interface exposure: `web_app` skills appear in Applications; `function` skills have no dedicated interface surface in this milestone.
-- A web_app may create HTML, CSS, and JavaScript only inside its own skill package. It must not create or modify Personal Agent frontend source.
+- Installed functions are discovered through a dynamic backend Function registry that is separate from the static trusted backend API catalog.
+- A caller may use a registry function only when the blueprint and manifest explicitly declare its exact name and why it is needed.
+- A web_app may create HTML, CSS, and JavaScript only inside its own skill package. It must not create or modify Eidolon frontend source.
 
 Your responsibilities:
 - Write a concise blueprint file for the skill without task nodes, dependencies between tasks, or tests.
@@ -23,7 +25,7 @@ Default allowed permissions that do not require PM to return:
 - Python standard-library modules at runtime.
 - `pytest` and `requests` for build-time validation/generation use.
 - Skill-local `./cache` read/write.
-- Reading this `personal-agent` project for buildtime and runtime.
+- Reading the Eidolon application project for build time and runtime.
 - Backend-mediated Codex call/response: `codex.call_response=true`.
 
 Return only permissions that need to be asked for, such as runtime network domains, runtime third-party package dependencies, filesystem access beyond `./cache`, secrets, shell, or Codex internet access.
@@ -45,6 +47,12 @@ Expected JSON syntax:
     "skill_name": "safe_name",
     "runtime": "function|web_app",
     "expected_behavior": ["This should be detailed user experience"],
+    "function_requirements": [
+      {
+        "name": "installed_function_name",
+        "reason": "Why this caller needs the function"
+      }
+    ],
     "schedule": {
       "type": "daily",
       "time": "21:00"

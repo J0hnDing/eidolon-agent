@@ -34,9 +34,9 @@ For new build workflows, the backend creates a skeleton `manifest.json` and the 
 
 After each successful task build, Builder writes `interface_artifact.json` at the controlled skill-folder root for child nodes. The artifact must name created/updated paths, schemas, entrypoints, functions, data contracts, and known limitations relevant to downstream work. The backend validates the sidecar before moving it to `runtime/agent_runs/run_<id>/tasks/<task_id>/interface_artifact.json`; Builder never writes under `runtime`.
 
-For `runtime = function`, Builder preserves bounded JSON stdin/stdout and does not add a user-facing interface. For `runtime = web_app`, Builder owns package-local interface files while leaving Personal Agent frontend source unchanged.
+For `runtime = function`, Builder preserves bounded JSON stdin/stdout and does not add a user-facing interface. For `runtime = web_app`, Builder owns package-local interface files while leaving Eidolon frontend source unchanged.
 
-For `runtime = web_app`, Builder exposes the manifest-declared importable ASGI application and may create package-owned HTML/CSS/JavaScript. Read-only assets use module-relative paths. Persistent state resolves from `PERSONAL_AGENT_SKILL_CACHE_DIR`, with `./cache` only as a development fallback; writable cache must never be placed beneath `__file__` because the package is read-only at runtime. Browser code uses same-origin application routes only. Builder never creates Personal Agent React source, custom Dockerfiles, startup commands, or process-management code.
+For `runtime = web_app`, Builder exposes the manifest-declared importable ASGI application and may create package-owned HTML/CSS/JavaScript. Read-only assets use module-relative paths. Persistent state resolves from `PERSONAL_AGENT_SKILL_CACHE_DIR`, with `./cache` only as a development fallback; writable cache must never be placed beneath `__file__` because the package is read-only at runtime. Browser code uses same-origin application routes only. Builder never creates Eidolon React source, custom Dockerfiles, startup commands, or process-management code.
 
 ## Repair Mode
 

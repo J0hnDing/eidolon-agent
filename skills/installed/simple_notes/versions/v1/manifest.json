@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "name": "simple_notes",
   "display_name": "Simple Notes",
-  "description": "Provide a simple reusable local-first web application for creating, saving, viewing, and deleting notes.",
+  "description": "Provide a reusable local-first notes application for creating, viewing, and deleting notes through a pleasant self-rendered web interface.",
   "runtime": "web_app",
   "entrypoint": "app:app",
   "instructions_path": null,

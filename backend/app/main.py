@@ -10,6 +10,7 @@ from app.routers import (
     agent_runs,
     chat,
     codex_settings,
+    functions,
     memory_facts,
     permission_requests,
     schedules,
@@ -66,7 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="Personal Agent Backend",
+    title="Eidolon Backend",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -99,6 +100,7 @@ async def enforce_web_app_gateway_origin(request: Request, call_next):
     return await call_next(request)
 
 app.include_router(memory_facts.router)
+app.include_router(functions.router)
 app.include_router(skills.router)
 app.include_router(agent_runs.router)
 app.include_router(chat.router)

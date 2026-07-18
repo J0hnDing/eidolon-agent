@@ -1,6 +1,6 @@
 # Architecture Overview
 
-The project is a local-first control plane for reusable application skills. The assistant can chat, store explicit memory, propose skills, build them with Codex-backed agents, validate them, request approvals, install them, run bounded function skills, host persistent sandboxed web applications, schedule bounded functions, and update skills through versioned drafts.
+Eidolon is a local-first control plane for reusable application skills. The assistant can chat, store explicit memory, propose skills, build them with Codex-backed agents, validate them, request approvals, install them, run bounded function skills, host persistent sandboxed web applications, schedule bounded functions, and update skills through versioned drafts.
 
 ## Main Parts
 
@@ -67,11 +67,11 @@ Generated skills must not modify backend/frontend app source.
 
 The manifest `runtime` discriminator selects an execution protocol:
 
-- `function`: the existing bounded Python JSON stdin/stdout runner and optional scheduling;
+- `function`: the bounded Python JSON stdin/stdout runner, optional scheduling, and backend-owned dynamic Function registry;
 - `web_app`: a version-pinned importable ASGI service with separate application-instance, browser-session, gateway, and bounded audit records.
 
-The backend is the control plane for both protocols. Web-app content remains on a distinct untrusted origin inside a sandboxed iframe; the React UI retains trusted navigation, lifecycle, version, and permission controls. See [Sandboxed web applications](../runtime/web_applications.md).
+The backend is the control plane for both protocols. Function discovery remains separate from the static trusted backend API catalog and invocation authority is derived from active manifests, current versions, runtime eligibility, and caller-target approval. Web-app content remains on a distinct untrusted origin inside a sandboxed iframe; the React UI retains trusted navigation, lifecycle, version, and permission controls. See [Function registry and invocation](../runtime/functions.md) and [Sandboxed web applications](../runtime/web_applications.md).
 
 ## Current Constraints
 
-The MVP is local and single-user. It intentionally avoids multi-user auth, cloud orchestration, autonomous background agents, unrestricted shell access, browser automation, secrets access, high-risk third-party actions, and silent package installation.
+The MVP is local and single-user. It intentionally avoids multi-user auth, cloud orchestration, autonomous background agents, unrestricted shell access, browser automation, secrets access, high-risk third-party actions, and silent package installation. Explicit memory facts are implemented, but automatic context selection, memory-aware chat, outcome learning, and long-term adaptation are not.

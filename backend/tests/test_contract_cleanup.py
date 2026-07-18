@@ -5,6 +5,7 @@ from app.schemas.agent_run import AgentRunRead, AgentRunStepRead
 from app.schemas.common import ScheduleStatus, SkillRuntime, SkillStatus
 from app.schemas.manifest import SkillManifest
 from app.schemas.skill import SkillRead
+from app.services.default_permissions import default_web_app_permissions
 from app.services.skill_plan_service import SkillGenerationPlan
 
 
@@ -29,3 +30,24 @@ def test_runtime_is_the_only_interface_discriminator() -> None:
         assert "tool_ui_schema" not in schema.model_fields
         assert "tool_ui_schema_json" not in schema.model_fields
     assert not any(path == "/tools" or path.startswith("/tools/") for path in app.openapi()["paths"])
+
+
+def test_default_web_app_permissions_match_runtime_support() -> None:
+    assert default_web_app_permissions() == {
+        "supported": [
+            "scripts",
+            "forms",
+            "same_origin",
+            "modals",
+            "approved_server_network",
+            "approved_server_codex",
+        ],
+        "blocked": [
+            "external_browser_network",
+            "top_navigation",
+            "popups",
+            "downloads",
+            "privileged_browser_features",
+            "websockets",
+        ],
+    }

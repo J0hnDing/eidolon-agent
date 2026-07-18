@@ -67,7 +67,7 @@ Task node files describe product work only. They should not contain backend book
 
 Task node `backend_api_ids` are numeric references to backend APIs. ProductManager sees only id, title, and description. The backend resolves those ids into detailed Builder context before the node is built. Scheduling is not represented as a backend API id; it is manifest metadata.
 
-For a web application, ProductManager may assign package-owned Python/HTML/CSS/JavaScript work but must never assign Personal Agent frontend files, custom Dockerfiles, or startup commands. Function skills keep the bounded JSON protocol and do not receive interface-specific task nodes.
+For a web application, ProductManager may assign package-owned Python/HTML/CSS/JavaScript work but must never assign Eidolon frontend files, custom Dockerfiles, or startup commands. Function skills keep the bounded JSON protocol and do not receive interface-specific task nodes.
 
 ## Decisions
 

@@ -2,7 +2,7 @@
 
 ## Project
 
-Local-First Self-Extending Personal AI Assistant.
+Eidolon: a local-first, self-extending personal AI assistant.
 
 This repository builds a local-first assistant that can chat with the user, store explicit editable memory, and turn repeated needs into safe reusable application skills. A skill is a reusable capability package that can be proposed, inspected, validated, installed, enabled, disabled, updated, scheduled, run, or deleted by the user.
 
@@ -22,7 +22,7 @@ Runtime determines interface exposure. A `web_app` skill is an importable ASGI r
 ## Repository Structure
 
 ```text
-personal-agent/
+Eidolon/
   AGENTS.md                  high-level repo guidance and guardrails
   README.md
   docs/                      detailed project documentation

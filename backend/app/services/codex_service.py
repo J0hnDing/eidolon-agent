@@ -1,6 +1,5 @@
 import json
 import os
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +16,7 @@ from app.services.codex_cli_service import codex_cli_service, should_use_real_co
 from app.services.codex_invocation_recorder import CodexInvocationRecorder
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
 from app.services.default_permissions import default_build_time_dependencies
+from app.services.dependency_environment import build_dependency_environment
 from app.services.manifest_validator import classify_permission_risk, validate_manifest_file
 from app.services.permission_service import PermissionService
 from app.services.product_manager_contract_service import ProductManagerContractService
@@ -184,6 +184,7 @@ class RealCodexAdapter:
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=build_dependency_environment(output_dir),
             timeout=timeout_seconds,
             shell=False,
         )
@@ -443,6 +444,7 @@ class FakeCodexAdapter:
             "instructions_path": self._instructions_path_for_plan(plan),
             "input_schema": plan.get("input_schema"),
             "output_schema": plan.get("output_schema"),
+            "function_requirements": list(plan.get("function_requirements", []) or []),
             "dependencies": plan.get("requested_dependencies", []),
             "permissions": permissions,
             "schedule": plan.get("schedule"),
@@ -615,6 +617,7 @@ class FakeCodexAdapter:
             "skill_name": plan.get("skill_name"),
             "runtime": plan.get("runtime", "function"),
             "expected_behavior": plan.get("expected_output", {}),
+            "function_requirements": list(plan.get("function_requirements", []) or []),
             "schedule": plan.get("schedule"),
             "acceptance_criteria": acceptance_criteria,
         }
@@ -873,6 +876,7 @@ class CodexService:
             result,
             payload,
             default_adapter_name=type(self.adapter).__name__,
+            prompt=prompt,
         )
         return result
 
@@ -904,6 +908,7 @@ class CodexService:
             result,
             plan,
             default_adapter_name=type(self.adapter).__name__,
+            prompt=prompt,
         )
         return result
 
@@ -948,6 +953,9 @@ class CodexService:
 
     def consume_invocation_usage(self) -> list[dict[str, object]]:
         return self.invocations.consume_build_usage()
+
+    def consume_agent_transcripts(self) -> list[dict[str, str]]:
+        return self.invocations.consume_build_transcripts()
 
     def _routed_adapter(
         self,
@@ -1088,7 +1096,8 @@ class CodexService:
         blueprint = self.product_manager_contracts.sanitize_blueprint(parsed.get("blueprint"), fallback)
         blueprint.pop("permission_plan", None)
         permission_plan = self.product_manager_contracts.sanitize_permission_plan(
-            parsed.get("permission_plan"), generation_request.plan_json
+            parsed.get("permission_plan"),
+            generation_request.plan_json,
         )
         raw_build_workflow = parsed.get("build_workflow")
         build_workflow = str(raw_build_workflow).strip() if raw_build_workflow else DEFAULT_BUILD_WORKFLOW
@@ -1271,6 +1280,7 @@ class CodexService:
         initial_skill_status: str = "proposed",
         task_context: dict[str, object] | None = None,
         create_runtime_request: bool = True,
+        workspace_prepared: bool = False,
     ) -> tuple[Skill, object]:
         if generation_request.status != "approved":
             raise CodexGenerationError("Generation request is not approved for generation")
@@ -1286,9 +1296,11 @@ class CodexService:
         installed_dir = self.proposed_service.installed_dir(skill_name)
         if installed_dir.exists():
             raise CodexGenerationError(f"Installed skill already exists: {skill_name}")
-        if proposed_dir.exists():
-            shutil.rmtree(proposed_dir)
-        proposed_dir.mkdir(parents=True)
+        if workspace_prepared:
+            if not proposed_dir.is_dir():
+                raise CodexGenerationError("Backend-prepared generation workspace is missing")
+        else:
+            proposed_dir = self.proposed_service.prepare_generation_workspace(skill_name)
         self._write_manifest_skeleton(proposed_dir, plan, task_context)
 
         generation_request.status = "generating"
@@ -1327,6 +1339,7 @@ class CodexService:
         blueprint: dict[str, object],
         permission_plan: dict[str, object],
         *,
+        workspace_prepared: bool = False,
         prompt_builder: Callable[[dict[str, object], dict[str, object], Path], str] = build_single_codex_prompt,
     ) -> tuple[Skill, subprocess.CompletedProcess[str]]:
         if generation_request.status != "approved":
@@ -1341,7 +1354,11 @@ class CodexService:
         self._assert_proposed_skill_workspace(proposed_dir)
         if self.proposed_service.installed_dir(skill_name).exists():
             raise CodexGenerationError(f"Installed skill already exists: {skill_name}")
-        proposed_dir = self.proposed_service.prepare_generation_workspace(skill_name)
+        if workspace_prepared:
+            if not proposed_dir.is_dir():
+                raise CodexGenerationError("Backend-prepared generation workspace is missing")
+        else:
+            proposed_dir = self.proposed_service.prepare_generation_workspace(skill_name)
         workflow_context = {
             "blueprint_json": blueprint,
             "permission_plan": permission_plan,
@@ -1543,6 +1560,7 @@ class CodexService:
             "skill_name": skill.name,
             "display_name": skill.name.replace("_", " ").title(),
             "runtime": skill.runtime,
+            "function_requirements": list(skill.function_requirements_json or []),
             "input_schema": skill.input_schema_json,
             "output_schema": skill.output_schema_json,
             "requested_permissions": failure_context.get(
@@ -1578,6 +1596,9 @@ class CodexService:
         skill.instructions_path = manifest.instructions_path
         skill.input_schema_json = manifest.input_schema
         skill.output_schema_json = manifest.output_schema
+        skill.function_requirements_json = [
+            item.model_dump(mode="json") for item in manifest.function_requirements
+        ]
         skill.enabled = False
         self.db.commit()
         self.db.refresh(skill)
@@ -1593,6 +1614,7 @@ class CodexService:
             "instructions_path": self._planned_instructions_path(plan),
             "input_schema_json": plan.get("input_schema"),
             "output_schema_json": plan.get("output_schema"),
+            "function_requirements_json": list(plan.get("function_requirements", []) or []),
             "installed_path": None,
             "enabled": False,
         }
@@ -1682,6 +1704,11 @@ class CodexService:
             "instructions_path": self._planned_instructions_path(plan),
             "input_schema": plan.get("input_schema"),
             "output_schema": plan.get("output_schema"),
+            "function_requirements": list(
+                blueprint.get("function_requirements")
+                if isinstance(blueprint.get("function_requirements"), list)
+                else plan.get("function_requirements", [])
+            ),
             "dependencies": dependencies,
             "permissions": sanitized_permissions,
             "schedule": (
@@ -1992,6 +2019,7 @@ Payload:
             "skill_name": skill.name,
             "runtime": skill.runtime,
             "suggestion": suggestion,
+            "function_requirements": list(skill.function_requirements_json or []),
             "permission_plan": {
                 "build_time": {
                     "internet_research": bool(requested_network_domains or requested_dependencies),

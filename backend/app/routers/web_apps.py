@@ -9,10 +9,13 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Skill, WebAppAuditRecord, WebAppInstance
+from app.schemas.function_registry import FunctionInvocationRequest, FunctionInvocationResponse
 from app.schemas.manifest import SkillManifest
 from app.schemas.skill_codex import SkillCodexRequest, SkillCodexResponse
+from app.schemas.skill_run import SkillRunRead
 from app.schemas.web_app import WebAppAuditRecordRead, WebAppInstanceRead, WebAppOpenResponse
 from app.services.codex_service import CodexGenerationError, CodexService
+from app.services.function_registry_service import FunctionRegistryError, FunctionRegistryService
 from app.services.manifest_validator import validate_manifest_file
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
 from app.services.web_app_runtime_service import WebAppRuntimeError, WebAppRuntimeService
@@ -132,6 +135,41 @@ def web_app_codex_capability(
         response={"response_characters": len(str(result.get("response", "")))},
     )
     return SkillCodexResponse(**result)
+
+
+@router.post("/capabilities/functions/{function_name}", response_model=FunctionInvocationResponse)
+def web_app_function_capability(
+    function_name: str,
+    payload: FunctionInvocationRequest,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> FunctionInvocationResponse:
+    token = _bearer_token(authorization)
+    runtime = WebAppRuntimeService(db)
+    try:
+        instance, skill, _manifest = runtime.instance_for_capability(token)
+        run = FunctionRegistryService(db).invoke_from_web_app(
+            skill,
+            instance.version_id,
+            instance.id,
+            function_name,
+            payload.input,
+        )
+    except (FunctionRegistryError, WebAppRuntimeError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    runtime.record_audit(
+        instance,
+        "function_call",
+        run.status,
+        request={"function_name": function_name, "input": payload.input},
+        response={"run_id": run.id, "status": run.status},
+        error_message=run.error_message,
+    )
+    return FunctionInvocationResponse(
+        run=SkillRunRead.model_validate(run),
+        output=run.output_json,
+        error=run.error_message,
+    )
 
 
 @gateway_router.api_route(

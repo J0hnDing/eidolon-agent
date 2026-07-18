@@ -161,8 +161,8 @@ def skill_plan(**overrides) -> dict:
         "files_to_generate": ["manifest.json", "README.md", "skill.py", "tests/test_skill.py"],
         "expected_input": {"input": "object"},
         "expected_output": {"title": "string", "items": [], "warnings": []},
-        "input_schema": None,
-        "output_schema": None,
+        "input_schema": {"type": "object", "additionalProperties": True},
+        "output_schema": {"type": "object", "additionalProperties": True},
         "requested_permissions": {
             "network": [],
             "filesystem_read": [],
@@ -343,10 +343,12 @@ def test_project_mode_uses_product_manager_review_before_blueprint(db_session: S
         for step in steps
         if (step.output_json or {}).get("decision_json")
     ]
-    assert decisions[:2] == [
-        "proceed_to_blueprint",
-        "request_permission",
-    ]
+    assert decisions == ["proceed_to_blueprint"]
+    permission_step = next(step for step in steps if step.action == "backend_build_time_permission_review")
+    assert permission_step.step_name == "backend"
+    assert permission_step.approval_request_id == response["permission_request"].id
+    assert permission_step.input_json is None
+    assert permission_step.output_json is None
     assert "plausibility_review" not in generation_request.plan_json
 
 

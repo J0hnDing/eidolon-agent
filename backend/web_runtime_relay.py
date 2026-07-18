@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import re
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, build_opener
 from urllib.request import Request as UrlRequest
@@ -12,6 +13,7 @@ from fastapi import FastAPI, Request, Response
 MAX_REQUEST_BYTES = 1_000_000
 MAX_RESPONSE_BYTES = 5_000_000
 CODEX_CAPABILITY_PATH = "/web-apps/capabilities/codex"
+SAFE_FUNCTION_NAME = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 APP_HOST = os.environ.get("PERSONAL_AGENT_RELAY_APP_HOST", "")
 APP_PORT = int(os.environ.get("PERSONAL_AGENT_RELAY_APP_PORT", "8000"))
@@ -27,6 +29,17 @@ class _NoRedirect(HTTPRedirectHandler):
 
 @capability_app.post(CODEX_CAPABILITY_PATH)
 async def forward_codex_capability(request: Request) -> Response:
+    return await _forward_capability(request, CODEX_CAPABILITY_PATH)
+
+
+@capability_app.post("/web-apps/capabilities/functions/{function_name}")
+async def forward_function_capability(function_name: str, request: Request) -> Response:
+    if not SAFE_FUNCTION_NAME.fullmatch(function_name):
+        return Response("Invalid function name", status_code=400, media_type="text/plain")
+    return await _forward_capability(request, f"/web-apps/capabilities/functions/{function_name}")
+
+
+async def _forward_capability(request: Request, path: str) -> Response:
     content_length = request.headers.get("content-length", "")
     if content_length.isdigit() and int(content_length) > MAX_REQUEST_BYTES:
         return Response("Capability request is too large", status_code=413, media_type="text/plain")
@@ -39,7 +52,7 @@ async def forward_codex_capability(request: Request) -> Response:
     if not BACKEND_URL.startswith("http://"):
         return Response("Trusted backend relay target is invalid", status_code=502, media_type="text/plain")
     upstream_request = UrlRequest(
-        f"{BACKEND_URL}{CODEX_CAPABILITY_PATH}",
+        f"{BACKEND_URL}{path}",
         data=body,
         headers={
             "Authorization": authorization,

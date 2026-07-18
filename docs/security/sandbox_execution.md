@@ -41,6 +41,8 @@ Wildcard or unrestricted network remains blocked.
 
 Backend-mediated Codex calls use the same runtime permission boundary: call/response is allowed by default, while Codex internet access is allowed only when the skill has approved runtime network domains.
 
+Backend-mediated Function calls use ephemeral capabilities derived from the currently running function or current web-application instance. No-internet Docker functions use a transient internal network and an allowlisted relay that forwards only Function registry discovery/invocation requests; the relay does not grant general internet access. The entrypoint receives the token, but its pre-run tests do not.
+
 Browser-side web-app traffic is a separate boundary and is blocked from external domains entirely. The gateway CSP permits same-origin application routes only; HTML/CSS/JavaScript literal absolute URLs also fail static validation.
 
 ## Local Runner

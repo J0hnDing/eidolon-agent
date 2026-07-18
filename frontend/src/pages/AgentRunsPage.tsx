@@ -71,7 +71,7 @@ export default function AgentRunsPage() {
               </div>
               <div>
                 <dt>Step</dt>
-                <dd>{run.current_step ?? "none"}</dd>
+                <dd>{run.current_step ? formatStepName(run.current_step) : "none"}</dd>
               </div>
               <div>
                 <dt>Skill</dt>
@@ -87,6 +87,14 @@ export default function AgentRunsPage() {
       </div>
     </section>
   );
+}
+
+function formatStepName(value: string): string {
+  if (value === "product_manager") return "Product Manager";
+  if (value === "backend") return "Backend";
+  if (value === "builder") return "Builder";
+  if (value === "tester") return "Tester";
+  return value;
 }
 
 function formatTimestamp(value: string): string {

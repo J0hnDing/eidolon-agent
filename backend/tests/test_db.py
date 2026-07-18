@@ -79,6 +79,7 @@ def test_local_schema_migrates_legacy_statuses_task_columns_and_retired_skill_fi
     assert "interface_type" not in skill_columns
     assert "tool_ui_schema_json" not in skill_columns
     assert "runtime" in skill_columns
+    assert "function_requirements_json" in skill_columns
     assert "relay_container_id" in {
         column["name"] for column in inspector.get_columns("web_app_instances")
     }
@@ -86,7 +87,14 @@ def test_local_schema_migrates_legacy_statuses_task_columns_and_retired_skill_fi
         column["name"] for column in inspector.get_columns("skill_generation_requests")
     }
     assert "current_task_id" in {column["name"] for column in inspector.get_columns("agent_runs")}
-    assert "task_node_id" in {column["name"] for column in inspector.get_columns("agent_run_steps")}
+    agent_step_columns = {column["name"] for column in inspector.get_columns("agent_run_steps")}
+    assert {
+        "action",
+        "task_node_id",
+        "approval_request_id",
+        "agent_input_text",
+        "agent_output_text",
+    } <= agent_step_columns
     with legacy_engine.connect() as connection:
         assert connection.execute(text("SELECT status, enabled, runtime FROM skills WHERE id = 1")).one() == (
             "installed",

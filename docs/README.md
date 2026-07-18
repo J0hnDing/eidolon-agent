@@ -1,6 +1,10 @@
-# Documentation Index
+# Eidolon Documentation
 
 This folder is the detailed source of truth for current behavior, confirmed future work, and concise implementation history. `AGENTS.md` remains the high-level entry point and safety contract.
+
+## Compatibility Identifiers
+
+The product and repository are named **Eidolon**. Existing environment variables with the `PERSONAL_AGENT_*` prefix, the `personal_agent.db` SQLite filename, browser-storage keys, internal gateway routes, and some Docker resource names remain stable compatibility contracts so the rename does not orphan local configuration, history, or installed skills. New user-facing copy and package metadata use Eidolon.
 
 ## Start Here
 
@@ -31,6 +35,7 @@ This folder is the detailed source of truth for current behavior, confirmed futu
 - [Permission system](security/permissions.md)
 - [Sandbox execution](security/sandbox_execution.md)
 - [Sandboxed web applications](runtime/web_applications.md)
+- [Function registry and invocation](runtime/functions.md)
 - [Scheduling](runtime/scheduling.md)
 
 ## Integrations, Roadmap, and History

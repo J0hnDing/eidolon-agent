@@ -1,11 +1,13 @@
 [project]
-name = "personal-agent-backend"
+name = "eidolon-backend"
 version = "0.1.0"
-description = "Local-first personal assistant backend foundation."
+description = "Local-first, self-extending Eidolon personal agent backend."
 requires-python = ">=3.12"
 dependencies = [
     "apscheduler>=3.10.4",
     "fastapi>=0.115.0",
+    "jsonschema>=4.23.0",
+    "packaging>=24.0",
     "pydantic>=2.8.0",
     "sqlalchemy>=2.0.30",
     "tzdata>=2025.2",
@@ -29,3 +31,8 @@ select = ["E4", "E7", "E9", "F", "I"]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "--basetemp=.pytest_tmp -p no:cacheprovider"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+exclude = ["data*", "docker*", "tests*"]

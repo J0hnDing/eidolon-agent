@@ -26,12 +26,13 @@ from app.schemas.skill_version import (
 )
 from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
 from app.services.codex_service import CodexGenerationError, CodexService
+from app.services.function_registry_service import FunctionRegistryService
 from app.services.manifest_validator import validate_manifest_file
 from app.services.permission_service import PermissionError, PermissionService
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
 from app.services.scheduler_service import SchedulerService
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
-from app.services.skill_runner import get_runner_status, get_skill_runner
+from app.services.skill_runner import get_runner_status
 from app.services.skill_version_service import SkillVersionError, SkillVersionService
 
 router = APIRouter(prefix="/skills", tags=["skills"])
@@ -77,7 +78,6 @@ def run_skill(
     skill = db.get(Skill, skill_id)
     if skill is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
-
     if skill.status != "installed":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only installed skills can be run")
     if skill.runtime != "function":
@@ -91,12 +91,12 @@ def run_skill(
     if not permission_decision.allowed:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=permission_decision.reason)
 
-    skill_dir = resolve_skill_dir(skill)
-    try:
-        with SkillOperationGuard(db).locked(skill, "run", reason="Manual skill run"):
-            return get_skill_runner(db).run(skill_id=skill.id, skill_dir=skill_dir, input_json=payload.input)
-    except SkillOperationConflict as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return FunctionRegistryService(db).invoke_direct(
+        skill,
+        payload.input,
+        source="direct_user",
+        initiating_action="Manual skill run",
+    )
 
 
 @router.post("/{skill_id}/codex", response_model=SkillCodexResponse)

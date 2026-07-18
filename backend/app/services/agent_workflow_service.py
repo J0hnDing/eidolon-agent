@@ -12,6 +12,7 @@ from app.models import AgentRun, AgentRunStep, ApprovalRequest, MemoryFact, Skil
 from app.schemas.proposed_skill import ProposedSkillValidationRead
 from app.services.agent_run_artifact_store import AgentRunArtifactStore
 from app.services.backend_api_catalog import backend_api_context
+from app.services.build_dependency_service import BuildDependencyError, BuildDependencyService
 from app.services.capability_scanner import CapabilityScanResult, StaticCapabilityScanner
 from app.services.codex_routing_service import CodexRoutingService
 from app.services.codex_service import CodexGenerationError, CodexService
@@ -287,35 +288,17 @@ class AgentWorkflowService:
         self._apply_combined_permission_summary(permission_request, pm_summary, permission_summary)
         self._finish_step(
             agent_run,
-            self._start_step(
+            self._start_backend_step(
                 agent_run,
-                "product_manager",
-                input_json={
-                    "action": "backend_build_time_permission_review",
-                    "blueprint_json": blueprint,
-                    "permission_plan": permission_plan,
-                },
-                logs="Backend created the deterministic build-time approval request from blueprint.json and permissions.json.",
+                "backend_build_time_permission_review",
+                "Backend created the build-time permission review and is waiting for the local user's decision.",
+                approval_request_id=permission_request.id,
             ),
             "waiting_for_approval",
-            output_json={
-                "blueprint_json": blueprint,
-                "permission_plan": permission_plan,
-                "blueprint_path": blueprint_path,
-                "permission_path": permission_path,
-                "permission_request_id": permission_request.id,
-                "risk_level": permission_request.risk_level,
-                "decision_json": {
-                    "decision": "request_permission",
-                    "reason": "Build-time approval is required before Codex writes proposed files.",
-                },
-                "user_summary": pm_summary,
-                "permission_review_summary": permission_summary,
-            },
-            logs=f"ProductManager: {pm_summary}\n\nPermission review: {permission_summary}",
+            logs="Backend created the build-time permission review and is waiting for the local user's decision.",
         )
         agent_run.status = "waiting_for_approval"
-        agent_run.current_step = "product_manager"
+        agent_run.current_step = "backend"
         agent_run.summary = "Waiting for one build-time approval."
         agent_run.final_summary_json = {
             "blueprint_path": blueprint_path,
@@ -333,19 +316,60 @@ class AgentWorkflowService:
         decision = PermissionService(self.db, project_root=self.project_root).can_generate(generation_request)
         if not decision.allowed:
             agent_run.status = "waiting_for_approval"
-            agent_run.current_step = "product_manager"
+            agent_run.current_step = "backend"
             self.db.commit()
             raise AgentWorkflowError(decision.reason)
 
         self._mark_waiting_permission_steps_approved(agent_run)
         permission_plan = self._finalize_build_permission_plan(agent_run, generation_request)
-        workflow = get_project_build_workflow(agent_run.build_workflow or DEFAULT_BUILD_WORKFLOW)
         try:
+            self._provision_build_dependencies(agent_run, generation_request, permission_plan)
+            workflow = get_project_build_workflow(agent_run.build_workflow or DEFAULT_BUILD_WORKFLOW)
             return workflow.execute(self, generation_request, agent_run, permission_plan)
         except Exception as exc:
             if agent_run.status != "blocked":
                 self._fail_run(agent_run, str(exc))
             raise
+
+    def _provision_build_dependencies(
+        self,
+        agent_run: AgentRun,
+        generation_request: SkillGenerationRequest,
+        permission_plan: dict[str, Any],
+    ) -> None:
+        skill = self.db.get(Skill, generation_request.proposed_skill_id)
+        if skill is None:
+            raise AgentWorkflowError("Approved build no longer has a controlled skill record")
+        self.proposed_service.prepare_generation_workspace(skill.name)
+        step = self._start_backend_step(
+            agent_run,
+            "backend_build_dependency_provisioning",
+            "Backend is provisioning and verifying the approved dependency environment.",
+        )
+        try:
+            BuildDependencyService(self.db, project_root=self.project_root).provision(
+                generation_request,
+                skill,
+                permission_plan,
+            )
+        except BuildDependencyError as exc:
+            self._finish_step(
+                agent_run,
+                step,
+                "failed",
+                logs="Backend dependency provisioning failed before Codex started.",
+                error_message=str(exc),
+            )
+            generation_request.status = "failed"
+            generation_request.error_message = str(exc)
+            self.db.commit()
+            raise AgentWorkflowError(f"Build dependency provisioning failed before Codex started: {exc}") from exc
+        self._finish_step(
+            agent_run,
+            step,
+            "succeeded",
+            logs="Backend provisioned and verified the controlled dependency environment before Codex started.",
+        )
 
     def create_repair_run(self, skill: Skill, user_request: str | None = None) -> AgentRun:
         with SkillOperationGuard(self.db).locked(skill, "repair", reason="Agent repair workflow"):
@@ -472,18 +496,22 @@ class AgentWorkflowService:
             )
             permission_summary = self._permission_build_time_summary(blueprint, permission_request)  # type: ignore[arg-type]
             self._apply_combined_permission_summary(permission_request, decision["summary"], permission_summary)
-            pm_step = agent_run.steps[-1]
-            pm_step.status = "waiting_for_approval"
-            pm_step.ended_at = utc_now()
-            pm_step.output_json = {
-                **(pm_step.output_json or {}),
-                "permission_request_id": permission_request.id,
-                "risk_level": permission_request.risk_level,
-                "permission_review_summary": permission_summary,
-            }
-            pm_step.logs = f"{pm_step.logs or decision['summary']}\n\nPermission review: {permission_summary}"
+            self._finish_step(
+                agent_run,
+                self._start_backend_step(
+                    agent_run,
+                    "backend_update_build_time_permission_review",
+                    "Backend created the update build-time permission review and is waiting for the local user's decision.",
+                    task_node_id="update_version",
+                    approval_request_id=permission_request.id,
+                ),
+                "waiting_for_approval",
+                logs=(
+                    "Backend created the update build-time permission review and is waiting for the local user's decision."
+                ),
+            )
             agent_run.status = "waiting_for_approval"
-            agent_run.current_step = "product_manager"
+            agent_run.current_step = "backend"
             agent_run.summary = decision["summary"]
             agent_run.final_summary_json = {
                 "permission_request_id": permission_request.id,
@@ -587,16 +615,14 @@ class AgentWorkflowService:
 
             self._finish_step(
                 agent_run,
-                self._start_step(
+                self._start_backend_step(
                     agent_run,
-                    "product_manager",
+                    "backend_finalize_update",
+                    "Backend finalized the validated draft update and recorded its activation requirements.",
                     task_node_id="update_version",
-                    input_json={"skill_id": skill.id, "version_id": draft.id},
-                    logs="ProductManager summarized the proposed update.",
                 ),
                 "succeeded",
-                output_json={"version_id": draft.id, "user_summary": summary},
-                logs=summary,
+                logs="Backend finalized the validated draft update and recorded its activation requirements.",
             )
             agent_run.status = final_status
             agent_run.summary = summary
@@ -1143,38 +1169,16 @@ class AgentWorkflowService:
         validation: Any,
         task_node_id: str = DEFAULT_TASK_ID,
     ) -> None:
-        next_task_node_id = self._next_task_node_id(agent_run, task_node_id)
-        decision = "finish_ready_for_review" if next_task_node_id is None else "build_next_milestone"
-        summary = self.codex_service.product_manager_summary(
-            "milestone_passed",
-            {
-                "skill_id": skill.id,
-                "task_node_id": task_node_id,
-                "next_task_node_id": next_task_node_id,
-                "test_result_json": validation.model_dump(mode="json"),
-                "blueprint_json": agent_run.blueprint_json,
-            },
-            (
-                f"Milestone {task_node_id} passed. " +
-                (
-                    "ProductManager considers the planned blueprint complete and is preparing runtime permission review."
-                    if next_task_node_id is None
-                    else f"ProductManager is continuing to milestone {next_task_node_id}."
-                )
-            ),
-        )
         self._finish_step(
             agent_run,
-            self._start_step(
+            self._start_backend_step(
                 agent_run,
-                "product_manager",
+                "backend_record_task_validation",
+                "Backend recorded that the current task passed validation and selected the next workflow state.",
                 task_node_id=task_node_id,
-                input_json={"skill_id": skill.id, "test_result_json": validation.model_dump(mode="json")},
-                logs="ProductManager reviewed the passing milestone result.",
             ),
             "succeeded",
-            output_json={"decision_json": {"decision": decision}, "user_summary": summary},
-            logs=summary,
+            logs="Backend recorded that the current task passed validation and selected the next workflow state.",
         )
 
     def _runtime_permission_review(
@@ -1209,6 +1213,7 @@ class AgentWorkflowService:
                 "risk_level": runtime_request.risk_level,
                 "permission_expansion": runtime_request.reason_json.get("permission_expansion", {}),
                 "runner_unsupported": runtime_request.reason_json.get("runner_unsupported", []),
+                "function_requirements": runtime_request.reason_json.get("function_requirements", []),
                 "permissions": runtime_request.requested_permissions_json,
                 "product_manager_summary": pm_summary,
                 "permission_review_summary": permission_summary,
@@ -1251,21 +1256,21 @@ class AgentWorkflowService:
             final_summary["task_statuses"] = previous_final_summary["task_statuses"]
         self._finish_step(
             agent_run,
-            self._start_step(
+            self._start_backend_step(
                 agent_run,
-                "product_manager",
+                "backend_finalize_build",
+                "Backend finalized validation, recorded runtime permission requirements, and marked the build ready for review.",
                 task_node_id=task_node_id,
-                input_json={"skill_id": skill.id},
-                logs="ProductManager wrote the completion summary.",
             ),
             "succeeded",
-            output_json={"decision_json": {"decision": "finish_ready_for_review"}, "user_summary": summary},
-            logs=summary,
+            logs=(
+                "Backend finalized validation, recorded runtime permission requirements, and marked the build ready for review."
+            ),
         )
         agent_run.skill_id = skill.id
         agent_run.status = "succeeded"
         skill.status = "proposed"
-        agent_run.current_step = "product_manager"
+        agent_run.current_step = "backend"
         agent_run.summary = summary
         agent_run.final_summary_json = final_summary
         agent_run.completed_at = utc_now()
@@ -1292,16 +1297,14 @@ class AgentWorkflowService:
         )
         self._finish_step(
             agent_run,
-            self._start_step(
+            self._start_backend_step(
                 agent_run,
-                "product_manager",
+                "backend_stop_failed_build",
+                "Backend stopped the workflow after the bounded validation failure limit was reached.",
                 task_node_id=task_node_id,
-                input_json={"skill_id": skill.id, "failure_count_json": agent_run.failure_count_json},
-                logs="ProductManager stopped the workflow after repeated failures.",
             ),
             "blocked",
-            output_json={"decision_json": {"decision": "stop_failed"}, "user_summary": summary},
-            logs=summary,
+            logs="Backend stopped the workflow after the bounded validation failure limit was reached.",
             error_message=summary,
         )
         agent_run.status = "blocked"
@@ -1340,16 +1343,14 @@ class AgentWorkflowService:
         )
         self._finish_step(
             agent_run,
-            self._start_step(
+            self._start_backend_step(
                 agent_run,
-                "product_manager",
+                "backend_stop_failed_update",
+                "Backend stopped the update after the bounded validation failure limit was reached.",
                 task_node_id="update_version",
-                input_json={"skill_id": skill.id, "version_id": draft.id, "failure_count_json": agent_run.failure_count_json},
-                logs="ProductManager stopped the update workflow after repeated draft-version failures.",
             ),
             "failed",
-            output_json={"decision_json": {"decision": "stop_failed"}, "user_summary": summary},
-            logs=summary,
+            logs="Backend stopped the update after the bounded validation failure limit was reached.",
             error_message=summary,
         )
         agent_run.status = "failed"
@@ -1423,6 +1424,7 @@ class AgentWorkflowService:
             instructions_path=skill.instructions_path,
             input_schema_json=skill.input_schema_json,
             output_schema_json=skill.output_schema_json,
+            function_requirements_json=list(skill.function_requirements_json or []),
             installed_path=None,
             enabled=False,
         )
@@ -1449,6 +1451,7 @@ class AgentWorkflowService:
             "instructions_path": self._planned_instructions_path(plan),
             "input_schema_json": plan.get("input_schema"),
             "output_schema_json": plan.get("output_schema"),
+            "function_requirements_json": list(plan.get("function_requirements", []) or []),
             "installed_path": None,
             "enabled": False,
         }
@@ -1478,7 +1481,8 @@ class AgentWorkflowService:
         return (
             f"Build the {blueprint.get('skill_name')} skill. "
             "ProductManager will define Builder-owned package files in the task DAG only after approval. "
-            "Approval lets Codex generate proposed files only; it does not install or run the skill."
+            "Approval lets the backend provision listed dependencies and lets Codex generate proposed files; "
+            "it does not install or run the skill."
         )
 
     def _permission_plan_from_blueprint(self, blueprint: dict[str, Any]) -> dict[str, Any]:
@@ -1582,7 +1586,7 @@ class AgentWorkflowService:
     ) -> dict[str, Any]:
         raw_permission_plan = self.artifacts.read_json(agent_run, "permissions.json")
         final_permission_plan = effective_permission_plan(raw_permission_plan)
-        permission_path = self.artifacts.write_json(agent_run, "permissions.json", final_permission_plan)
+        self.artifacts.write_json(agent_run, "permissions.json", final_permission_plan)
         runtime = final_permission_plan["runtime"]
         runtime_permissions = self._runtime_permissions_from_plan(final_permission_plan)
         plan = dict(generation_request.plan_json or {})
@@ -1596,16 +1600,6 @@ class AgentWorkflowService:
         generation_request.requested_network_domains_json = runtime_permissions["network"]
         self.db.commit()
         self.db.refresh(generation_request)
-        for step in agent_run.steps:
-            if (
-                step.step_name == "product_manager"
-                and (step.input_json or {}).get("action") == "backend_build_time_permission_review"
-            ):
-                output = dict(step.output_json or {})
-                output["permission_plan"] = final_permission_plan
-                output["permission_path"] = permission_path
-                step.output_json = output
-        self.db.commit()
         return final_permission_plan
 
     def _record_pending_product_manager_question(
@@ -1689,14 +1683,11 @@ class AgentWorkflowService:
         waiting_steps = [
             step
             for step in agent_run.steps
-            if step.status == "waiting_for_approval" and (step.output_json or {}).get("permission_request_id")
+            if step.status == "waiting_for_approval" and step.approval_request_id is not None
         ]
         for step in waiting_steps:
             step.status = "succeeded"
             step.ended_at = utc_now()
-            output = dict(step.output_json or {})
-            output["status"] = "approved"
-            step.output_json = output
             step.logs = f"{step.logs or ''}\n\nApproved by local user.".strip()
         self.db.commit()
 
@@ -1940,7 +1931,7 @@ class AgentWorkflowService:
         except Exception:
             return []
         excluded_names = {"interface_artifact.json", "codex_prompt.txt", "codex_last_message.txt"}
-        excluded_parts = {".agents", ".deps", ".git", ".pytest_cache", "__pycache__"}
+        excluded_parts = {".agents", ".build-deps", ".deps", ".git", ".pytest_cache", "__pycache__"}
         return [
             path.relative_to(skill_dir).as_posix()
             for path in sorted(skill_dir.rglob("*"))
@@ -1965,15 +1956,23 @@ class AgentWorkflowService:
         agent_run: AgentRun,
         step_name: str,
         *,
+        action: str | None = None,
         task_node_id: str | None = None,
+        approval_request_id: int | None = None,
         input_json: dict[str, Any] | None = None,
         logs: str | None = None,
     ) -> AgentRunStep:
         self._ensure_not_cancelled(agent_run)
+        recorded_action = action
+        if recorded_action is None and input_json:
+            candidate = input_json.get("action") or input_json.get("mode")
+            recorded_action = str(candidate) if candidate else None
         step = AgentRunStep(
             agent_run_id=agent_run.id,
             step_name=step_name,
+            action=recorded_action,
             task_node_id=task_node_id,
+            approval_request_id=approval_request_id,
             status="running",
             input_json=input_json,
             logs=logs,
@@ -1987,6 +1986,24 @@ class AgentWorkflowService:
         self.db.refresh(step)
         return step
 
+    def _start_backend_step(
+        self,
+        agent_run: AgentRun,
+        action: str,
+        summary: str,
+        *,
+        task_node_id: str | None = None,
+        approval_request_id: int | None = None,
+    ) -> AgentRunStep:
+        return self._start_step(
+            agent_run,
+            "backend",
+            action=action,
+            task_node_id=task_node_id,
+            approval_request_id=approval_request_id,
+            logs=summary,
+        )
+
     def _finish_step(
         self,
         agent_run: AgentRun,
@@ -1998,6 +2015,15 @@ class AgentWorkflowService:
         error_message: str | None = None,
     ) -> None:
         invocations = self.codex_service.consume_invocation_usage()
+        transcripts = self.codex_service.consume_agent_transcripts()
+        if len(transcripts) > 1:
+            raise AgentWorkflowError("One agent-run step cannot contain multiple Codex transcripts")
+        if transcripts:
+            if step.step_name == "backend":
+                raise AgentWorkflowError("Backend steps cannot contain Codex transcripts")
+            step.action = transcripts[0]["action"]
+            step.agent_input_text = transcripts[0]["input"]
+            step.agent_output_text = transcripts[0]["output"]
         if invocations:
             step.codex_invocations_json = invocations
             for field_name in (

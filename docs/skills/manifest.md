@@ -14,8 +14,22 @@ For new Project-mode builds, the backend derives an initial skeleton from the ap
   "runtime": "function",
   "entrypoint": "skill.py",
   "instructions_path": null,
-  "input_schema": null,
-  "output_schema": null,
+  "input_schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": true
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": true
+  },
+  "function_requirements": [
+    {
+      "name": "installed_function_name",
+      "reason": "Why this skill needs the function."
+    }
+  ],
   "dependencies": [],
   "permissions": {
     "network": [],
@@ -34,6 +48,10 @@ For new Project-mode builds, the backend derives an initial skeleton from the ap
 
 Installation state, enabled state, active version, provenance, and risk level are backend-owned. They are not canonical manifest fields. The validator reads older packages that still contain `risk_level`, `created_by`, or `enabled` for compatibility, but canonical serialization and new generation omit them. Risk is derived deterministically from permissions and dependencies when the backend updates the skill record.
 
+New function plans declare object-shaped `input_schema` and `output_schema` JSON Schemas. The backend validates the schemas themselves and validates every registry input and successful output against them. Older installed functions with missing schemas remain directly runnable and schedulable for compatibility, but appear unavailable for cross-skill registry invocation until updated with explicit contracts.
+
+`function_requirements` declares caller relationships. Each entry contains the exact installed function name and a user-readable reason. Discovery does not add entries automatically, requirements are not Python dependencies, and the caller does not inherit the target function's permissions. A skill cannot require itself and duplicate target names are invalid.
+
 `schedule` is ProductManager-owned manifest intent for recurring bounded function execution. Use `null` when no recurring run was requested. `web_app` manifests must use `null`; persistent services are not scheduled `SkillRun` jobs. Supported function schedule forms are:
 
 - `{"type": "daily", "time": "HH:MM", "timezone": "America/Toronto", "input": {}}`;
@@ -47,6 +65,8 @@ On install, the backend registers a manifest-declared schedule as a pending sche
 - `runtime` is `function` or `web_app`;
 - both protocols require an `entrypoint` and tests;
 - `function` uses a relative Python file such as `skill.py` and bounded JSON stdin/stdout execution;
+- registry-callable functions require object-shaped input/output JSON Schema contracts;
+- both runtime protocols may declare `function_requirements` for backend-controlled server-side calls;
 - `web_app` uses importable `module:attribute` ASGI syntax such as `app:app` and cannot declare a bounded schedule;
 - the declared entrypoint file or module must exist inside the package;
 - may request supported runtime permissions.
@@ -59,13 +79,13 @@ Skills may optionally include reusable instructions:
 
 ## Interface Exposure
 
-`runtime` is the sole interface discriminator. A `web_app` owns its HTML, CSS, and JavaScript inside the skill folder and is opened from Applications. Generated skills must never modify or inject source into the Personal Agent React frontend. A `function` has no dedicated interface surface in the current milestone.
+`runtime` is the sole interface discriminator. A `web_app` owns its HTML, CSS, and JavaScript inside the skill folder and is opened from Applications. Generated skills must never modify or inject source into the Eidolon React frontend. A `function` has no dedicated interface surface; the registry is a machine-facing backend contract, not an application UI.
 
 ## Dependency Rules
 
 `dependencies` is optional and contains Python package names or simple version specifiers. URLs, Git references, local paths, editable installs, shell flags, and generated-skill Dockerfiles are blocked.
 
-Build-time dependency installation is approval-gated. Runtime package installation is not supported.
+Build-time dependency provisioning is approval-gated and backend-owned. Immediately after approval, declared runtime packages are installed into the proposed skill's `.deps` folder before Codex starts; missing build-only tools use `.build-deps`. Final validation requires the actual manifest dependency list to match the provisioned runtime contract exactly. Agents and generated code cannot install packages, and runtime package installation is not supported.
 
 ## Permission Risk
 

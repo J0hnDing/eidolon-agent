@@ -41,26 +41,31 @@ def test_product_manager_creates_blueprint_and_permissions_before_task_dag(tmp_p
     run_dir = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}"
 
     assert agent_run.status == "waiting_for_approval"
-    assert agent_run.current_step == "product_manager"
+    assert agent_run.current_step == "backend"
     assert agent_run.current_task_id is None
     assert building_skill.status == "building"
     assert agent_run.build_workflow == "task_dag"
     assert "milestones" not in agent_run.blueprint_json
     assert "build_workflow" not in agent_run.blueprint_json
     steps = sorted(agent_run.steps, key=lambda step: step.id)
-    assert [step.step_name for step in steps] == ["product_manager"] * 4
-    assert [step.input_json["action"] for step in steps] == [
-        "pm_refine_intent",
-        "pm_review_plausibility",
-        "pm_write_blueprint_and_permissions",
+    assert [step.step_name for step in steps] == ["product_manager"] * 3 + ["backend"]
+    assert [step.action for step in steps] == [
+        "product_manager_refine_intent",
+        "product_manager_build_review",
+        "product_manager_write_blueprint_and_permissions",
         "backend_build_time_permission_review",
     ]
     assert steps[0].output_json["intent_prompt_path"].endswith("intent_prompt.json")
     assert steps[1].output_json["decision_json"]["decision"] == "proceed_to_blueprint"
     assert steps[2].output_json["blueprint_json"]["skill_name"] == building_skill.name
     assert steps[2].output_json["permission_path"].endswith("permissions.json")
-    assert steps[3].output_json["decision_json"]["decision"] == "request_permission"
-    assert "task_dag_path" not in steps[3].output_json
+    assert steps[3].input_json is None
+    assert steps[3].output_json is None
+    assert steps[3].approval_request_id is not None
+    assert all(step.agent_input_text for step in steps[:3])
+    assert all(step.agent_output_text is not None for step in steps[:3])
+    assert steps[3].agent_input_text is None
+    assert steps[3].agent_output_text is None
     assert (run_dir / "intent_prompt.json").is_file()
     assert (run_dir / "decision.json").is_file()
     assert (run_dir / "blueprint.json").is_file()
@@ -83,7 +88,6 @@ def test_product_manager_creates_blueprint_and_permissions_before_task_dag(tmp_p
     assert "build_workflow" not in stored_blueprint
     assert set(steps[1].input_json) == {"action", "intent_prompt"}
     assert set(steps[2].input_json) == {"action", "intent_prompt"}
-    assert set(steps[3].input_json) == {"action", "blueprint_json", "permission_plan"}
 
 
 def test_settings_workflow_override_wins_over_product_manager_choice(tmp_path: Path, db_session: Session) -> None:
@@ -224,9 +228,11 @@ def test_approval_updates_waiting_product_manager_permission_step(db_session: Se
 
     agent_run = AgentWorkflowService(db_session).latest_run_for_generation(response["generation_request"].id)
     db_session.refresh(response["generation_request"])
-    pm_step = [step for step in agent_run.steps if (step.output_json or {}).get("permission_request_id")][0]
-    assert pm_step.status == "succeeded"
-    assert pm_step.output_json["status"] == "approved"
+    backend_step = [step for step in agent_run.steps if step.approval_request_id == permission_request.id][0]
+    assert backend_step.step_name == "backend"
+    assert backend_step.status == "succeeded"
+    assert backend_step.input_json is None
+    assert backend_step.output_json is None
     assert agent_run.status == "pending"
     assert response["generation_request"].status == "approved"
 
@@ -290,10 +296,11 @@ def test_approved_build_uses_pm_builder_tester_and_permission_artifacts(tmp_path
         "product_manager",
         "builder",
         "tester",
+        "backend",
     }
-    approval_pm_step = [step for step in agent_run.steps if (step.output_json or {}).get("permission_request_id")][0]
-    assert approval_pm_step.status == "succeeded"
-    assert "Approved by local user" in approval_pm_step.logs
+    approval_backend_step = [step for step in agent_run.steps if step.approval_request_id is not None][0]
+    assert approval_backend_step.status == "succeeded"
+    assert "Approved by local user" in approval_backend_step.logs
     runtime_artifact = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "runtime_permissions.json"
     assert runtime_artifact.is_file()
     assert json.loads(runtime_artifact.read_text(encoding="utf-8"))["skill_id"] == skill.id
@@ -307,7 +314,7 @@ def test_approved_build_uses_pm_builder_tester_and_permission_artifacts(tmp_path
     assert final_permission_plan["runtime"]["python_standard_library"] is True
     assert final_permission_plan["runtime"]["codex"]["call_response"] is True
     assert final_permission_plan["build_time"]["dependencies"] == ["pytest", "requests"]
-    assert final_permission_plan["build_time"]["project_read"] == ["personal-agent"]
+    assert final_permission_plan["build_time"]["project_read"] == ["Eidolon"]
     assert "default_allowed" not in final_permission_plan
     assert "banned_permissions" not in final_permission_plan
     assert "codex_generation" not in final_permission_plan["build_time"]
@@ -329,6 +336,16 @@ def test_approved_build_uses_pm_builder_tester_and_permission_artifacts(tmp_path
         for step in agent_run.steps
         if step.step_name == "product_manager" and step.input_json.get("action") == "pm_write_task_dag"
     )
+    dependency_step = next(
+        step
+        for step in agent_run.steps
+        if step.step_name == "backend" and step.action == "backend_build_dependency_provisioning"
+    )
+    builder_step = next(step for step in agent_run.steps if step.step_name == "builder")
+    assert dependency_step.status == "succeeded"
+    assert dependency_step.input_json is None
+    assert dependency_step.output_json is None
+    assert dependency_step.id < dag_step.id < builder_step.id
     assert dag_step.input_json["backend_api_index_file"] == backend_api_index_file().as_posix()
     assert task_artifact.is_file()
     assert interface_artifact.is_file()
@@ -393,6 +410,17 @@ def test_single_codex_workflow_runs_one_build_invocation_end_to_end(tmp_path: Pa
     ] is True
     assert "Blueprint:" in adapter.single_prompt
     assert "Effective permissions:" in adapter.single_prompt
+    builder_step = next(step for step in agent_run.steps if step.action == "single_codex_build")
+    assert builder_step.agent_input_text == adapter.single_prompt
+    assert builder_step.agent_output_text == "fake generation complete"
+    assert all(
+        step.input_json is None
+        and step.output_json is None
+        and step.agent_input_text is None
+        and step.agent_output_text is None
+        for step in agent_run.steps
+        if step.step_name == "backend"
+    )
     assert agent_run.final_summary_json["backend_final_validation"] == "manifest_tests_and_capability_scan"
     skill_result = subprocess.run(
         [sys.executable, str(tmp_path / "skills" / "proposed" / skill.name / "skill.py")],
@@ -991,7 +1019,7 @@ def test_builder_and_tester_agents_receive_trimmed_task_context(tmp_path: Path, 
     assert permission_bounds["runtime"]["shell"] is False
     assert permission_bounds["runtime"]["secrets"] == []
     assert permission_bounds["runtime"]["python_standard_library"] is True
-    assert permission_bounds["build_time"]["project_read"] == ["personal-agent"]
+    assert permission_bounds["build_time"]["project_read"] == ["Eidolon"]
     assert permission_bounds["blocked_capabilities"] == default_banned_permissions()
     assert "task_dag_json" not in tester_plans[0]
     assert "final_e2e_expectations" not in tester_plans[-1]
@@ -1143,8 +1171,10 @@ def test_more_than_three_failures_stops_workflow(tmp_path: Path, db_session: Ses
     assert agent_run.failure_count_json["core_skill"] == 4
     assert agent_run.final_summary_json["failure_count_json"]["core_skill"] == 4
     assert skill.status == "failed"
-    product_manager_steps = [step for step in agent_run.steps if step.step_name == "product_manager"]
-    assert product_manager_steps[-1].output_json["decision_json"]["decision"] == "stop_failed"
+    backend_steps = [step for step in agent_run.steps if step.step_name == "backend"]
+    assert backend_steps[-1].action == "backend_stop_failed_build"
+    assert backend_steps[-1].input_json is None
+    assert backend_steps[-1].output_json is None
 
 
 def test_builder_user_action_required_blocks_workflow(tmp_path: Path, db_session: Session) -> None:

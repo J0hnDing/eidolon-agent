@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import {
@@ -10,7 +10,7 @@ import {
 } from "../api/client";
 import { usePolling } from "../lib/usePolling";
 
-export const WEB_APP_IFRAME_SANDBOX = "allow-scripts allow-forms allow-same-origin";
+export const WEB_APP_IFRAME_SANDBOX = "allow-scripts allow-forms allow-same-origin allow-modals";
 const WEB_APP_GATEWAY_DOMAIN = (import.meta.env.VITE_WEB_APP_GATEWAY_DOMAIN ?? "web-app.localhost").toLowerCase();
 
 export function isControlledWebAppEmbedUrl(value: string) {
@@ -52,6 +52,7 @@ export default function WebAppPage() {
   const [audit, setAudit] = useState<WebAppAuditRecord[]>([]);
   const [isWorking, setIsWorking] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const openingSkillId = useRef<number | null>(null);
 
   useEffect(() => {
     if (!Number.isFinite(id)) return;
@@ -62,6 +63,8 @@ export default function WebAppPage() {
   usePolling(() => refreshDiagnostics(), Boolean(openedApp?.instance.status === "healthy"), 5000);
 
   async function openApplication() {
+    if (openingSkillId.current === id) return;
+    openingSkillId.current = id;
     setIsWorking(true);
     setError(null);
     try {
@@ -75,6 +78,7 @@ export default function WebAppPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not open application");
     } finally {
+      if (openingSkillId.current === id) openingSkillId.current = null;
       setIsWorking(false);
     }
   }
@@ -109,7 +113,7 @@ export default function WebAppPage() {
     <section className="web-app-page stack">
       <header className="web-app-trusted-chrome">
         <div>
-          <p className="eyebrow">Trusted Personal Agent application chrome</p>
+          <p className="eyebrow">Trusted Eidolon application chrome</p>
           <h1>{skill?.name ?? "Web application"}</h1>
           <p>{skill?.description}</p>
         </div>

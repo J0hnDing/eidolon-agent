@@ -23,6 +23,13 @@ class SkillRunBase(BaseModel):
     output_tokens: int = 0
     reasoning_output_tokens: int = 0
     total_tokens: int = 0
+    version_id: int | None = None
+    invocation_source: str = "internal"
+    caller_skill_id: int | None = None
+    caller_version_id: int | None = None
+    source_schedule_id: int | None = None
+    web_app_instance_id: str | None = None
+    initiating_action: str | None = None
 
 
 class SkillRunCreate(SkillRunBase):

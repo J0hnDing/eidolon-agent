@@ -20,6 +20,7 @@ class ProductManagerContractService:
             "milestones",
             "suggestion",
             "permission_plan",
+            "function_requirements",
         }
         blueprint = {key: fallback[key] for key in allowed_fields if key in fallback}
         blueprint.update({key: value[key] for key in allowed_fields if key in value})
@@ -58,6 +59,21 @@ class ProductManagerContractService:
         criteria = blueprint.get("acceptance_criteria")
         if not isinstance(criteria, list):
             blueprint["acceptance_criteria"] = list(fallback.get("acceptance_criteria", []) or [])
+        raw_requirements = blueprint.get("function_requirements")
+        if not isinstance(raw_requirements, list):
+            raw_requirements = fallback.get("function_requirements", [])
+        requirements: list[dict[str, str]] = []
+        seen_names: set[str] = set()
+        for item in raw_requirements if isinstance(raw_requirements, list) else []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            reason = str(item.get("reason") or "").strip()
+            if not name or not reason or name in seen_names:
+                continue
+            requirements.append({"name": name, "reason": reason})
+            seen_names.add(name)
+        blueprint["function_requirements"] = requirements
         blueprint["permission_plan"] = self.sanitize_permission_plan(blueprint.get("permission_plan"), fallback)
         return blueprint
 
