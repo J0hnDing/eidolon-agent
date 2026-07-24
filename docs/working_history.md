@@ -1,182 +1,447 @@
-# Working History
+## 2026-07-18 00:36 — Eidolon Rename And Relocation Hardening
 
-This file records notable implemented changes. Each entry must contain only:
+- Category: bugfix
+- Related TODOs: TODO-014
+- Area: unknown
 
-- date,
-- time,
-- title,
-- summary,
-- limitations or future implementations.
+### Summary
 
-Do not add separate area, intention, changed-files, or verification fields. Implementation and verification details that materially explain the result belong in the summary.
+Eidolon rename and relocation hardening. Renamed the GitHub-facing project, visible application shell, API title, package metadata, agent instructions, default project-read label, and product-facing documentation to Eidolon. Rebuilt the root README around the local-first memory, self-built skill, permission-boundary, and long-term adaptation vision with an explicit implemented/partial/planned status matrix, architecture and capability-flow diagrams, setup instructions, and direct roadmap links. Kept `PERSONAL_AGENT_*`, `personal_agent.db`, browser-storage keys, internal gateway routes, and selected Docker resource identifiers as documented compatibility contracts so existing configuration and local state are not orphaned. Audited the move to `C:\Users\John\Projects\Eidolon`; no `.env` file or process environment value referenced the old path, active application roots resolve from the new location, and historical old-path text remains only in immutable logs/transcripts. Repaired the copied virtual environment's stale editable registration, added explicit setuptools package discovery so a fresh editable install works with the current backend layout, and confirmed `eidolon-backend` resolves to the new path. Ruff passed, all 319 backend tests passed from an external Windows pytest temp root, all 13 frontend tests passed, the frontend production build passed, all local Markdown links resolved, the active-root smoke check passed, and `git diff --check` passed.
 
-## Entry Format
+### Limitations
 
-```markdown
-## YYYY-MM-DD HH:MM - Short Title
+Automatic memory selection, memory-aware responses, outcome feedback, and controlled long-term adaptation remain planned in TODO-014. Stable legacy compatibility identifiers intentionally remain internal. Historical runtime logs, generated prompts, and stored transcripts are not rewritten. The GitHub repository/remote URL was not renamed.
 
-- Summary: Short title followed by the implemented behavior and material verification.
-- Limitations/Future implementations: Known limitations and explicitly deferred work. Use `None known` when empty.
-```
+## 2026-07-17 02:51 — Function Registry And Risk-Based Cross-Skill Invocation
 
-## Current Entries
+- Category: feature
+- Related TODOs: TODO-010, TODO-013
+- Area: unknown
 
-## 2026-07-18 00:36 - Eidolon Rename And Relocation Hardening
+### Summary
 
-- Summary: Eidolon rename and relocation hardening. Renamed the GitHub-facing project, visible application shell, API title, package metadata, agent instructions, default project-read label, and product-facing documentation to Eidolon. Rebuilt the root README around the local-first memory, self-built skill, permission-boundary, and long-term adaptation vision with an explicit implemented/partial/planned status matrix, architecture and capability-flow diagrams, setup instructions, and direct roadmap links. Kept `PERSONAL_AGENT_*`, `personal_agent.db`, browser-storage keys, internal gateway routes, and selected Docker resource identifiers as documented compatibility contracts so existing configuration and local state are not orphaned. Audited the move to `C:\Users\John\Projects\Eidolon`; no `.env` file or process environment value referenced the old path, active application roots resolve from the new location, and historical old-path text remains only in immutable logs/transcripts. Repaired the copied virtual environment's stale editable registration, added explicit setuptools package discovery so a fresh editable install works with the current backend layout, and confirmed `eidolon-backend` resolves to the new path. Ruff passed, all 319 backend tests passed from an external Windows pytest temp root, all 13 frontend tests passed, the frontend production build passed, all local Markdown links resolved, the active-root smoke check passed, and `git diff --check` passed.
-- Limitations/Future implementations: Automatic memory selection, memory-aware responses, outcome feedback, and controlled long-term adaptation remain planned in TODO-014. Stable legacy compatibility identifiers intentionally remain internal. Historical runtime logs, generated prompts, and stored transcripts are not rewritten. The GitHub repository/remote URL was not renamed.
+Function registry and risk-based cross-skill invocation. Added a backend-owned dynamic registry for installed function skills with active-version identity, validated object-shaped JSON input/output contracts, backend-derived risk, effective permissions, and explicit availability reasons while keeping it separate from the static trusted backend API catalog. Manifests and Project/update contracts now carry explicit caller `function_requirements`; build/runtime review presents each target and creates caller-specific approval requests only for medium/high-risk relationships, while low-risk declared targets need no redundant approval. Approval fingerprints cover target risk, permissions, dependencies, and JSON schemas so materially changed callable contracts become stale without invalidating code-only version updates. Manual runs, schedules, authenticated function callers, backend callers, and web applications converge on one registry service before the existing bounded runner; ephemeral run or instance capabilities prevent caller-supplied identity, input/output mismatches fail deterministically, and target runs record version, origin, caller, schedule/web-app attribution, errors, and separate runtime Codex usage. Added trusted function/web-app helper calls plus a transient allowlisted internal-network relay so no-internet Docker callers can reach only Function control-plane routes without receiving general egress. Preserved direct and scheduled execution for legacy schema-less functions while marking them unavailable as registry targets, removed the completed old registry TODO, added focused manifest/approval/schema/audit/helper/relay coverage, and updated architecture, manifest, lifecycle, security, runtime, frontend, workflow, and backend documentation. Ruff passed, all 319 backend tests passed, all 13 frontend tests passed, and the frontend production build passed.
 
-## 2026-07-17 02:51 - Function Registry And Risk-Based Cross-Skill Invocation
+### Limitations
 
-- Summary: Function registry and risk-based cross-skill invocation. Added a backend-owned dynamic registry for installed function skills with active-version identity, validated object-shaped JSON input/output contracts, backend-derived risk, effective permissions, and explicit availability reasons while keeping it separate from the static trusted backend API catalog. Manifests and Project/update contracts now carry explicit caller `function_requirements`; build/runtime review presents each target and creates caller-specific approval requests only for medium/high-risk relationships, while low-risk declared targets need no redundant approval. Approval fingerprints cover target risk, permissions, dependencies, and JSON schemas so materially changed callable contracts become stale without invalidating code-only version updates. Manual runs, schedules, authenticated function callers, backend callers, and web applications converge on one registry service before the existing bounded runner; ephemeral run or instance capabilities prevent caller-supplied identity, input/output mismatches fail deterministically, and target runs record version, origin, caller, schedule/web-app attribution, errors, and separate runtime Codex usage. Added trusted function/web-app helper calls plus a transient allowlisted internal-network relay so no-internet Docker callers can reach only Function control-plane routes without receiving general egress. Preserved direct and scheduled execution for legacy schema-less functions while marking them unavailable as registry targets, removed the completed old registry TODO, added focused manifest/approval/schema/audit/helper/relay coverage, and updated architecture, manifest, lifecycle, security, runtime, frontend, workflow, and backend documentation. Ruff passed, all 319 backend tests passed, all 13 frontend tests passed, and the frontend production build passed.
-- Limitations/Future implementations: Nested function calls are intentionally rejected and tracked in TODO-013. Legacy schema-less functions need an updated manifest before cross-skill use. There is no dedicated Function application or Tools UI. Domain-level filtering for otherwise approved Docker internet egress remains tracked in TODO-010, and the explicit `local/dev` runner remains less isolated than Docker.
+Nested function calls are intentionally rejected and tracked in TODO-013. Legacy schema-less functions need an updated manifest before cross-skill use. There is no dedicated Function application or Tools UI. Domain-level filtering for otherwise approved Docker internet egress remains tracked in TODO-010, and the explicit `local/dev` runner remains less isolated than Docker.
 
-## 2026-07-17 - Web Application Open And Modal Reliability
+## 2026-07-17 00:00 — Web Application Open And Modal Reliability
 
-- Summary: Web application open and modal reliability. `WebAppPage` now coalesces React Strict Mode mount replays so a cold application launch creates one session request instead of racing itself against the `web_app_start` lock. The trusted iframe and backend containment disclosure now allow modal dialogs while retaining the existing navigation, popup, download, browser-feature, and external-browser-network restrictions. The backend default-permission policy records the concise web-app-specific supported and blocked capability sets. Removed incomplete policy remnants that erased web-app network/Codex requests, blocked supported server-side capabilities, and silently resolved runtime approvals; web applications continue through the normal manifest-based approval path. Ruff passed, all 304 backend tests passed, all 13 frontend tests passed, and the frontend production build passed.
-- Limitations/Future implementations: Concurrent session opens from separate browser contexts still use the backend operation-lock conflict contract; the duplicate request fixed here was the same-page Strict Mode replay.
+- Category: bugfix
+- Related TODOs: none
+- Area: unknown
 
-## 2026-07-16 23:26 - Exact Agent Transcripts And Backend Step Identity
+### Summary
 
-- Summary: Exact agent transcripts and backend step identity. Agent Run steps now persist the exact fully composed prompt passed to each ProductManager, Builder, and Tester Codex invocation together with the exact final response returned by the adapter, while keeping backend-normalized workflow JSON separate for validation and orchestration. Build Details displays those raw text transcripts and explicitly marks unavailable historical values instead of presenting normalized JSON as agent I/O. Deterministic permission review, dependency provisioning, validation progression, workflow finalization, and bounded failure stops are recorded as `Backend` steps with a fixed summary and no input/output; approval linkage moved to a dedicated step column, and update approval no longer relabels a completed ProductManager invocation. Migrated Agent Run 1 so steps 4, 5, and 7 are Backend steps, recovered exact inputs for agent steps 1, 2, 3, and 6, and recovered exact outputs for steps 3 and 6; the overwritten historical outputs for steps 1 and 2 are honestly unavailable. Ruff passed across backend application and tests, all 302 backend tests passed, all 12 frontend tests passed, and the frontend production build passed. No Codex invocation or account-usage reset was used.
-- Limitations/Future implementations: Agent Run 1 ProductManager outputs for intent refinement and plausibility review were overwritten before exact transcript persistence existed and cannot be reconstructed byte-for-byte.
+Web application open and modal reliability. `WebAppPage` now coalesces React Strict Mode mount replays so a cold application launch creates one session request instead of racing itself against the `web_app_start` lock. The trusted iframe and backend containment disclosure now allow modal dialogs while retaining the existing navigation, popup, download, browser-feature, and external-browser-network restrictions. The backend default-permission policy records the concise web-app-specific supported and blocked capability sets. Removed incomplete policy remnants that erased web-app network/Codex requests, blocked supported server-side capabilities, and silently resolved runtime approvals; web applications continue through the normal manifest-based approval path. Ruff passed, all 304 backend tests passed, all 13 frontend tests passed, and the frontend production build passed.
 
-## 2026-07-16 21:47 - Pre-Build Dependency Provisioning
+### Limitations
 
-- Summary: Pre-build dependency provisioning. Build approval now covers both runtime and build-only requirements and immediately resumes into a backend-owned provisioning step before any post-approval ProductManager, Builder, or Tester invocation. The backend creates a clean workspace, atomically installs approved runtime packages into `.deps`, isolates missing build-only packages in `.build-deps`, verifies platform `pytest` availability and installed distribution versions, and gives Codex plus authoritative tests the same backend interpreter path and dependency `PYTHONPATH`. Repeated validation reuses and verifies the environment without invoking `pip`; manifest dependency drift fails before tests or runtime review. Removed the former late dependency installation and approval lookup from proposed-skill validation, removed its redundant tests and misleading approval language, and excluded build-only packages from scans, file reads, and installed versions. Added coverage for approval union, already-provisioned reuse, successful install, missing approval, unavailable packages, install failure and timeout, manifest drift, shared environment, and provisioning-before-workflow ordering. Ruff passed across backend application and test code, all 302 backend tests passed, and `git diff --check` passed.
-- Limitations/Future implementations: Dependency provisioning currently applies to new Project builds; update and repair dependency changes retain their existing version-workflow behavior.
+Concurrent session opens from separate browser contexts still use the backend operation-lock conflict contract; the duplicate request fixed here was the same-page Strict Mode replay.
 
-## 2026-07-16 14:39 - Action-Specific Codex Hard Timeouts
+## 2026-07-16 23:26 — Exact Agent Transcripts And Backend Step Identity
 
-- Summary: Action-specific Codex hard timeouts. Replaced the shared 300-second project-build Codex limit with backend-owned per-action limits: 120 seconds for ProductManager refinement and plausibility, 180 seconds for ProductManager blueprint/DAG/repair/update work, 600 seconds for Builder build/update/repair work, 300 seconds for Tester work, 900 seconds for the combined single-Codex build, and 45 seconds for bounded installed-skill Codex calls. Unknown legacy actions retain a 300-second compatibility fallback, and explicit adapter timeouts remain available for tests and embedding. Added policy, fallback, application, and explicit-override regression coverage and documented that limits apply per invocation rather than per workflow. Ruff passed across backend application and test code, all 296 backend tests passed, and `git diff --check` passed.
-- Limitations/Future implementations: Progress-aware idle timeout, whole-workflow execution budgets, streamed partial diagnostics, and safe partial recovery remain deferred together in TODO-012.
+- Category: feature
+- Related TODOs: none
+- Area: unknown
 
-## 2026-07-16 11:55 - Runtime-Only Interface Contract
+### Summary
 
-- Summary: Runtime-only interface contract. Removed the former interface selector and declarative tool UI schema from manifests, SQLAlchemy records, API and planning schemas, ProductManager/Builder/Tester contracts, generated manifest skeletons, persisted artifacts, fixtures, and frontend types. Removed the backend Tools routes and schemas, Tools list/detail pages, navigation, styles, tests, API catalog entry, and current-behavior documentation. Applications now use `runtime = web_app` as their sole visibility rule, while function skills receive no dedicated interface surface. The local SQLite migration dropped both retired skill columns and recursively cleaned their keys from persisted generation, version, agent, and approval artifacts; the current local database was migrated and verified with zero remaining retired contract keys. Both existing web-app package manifests validate under the new contract. Ruff passed, all 280 backend tests passed, all 12 frontend tests passed, the frontend production build passed, and `git diff --check` passed.
-- Limitations/Future implementations: This change intentionally removed the prior function-facing interface; the later Function Registry milestone added machine-facing discovery without recreating a dedicated application UI.
+Exact agent transcripts and backend step identity. Agent Run steps now persist the exact fully composed prompt passed to each ProductManager, Builder, and Tester Codex invocation together with the exact final response returned by the adapter, while keeping backend-normalized workflow JSON separate for validation and orchestration. Build Details displays those raw text transcripts and explicitly marks unavailable historical values instead of presenting normalized JSON as agent I/O. Deterministic permission review, dependency provisioning, validation progression, workflow finalization, and bounded failure stops are recorded as `Backend` steps with a fixed summary and no input/output; approval linkage moved to a dedicated step column, and update approval no longer relabels a completed ProductManager invocation. Migrated Agent Run 1 so steps 4, 5, and 7 are Backend steps, recovered exact inputs for agent steps 1, 2, 3, and 6, and recovered exact outputs for steps 3 and 6; the overwritten historical outputs for steps 1 and 2 are honestly unavailable. Ruff passed across backend application and tests, all 302 backend tests passed, all 12 frontend tests passed, and the frontend production build passed. No Codex invocation or account-usage reset was used.
 
-## 2026-07-16 11:44 - Evidence-Based Static Capability Scanning
+### Limitations
 
-- Summary: Evidence-based static capability scanning. Network and process imports no longer block without a recognized capability call, dynamic deletion targets no longer fail validation when their location cannot be proven, and literal deletion is blocked only when it is provably outside approved runtime write roots. Cache-local literal cleanup remains covered by `./cache` write permission. Added focused coverage for passive imports, dynamic temporary cleanup, allowed cache deletion, and blocked out-of-cache deletion; all 13 scanner tests passed, and the generated `simple_notes` package scans cleanly with zero findings.
-- Limitations/Future implementations: The deliberately passive scanner may miss dynamic behavior; the runtime sandbox remains authoritative. A full backend run was attempted but could not provide a valid repository-wide result because concurrent unrelated workspace changes removed existing model fields and tool files during verification.
+Agent Run 1 ProductManager outputs for intent refinement and plausibility review were overwritten before exact transcript persistence existed and cannot be reconstructed byte-for-byte.
 
-## 2026-07-16 11:19 - Terminal Single-Codex Error Handling
+## 2026-07-16 21:47 — Pre-Build Dependency Provisioning
 
-- Summary: Terminal single-Codex error handling. Failed or blocked single-Codex builds can no longer resume, retry the current task, or retry a failed step, so an error never resends the original Builder prompt; task-DAG retry behavior remains unchanged. Agent Run detail hides both retry surfaces for terminal single-Codex errors. A separate new Project build atomically stages an obsolete proposed workspace before creating a clean one, preventing sandbox-owned `.pytest_cache` ACLs from causing raw Windows access-denied cleanup failures. Ruff passed, the 64-test focused workflow/lifecycle suite passed, all 283 backend tests passed, all 11 frontend tests passed, and the frontend production build passed.
-- Limitations/Future implementations: Existing failed run and generated-package records remain historical and are not rewritten automatically.
+- Category: feature
+- Related TODOs: none
+- Area: unknown
 
-## 2026-07-16 10:49 - Precise Network Import Capability Scanning
+### Summary
 
-- Summary: Precise network import capability scanning. Replaced top-level `urllib` classification with capability-bearing module-prefix matching so local helpers such as `urllib.parse` do not require runtime network permission, while `urllib.request`, direct URL-opening calls, and imported aliases remain detectable. Added paired regression coverage and confirmed the failed Notes Manager package now scans cleanly without broadening its empty network declaration. Ruff passed, all 9 focused scanner tests passed, and all 281 backend tests passed.
-- Limitations/Future implementations: The scanner remains a bounded heuristic and does not infer behavior hidden behind dynamic imports, reflection, or dependencies.
+Pre-build dependency provisioning. Build approval now covers both runtime and build-only requirements and immediately resumes into a backend-owned provisioning step before any post-approval ProductManager, Builder, or Tester invocation. The backend creates a clean workspace, atomically installs approved runtime packages into `.deps`, isolates missing build-only packages in `.build-deps`, verifies platform `pytest` availability and installed distribution versions, and gives Codex plus authoritative tests the same backend interpreter path and dependency `PYTHONPATH`. Repeated validation reuses and verifies the environment without invoking `pip`; manifest dependency drift fails before tests or runtime review. Removed the former late dependency installation and approval lookup from proposed-skill validation, removed its redundant tests and misleading approval language, and excluded build-only packages from scans, file reads, and installed versions. Added coverage for approval union, already-provisioned reuse, successful install, missing approval, unavailable packages, install failure and timeout, manifest drift, shared environment, and provisioning-before-workflow ordering. Ruff passed across backend application and test code, all 302 backend tests passed, and `git diff --check` passed.
 
-## 2026-07-16 03:59 - Project Approval And Skill Lifecycle E2E Recovery
+### Limitations
 
-- Summary: Project approval and skill lifecycle E2E recovery. Project chat now reconciles its transcript with persisted generation, build-approval, agent-run, proposed-skill, and runtime-approval state, including after a lost HTTP response, so approvals decided on the global Approval page reappear inline and generic build approval automatically resumes the waiting workflow. ProductManager output can no longer rename the backend-controlled skill, final validation rejects manifest name drift, and web application packages must use the platform-provided writable cache directory instead of a path beneath the read-only package mount. Proposed-skill tests now use an external temporary directory, package traversal skips inaccessible test artifacts, install copies only distributable files and atomically stages conflicting or obsolete trees, retries are idempotent, and delete commits independently of best-effort filesystem cleanup. Install and delete UI mutations also reconcile committed backend state after response loss. Recovered the interrupted `persistent_counter` install into a clean installed, disabled version, then verified its persisted counter across two Docker starts without enabling the application. Ruff passed, all 278 backend tests passed, all 9 frontend tests passed, and the frontend production build passed.
-- Limitations/Future implementations: None known.
+Dependency provisioning currently applies to new Project builds; update and repair dependency changes retain their existing version-workflow behavior.
 
-## 2026-07-16 01:59 - First-Class Sandboxed Web Application Skills
+## 2026-07-16 14:39 — Action-Specific Codex Hard Timeouts
 
-- Summary: First-class sandboxed web application skills. Added a versioned manifest runtime contract for `function` and `web_app` packages, backend-derived risk classification, persistent web application instance/session/audit records, lazy version-pinned startup, per-session bearer origins, and short operation-lock transitions. Web applications run through a trusted ASGI host in hardened Docker containers by default, with read-only package/root filesystems, a writable per-skill cache, resource/capability limits, health checks, idle cleanup, startup stale-state recovery, and an explicitly labeled local-development fallback. Every Docker application starts on an internal network behind a trusted relay that bridges loopback ingress and only the exact scoped Codex-capability route; it receives neither skill code nor an instance token, while approved server egress is added separately. A same-origin gateway isolates all `*.web-app.localhost` traffic from the main API, applies iframe and browser containment headers, strips unsafe upstream behavior, caps request/response bodies, blocks WebSockets and literal browser-side external URLs, and exposes only a backend-mediated Codex capability that rechecks the active installed manifest and permissions. Added Web Applications list/detail routes, a sandboxed React iframe experience, package-file support across generation and version inspection, lifecycle cleanup for disable/activation/delete/shutdown, focused runtime and UI coverage, and authoritative architecture/security/API documentation. Ruff passed, all 270 backend tests passed, all 7 frontend tests passed, the frontend production build passed, live Docker image/start/readiness/HTTP/cleanup, no-egress/API-isolation, approved-egress, and scoped-capability relay probes passed, and the final repository checks passed.
-- Limitations/Future implementations: Domain-level Docker egress enforcement remains deferred in TODO-010. Function registration and one-hop cross-skill invocation were completed in the later Function Registry milestone. WebSockets are intentionally unsupported. The explicit `local/dev` fallback is less isolated than Docker and is labeled accordingly.
+- Category: feature
+- Related TODOs: TODO-012
+- Area: unknown
 
-## 2026-07-15 22:23 - Executable-Only Skill Contract
+### Summary
 
-- Summary: Executable-only skill contract. Removed the former skill-kind field from manifests, SQLAlchemy records, generation requests, API schemas, ProductManager/Builder contracts, runner and scheduler branches, frontend types and displays, fixtures, and documentation. Every skill now requires a Python entrypoint and tests, while optional `SKILL.md` reusable instructions remain supported. The local SQLite migration drops both legacy columns and removes their exact keys recursively from persisted JSON artifacts; the current local database was migrated after confirming all existing rows used the executable variant. The installed GitHub Trending skill manifest was migrated and its 24 tests passed. Ruff passed, all 245 backend tests passed, all 5 frontend tests passed, and the frontend production build passed.
-- Limitations/Future implementations: None known.
+Action-specific Codex hard timeouts. Replaced the shared 300-second project-build Codex limit with backend-owned per-action limits: 120 seconds for ProductManager refinement and plausibility, 180 seconds for ProductManager blueprint/DAG/repair/update work, 600 seconds for Builder build/update/repair work, 300 seconds for Tester work, 900 seconds for the combined single-Codex build, and 45 seconds for bounded installed-skill Codex calls. Unknown legacy actions retain a 300-second compatibility fallback, and explicit adapter timeouts remain available for tests and embedding. Added policy, fallback, application, and explicit-override regression coverage and documented that limits apply per invocation rather than per workflow. Ruff passed across backend application and test code, all 296 backend tests passed, and `git diff --check` passed.
 
-## 2026-07-14 23:02 - Backend Service And Frontend Page Decomposition
+### Limitations
 
-- Summary: Backend service and frontend page decomposition. Extracted task-DAG validation and ready-batch calculation into `TaskDagService`, run artifact persistence and interface-artifact validation into `AgentRunArtifactStore`, ProductManager output normalization into `ProductManagerContractService`, and separate build/runtime usage handling into `CodexInvocationRecorder`. `AgentWorkflowService` and `CodexService` remain orchestration facades and call the new narrow interfaces directly without private compatibility forwarders. Moved Chat conversation state into a tested hook, Chat presentation into a feature workspace, and Skill Detail update/version/schedule/validation/run panels into tested feature components while route pages retain API orchestration. Hook coverage also fixed the synthesized first chat not being persisted before its first edit. Ruff passed, all 258 backend tests passed, all 5 frontend feature tests passed, and the frontend production build passed.
-- Limitations/Future implementations: Update and repair orchestration still shares the main workflow service, and some route-level Skill Detail mutations remain intentionally colocated because they coordinate several panels. Further extraction should be driven by a concrete feature boundary rather than file-size alone.
+Progress-aware idle timeout, whole-workflow execution budgets, streamed partial diagnostics, and safe partial recovery remain deferred together in TODO-012.
 
-## 2026-07-14 01:06 - Skill Exit-Code Error Summaries
+## 2026-07-16 11:55 — Runtime-Only Interface Contract
 
-- Summary: Skill exit-code error summaries. Local and Docker skill runners now translate common nonzero process exit codes into specific Error messages for execution failure (`126`), missing commands (`127`), SIGINT interruption (`130`), SIGKILL (`137`), segmentation faults (`139`), and SIGTERM (`143`), with an explicit numeric fallback for other codes. Raw process output remains available in stderr. Ruff passed, the focused runner suite passed with 31 tests, all 253 backend tests passed, and `git diff --check` passed.
-- Limitations/Future implementations: Exit codes identify the terminating condition but cannot always identify the external actor that sent a signal; stderr remains the detailed diagnostic source.
+- Category: feature
+- Related TODOs: none
+- Area: unknown
 
-## 2026-07-14 01:35 - Deterministic Final Validation and Static Capability Scan
+### Summary
 
-- Summary: Deterministic final validation and static capability scan. Both `single_codex` and `task_dag` now use one backend-owned, agent-free validator that parses and package-checks the actual manifest, compares scanned Python capability evidence with that manifest's runtime declarations, and runs generated tests before runtime permission review. The backend creates the skill's `tests/` directory before writable agents in both workflows and instructions require test authors to use that existing directory. Single-Codex writes tests in its one invocation and blocks on backend validation failure without calling more agents. DAG Tester still writes the final E2E test, now solely from blueprint acceptance criteria, before backend validation; only the DAG workflow may invoke its bounded Builder repair loop. The duplicate `final_e2e_expectations` DAG field and completed TODO-001 were removed. Ruff passed, the targeted workflow/capability suite passed with 8 tests, all 254 backend tests passed, and `git diff --check` passed.
-- Limitations/Future implementations: The static scanner is intentionally heuristic and cannot prove the absence of dynamic, transitive, encoded, dependency-internal, non-Python, or runtime-constructed behavior. It excludes tests and dependency folders, and recognized imports can still produce conservative false positives. Final proposed-skill tests continue to execute through the existing host-side validation path rather than the Docker runtime sandbox.
+Runtime-only interface contract. Removed the former interface selector and declarative tool UI schema from manifests, SQLAlchemy records, API and planning schemas, ProductManager/Builder/Tester contracts, generated manifest skeletons, persisted artifacts, fixtures, and frontend types. Removed the backend Tools routes and schemas, Tools list/detail pages, navigation, styles, tests, API catalog entry, and current-behavior documentation. Applications now use `runtime = web_app` as their sole visibility rule, while function skills receive no dedicated interface surface. The local SQLite migration dropped both retired skill columns and recursively cleaned their keys from persisted generation, version, agent, and approval artifacts; the current local database was migrated and verified with zero remaining retired contract keys. Both existing web-app package manifests validate under the new contract. Ruff passed, all 280 backend tests passed, all 12 frontend tests passed, the frontend production build passed, and `git diff --check` passed.
 
-## 2026-07-14 00:20 - Runtime Codex Failure Diagnostics
+### Limitations
 
-- Summary: Runtime Codex failure diagnostics. Failed backend-mediated skill Codex calls now persist a failed invocation record on the active `skill_run` with resolved CLI path/version/source, exit code, error type, concise error detail, bounded stderr tail, and zero tokens when no turn completed. SkillRunner now maps top-level `partial` and `failed` outputs to honest backend statuses and prevents a run with a recorded failed Codex call from being marked succeeded merely because the skill process returned valid JSON with exit code zero. Run-history API/UI contracts and documentation now expose the new status and diagnostics. Ruff passed, the focused runtime suite passed with 28 tests, the adapter regression suite passed with 16 tests, all 241 backend tests passed, the frontend production build passed, and `git diff --check` passed.
-- Limitations/Future implementations: Existing completed runs cannot recover failed CLI stderr that was discarded before this change. Runtime Codex calls made outside an active executable skill run still cannot be attributed to run history.
+This change intentionally removed the prior function-facing interface; the later Function Registry milestone added machine-facing discovery without recreating a dedicated application UI.
 
-## 2026-07-13 00:58 - Project Build Workflow Override
+## 2026-07-16 11:44 — Evidence-Based Static Capability Scanning
 
-- Summary: Project build workflow override. Added a persistent Codex setting that keeps automatic ProductManager workflow selection by default or forces every new Project build through Simple (`single_codex`) or Task DAG (`task_dag`). Backend selection now applies the override after ProductManager blueprinting, records the effective workflow and selection source in the ProductManager step, and validates the effective workflow through the trusted registry. Added the Codex Settings control, backend regression coverage, and current-behavior documentation. Ruff passed, the focused routing/workflow suite passed with 43 tests, all 237 backend tests passed, the frontend production build passed, and `git diff --check` passed.
-- Limitations/Future implementations: The override applies to new Project builds and does not rewrite workflows already persisted on existing agent runs.
+- Category: feature
+- Related TODOs: none
+- Area: unknown
 
-## 2026-07-13 00:55 - Canonical Contracts, Structured TODO, And Ruff
+### Summary
 
-- Summary: Canonical contracts, structured TODO, and Ruff. Replaced agent-run milestone compatibility fields and the duplicate retry route with canonical task-node names, added safe local-schema data copying from old columns, collapsed legacy disabled skill rows into `installed` plus `enabled = false`, removed the non-persisted deleted schedule status, and added regression tests for those contracts. Reworked `docs/todo.md` into stable items with Priority, Status, Area, Rationale, and Acceptance criteria; added the audited service/page decomposition, approval-scope, message-storage, filesystem-transaction, and parallel-execution work; clarified documentation ownership in `AGENTS.md` and `docs/README.md`; corrected the stale claim that `ProposedSkillService` creates sample skills; and tightened lifecycle, scheduling, and data-model documentation. Installed Ruff 0.15.21, added it to backend development dependencies, configured import and correctness checks, applied the initial clean baseline, and made Ruff-before-pytest a repository rule. Ruff passed, all 235 backend tests passed, the frontend production build passed, local documentation links resolved, and `git diff --check` passed.
-- Limitations/Future implementations: The confirmed architectural work remains in `docs/todo.md`; service and page decomposition, first-class schedule approval scope, the chat message-storage boundary, transactional filesystem/database lifecycle operations, and real isolated-workspace DAG concurrency were intentionally not implemented in this change.
+Evidence-based static capability scanning. Network and process imports no longer block without a recognized capability call, dynamic deletion targets no longer fail validation when their location cannot be proven, and literal deletion is blocked only when it is provably outside approved runtime write roots. Cache-local literal cleanup remains covered by `./cache` write permission. Added focused coverage for passive imports, dynamic temporary cleanup, allowed cache deletion, and blocked out-of-cache deletion; all 13 scanner tests passed, and the generated `simple_notes` package scans cleanly with zero findings.
 
-## 2026-07-12 23:50 - Repository Consistency And Safety Audit
+### Limitations
 
-- Summary: Repository consistency and safety audit. Removed the unused bare `POST /skills` record-creation path and the obsolete sample-skill UI/API that bypassed the Project-mode creation boundary, restricted skill PATCH requests to enabling or disabling installed skills, centralized declared-file checks in package validation, enabled SQLite foreign-key enforcement, routed schedule mutations through the live shared APScheduler instance, made global schedule approvals activate or deny the schedule itself, blocked run-now for non-active schedules, cleaned schedule approvals and stale skill links during deletion, removed unreferenced linear-workflow and chat-plausibility helpers, corrected version-cap guidance, and aligned lifecycle, workflow, backend, and TODO documentation. Final backend, generated-skill, frontend, manifest, OpenAPI, compilation, and diff verification completed successfully.
-- Limitations/Future implementations: Architectural findings that are not unambiguous bugs remain report-only. In particular, the large workflow/Codex service classes, lightweight SQLite schema migration strategy, single-Codex final validation gap, and true parallel DAG execution remain unchanged.
+The deliberately passive scanner may miss dynamic behavior; the runtime sandbox remains authoritative. A full backend run was attempted but could not provide a valid repository-wide result because concurrent unrelated workspace changes removed existing model fields and tool files during verification.
 
-## 2026-07-12 20:50 - Modular Project Build Workflows
+## 2026-07-16 11:19 — Terminal Single-Codex Error Handling
 
-- Summary: Modular project build workflows. Added ProductManager selection of a single backend-only `build_workflow` value, persisted it separately from `blueprint.json`, kept intent refinement, plausibility review, blueprint creation, permission planning, and build-time approval as the shared starting sequence, and routed post-approval execution through a trusted workflow registry. Colocated shared preflight, DAG, and single-Codex Markdown instructions and prompt composition with their owning workflow packages; `CodexService` now delegates project-build prompt construction while retaining shared invocation, parsing, routing, usage, workspace, and safety primitives. Moved existing DAG execution, pause/resume, and retry orchestration into the `task_dag` package, and added a `single_codex` package that gives Codex the approved blueprint and effective permissions for one planning, build, and test invocation. The workflow/chat regression suite passed with 85 tests, the final single-Codex end-to-end test passed and executed the generated JSON entrypoint, the frontend production build passed, and `git diff --check` passed.
-- Limitations/Future implementations: Independent backend acceptance-criteria and authoritative test validation after `single_codex` completion remains deferred in `docs/todo.md`. Central manifest schema, required test-directory, and declared-file validation plus runtime permission review remain enforced.
+- Category: bugfix
+- Related TODOs: none
+- Area: unknown
 
-## 2026-07-12 15:00 - Codex CLI Compatibility And Per-Task Model Routing
+### Summary
 
-- Summary: Codex CLI compatibility and per-task model routing. Added centralized CLI discovery/version probing with strict command overrides, live App Server model and supported-effort discovery, persistent routing settings, independent Chat and ProductManager action routes, Builder `easy`/`medium`/`hard` difficulty routes, Tester task/final/update routes, pre-invocation model/effort validation, requested/effective routing metadata, and the Codex Settings UI. The task DAG continues to contain difficulty but no model ids. The final backend suite passed with 219 tests, focused routing tests passed, the live model-catalog probe succeeded, the frontend production build passed, and `git diff --check` passed.
-- Limitations/Future implementations: Only the `codex_cli` provider is implemented. The local non-agentic model adapter remains deferred. Model selection requires the local Codex App Server catalog to validate explicit choices. Direct Chat applies its configured route but does not persist a build-style token or invocation audit record.
+Terminal single-Codex error handling. Failed or blocked single-Codex builds can no longer resume, retry the current task, or retry a failed step, so an error never resends the original Builder prompt; task-DAG retry behavior remains unchanged. Agent Run detail hides both retry surfaces for terminal single-Codex errors. A separate new Project build atomically stages an obsolete proposed workspace before creating a clean one, preventing sandbox-owned `.pytest_cache` ACLs from causing raw Windows access-denied cleanup failures. Ruff passed, the 64-test focused workflow/lifecycle suite passed, all 283 backend tests passed, all 11 frontend tests passed, and the frontend production build passed.
 
-## 2026-07-12 14:45 - Skill Runtime Token History
+### Limitations
 
-- Summary: Skill runtime token history. Added adapter/model-aware runtime Codex invocation records and aggregate token columns to `skill_runs`, associated successful backend-mediated calls with the active per-skill run, added a Skill Run History tab to Agent Run detail, and removed the completed runtime-tracking TODO. Focused runtime tests passed with 11 tests, the full backend suite passed with 219 tests, the frontend production build passed, and `git diff --check` passed.
-- Limitations/Future implementations: Direct Chat token tracking remains outside runtime history. Runtime Codex calls made outside an active executable skill run are not attributed to a run.
+Existing failed run and generated-package records remain historical and are not rewritten automatically.
 
-## 2026-07-12 01:39 - Project Build Context Optimization And GitHub E2E
+## 2026-07-16 10:49 — Precise Network Import Capability Scanning
 
-- Summary: Project build context optimization and GitHub end-to-end correction. Compacted ProductManager, Builder, Tester, and repair contexts; enforced Tester ownership of test files; added focused Tester self-checks; adjusted generated-skill timeouts; and corrected duplicate GitHub Trending card normalization. Before the user reverted the first-turn intent-refinement skip and direct failed-task resume, an end-to-end run used 382,608 tokens versus a 684,621-token baseline, a 44.1% reduction. The corrected proposed skill passed platform validation, 24 tests, a live parser smoke test, the then-current 205-test backend suite, and `git diff --check`.
-- Limitations/Future implementations: Re-measure token usage after the two reverts before treating the 44.1% reduction as representative. The generated GitHub skill remains proposed, disabled, uninstalled, unscheduled, and subject to runtime permission approval.
+- Category: feature
+- Related TODOs: none
+- Area: unknown
 
-## 2026-07-11 02:38 - Codex Build Usage Tracking
+### Summary
 
-- Summary: Codex build usage tracking. Added ProductManager, Builder, and Tester invocation token records, step/build totals, UI reporting, a persistent App Server allowance client, `/usage/codex`, parallel-aware ready-node batches, and workflow pause/resume below a 5% reserve in either allowance window. The full backend suite passed with 200 tests, focused usage/workflow tests passed with 36 tests, the frontend build passed, a live allowance probe succeeded, and `git diff --check` passed.
-- Limitations/Future implementations: The scheduler batches parallel-safe nodes but does not yet execute shared-workspace nodes concurrently. Build totals intentionally exclude installed-skill runtime calls.
+Precise network import capability scanning. Replaced top-level `urllib` classification with capability-bearing module-prefix matching so local helpers such as `urllib.parse` do not require runtime network permission, while `urllib.request`, direct URL-opening calls, and imported aliases remain detectable. Added paired regression coverage and confirmed the failed Notes Manager package now scans cleanly without broadening its empty network declaration. Ruff passed, all 9 focused scanner tests passed, and all 281 backend tests passed.
 
-## 2026-07-09 00:50 - ProductManager Build Instruction Split
+### Limitations
 
-- Summary: ProductManager build instruction split. Separated blueprint/permissions from post-approval task-DAG planning, adopted flat runtime permission fields, removed ProductManager summary Codex calls and unsupported DAG-phase decisions, and aligned CodexService, AgentWorkflowService, PermissionService, tests, and documentation. Focused schema tests and the then-current 190-test backend suite passed.
-- Limitations/Future implementations: Existing compatibility DB/API fields such as `requested_network_domains_json` remain and are populated from `permission_plan.runtime.network`. Unrelated generated files under `skills/proposed/weekly_github_trend_analyzer/` remain untracked.
+The scanner remains a bounded heuristic and does not infer behavior hidden behind dynamic imports, reflection, or dependencies.
 
-## 2026-07-08 15:06 - Remove Hybrid Skill Variant
+## 2026-07-16 03:59 — Project Approval And Skill Lifecycle E2E Recovery
 
-- Summary: Removed the hybrid skill variant, retained optional `SKILL.md` support for executable packages, and updated shared schemas, manifest validation, prompts, agent instructions, tool filtering, frontend choices, and documentation. Focused backend suites and the frontend build passed.
-- Limitations/Future implementations: Superseded by the later executable-only skill contract.
+- Category: bugfix
+- Related TODOs: none
+- Area: unknown
 
-## 2026-07-08 02:34 - Manifest Schedule Registration
+### Summary
 
-- Summary: Manifest schedule registration. Moved schedule intent into ProductManager-owned manifest metadata, removed the PM-visible Scheduling API catalog entry, registered manifest schedules as pending during installation, and improved fake planning names for weekly GitHub Trending skills. Focused schedule/planning tests and the full backend suite passed.
-- Limitations/Future implementations: Proposed skills generated before this change are not renamed in place.
+Project approval and skill lifecycle E2E recovery. Project chat now reconciles its transcript with persisted generation, build-approval, agent-run, proposed-skill, and runtime-approval state, including after a lost HTTP response, so approvals decided on the global Approval page reappear inline and generic build approval automatically resumes the waiting workflow. ProductManager output can no longer rename the backend-controlled skill, final validation rejects manifest name drift, and web application packages must use the platform-provided writable cache directory instead of a path beneath the read-only package mount. Proposed-skill tests now use an external temporary directory, package traversal skips inaccessible test artifacts, install copies only distributable files and atomically stages conflicting or obsolete trees, retries are idempotent, and delete commits independently of best-effort filesystem cleanup. Install and delete UI mutations also reconcile committed backend state after response loss. Recovered the interrupted `persistent_counter` install into a clean installed, disabled version, then verified its persisted counter across two Docker starts without enabling the application. Ruff passed, all 278 backend tests passed, all 9 frontend tests passed, and the frontend production build passed.
 
-## 2026-07-08 01:52 - Skill Codex API And DAG API Context
+### Limitations
 
-- Summary: Skill Codex API and DAG API context. Added manifest `permissions.codex`, `POST /skills/{skill_id}/codex`, backend API catalog ids, task-node `backend_api_ids`, selected Builder API context, runner backend URL variables, and an explicit DAG view in Agent Run detail. The full backend suite and frontend build passed, and Chrome UI end-to-end verification completed an approved task DAG.
-- Limitations/Future implementations: Potential backend APIs for runtime cache, permission status, skill-run metadata, and memory lookup remain deferred until their contracts and permissions are designed.
+None known.
 
-## 2026-07-07 21:43 - Backend Manifest Skeletons
+## 2026-07-16 01:59 — First-Class Sandboxed Web Application Skills
 
-- Summary: Backend manifest skeletons. The backend now seeds and finalizes `manifest.json` from approved blueprint and permission artifacts, validates declared entrypoints, reports seeded manifest changes in fallback interface artifacts, and discourages over-splitting same-file DAG nodes. The targeted workflow suite passed.
-- Limitations/Future implementations: None known.
+- Category: feature
+- Related TODOs: TODO-010
+- Area: unknown
 
-## 2026-07-07 02:32 - DAG Build Workflow
+### Summary
 
-- Summary: DAG build workflow. Replaced the linear milestone flow with explicit ProductManager phases, backend DAG validation, task artifacts, interface artifacts, node-specific tests, final end-to-end tests, task retry aliases, and task-node UI labels. The full backend suite and frontend build passed.
-- Limitations/Future implementations: True concurrent isolated-workspace DAG execution remains deferred.
+First-class sandboxed web application skills. Added a versioned manifest runtime contract for `function` and `web_app` packages, backend-derived risk classification, persistent web application instance/session/audit records, lazy version-pinned startup, per-session bearer origins, and short operation-lock transitions. Web applications run through a trusted ASGI host in hardened Docker containers by default, with read-only package/root filesystems, a writable per-skill cache, resource/capability limits, health checks, idle cleanup, startup stale-state recovery, and an explicitly labeled local-development fallback. Every Docker application starts on an internal network behind a trusted relay that bridges loopback ingress and only the exact scoped Codex-capability route; it receives neither skill code nor an instance token, while approved server egress is added separately. A same-origin gateway isolates all `*.web-app.localhost` traffic from the main API, applies iframe and browser containment headers, strips unsafe upstream behavior, caps request/response bodies, blocks WebSockets and literal browser-side external URLs, and exposes only a backend-mediated Codex capability that rechecks the active installed manifest and permissions. Added Web Applications list/detail routes, a sandboxed React iframe experience, package-file support across generation and version inspection, lifecycle cleanup for disable/activation/delete/shutdown, focused runtime and UI coverage, and authoritative architecture/security/API documentation. Ruff passed, all 270 backend tests passed, all 7 frontend tests passed, the frontend production build passed, live Docker image/start/readiness/HTTP/cleanup, no-egress/API-isolation, approved-egress, and scoped-capability relay probes passed, and the final repository checks passed.
 
-## 2026-07-04 13:09 - Two-Phase ProductManager Build Review
+### Limitations
 
-- Summary: Two-phase ProductManager build review. Added intent and plausibility review before blueprint/permission creation, a separate plausibility instruction, `needs_input` requests, same-chat clarification continuation, tool UI guidance, and pending-request tracking in Chat. Backend tests and the frontend build passed.
-- Limitations/Future implementations: A durable backend conversation table may be needed if multi-device chat continuity becomes a requirement.
+Domain-level Docker egress enforcement remains deferred in TODO-010. Function registration and one-hop cross-skill invocation were completed in the later Function Registry milestone. WebSockets are intentionally unsupported. The explicit `local/dev` fallback is less isolated than Docker and is labeled accordingly.
+
+## 2026-07-15 22:23 — Executable-Only Skill Contract
+
+- Category: feature
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Executable-only skill contract. Removed the former skill-kind field from manifests, SQLAlchemy records, generation requests, API schemas, ProductManager/Builder contracts, runner and scheduler branches, frontend types and displays, fixtures, and documentation. Every skill now requires a Python entrypoint and tests, while optional `SKILL.md` reusable instructions remain supported. The local SQLite migration drops both legacy columns and removes their exact keys recursively from persisted JSON artifacts; the current local database was migrated after confirming all existing rows used the executable variant. The installed GitHub Trending skill manifest was migrated and its 24 tests passed. Ruff passed, all 245 backend tests passed, all 5 frontend tests passed, and the frontend production build passed.
+
+### Limitations
+
+None known.
+
+## 2026-07-14 23:02 — Backend Service And Frontend Page Decomposition
+
+- Category: refactor
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Backend service and frontend page decomposition. Extracted task-DAG validation and ready-batch calculation into `TaskDagService`, run artifact persistence and interface-artifact validation into `AgentRunArtifactStore`, ProductManager output normalization into `ProductManagerContractService`, and separate build/runtime usage handling into `CodexInvocationRecorder`. `AgentWorkflowService` and `CodexService` remain orchestration facades and call the new narrow interfaces directly without private compatibility forwarders. Moved Chat conversation state into a tested hook, Chat presentation into a feature workspace, and Skill Detail update/version/schedule/validation/run panels into tested feature components while route pages retain API orchestration. Hook coverage also fixed the synthesized first chat not being persisted before its first edit. Ruff passed, all 258 backend tests passed, all 5 frontend feature tests passed, and the frontend production build passed.
+
+### Limitations
+
+Update and repair orchestration still shares the main workflow service, and some route-level Skill Detail mutations remain intentionally colocated because they coordinate several panels. Further extraction should be driven by a concrete feature boundary rather than file-size alone.
+
+## 2026-07-14 01:06 — Skill Exit-Code Error Summaries
+
+- Category: bugfix
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Skill exit-code error summaries. Local and Docker skill runners now translate common nonzero process exit codes into specific Error messages for execution failure (`126`), missing commands (`127`), SIGINT interruption (`130`), SIGKILL (`137`), segmentation faults (`139`), and SIGTERM (`143`), with an explicit numeric fallback for other codes. Raw process output remains available in stderr. Ruff passed, the focused runner suite passed with 31 tests, all 253 backend tests passed, and `git diff --check` passed.
+
+### Limitations
+
+Exit codes identify the terminating condition but cannot always identify the external actor that sent a signal; stderr remains the detailed diagnostic source.
+
+## 2026-07-14 01:35 — Deterministic Final Validation and Static Capability Scan
+
+- Category: feature
+- Related TODOs: TODO-001
+- Area: unknown
+
+### Summary
+
+Deterministic final validation and static capability scan. Both `single_codex` and `task_dag` now use one backend-owned, agent-free validator that parses and package-checks the actual manifest, compares scanned Python capability evidence with that manifest's runtime declarations, and runs generated tests before runtime permission review. The backend creates the skill's `tests/` directory before writable agents in both workflows and instructions require test authors to use that existing directory. Single-Codex writes tests in its one invocation and blocks on backend validation failure without calling more agents. DAG Tester still writes the final E2E test, now solely from blueprint acceptance criteria, before backend validation; only the DAG workflow may invoke its bounded Builder repair loop. The duplicate `final_e2e_expectations` DAG field and completed TODO-001 were removed. Ruff passed, the targeted workflow/capability suite passed with 8 tests, all 254 backend tests passed, and `git diff --check` passed.
+
+### Limitations
+
+The static scanner is intentionally heuristic and cannot prove the absence of dynamic, transitive, encoded, dependency-internal, non-Python, or runtime-constructed behavior. It excludes tests and dependency folders, and recognized imports can still produce conservative false positives. Final proposed-skill tests continue to execute through the existing host-side validation path rather than the Docker runtime sandbox.
+
+## 2026-07-14 00:20 — Runtime Codex Failure Diagnostics
+
+- Category: bugfix
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Runtime Codex failure diagnostics. Failed backend-mediated skill Codex calls now persist a failed invocation record on the active `skill_run` with resolved CLI path/version/source, exit code, error type, concise error detail, bounded stderr tail, and zero tokens when no turn completed. SkillRunner now maps top-level `partial` and `failed` outputs to honest backend statuses and prevents a run with a recorded failed Codex call from being marked succeeded merely because the skill process returned valid JSON with exit code zero. Run-history API/UI contracts and documentation now expose the new status and diagnostics. Ruff passed, the focused runtime suite passed with 28 tests, the adapter regression suite passed with 16 tests, all 241 backend tests passed, the frontend production build passed, and `git diff --check` passed.
+
+### Limitations
+
+Existing completed runs cannot recover failed CLI stderr that was discarded before this change. Runtime Codex calls made outside an active executable skill run still cannot be attributed to run history.
+
+## 2026-07-13 00:58 — Project Build Workflow Override
+
+- Category: feature
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Project build workflow override. Added a persistent Codex setting that keeps automatic ProductManager workflow selection by default or forces every new Project build through Simple (`single_codex`) or Task DAG (`task_dag`). Backend selection now applies the override after ProductManager blueprinting, records the effective workflow and selection source in the ProductManager step, and validates the effective workflow through the trusted registry. Added the Codex Settings control, backend regression coverage, and current-behavior documentation. Ruff passed, the focused routing/workflow suite passed with 43 tests, all 237 backend tests passed, the frontend production build passed, and `git diff --check` passed.
+
+### Limitations
+
+The override applies to new Project builds and does not rewrite workflows already persisted on existing agent runs.
+
+## 2026-07-13 00:55 — Canonical Contracts, Structured TODO, And Ruff
+
+- Category: feature
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Canonical contracts, structured TODO, and Ruff. Replaced agent-run milestone compatibility fields and the duplicate retry route with canonical task-node names, added safe local-schema data copying from old columns, collapsed legacy disabled skill rows into `installed` plus `enabled = false`, removed the non-persisted deleted schedule status, and added regression tests for those contracts. Reworked `docs/todo.md` into stable items with Priority, Status, Area, Rationale, and Acceptance criteria; added the audited service/page decomposition, approval-scope, message-storage, filesystem-transaction, and parallel-execution work; clarified documentation ownership in `AGENTS.md` and `docs/README.md`; corrected the stale claim that `ProposedSkillService` creates sample skills; and tightened lifecycle, scheduling, and data-model documentation. Installed Ruff 0.15.21, added it to backend development dependencies, configured import and correctness checks, applied the initial clean baseline, and made Ruff-before-pytest a repository rule. Ruff passed, all 235 backend tests passed, the frontend production build passed, local documentation links resolved, and `git diff --check` passed.
+
+### Limitations
+
+The confirmed architectural work remains in `docs/todo.md`; service and page decomposition, first-class schedule approval scope, the chat message-storage boundary, transactional filesystem/database lifecycle operations, and real isolated-workspace DAG concurrency were intentionally not implemented in this change.
+
+## 2026-07-12 23:50 — Repository Consistency And Safety Audit
+
+- Category: research
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Repository consistency and safety audit. Removed the unused bare `POST /skills` record-creation path and the obsolete sample-skill UI/API that bypassed the Project-mode creation boundary, restricted skill PATCH requests to enabling or disabling installed skills, centralized declared-file checks in package validation, enabled SQLite foreign-key enforcement, routed schedule mutations through the live shared APScheduler instance, made global schedule approvals activate or deny the schedule itself, blocked run-now for non-active schedules, cleaned schedule approvals and stale skill links during deletion, removed unreferenced linear-workflow and chat-plausibility helpers, corrected version-cap guidance, and aligned lifecycle, workflow, backend, and TODO documentation. Final backend, generated-skill, frontend, manifest, OpenAPI, compilation, and diff verification completed successfully.
+
+### Limitations
+
+Architectural findings that are not unambiguous bugs remain report-only. In particular, the large workflow/Codex service classes, lightweight SQLite schema migration strategy, single-Codex final validation gap, and true parallel DAG execution remain unchanged.
+
+## 2026-07-12 20:50 — Modular Project Build Workflows
+
+- Category: feature
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Modular project build workflows. Added ProductManager selection of a single backend-only `build_workflow` value, persisted it separately from `blueprint.json`, kept intent refinement, plausibility review, blueprint creation, permission planning, and build-time approval as the shared starting sequence, and routed post-approval execution through a trusted workflow registry. Colocated shared preflight, DAG, and single-Codex Markdown instructions and prompt composition with their owning workflow packages; `CodexService` now delegates project-build prompt construction while retaining shared invocation, parsing, routing, usage, workspace, and safety primitives. Moved existing DAG execution, pause/resume, and retry orchestration into the `task_dag` package, and added a `single_codex` package that gives Codex the approved blueprint and effective permissions for one planning, build, and test invocation. The workflow/chat regression suite passed with 85 tests, the final single-Codex end-to-end test passed and executed the generated JSON entrypoint, the frontend production build passed, and `git diff --check` passed.
+
+### Limitations
+
+Independent backend acceptance-criteria and authoritative test validation after `single_codex` completion remains deferred in `docs/todo.md`. Central manifest schema, required test-directory, and declared-file validation plus runtime permission review remain enforced.
+
+## 2026-07-12 15:00 — Codex CLI Compatibility And Per-Task Model Routing
+
+- Category: feature
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Codex CLI compatibility and per-task model routing. Added centralized CLI discovery/version probing with strict command overrides, live App Server model and supported-effort discovery, persistent routing settings, independent Chat and ProductManager action routes, Builder `easy`/`medium`/`hard` difficulty routes, Tester task/final/update routes, pre-invocation model/effort validation, requested/effective routing metadata, and the Codex Settings UI. The task DAG continues to contain difficulty but no model ids. The final backend suite passed with 219 tests, focused routing tests passed, the live model-catalog probe succeeded, the frontend production build passed, and `git diff --check` passed.
+
+### Limitations
+
+Only the `codex_cli` provider is implemented. The local non-agentic model adapter remains deferred. Model selection requires the local Codex App Server catalog to validate explicit choices. Direct Chat applies its configured route but does not persist a build-style token or invocation audit record.
+
+## 2026-07-12 14:45 — Skill Runtime Token History
+
+- Category: feature
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Skill runtime token history. Added adapter/model-aware runtime Codex invocation records and aggregate token columns to `skill_runs`, associated successful backend-mediated calls with the active per-skill run, added a Skill Run History tab to Agent Run detail, and removed the completed runtime-tracking TODO. Focused runtime tests passed with 11 tests, the full backend suite passed with 219 tests, the frontend production build passed, and `git diff --check` passed.
+
+### Limitations
+
+Direct Chat token tracking remains outside runtime history. Runtime Codex calls made outside an active executable skill run are not attributed to a run.
+
+## 2026-07-12 01:39 — Project Build Context Optimization And GitHub E2E
+
+- Category: feature
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Project build context optimization and GitHub end-to-end correction. Compacted ProductManager, Builder, Tester, and repair contexts; enforced Tester ownership of test files; added focused Tester self-checks; adjusted generated-skill timeouts; and corrected duplicate GitHub Trending card normalization. Before the user reverted the first-turn intent-refinement skip and direct failed-task resume, an end-to-end run used 382,608 tokens versus a 684,621-token baseline, a 44.1% reduction. The corrected proposed skill passed platform validation, 24 tests, a live parser smoke test, the then-current 205-test backend suite, and `git diff --check`.
+
+### Limitations
+
+Re-measure token usage after the two reverts before treating the 44.1% reduction as representative. The generated GitHub skill remains proposed, disabled, uninstalled, unscheduled, and subject to runtime permission approval.
+
+## 2026-07-11 02:38 — Codex Build Usage Tracking
+
+- Category: feature
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Codex build usage tracking. Added ProductManager, Builder, and Tester invocation token records, step/build totals, UI reporting, a persistent App Server allowance client, `/usage/codex`, parallel-aware ready-node batches, and workflow pause/resume below a 5% reserve in either allowance window. The full backend suite passed with 200 tests, focused usage/workflow tests passed with 36 tests, the frontend build passed, a live allowance probe succeeded, and `git diff --check` passed.
+
+### Limitations
+
+The scheduler batches parallel-safe nodes but does not yet execute shared-workspace nodes concurrently. Build totals intentionally exclude installed-skill runtime calls.
+
+## 2026-07-09 00:50 — ProductManager Build Instruction Split
+
+- Category: feature
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+ProductManager build instruction split. Separated blueprint/permissions from post-approval task-DAG planning, adopted flat runtime permission fields, removed ProductManager summary Codex calls and unsupported DAG-phase decisions, and aligned CodexService, AgentWorkflowService, PermissionService, tests, and documentation. Focused schema tests and the then-current 190-test backend suite passed.
+
+### Limitations
+
+Existing compatibility DB/API fields such as `requested_network_domains_json` remain and are populated from `permission_plan.runtime.network`. Unrelated generated files under `skills/proposed/weekly_github_trend_analyzer/` remain untracked.
+
+## 2026-07-08 15:06 — Remove Hybrid Skill Variant
+
+- Category: refactor
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Removed the hybrid skill variant, retained optional `SKILL.md` support for executable packages, and updated shared schemas, manifest validation, prompts, agent instructions, tool filtering, frontend choices, and documentation. Focused backend suites and the frontend build passed.
+
+### Limitations
+
+Superseded by the later executable-only skill contract.
+
+## 2026-07-08 02:34 — Manifest Schedule Registration
+
+- Category: feature
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Manifest schedule registration. Moved schedule intent into ProductManager-owned manifest metadata, removed the PM-visible Scheduling API catalog entry, registered manifest schedules as pending during installation, and improved fake planning names for weekly GitHub Trending skills. Focused schedule/planning tests and the full backend suite passed.
+
+### Limitations
+
+Proposed skills generated before this change are not renamed in place.
+
+## 2026-07-08 01:52 — Skill Codex API And DAG API Context
+
+- Category: feature
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Skill Codex API and DAG API context. Added manifest `permissions.codex`, `POST /skills/{skill_id}/codex`, backend API catalog ids, task-node `backend_api_ids`, selected Builder API context, runner backend URL variables, and an explicit DAG view in Agent Run detail. The full backend suite and frontend build passed, and Chrome UI end-to-end verification completed an approved task DAG.
+
+### Limitations
+
+Potential backend APIs for runtime cache, permission status, skill-run metadata, and memory lookup remain deferred until their contracts and permissions are designed.
+
+## 2026-07-07 21:43 — Backend Manifest Skeletons
+
+- Category: feature
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Backend manifest skeletons. The backend now seeds and finalizes `manifest.json` from approved blueprint and permission artifacts, validates declared entrypoints, reports seeded manifest changes in fallback interface artifacts, and discourages over-splitting same-file DAG nodes. The targeted workflow suite passed.
+
+### Limitations
+
+None known.
+
+## 2026-07-07 02:32 — DAG Build Workflow
+
+- Category: feature
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+DAG build workflow. Replaced the linear milestone flow with explicit ProductManager phases, backend DAG validation, task artifacts, interface artifacts, node-specific tests, final end-to-end tests, task retry aliases, and task-node UI labels. The full backend suite and frontend build passed.
+
+### Limitations
+
+True concurrent isolated-workspace DAG execution remains deferred.
+
+## 2026-07-04 13:09 — Two-Phase ProductManager Build Review
+
+- Category: feature
+- Related TODOs: none
+- Area: unknown
+
+### Summary
+
+Two-phase ProductManager build review. Added intent and plausibility review before blueprint/permission creation, a separate plausibility instruction, `needs_input` requests, same-chat clarification continuation, tool UI guidance, and pending-request tracking in Chat. Backend tests and the frontend build passed.
+
+### Limitations
+
+A durable backend conversation table may be needed if multi-device chat continuity becomes a requirement.

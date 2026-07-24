@@ -75,6 +75,12 @@ Read the relevant files under `docs/` before making non-trivial changes. Start a
 - Confirmed unfinished work: [docs/todo.md](docs/todo.md)
 - Working history log format: [docs/working_history.md](docs/working_history.md)
 
+## TODO Management
+
+`docs/todo.md` is the source of truth for confirmed unfinished work. Each item must have a stable ID, Priority, Status, Area, Rationale, and Acceptance criteria. Keep priorities limited to `High`, `Medium`, or `Low`, and statuses limited to `Planned`, `In progress`, or `Blocked`.
+
+When work is completed, remove its TODO entry and add a concise dated summary to `docs/working_history.md`. Do not leave completed items in the TODO as a second history log.
+
 ## Non-Negotiable Guardrails
 
 ### Local First
@@ -195,14 +201,3 @@ npm run build
 Run Ruff on changed backend code before declaring a task is complete. 
 
 The frontend build may need normal filesystem access for Vite/esbuild config loading in the Codex sandbox. If the sandbox denies config reads, rerun the same `npm run build` command with the narrow build escalation.
-
-## Projector
-
-Use Projector's local API at `http://127.0.0.1:48721/v1` to manage project state. Projector must be running; resolve the registered project ID with `GET /projects`.
-
-- `POST /add_todo` (`add_todo`): `projectId`, `title`, `priority` (`critical|high|medium|low`), `area`, `dependencies` (TODO ID array), `rationale`, `acceptanceCriteria`, and optional `status` (`planned|blocked`, default `planned`).
-- `POST /complete_todo` (`complete_todo`): `projectId`, `todoId`, `historyTitle`, `category` (`feature|bugfix|refactor|test|documentation|research|decision`), `area`, `summary`, and `limitations`.
-- `POST /add_work_history` (`add_work_history`): `projectId`, `title`, `category`, `relatedTodos` (TODO ID array), `area`, `summary`, and `limitations`.
-
-Send JSON with camel-case field names. Use empty arrays when there are no dependencies or related TODOs, and use `none` for no known limitations.
-- Do not directly modify `TODO.md` or `WORK_HISTORY.md`.
