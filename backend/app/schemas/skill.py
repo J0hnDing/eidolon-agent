@@ -17,6 +17,7 @@ class SkillBase(BaseModel):
     input_schema_json: dict[str, Any] | None = None
     output_schema_json: dict[str, Any] | None = None
     function_requirements_json: list[dict[str, Any]] = Field(default_factory=list)
+    integration_requirements_json: list[dict[str, Any]] = Field(default_factory=list)
     installed_path: str | None = Field(default=None, max_length=512)
     active_version_id: int | None = None
     enabled: bool = False

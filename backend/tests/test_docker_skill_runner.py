@@ -118,6 +118,8 @@ def test_private_function_capability_command_uses_internal_network_and_relay_url
     )
 
     assert command[command.index("--network") + 1] == "private-function-network"
+    assert "api.github.com:127.0.0.1" in command
+    assert "github.com:127.0.0.1" in command
     assert "PERSONAL_AGENT_BACKEND_URL=http://trusted-function-relay:8000" in command
     assert "PERSONAL_AGENT_FUNCTION_CAPABILITY=ephemeral-secret" in command
 
@@ -214,6 +216,7 @@ def test_docker_runner_allows_explicit_network_permissions_with_bridge_network(t
     assert len(commands) == 2
     assert commands[0][commands[0].index("--network") + 1] == "bridge"
     assert commands[1][commands[1].index("--network") + 1] == "bridge"
+    assert "api.github.com:127.0.0.1" in commands[1]
 
 
 def test_docker_runner_blocks_filesystem_read(tmp_path: Path, db_session: Session) -> None:

@@ -162,4 +162,5 @@ def test_private_relay_exposes_only_scoped_backend_capabilities(
     } == {
         relay.CODEX_CAPABILITY_PATH,
         "/web-apps/capabilities/functions/{function_name}",
+        "/web-apps/capabilities/integrations/invoke",
     }

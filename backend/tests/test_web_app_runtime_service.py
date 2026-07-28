@@ -493,6 +493,8 @@ def test_docker_web_app_ingress_does_not_grant_internet_egress(tmp_path: Path) -
     assert len(run_commands) == 2
     app_command, relay_command = run_commands
     assert app_command[app_command.index("--network") + 1] == "personal-agent-web-app-internal"
+    assert "api.github.com:127.0.0.1" in app_command
+    assert "github.com:127.0.0.1" in app_command
     assert "127.0.0.1::8000" not in app_command
     assert "--read-only" in app_command
     assert app_command[app_command.index("--cap-drop") + 1] == "ALL"

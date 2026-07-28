@@ -366,6 +366,18 @@ export interface CodexModelCatalog {
   models: CodexModelOption[];
 }
 
+export interface GitHubConnectionStatus {
+  provider: "github";
+  connected: boolean;
+  status: "connected" | "disconnected" | "unavailable" | "invalid";
+  account_login: string | null;
+  account_id: string | null;
+  last_validated_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  error_type: string | null;
+}
+
 export interface AgentRunDetail extends AgentRun {
   steps: AgentRunStep[];
 }
@@ -549,6 +561,14 @@ function formatApiError(raw: string): string {
   try {
     const parsed = JSON.parse(raw) as { detail?: unknown };
     if (typeof parsed.detail === "string") return parsed.detail;
+    if (
+      parsed.detail
+      && typeof parsed.detail === "object"
+      && "message" in parsed.detail
+      && typeof (parsed.detail as { message?: unknown }).message === "string"
+    ) {
+      return (parsed.detail as { message: string }).message;
+    }
     if (Array.isArray(parsed.detail)) {
       return parsed.detail
         .map((item) => {
@@ -647,6 +667,14 @@ export const api = {
     }),
   getCodexModels: (refresh = false) =>
     request<CodexModelCatalog>(`/settings/codex-models?refresh=${refresh}`),
+  getGitHubConnection: () => request<GitHubConnectionStatus>("/settings/integrations/github"),
+  putGitHubConnection: (token: string) =>
+    request<GitHubConnectionStatus>("/settings/integrations/github", {
+      method: "PUT",
+      body: JSON.stringify({ token }),
+    }),
+  removeGitHubConnection: () =>
+    request<void>("/settings/integrations/github", { method: "DELETE" }),
   listAgentRuns: () => request<AgentRun[]>("/agent-runs"),
   getAgentRun: (id: number) => request<AgentRunDetail>(`/agent-runs/${id}`),
   cancelAgentRun: (id: number) =>

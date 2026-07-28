@@ -36,6 +36,8 @@ Build workflows use task-node artifacts instead of linear milestone artifacts. E
 
 ProductManager, Builder, and Tester are Codex-backed through `CodexService`. Project-build packages under `backend/app/workflows/` own and load their workflow-specific instructions and prompt composition. Shared preflight instructions live under `workflows/common`, DAG instructions under `workflows/task_dag`, and the one-call prompt under `workflows/single_codex`. Update and standalone repair actions continue to load role-relative files from `backend/app/agent_instructions/`.
 
+GitHub agent context is registry-derived and selected-only. ProductManager gets a concise index, Builder and single-Codex get detail only for approved operations, and Tester gets selected detail plus a deterministic fake adapter. Credentials, headers, settings routes, secret-store data, and complete provider request construction never enter agent prompts, responses, or artifacts.
+
 Tests may use fake Codex adapters. Production workflow code should not bypass Codex for these roles except as a safe fallback when Codex output is unusable.
 
 ## Role Boundaries

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 from app.models import Skill, SkillGenerationRequest
 from app.services.backend_api_catalog import backend_api_index, backend_api_index_file
 from app.services.codex_service import CodexGenerationError
+from app.services.integration_registry import operation_index
 from app.workflows.base import (
     FINAL_E2E_FAILURE_KEY,
     MAX_TASK_FAILURES,
@@ -56,6 +57,7 @@ class TaskDagBuildWorkflow:
                     "permission_bounds": permission_bounds,
                     "backend_api_index": api_index,
                     "backend_api_index_file": backend_api_index_file().as_posix(),
+                    "integration_operation_index": operation_index(),
                 },
                 logs="ProductManager wrote task_dag.json after build-time approval.",
             ),

@@ -80,6 +80,10 @@ Agent Runs list and detail pages show run status, current task node or parallel 
 
 `/settings/usage` shows the resolved CLI and both the 5-hour and weekly Codex allowance windows. It lets the user keep automatic Project build workflow selection or force every new build through Simple (`single_codex`) or Task DAG (`task_dag`); forced selection overrides ProductManager output in the backend. The page also loads the live App Server model catalog and lets the user choose model and reasoning effort independently for Chat, ProductManager actions, Builder difficulty tiers plus repair/update, and Tester task/final/update actions. Unsupported model/effort combinations are rejected by the backend. Refresh reads current local App Server state; it does not infer quota from project-build token totals.
 
+The same trusted Settings page includes the single GitHub connection. It shows connected/disconnected/unavailable state, validated account identity, last validation time, and sanitized errors, with add, replace, and remove actions. The token input is password-style, is cleared after submission, and is never returned or redisplayed.
+
+Runtime approval uses the existing `PermissionRequestModal`. GitHub `integration_access` reviews show provider, operation ids, user-readable reason, read-only status, normalized repositories, and current connection availability. Connection state alone never marks a skill approved.
+
 ## Targeted Polling
 
 The MVP uses targeted polling, not push events. Pages with changing backend state poll only relevant resources and should stop or slow down once records reach terminal states.

@@ -17,6 +17,8 @@ from app.models import (
     AgentRun,
     ApprovalRequest,
     FunctionAccessApproval,
+    IntegrationAuditRecord,
+    IntegrationAuthorization,
     Skill,
     SkillGenerationRequest,
     SkillOperationLock,
@@ -93,6 +95,7 @@ class ProposedSkillService:
             "input_schema_json": None,
             "output_schema_json": None,
             "function_requirements_json": [],
+            "integration_requirements_json": [],
             "installed_path": None,
             "enabled": False,
         }
@@ -160,6 +163,9 @@ class ProposedSkillService:
                     skill.function_requirements_json = [
                         item.model_dump(mode="json") for item in manifest.function_requirements
                     ]
+                    skill.integration_requirements_json = [
+                        item.model_dump(mode="json") for item in manifest.integration_requirements
+                    ]
                     skill.installed_path = self._relative_path(active_dir)
                     changed = True
                 continue
@@ -175,6 +181,9 @@ class ProposedSkillService:
                 output_schema_json=manifest.output_schema,
                 function_requirements_json=[
                     item.model_dump(mode="json") for item in manifest.function_requirements
+                ],
+                integration_requirements_json=[
+                    item.model_dump(mode="json") for item in manifest.integration_requirements
                 ],
                 installed_path=self._relative_path(active_dir),
                 enabled=False,
@@ -311,6 +320,9 @@ class ProposedSkillService:
         skill.function_requirements_json = [
             item.model_dump(mode="json") for item in manifest.function_requirements
         ]
+        skill.integration_requirements_json = [
+            item.model_dump(mode="json") for item in manifest.integration_requirements
+        ]
         skill.installed_path = self._relative_path(version_dir)
         skill.active_version_id = version.id
         skill.enabled = False
@@ -356,6 +368,12 @@ class ProposedSkillService:
             self.db.query(FunctionAccessApproval).filter(
                 (FunctionAccessApproval.caller_skill_id == skill.id)
                 | (FunctionAccessApproval.target_skill_id == skill.id)
+            ).delete(synchronize_session=False)
+            self.db.query(IntegrationAuditRecord).filter(IntegrationAuditRecord.skill_id == skill.id).delete(
+                synchronize_session=False
+            )
+            self.db.query(IntegrationAuthorization).filter(
+                IntegrationAuthorization.skill_id == skill.id
             ).delete(synchronize_session=False)
             self.db.query(SkillRun).filter(SkillRun.caller_skill_id == skill.id).update(
                 {
@@ -482,6 +500,7 @@ class ProposedSkillService:
             "permissions": manifest_json.get("permissions", {}),
             "dependencies": manifest_json.get("dependencies", []),
             "function_requirements": manifest_json.get("function_requirements", []),
+            "integration_requirements": manifest_json.get("integration_requirements", []),
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
@@ -511,6 +530,7 @@ class ProposedSkillService:
             "input_schema": None,
             "output_schema": None,
             "function_requirements": [],
+            "integration_requirements": [],
             "permissions": {
                 "network": [],
                 "filesystem_read": [],

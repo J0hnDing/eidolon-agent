@@ -445,3 +445,17 @@ Two-phase ProductManager build review. Added intent and plausibility review befo
 ### Limitations
 
 A durable backend conversation table may be needed if multi-device chat continuity becomes a requirement.
+
+## 2026-07-24 17:32 — Minimal GitHub Integration Capability
+
+- Category: feature
+- Related TODOs: TODO-015
+- Area: backend-integrations
+
+### Summary
+
+Implemented trusted Windows Credential Manager-backed GitHub connection management; one typed six-operation read-only registry; manifest integration requirements; separate fingerprinted skill authorization; function and web-app capability relays; backend-only provider execution; sanitized auditing and errors; selected-only ProductManager, Builder, Tester, and single-Codex context; deterministic fake adapters; static direct-access validation; Settings and approval UI; focused regression and secret-leakage tests; and linked current-behavior documentation.
+
+### Limitations
+
+The explicit local/dev runtime fallback remains less isolated than Docker; production Docker runtimes block direct GitHub host resolution and all runtime integration calls are still enforced by the authenticated backend relay.

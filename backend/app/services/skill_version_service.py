@@ -161,6 +161,15 @@ class SkillVersionService:
 
     def create_runtime_request_if_needed(self, skill: Skill, version: SkillVersion) -> ApprovalRequest | None:
         active = self.ensure_active_version(skill)
+        candidate_manifest = SkillManifest.model_validate(version.manifest_json)
+        if candidate_manifest.integration_requirements:
+            from app.services.integration_service import build_default_integration_service
+
+            build_default_integration_service(self.db).ensure_authorization_requests(
+                skill,
+                candidate_manifest,
+                version_id=version.id,
+            )
         if active.permission_fingerprint == version.permission_fingerprint:
             return None
         existing = self._latest_version_permission_request(skill, version)
@@ -202,11 +211,17 @@ class SkillVersionService:
         self.db.add(request)
         self.db.commit()
         self.db.refresh(request)
-        return permission_service._attach_function_requirement_review(
+        request = permission_service._attach_function_requirement_review(
             request,
             skill,
             manifest=SkillManifest.model_validate(manifest),
             caller_version_id=version.id,
+        )
+        return permission_service._attach_integration_review(
+            request,
+            skill,
+            SkillManifest.model_validate(manifest),
+            version_id=version.id,
         )
 
     def activate_version(self, skill: Skill, version: SkillVersion) -> Skill:
@@ -222,6 +237,23 @@ class SkillVersionService:
             if request is None or request.status != "approved":
                 self.create_runtime_request_if_needed(skill, version)
                 raise SkillVersionError("Runtime permission approval is required before activating this version")
+        candidate_manifest = SkillManifest.model_validate(version.manifest_json)
+        if candidate_manifest.integration_requirements:
+            from app.services.integration_service import build_default_integration_service
+
+            integration_service = build_default_integration_service(self.db)
+            integration_service.ensure_authorization_requests(
+                skill,
+                candidate_manifest,
+                version_id=version.id,
+            )
+            if any(
+                integration_service.authorization_state(skill, requirement) != "approved"
+                for requirement in candidate_manifest.integration_requirements
+            ):
+                raise SkillVersionError(
+                    "Integration authorization is required before activating this version"
+                )
 
         try:
             with SkillOperationGuard(self.db).locked(skill, "update", reason=f"Activating {version.version}"):
@@ -322,6 +354,9 @@ class SkillVersionService:
         skill.output_schema_json = manifest.output_schema
         skill.function_requirements_json = [
             item.model_dump(mode="json") for item in manifest.function_requirements
+        ]
+        skill.integration_requirements_json = [
+            item.model_dump(mode="json") for item in manifest.integration_requirements
         ]
         self.db.commit()
         self.db.refresh(skill)

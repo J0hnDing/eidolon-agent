@@ -52,6 +52,8 @@ New function plans declare object-shaped `input_schema` and `output_schema` JSON
 
 `function_requirements` declares caller relationships. Each entry contains the exact installed function name and a user-readable reason. Discovery does not add entries automatically, requirements are not Python dependencies, and the caller does not inherit the target function's permissions. A skill cannot require itself and duplicate target names are invalid.
 
+`integration_requirements` declares GitHub authorization intent separately from ordinary network permission. Each entry contains provider `github`, unique registry operation ids, exact normalized repository scope when required, and a concise reason. Wildcards and credentials are invalid. The detailed contract and example live in [GitHub integration capability](../integrations/github.md).
+
 `schedule` is ProductManager-owned manifest intent for recurring bounded function execution. Use `null` when no recurring run was requested. `web_app` manifests must use `null`; persistent services are not scheduled `SkillRun` jobs. Supported function schedule forms are:
 
 - `{"type": "daily", "time": "HH:MM", "timezone": "America/Toronto", "input": {}}`;

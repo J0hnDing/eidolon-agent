@@ -1,3 +1,4 @@
+import re
 from typing import Any, Literal
 
 from jsonschema import Draft202012Validator, SchemaError
@@ -120,6 +121,71 @@ class ManifestFunctionRequirement(BaseModel):
     reason: str = Field(min_length=1, max_length=1000)
 
 
+class ManifestIntegrationResourceScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    repositories: list[str] = Field(default_factory=list, max_length=100)
+
+    @field_validator("repositories")
+    @classmethod
+    def validate_repositories(cls, repositories: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for repository in repositories:
+            value = repository.strip().lower()
+            parts = value.split("/")
+            if (
+                len(parts) != 2
+                or not all(parts)
+                or any("*" in part for part in parts)
+                or re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,38})", parts[0]) is None
+                or re.fullmatch(r"[a-z0-9_.-]{1,100}", parts[1]) is None
+            ):
+                raise ValueError("repository scope must use exact owner/repository entries")
+            normalized.append(value)
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("integration repository scope cannot contain duplicates")
+        return normalized
+
+
+class ManifestIntegrationRequirement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["github"]
+    operations: list[str] = Field(min_length=1, max_length=20)
+    resource_scope: ManifestIntegrationResourceScope = Field(default_factory=ManifestIntegrationResourceScope)
+    reason: str = Field(min_length=1, max_length=300)
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, reason: str) -> str:
+        normalized = reason.strip()
+        if not normalized or any(character in normalized for character in "\r\n"):
+            raise ValueError("integration reason must be concise user-readable text")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_requirement(self) -> "ManifestIntegrationRequirement":
+        from app.services.integration_registry import OPERATIONS
+
+        if len(self.operations) != len(set(self.operations)):
+            raise ValueError("integration requirement operations cannot contain duplicates")
+        unknown = [operation_id for operation_id in self.operations if operation_id not in OPERATIONS]
+        if unknown:
+            raise ValueError(f"unknown integration operations: {unknown}")
+        if any(OPERATIONS[operation_id].provider != self.provider for operation_id in self.operations):
+            raise ValueError("integration operations must match their declared provider")
+        repository_operations = [
+            operation_id
+            for operation_id in self.operations
+            if OPERATIONS[operation_id].resource_scope == "repository"
+        ]
+        if repository_operations and not self.resource_scope.repositories:
+            raise ValueError("repository-scoped integration operations require exact repository scope")
+        if not repository_operations and self.resource_scope.repositories:
+            raise ValueError("non-repository integration operations cannot declare repository scope")
+        return self
+
+
 class SkillManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -133,6 +199,7 @@ class SkillManifest(BaseModel):
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
     function_requirements: list[ManifestFunctionRequirement] = Field(default_factory=list)
+    integration_requirements: list[ManifestIntegrationRequirement] = Field(default_factory=list)
     dependencies: list[str] = Field(default_factory=list)
     permissions: ManifestPermissions
     schedule: ManifestSchedule | None = None
@@ -202,6 +269,9 @@ class SkillManifest(BaseModel):
             raise ValueError("function_requirements cannot contain duplicate function names")
         if self.name in requirement_names:
             raise ValueError("a skill cannot require itself as a function")
+        providers = [requirement.provider for requirement in self.integration_requirements]
+        if len(providers) != len(set(providers)):
+            raise ValueError("integration_requirements cannot contain duplicate providers")
         if self.runtime == "function":
             normalized = self.entrypoint.replace("\\", "/")
             if normalized.startswith("/") or normalized.startswith("~") or ":" in normalized:

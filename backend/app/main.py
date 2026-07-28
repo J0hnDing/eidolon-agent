@@ -11,6 +11,7 @@ from app.routers import (
     chat,
     codex_settings,
     functions,
+    integrations,
     memory_facts,
     permission_requests,
     schedules,
@@ -101,6 +102,7 @@ async def enforce_web_app_gateway_origin(request: Request, call_next):
 
 app.include_router(memory_facts.router)
 app.include_router(functions.router)
+app.include_router(integrations.router)
 app.include_router(skills.router)
 app.include_router(agent_runs.router)
 app.include_router(chat.router)

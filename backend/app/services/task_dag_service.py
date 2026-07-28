@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.backend_api_catalog import valid_backend_api_ids
+from app.services.integration_registry import OPERATIONS
 from app.workflows.base import ProjectBuildWorkflowError
 
 
@@ -38,7 +39,43 @@ class TaskDagService:
                     ) from None
                 if normalized_api_id not in valid_backend_api_ids():
                     raise ProjectBuildWorkflowError(f"Task node {node_id} references unknown backend API id: {api_id}")
+            approved_operation_ids = {
+                str(operation_id)
+                for requirement in blueprint.get("integration_requirements", []) or []
+                if isinstance(requirement, dict)
+                for operation_id in requirement.get("operations", []) or []
+            }
+            integration_operation_ids = node.get("integration_operation_ids", []) or []
+            if len(integration_operation_ids) != len(set(integration_operation_ids)):
+                raise ProjectBuildWorkflowError(
+                    f"Task node {node_id} contains duplicate integration operation ids"
+                )
+            for operation_id in integration_operation_ids:
+                if operation_id not in OPERATIONS:
+                    raise ProjectBuildWorkflowError(
+                        f"Task node {node_id} references unknown integration operation: {operation_id}"
+                    )
+                if operation_id not in approved_operation_ids:
+                    raise ProjectBuildWorkflowError(
+                        f"Task node {node_id} references unapproved integration operation: {operation_id}"
+                    )
             node_by_id[node_id] = node
+        assigned_operation_ids = {
+            str(operation_id)
+            for node in nodes
+            for operation_id in node.get("integration_operation_ids", []) or []
+        }
+        blueprint_operation_ids = {
+            str(operation_id)
+            for requirement in blueprint.get("integration_requirements", []) or []
+            if isinstance(requirement, dict)
+            for operation_id in requirement.get("operations", []) or []
+        }
+        if blueprint_operation_ids - assigned_operation_ids:
+            raise ProjectBuildWorkflowError(
+                "Task DAG does not assign approved integration operations: "
+                f"{sorted(blueprint_operation_ids - assigned_operation_ids)}"
+            )
         for node in nodes:
             for dependency in node.get("depends_on", []):
                 if dependency not in node_by_id:

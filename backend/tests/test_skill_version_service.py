@@ -8,10 +8,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import ApprovalRequest, Skill, SkillVersion
+from app.models import ApprovalRequest, IntegrationAuthorization, Skill, SkillVersion
 from app.services.agent_workflow_service import AgentWorkflowService
 from app.services.codex_service import CodexService, FakeCodexAdapter
+from app.services.github_provider import FakeGitHubProviderAdapter
+from app.services.integration_service import IntegrationService
 from app.services.permission_service import PermissionService
+from app.services.secret_store import FakeSecretStore
 from app.services.skill_version_service import SkillVersionError, SkillVersionService
 
 
@@ -156,6 +159,55 @@ def test_unchanged_permissions_skip_runtime_reapproval(tmp_path: Path, db_sessio
     request = service.create_runtime_request_if_needed(skill, draft)
 
     assert request is None
+
+
+def test_integration_expansion_uses_separate_version_authorization(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill = create_installed_skill(db_session, tmp_path)
+    version_service = SkillVersionService(db_session, project_root=tmp_path)
+    active = version_service.ensure_active_version(skill)
+    draft = version_service.create_draft_from_active(skill, "Add GitHub metadata")
+    manifest_path = tmp_path / draft.folder_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["integration_requirements"] = [
+        {
+            "provider": "github",
+            "operations": ["github.repository.get"],
+            "resource_scope": {"repositories": ["octo/demo"]},
+            "reason": "Read approved repository metadata.",
+        }
+    ]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert version_service.validate_version(draft).ok is True
+
+    integration_service = IntegrationService(
+        db_session,
+        project_root=tmp_path,
+        secret_store=FakeSecretStore(),
+        github=FakeGitHubProviderAdapter(),
+    )
+    monkeypatch.setattr(
+        "app.services.integration_service.build_default_integration_service",
+        lambda _db: integration_service,
+    )
+
+    ordinary_request = version_service.create_runtime_request_if_needed(skill, draft)
+    authorization = db_session.query(IntegrationAuthorization).filter_by(skill_id=skill.id).one()
+    assert ordinary_request is None
+    assert authorization.approval_request.status == "pending"
+    assert skill.active_version_id == active.id
+    assert active.status == "active"
+
+    with pytest.raises(SkillVersionError, match="Integration authorization"):
+        version_service.activate_version(skill, draft)
+
+    authorization.approval_request.status = "approved"
+    db_session.commit()
+    activated = version_service.activate_version(skill, draft)
+    assert activated.active_version_id == draft.id
 
 
 def test_changed_permissions_require_approval_before_activation(tmp_path: Path, db_session: Session) -> None:

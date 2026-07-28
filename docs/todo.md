@@ -2,6 +2,7 @@
 
 - Status: planned
 - Priority: medium
+- Category: feature
 - Area: backend-model-adapters
 - Dependencies: none
 - Rationale: Some controlled artifact transformations should be able to use a selected local non-agentic model without going through the Codex agent workflow.
@@ -13,6 +14,7 @@ A backend adapter reads only the selected path and relevant context, invokes the
 
 - Status: planned
 - Priority: medium
+- Category: refactor
 - Area: backend-approval-contracts
 - Dependencies: none
 - Rationale: Schedule approvals are currently identified by `request_scope = runtime` plus `request_type = schedule`. A first-class schedule scope would make validation, querying, and documentation more precise.
@@ -24,6 +26,7 @@ Schedule approvals use one canonical scope contract; existing local rows are mig
 
 - Status: planned
 - Priority: low
+- Category: research
 - Area: backend-and-frontend-chat-persistence
 - Dependencies: none
 - Rationale: Chat history is currently frontend-local while the backend retains a compatibility `messages` table mainly for memory-source cleanup. The ownership boundary should be explicit rather than indefinite compatibility code.
@@ -35,6 +38,7 @@ Decide whether chat history is backend-persisted or frontend-local; migrate or r
 
 - Status: planned
 - Priority: low
+- Category: refactor
 - Area: backend-lifecycle-reliability
 - Dependencies: none
 - Rationale: Skill install, update, activation, rejection, and deletion coordinate filesystem changes with SQLite commits without one transaction spanning both resources. Process interruption can leave recoverable but inconsistent partial state.
@@ -46,6 +50,7 @@ Destructive lifecycle operations use staging plus deterministic commit/rollback 
 
 - Status: planned
 - Priority: low
+- Category: feature
 - Area: backend-project-build-execution
 - Dependencies: none
 - Rationale: The scheduler is parallel-aware but executes each admitted ready-node batch serially in one shared skill workspace. Real concurrency requires isolated writes and deterministic integration.
@@ -70,6 +75,7 @@ Suggested design:
 
 - Status: planned
 - Priority: high
+- Category: feature
 - Area: backend-sandbox-networking
 - Dependencies: none
 - Rationale: Runtime approvals name explicit server-side network domains, but any approved domain currently enables Docker bridge egress without domain-level filtering. Web-application browser traffic is separately blocked, and no-network application ingress is isolated, but approved server egress still has this disclosed enforcement gap.
@@ -81,6 +87,7 @@ Docker runtime egress is restricted to the approved manifest domains for both bo
 
 - Status: planned
 - Priority: medium
+- Category: feature
 - Area: backend-codex-workflow-reliability
 - Dependencies: none
 - Rationale: Action-specific hard timeouts bound individual Codex calls but cannot distinguish healthy ongoing work from an idle or stuck process, cap total workflow execution across many DAG calls, or recover useful workflow progress after an infrastructure interruption. These concerns need one coordinated execution-state design so recovery never treats partial generated output as validated or silently repeats completed work.
@@ -92,6 +99,7 @@ Codex JSONL and relevant tool/file activity are streamed and persisted as invoca
 
 - Status: planned
 - Priority: medium
+- Category: research
 - Area: backend-function-composition
 - Dependencies: none
 - Rationale: Milestone 2 supports one direct caller-to-function hop and deliberately rejects a function invoked by another function or web application from invoking another target. Safe nesting needs explicit depth, cycle, budget, lock, approval, and audit-chain semantics rather than accidental recursive authority.
@@ -103,6 +111,7 @@ Define and enforce a bounded maximum depth; reject cycles deterministically; eva
 
 - Status: planned
 - Priority: medium
+- Category: feature
 - Area: memory-adaptation
 - Dependencies: none
 - Rationale: Eidolon can store explicit editable memory and preserve skill/run history, but it does not yet select memory for chat or skills, capture structured outcome feedback, or turn accumulated evidence into safe adaptation proposals. Long-term usefulness must grow without silently collecting conversations, rewriting memory, or mutating active skills.

@@ -41,6 +41,12 @@ async def forward_invocation(function_name: str, request: Request) -> Response:
     return await _forward(request, f"/functions/{function_name}/invoke", body, "POST")
 
 
+@app.post("/integrations/capabilities/invoke")
+async def forward_integration_invocation(request: Request) -> Response:
+    body = await request.body()
+    return await _forward(request, "/integrations/capabilities/invoke", body, "POST")
+
+
 async def _forward(request: Request, path: str, body: bytes, method: str) -> Response:
     content_length = request.headers.get("content-length", "")
     if content_length.isdigit() and int(content_length) > MAX_REQUEST_BYTES:

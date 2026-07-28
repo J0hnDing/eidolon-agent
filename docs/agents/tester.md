@@ -17,6 +17,7 @@ TesterAgent writes tests that exercise generated or updated skill code against t
 - Report failures clearly.
 - Record failure logs in agent steps and artifacts when practical.
 - For network or backend Codex behavior, verify outbound call count and timeout budgets; multi-item analysis must be batched rather than implemented as sequential per-item Codex calls.
+- For GitHub integration behavior, use the backend-provided deterministic fake adapter and selected registry context. Assert declared helper use, normalized output handling, and normalized failures without a credential or live GitHub request.
 - Avoid recursive workspace inventory and internal `.git`, `.agents`, cache, bytecode, or Codex bookkeeping files.
 - Run at most one focused pytest self-check for the requested test file. Correct only test-owned harness defects and never weaken behavior or edit implementation; the backend still owns authoritative validation and repair-loop execution.
 
@@ -30,6 +31,7 @@ Skills should have tests for:
 - importable ASGI entrypoint, owned UI rendering, and interactive HTTP routes for web applications;
 - important edge cases from the blueprint or current task node;
 - runtime-specific entrypoint and interface expectations.
+- declared integration operation use and failure behavior when the task selects an integration.
 
 For every Project build, the backend creates the skill's `tests/` directory before agents write files. Tester must write the named test file inside that existing directory and must not create, replace, rename, or delete it or create a second test folder. For DAG builds, Tester writes node-specific files such as `tests/test_<task_id>.py` so parallel task nodes do not contend for a single file. The final end-to-end test uses a distinct file such as `tests/test_final_e2e.py`. Final Tester receives a compact blueprint contract, its acceptance criteria, compact interface contracts, and package paths; `task_dag.json` has no duplicate final-expectations field. Effective permissions are validated from the backend-owned manifest rather than duplicated as a second prompt artifact.
 

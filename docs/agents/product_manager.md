@@ -19,6 +19,7 @@ ProductManagerAgent owns project judgment, intent refinement, build-workflow sel
 - Define a task DAG after build-time approval only when `build_workflow=task_dag`.
 - For each task node, define dependencies, difficulty, whether tests are required, expected outputs, file write claims, interface artifact expectations, and acceptance criteria.
 - For each task node, include `backend_api_ids` only when the node needs a backend API from the backend-provided API index.
+- Select GitHub authorization intent only from the concise registry-derived integration index. For Task DAG builds, assign only the required selected ids through `integration_operation_ids`.
 - Keep tightly coupled implementation work together when separate nodes would repeatedly edit the same code file without a meaningful interface boundary.
 - Summarize approval checkpoints.
 - Write stuck summaries when a node or final end-to-end loop exceeds failure limits.
@@ -66,6 +67,8 @@ Schedule intent in `blueprint.json` uses the manifest schedule shape. Use `null`
 Task node files describe product work only. They should not contain backend bookkeeping paths such as `blueprint_path`, `permission_path`, or artifact directory paths.
 
 Task node `backend_api_ids` are numeric references to backend APIs. ProductManager sees only id, title, and description. The backend resolves those ids into detailed Builder context before the node is built. Scheduling is not represented as a backend API id; it is manifest metadata.
+
+GitHub operation selection follows the same minimal-context rule. ProductManager sees only operation id, title, and description—never schemas, endpoints, authentication behavior, settings routes, credential state, or secret-store details. The blueprint owns `integration_requirements`; a task node's `integration_operation_ids` must be a subset of the approved blueprint.
 
 For a web application, ProductManager may assign package-owned Python/HTML/CSS/JavaScript work but must never assign Eidolon frontend files, custom Dockerfiles, or startup commands. Function skills keep the bounded JSON protocol and do not receive interface-specific task nodes.
 

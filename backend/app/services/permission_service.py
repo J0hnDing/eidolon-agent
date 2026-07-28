@@ -78,6 +78,7 @@ class PermissionService:
             reason_json={
                 "blocked_reasons": blocked_reasons,
                 "function_requirements": list(plan.get("function_requirements", []) or []),
+                "integration_requirements": list(plan.get("integration_requirements", []) or []),
                 "approval_means": (
                     "The backend may provision listed dependencies, then Codex may generate proposed skill files."
                 ),
@@ -131,6 +132,7 @@ class PermissionService:
             **previous_reason,
             "blocked_reasons": blocked_reasons,
             "function_requirements": list(plan.get("function_requirements", []) or []),
+            "integration_requirements": list(plan.get("integration_requirements", []) or []),
             "approval_means": (
                 "The backend may provision listed dependencies, then Codex may generate proposed skill files."
             ),
@@ -210,6 +212,7 @@ class PermissionService:
                 "agent_run_id": agent_run.id,
                 "blueprint_json": blueprint,
                 "function_requirements": list(blueprint.get("function_requirements", []) or []),
+                "integration_requirements": list(blueprint.get("integration_requirements", []) or []),
                 "blocked_reasons": blocked_reasons,
                 "product_manager_summary": product_manager_summary,
                 "approval_means": "Builder may create a draft version folder for this update.",
@@ -230,12 +233,13 @@ class PermissionService:
         return request
 
     def create_runtime_request(self, skill: Skill) -> ApprovalRequest:
-        existing = self._latest_request(skill_id=skill.id, scope="runtime", request_type="install")
-        if existing and existing.status in {"pending", "approved", "denied"}:
-            return self._attach_function_requirement_review(existing, skill)
-
         skill_dir = self.proposed_service.skill_dir_for_record(skill)
         manifest = validate_manifest_file(skill_dir / "manifest.json")
+        existing = self._latest_request(skill_id=skill.id, scope="runtime", request_type="install")
+        if existing and existing.status in {"pending", "approved", "denied"}:
+            request = self._attach_function_requirement_review(existing, skill, manifest=manifest)
+            return self._attach_integration_review(request, skill, manifest)
+
         permissions = manifest.permissions.model_dump()
         dependencies = list(manifest.dependencies)
         risk_level, blocked_reasons = self._risk_for_permissions(permissions, dependencies=dependencies)
@@ -263,6 +267,9 @@ class PermissionService:
                 "function_requirements": [
                     item.model_dump(mode="json") for item in manifest.function_requirements
                 ],
+                "integration_requirements": [
+                    item.model_dump(mode="json") for item in manifest.integration_requirements
+                ],
                 "permission_expansion": expansion,
                 "dependency_expansion": dependency_expansion,
                 "runner_unsupported": self.unsupported_runtime_reasons(permissions),
@@ -280,7 +287,8 @@ class PermissionService:
         self.db.add(request)
         self.db.commit()
         self.db.refresh(request)
-        return self._attach_function_requirement_review(request, skill, manifest=manifest)
+        request = self._attach_function_requirement_review(request, skill, manifest=manifest)
+        return self._attach_integration_review(request, skill, manifest)
 
     def detect_permission_expansion(self, skill: Skill, actual_permissions: dict[str, Any]) -> dict[str, Any]:
         generation_request = self.db.scalar(
@@ -367,7 +375,7 @@ class PermissionService:
             return PermissionDecision(False, f"Build-time permission request is {request.status}")
         return PermissionDecision(True, "Build-time permissions are approved")
 
-    def can_install(self, skill: Skill) -> PermissionDecision:
+    def can_install(self, skill: Skill, *, include_integrations: bool = True) -> PermissionDecision:
         request = self._latest_active_runtime_request(skill)
         if request is None:
             return PermissionDecision(False, "Runtime permissions have not been reviewed")
@@ -375,10 +383,42 @@ class PermissionService:
             return PermissionDecision(False, "Runtime permissions include blocked or unsupported requests")
         if request.status != "approved":
             return PermissionDecision(False, f"Runtime permission request is {request.status}")
+        if include_integrations:
+            try:
+                manifest = validate_manifest_file(self.proposed_service.skill_dir_for_record(skill) / "manifest.json")
+            except Exception:
+                return PermissionDecision(False, "Active integration manifest is invalid")
+        if include_integrations and manifest.integration_requirements:
+            from app.services.integration_service import build_default_integration_service
+
+            integration_service = build_default_integration_service(self.db)
+            for requirement in manifest.integration_requirements:
+                state = integration_service.authorization_state(skill, requirement)
+                if state != "approved":
+                    return PermissionDecision(False, f"Integration authorization is {state}")
         return PermissionDecision(True, "Runtime permissions are approved")
 
-    def can_run(self, skill: Skill) -> PermissionDecision:
-        install_decision = self.can_install(skill)
+    def _attach_integration_review(
+        self,
+        request: ApprovalRequest,
+        skill: Skill,
+        manifest,
+        *,
+        version_id: int | None = None,
+    ) -> ApprovalRequest:
+        from app.services.integration_service import build_default_integration_service
+
+        service = build_default_integration_service(self.db)
+        service.ensure_authorization_requests(skill, manifest, version_id=version_id)
+        reason_json = dict(request.reason_json or {})
+        reason_json["integration_requirements"] = service.integration_review(skill, manifest)
+        request.reason_json = reason_json
+        self.db.commit()
+        self.db.refresh(request)
+        return request
+
+    def can_run(self, skill: Skill, *, include_integrations: bool = True) -> PermissionDecision:
+        install_decision = self.can_install(skill, include_integrations=include_integrations)
         if not install_decision.allowed:
             return install_decision
         request = self._latest_active_runtime_request(skill)

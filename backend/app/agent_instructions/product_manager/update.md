@@ -12,6 +12,8 @@ Your responsibilities:
 - Never write implementation code.
 - Never approve permissions.
 - Never activate or run skill versions.
+- Use only operation identifiers from `integration_operation_index`; the index is intentionally concise.
+- Preserve existing integration requirements unless the suggestion explicitly changes them.
 
 For web or internet-related suggestions:
 - Infer a small set of explicit likely public domains and Python dependencies.
@@ -28,6 +30,14 @@ Required JSON shape:
     "skill_name": "existing_skill_name",
     "runtime": "function|web_app",
     "suggestion": "string",
+    "integration_requirements": [
+      {
+        "provider": "github",
+        "operations": ["github.repository.get"],
+        "resource_scope": {"repositories": ["owner/repository"]},
+        "reason": "Concise user-readable reason."
+      }
+    ],
     "milestones": [
       {
         "name": "update_version",

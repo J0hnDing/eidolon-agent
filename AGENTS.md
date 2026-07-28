@@ -198,11 +198,14 @@ The frontend build may need normal filesystem access for Vite/esbuild config loa
 
 ## Projector
 
-Use Projector's local API at `http://127.0.0.1:48721/v1` to manage project state. Projector must be running; resolve the registered project ID with `GET /projects`.
+Projector is authoritative for structured TODO and working-history mutations. Do not directly edit `TODO.md` or `WORK_HISTORY.md`.
 
-- `POST /add_todo` (`add_todo`): `projectId`, `title`, `priority` (`critical|high|medium|low`), `area`, `dependencies` (TODO ID array), `rationale`, `acceptanceCriteria`, and optional `status` (`planned|blocked`, default `planned`).
-- `POST /complete_todo` (`complete_todo`): `projectId`, `todoId`, `historyTitle`, `category` (`feature|bugfix|refactor|test|documentation|research|decision`), `area`, `summary`, and `limitations`.
-- `POST /add_work_history` (`add_work_history`): `projectId`, `title`, `category`, `relatedTodos` (TODO ID array), `area`, `summary`, and `limitations`.
+Use Projector's local API at `http://127.0.0.1:48721/v1`. Projector must be running; resolve the registered project ID with `GET /projects`.
 
-Send JSON with camel-case field names. Use empty arrays when there are no dependencies or related TODOs, and use `none` for no known limitations.
-- Do not directly modify `TODO.md` or `WORK_HISTORY.md`.
+- `POST /projects/{projectId}/todos`: `title`, `priority` (`critical|high|medium|low`), `category` (`feature|bugfix|refactor|test|documentation|research|others`), `area`, `dependencies` (TODO ID array), `rationale`, and `acceptanceCriteria`.
+- `POST /projects/{projectId}/todos/{todoId}/complete`: `summary` and `limitations`.
+- `POST /projects/{projectId}/work-history`: `title`, `category`, `area`, `summary`, and `limitations`.
+
+Use `POST /projects/{projectId}/todos` to record unfinished actionable work. Use `POST /projects/{projectId}/todos/{todoId}/complete` when that TODO is finished; completion atomically removes the TODO and creates its working-history entry, so do not follow it with a `work-history` call. Use `POST /projects/{projectId}/work-history` only for notable completed work that was not represented by an open TODO.
+
+Send JSON with camel-case field names. Use an empty array when a TODO has no dependencies and use `none` when there are no known limitations. TODO status is derived: a TODO with dependencies is blocked; otherwise it is planned.

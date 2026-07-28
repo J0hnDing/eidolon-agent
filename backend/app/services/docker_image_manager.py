@@ -13,6 +13,8 @@ TRUSTED_RUNTIME_FILES = (
     PROJECT_ROOT / "backend" / "web_runtime_host.py",
     PROJECT_ROOT / "backend" / "web_runtime_capabilities.py",
     PROJECT_ROOT / "backend" / "function_runtime_capabilities.py",
+    PROJECT_ROOT / "backend" / "integration_runtime_capabilities.py",
+    PROJECT_ROOT / "backend" / "integration_test_adapter.py",
     PROJECT_ROOT / "backend" / "function_runtime_relay.py",
     PROJECT_ROOT / "backend" / "web_runtime_relay.py",
 )

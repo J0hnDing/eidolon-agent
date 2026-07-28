@@ -594,6 +594,10 @@ class DockerSkillRunner:
             "--rm",
             "--network",
             network_mode,
+            "--add-host",
+            "api.github.com:127.0.0.1",
+            "--add-host",
+            "github.com:127.0.0.1",
             "--memory",
             self.config.memory_limit,
             "--cpus",
@@ -604,7 +608,7 @@ class DockerSkillRunner:
             "-e",
             "PYTEST_ADDOPTS=-p no:cacheprovider",
             "-e",
-            "PYTHONPATH=/skill/.deps",
+            "PYTHONPATH=/skill/.deps:/runtime",
             "-e",
             "PERSONAL_AGENT_BACKEND_URL="
             + (

@@ -10,12 +10,18 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import Skill, WebAppAuditRecord, WebAppInstance
 from app.schemas.function_registry import FunctionInvocationRequest, FunctionInvocationResponse
+from app.schemas.integration import IntegrationInvocationRequest, IntegrationInvocationResponse
 from app.schemas.manifest import SkillManifest
 from app.schemas.skill_codex import SkillCodexRequest, SkillCodexResponse
 from app.schemas.skill_run import SkillRunRead
 from app.schemas.web_app import WebAppAuditRecordRead, WebAppInstanceRead, WebAppOpenResponse
 from app.services.codex_service import CodexGenerationError, CodexService
 from app.services.function_registry_service import FunctionRegistryError, FunctionRegistryService
+from app.services.integration_service import (
+    IntegrationCaller,
+    IntegrationError,
+    build_default_integration_service,
+)
 from app.services.manifest_validator import validate_manifest_file
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
 from app.services.web_app_runtime_service import WebAppRuntimeError, WebAppRuntimeService
@@ -170,6 +176,43 @@ def web_app_function_capability(
         output=run.output_json,
         error=run.error_message,
     )
+
+
+@router.post(
+    "/capabilities/integrations/invoke",
+    response_model=IntegrationInvocationResponse,
+    include_in_schema=False,
+)
+def web_app_integration_capability(
+    payload: IntegrationInvocationRequest,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> IntegrationInvocationResponse:
+    token = _bearer_token(authorization)
+    runtime = WebAppRuntimeService(db)
+    try:
+        instance, skill, _manifest = runtime.instance_for_capability(token)
+        output = build_default_integration_service(db).invoke(
+            IntegrationCaller(
+                skill_id=skill.id,
+                version_id=instance.version_id,
+                runtime="web_app",
+                web_app_instance_id=instance.id,
+            ),
+            payload.operation,
+            payload.input,
+        )
+    except WebAppRuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"type": "authorization_missing_or_stale", "message": str(exc)},
+        ) from None
+    except IntegrationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"type": exc.error_type, "message": str(exc)},
+        ) from None
+    return IntegrationInvocationResponse(output=output)
 
 
 @gateway_router.api_route(

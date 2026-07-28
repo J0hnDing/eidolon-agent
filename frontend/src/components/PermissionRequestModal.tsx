@@ -24,6 +24,11 @@ export default function PermissionRequestModal({
   const unsupportedReasons = stringList(request.reason_json.runner_unsupported);
   const expansion = request.reason_json.permission_expansion;
   const hasExpansion = isNonEmptyObject(expansion);
+  const integrationReview = Array.isArray(request.reason_json.integration_requirements)
+    ? request.reason_json.integration_requirements.filter(isRecord)
+    : request.request_type === "integration_access" && isRecord(request.reason_json)
+      ? [request.reason_json]
+      : [];
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
@@ -66,6 +71,20 @@ export default function PermissionRequestModal({
             {hasExpansion && <p>Permission expansion was detected compared with the original plan.</p>}
             {[...blockedReasons, ...unsupportedReasons].map((reason) => (
               <p key={reason}>{reason}</p>
+            ))}
+          </section>
+        )}
+
+        {integrationReview.length > 0 && (
+          <section className="permission-summary">
+            <h3>GitHub integration authorization</h3>
+            {integrationReview.map((review, index) => (
+              <div key={`${String(review.provider)}-${index}`}>
+                <p><strong>{String(review.provider)}</strong> · read-only · connection {review.connection_available ? "available" : "unavailable"}</p>
+                <ChipList values={stringList(review.operations)} />
+                <p className="muted">{String(review.reason ?? "")}</p>
+                <p className="muted">Repositories: {repositoriesFromReview(review).join(", ") || "None"}</p>
+              </div>
             ))}
           </section>
         )}
@@ -149,4 +168,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyObject(value: unknown): boolean {
   return isRecord(value) && Object.keys(value).length > 0;
+}
+
+function repositoriesFromReview(review: Record<string, unknown>): string[] {
+  const scope = review.resource_scope;
+  return isRecord(scope) ? stringList(scope.repositories) : [];
 }

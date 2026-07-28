@@ -8,6 +8,7 @@ import {
   CodexRoutingSettings,
   CodexRoutingSettingsPayload,
   CodexUsageWindow,
+  GitHubConnectionStatus,
   api,
 } from "../api/client";
 
@@ -16,6 +17,8 @@ export default function UsageSettingsPage() {
   const [cliStatus, setCliStatus] = useState<CodexCliStatus | null>(null);
   const [catalog, setCatalog] = useState<CodexModelCatalog | null>(null);
   const [routing, setRouting] = useState<CodexRoutingSettings | null>(null);
+  const [github, setGitHub] = useState<GitHubConnectionStatus | null>(null);
+  const [githubToken, setGitHubToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -23,16 +26,18 @@ export default function UsageSettingsPage() {
   async function loadUsage(refresh = false) {
     setError(null);
     try {
-      const [nextUsage, nextCliStatus, nextCatalog, nextRouting] = await Promise.all([
+      const [nextUsage, nextCliStatus, nextCatalog, nextRouting, nextGitHub] = await Promise.all([
         api.getCodexUsage(),
         api.getCodexCliStatus(refresh),
         api.getCodexModels(refresh),
         api.getCodexRoutingSettings(),
+        api.getGitHubConnection(),
       ]);
       setUsage(nextUsage);
       setCliStatus(nextCliStatus);
       setCatalog(nextCatalog);
       setRouting(nextRouting);
+      setGitHub(nextGitHub);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load Codex usage");
     } finally {
@@ -75,6 +80,40 @@ export default function UsageSettingsPage() {
     }
   }
 
+  async function saveGitHubConnection() {
+    if (!githubToken.trim()) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const next = await api.putGitHubConnection(githubToken);
+      setGitHub(next);
+      setGitHubToken("");
+      setSaved("GitHub connection validated and saved.");
+    } catch (err) {
+      setGitHubToken("");
+      setError(err instanceof Error ? err.message : "Could not save GitHub connection");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function removeGitHubConnection() {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      await api.removeGitHubConnection();
+      setGitHub(await api.getGitHubConnection());
+      setGitHubToken("");
+      setSaved("GitHub connection removed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove GitHub connection");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <section className="page stack">
       <header className="page-header">
@@ -89,6 +128,43 @@ export default function UsageSettingsPage() {
       </header>
       {error && <p className="error-text">{error}</p>}
       {saved && <p className="success-text">{saved}</p>}
+      {github && (
+        <section className="detail-panel stack">
+          <div>
+            <h2>GitHub connection</h2>
+            <p className="muted">
+              The token is validated by trusted backend code and stored in Windows Credential Manager. It is never shown again or shared with skills.
+            </p>
+          </div>
+          <dl className="detail-grid">
+            <div><dt>Status</dt><dd>{github.connected ? "Connected" : github.status}</dd></div>
+            <div><dt>Account</dt><dd>{github.account_login ?? "None"}</dd></div>
+            <div><dt>Account ID</dt><dd>{github.account_id ?? "None"}</dd></div>
+            <div><dt>Last validated</dt><dd>{formatDate(github.last_validated_at)}</dd></div>
+          </dl>
+          {github.error_type && <p className="error-text">Connection status: {github.error_type.replace(/_/g, " ")}</p>}
+          <label>
+            {github.connected ? "Replacement GitHub token" : "GitHub token"}
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={githubToken}
+              onChange={(event) => setGitHubToken(event.target.value)}
+              placeholder="Token is never displayed after submission"
+            />
+          </label>
+          <div className="button-row">
+            <button type="button" onClick={() => void saveGitHubConnection()} disabled={loading || !githubToken.trim()}>
+              {github.connected ? "Replace connection" : "Add connection"}
+            </button>
+            {github.connected && (
+              <button type="button" className="secondary" onClick={() => void removeGitHubConnection()} disabled={loading}>
+                Remove connection
+              </button>
+            )}
+          </div>
+        </section>
+      )}
       {catalog && !catalog.available && (
         <p className="error-text">Model choices are unavailable: {catalog.error ?? "Codex model catalog could not be loaded."}</p>
       )}

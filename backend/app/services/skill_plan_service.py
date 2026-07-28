@@ -11,9 +11,15 @@ from sqlalchemy.orm import Session
 
 from app.schemas.codex_routing import ResolvedInvocationSettings
 from app.schemas.common import RiskLevel, SkillRuntime
-from app.schemas.manifest import ManifestFunctionRequirement, ManifestPermissions, classify_permission_risk
+from app.schemas.manifest import (
+    ManifestFunctionRequirement,
+    ManifestIntegrationRequirement,
+    ManifestPermissions,
+    classify_permission_risk,
+)
 from app.services.codex_cli_service import codex_cli_service, should_use_real_codex
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
+from app.services.integration_registry import operation_index
 
 SAFE_SKILL_NAME = re.compile(r"^[a-zA-Z0-9_-]+$")
 
@@ -35,6 +41,7 @@ class SkillGenerationPlan(BaseModel):
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
     function_requirements: list[ManifestFunctionRequirement] = Field(default_factory=list)
+    integration_requirements: list[ManifestIntegrationRequirement] = Field(default_factory=list)
     requested_permissions: ManifestPermissions
     requested_network_domains: list[str]
     requested_dependencies: list[str]
@@ -113,6 +120,7 @@ class FakeSkillPlanAdapter:
             "input_schema": {"type": "object", "additionalProperties": True},
             "output_schema": {"type": "object", "additionalProperties": True},
             "function_requirements": [],
+            "integration_requirements": _infer_integration_requirements(message),
             "requested_permissions": {
                 "network": [],
                 "filesystem_read": [],
@@ -248,6 +256,7 @@ class SkillPlanService:
             from app.services.function_registry_service import FunctionRegistryService
 
             available_functions = FunctionRegistryService(self.db).discovery_context()
+        github_operations = operation_index()
         return f"""
 You are designing an application skill generation plan for the Local-First Self-Extending Personal AI Assistant.
 
@@ -264,6 +273,7 @@ Definitions:
 - Runtime alone determines interface exposure: web_app skills appear in Applications; function skills have no dedicated interface surface in this milestone.
 - Installed function skills are discovered through a dynamic backend Function registry, never through the static trusted backend API catalog.
 - A skill may use an installed function only when it declares that relationship in function_requirements with the exact function name and a clear reason.
+- GitHub access is available only through the backend integration operation index below. Select explicit integration_requirements; do not request GitHub network domains or secrets.
 
 Safety requirements:
 - shell must be false.
@@ -281,6 +291,7 @@ Choose all skill properties yourself based on the request:
 - runtime: choose web_app only when the requested capability needs a self-rendered interactive application; otherwise function.
 - function skills require explicit object-shaped input_schema and output_schema JSON Schema contracts; web_app schemas may be null.
 - function_requirements: select only installed registry functions genuinely needed by this skill. Do not invent function names.
+- integration_requirements: select only listed GitHub operations genuinely needed, with exact owner/repository scope for repository operations.
 - permissions, dependencies, risk level, expected input/output, files, and validation steps.
 - If the user asks for recurring bounded function execution, include schedule as manifest intent. Always set schedule to null for web_app.
 - Supported schedule shapes:
@@ -301,6 +312,14 @@ Return JSON with exactly this shape:
   "output_schema": {{"type": "object", "properties": {{}}, "additionalProperties": true}},
   "function_requirements": [
     {{"name": "installed_function_name", "reason": "why this skill needs this function"}}
+  ],
+  "integration_requirements": [
+    {{
+      "provider": "github",
+      "operations": ["github.repository.get"],
+      "resource_scope": {{"repositories": ["owner/repository"]}},
+      "reason": "Why the skill needs these read-only operations"
+    }}
   ],
   "requested_permissions": {{
     "network": [],
@@ -324,6 +343,9 @@ Return JSON with exactly this shape:
 
 Current dynamic Function registry (discovery does not grant invocation authority):
 {json.dumps(available_functions, indent=2)}
+
+Current GitHub integration operation index (selection does not grant runtime authorization):
+{json.dumps(github_operations, indent=2)}
 
 User Project mode request:
 {message}
@@ -412,6 +434,20 @@ def _infer_runtime(message: str) -> str:
     lowered = message.lower()
     web_app_markers = ("web app", "web application", "interactive dashboard", "browser application")
     return "web_app" if any(marker in lowered for marker in web_app_markers) else "function"
+
+
+def _infer_integration_requirements(message: str) -> list[dict[str, Any]]:
+    lowered = message.lower()
+    if "github" in lowered and "trending" in lowered:
+        return [
+            {
+                "provider": "github",
+                "operations": ["github.repository.trending.list"],
+                "resource_scope": {"repositories": []},
+                "reason": "Read the backend-defined GitHub trending repository ranking.",
+            }
+        ]
+    return []
 
 
 def _infer_schedule(message: str) -> dict[str, Any] | None:

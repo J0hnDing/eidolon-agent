@@ -113,7 +113,7 @@ def call_codex_for_skill(
     if not skill.enabled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Skill is disabled")
 
-    permission_decision = PermissionService(db).can_run(skill)
+    permission_decision = PermissionService(db).can_run(skill, include_integrations=False)
     if not permission_decision.allowed:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=permission_decision.reason)
 

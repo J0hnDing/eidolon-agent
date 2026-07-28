@@ -23,6 +23,8 @@ Discovery is not authorization. A caller manifest must contain:
 
 Function code uses the trusted `function_runtime_capabilities.call_function` helper. Web-application server code uses `web_runtime_capabilities.call_function`. Browser code never receives either capability token.
 
+GitHub integration calls use the parallel stable helper `integration_runtime_capabilities.call`. The operation must be literal, declared by the active manifest, approved for the caller's current integration fingerprint, and within exact repository scope. The helper carries no credential; the backend retrieves it only after all invocation checks and performs the provider request. See [GitHub integration capability](../integrations/github.md).
+
 ## Authorization
 
 The backend evaluates the direct caller-to-target relationship on every call:
@@ -43,7 +45,7 @@ Direct user runs, backend actions, and approved schedules keep their existing au
 
 The target still runs through the disposable function runner and creates its normal `skill_runs` record. Runs record target version, invocation source, caller skill/version when applicable, schedule id or web-app instance when applicable, and a bounded initiating-action label. Runtime Codex usage remains attached to that target run and separate from Project build totals.
 
-No-internet Docker callers receive backend Function access through a transient allowlisted relay on an internal Docker network. The caller cannot use that path for general internet egress. Functions with approved runtime network domains continue to use the existing bridge behavior; domain-level egress filtering remains separately disclosed.
+No-internet Docker callers receive backend Function and integration capability access through a transient allowlisted relay on an internal Docker network. The caller cannot use those exact paths for general backend access or internet egress. Functions with approved runtime network domains continue to use the existing bridge behavior, but direct GitHub access is still prohibited; domain-level egress filtering remains separately disclosed.
 
 Input mismatch blocks before entrypoint execution and is audited as a blocked target run. Output mismatch changes the completed target run to failed while preserving its output and process diagnostics.
 

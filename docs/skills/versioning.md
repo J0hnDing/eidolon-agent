@@ -28,6 +28,8 @@ The local MVP allows at most three non-discarded versions per skill. Archived ve
 
 If permissions, dependencies, and declared function requirements are unchanged, runtime reapproval can be skipped. A change to any of them creates a runtime review request for the candidate version before activation. Caller-target function approvals remain reusable only when each target's risk, permission/dependency contract, and JSON schemas retain the same backend fingerprint.
 
+GitHub integration authorization is evaluated independently. A candidate version may reuse it only when provider, selected operation ids, normalized repository scope, and registry contract identity produce the same fingerprint. Any expansion blocks activation pending a new `integration_access` decision.
+
 ## User Controls
 
 Skill Detail should show:

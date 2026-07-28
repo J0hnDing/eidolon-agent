@@ -41,7 +41,9 @@ Wildcard or unrestricted network remains blocked.
 
 Backend-mediated Codex calls use the same runtime permission boundary: call/response is allowed by default, while Codex internet access is allowed only when the skill has approved runtime network domains.
 
-Backend-mediated Function calls use ephemeral capabilities derived from the currently running function or current web-application instance. No-internet Docker functions use a transient internal network and an allowlisted relay that forwards only Function registry discovery/invocation requests; the relay does not grant general internet access. The entrypoint receives the token, but its pre-run tests do not.
+Backend-mediated Function and GitHub integration calls use ephemeral capabilities derived from the currently running function or current web-application instance. No-internet Docker functions use a transient internal network and an allowlisted relay that forwards only Function registry discovery/invocation and the exact integration invocation request; the relay does not grant general backend or internet access. Web-application relays expose the corresponding exact instance-capability paths. The entrypoint receives the capability token, but its pre-run tests do not. GitHub credentials and authorization headers exist only in the trusted backend provider adapter and are never placed in a container environment.
+
+Docker function and web-application containers map direct `api.github.com` and `github.com` resolution to loopback even when ordinary runtime network access is approved. Combined with deterministic source validation, this keeps provider traffic on the trusted integration path. Explicit local/development runner mode remains less isolated and is not a production secret-backed runtime boundary.
 
 Browser-side web-app traffic is a separate boundary and is blocked from external domains entirely. The gateway CSP permits same-origin application routes only; HTML/CSS/JavaScript literal absolute URLs also fail static validation.
 

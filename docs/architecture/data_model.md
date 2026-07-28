@@ -28,6 +28,7 @@ The central skill record. Important fields:
 - manifest/instructions/installed paths
 - input/output schemas
 - declared function requirements
+- normalized integration requirements derived from the actual active manifest
 - `active_version_id`
 - `enabled`
 
@@ -59,6 +60,18 @@ Stores manual or scheduled function-run results:
 
 Links one caller skill, one target function, the user-facing approval request, and the backend fingerprint of the approved target callable contract. Historical rows are invalidated rather than silently reused when target risk, permissions, dependencies, or input/output schemas change. Low-risk relationships do not need rows.
 
+### integration_connections
+
+Stores the single GitHub connection's sanitized lifecycle metadata: provider, operating-system secret-store implementation id, opaque secret reference, status, validated account identity, and timestamps. Credential plaintext, authorization headers, and provider responses are never stored.
+
+### integration_authorizations
+
+Links one skill/provider integration-contract fingerprint to its `integration_access` approval. Different fingerprints may coexist so a proposed draft cannot revoke the active version's unchanged contract; validated account identity changes invalidate all existing rows while preserving history.
+
+### integration_audit_records
+
+Stores one bounded sanitized record per authenticated caller attempt: caller skill/version, function run or web-app instance, operation, normalized repository resource when applicable, timing, status, normalized error type, and size metadata. Raw inputs, credentials, secret references, headers, capability material, and provider responses are excluded.
+
 ### web_app_instances
 
 Stores persistent version-pinned service instances separately from bounded runs. It includes skill/version ids, startup/readiness/access/stop timestamps, lifecycle status, runner mode, loopback upstream, application and optional trusted-relay Docker identities or a local process identity, a hash of the scoped capability token, and bounded logs/error diagnostics.
@@ -81,7 +94,7 @@ Stores schedule definitions for installed skills. Canonical statuses are `pendin
 
 ### approval_requests
 
-Stores build-time, runtime, schedule, update, and caller-target function-access approval requests. The approval request is the durable record of what was requested, why, risk level, and user decision.
+Stores build-time, runtime, schedule, update, caller-target function-access, and skill-specific integration-access approval requests. The approval request is the durable record of what was requested, why, risk level, and user decision.
 
 ### skill_generation_requests
 

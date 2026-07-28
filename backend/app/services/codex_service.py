@@ -17,6 +17,7 @@ from app.services.codex_invocation_recorder import CodexInvocationRecorder
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
 from app.services.default_permissions import default_build_time_dependencies
 from app.services.dependency_environment import build_dependency_environment
+from app.services.integration_registry import operation_context, operation_index
 from app.services.manifest_validator import classify_permission_risk, validate_manifest_file
 from app.services.permission_service import PermissionService
 from app.services.product_manager_contract_service import ProductManagerContractService
@@ -445,6 +446,7 @@ class FakeCodexAdapter:
             "input_schema": plan.get("input_schema"),
             "output_schema": plan.get("output_schema"),
             "function_requirements": list(plan.get("function_requirements", []) or []),
+            "integration_requirements": list(plan.get("integration_requirements", []) or []),
             "dependencies": plan.get("requested_dependencies", []),
             "permissions": permissions,
             "schedule": plan.get("schedule"),
@@ -618,6 +620,7 @@ class FakeCodexAdapter:
             "runtime": plan.get("runtime", "function"),
             "expected_behavior": plan.get("expected_output", {}),
             "function_requirements": list(plan.get("function_requirements", []) or []),
+            "integration_requirements": list(plan.get("integration_requirements", []) or []),
             "schedule": plan.get("schedule"),
             "acceptance_criteria": acceptance_criteria,
         }
@@ -651,6 +654,12 @@ class FakeCodexAdapter:
             ),
             "test_expectations": ["validate manifest and generated skill behavior"],
             "interface_artifact_expectations": ["declare generated files and exposed entrypoints"],
+            "integration_operation_ids": [
+                str(operation_id)
+                for requirement in blueprint.get("integration_requirements", []) or []
+                if isinstance(requirement, dict)
+                for operation_id in requirement.get("operations", []) or []
+            ],
         }
         return {"schema_version": 1, "nodes": [node]}
 
@@ -1073,6 +1082,7 @@ class CodexService:
             "user_message": generation_request.user_message,
             "intent_prompt": intent_prompt,
             "generation_plan": plan,
+            "integration_operation_index": operation_index(),
         }
         fallback = self._fallback_build_blueprint(generation_request)
         fallback_permission_plan = self.product_manager_contracts.sanitize_permission_plan(
@@ -1081,7 +1091,7 @@ class CodexService:
         result = self._generate_product_manager(
             self.build_product_manager_prompt(
                 "write_blueprint_and_permissions",
-                {"intent_prompt": intent_prompt},
+                {"intent_prompt": intent_prompt, "integration_operation_index": operation_index()},
             ),
             payload,
         )
@@ -1119,12 +1129,14 @@ class CodexService:
             "permission_bounds": permission_bounds,
             "generation_plan": generation_request.plan_json,
             "backend_api_index": backend_api_index_payload or backend_api_index(),
+            "integration_operation_index": operation_index(),
         }
         fallback = self._fallback_task_dag(generation_request, blueprint)
         prompt_payload = {
             "blueprint_json": blueprint,
             "permission_bounds": permission_bounds,
             "backend_api_index": payload["backend_api_index"],
+            "integration_operation_index": payload["integration_operation_index"],
         }
         result = self._generate_product_manager(
             prompt_builder(prompt_payload),
@@ -1161,6 +1173,7 @@ class CodexService:
             "codex_task": "product_manager_repair_blueprint",
             "skill_name": skill.name,
             "user_request": user_request or f"Repair skill {skill.name}.",
+            "integration_operation_index": operation_index(),
         }
         fallback = self._fallback_repair_blueprint(skill, user_request)
         result = self._generate_product_manager(
@@ -1177,6 +1190,7 @@ class CodexService:
             "description": skill.description,
             "suggestion": suggestion,
             "project_files": self._read_skill_files(skill),
+            "integration_operation_index": operation_index(),
         }
         fallback = self._fallback_update_review(skill, suggestion)
         result = self._generate_product_manager(
@@ -1561,6 +1575,7 @@ class CodexService:
             "display_name": skill.name.replace("_", " ").title(),
             "runtime": skill.runtime,
             "function_requirements": list(skill.function_requirements_json or []),
+            "integration_requirements": list(skill.integration_requirements_json or []),
             "input_schema": skill.input_schema_json,
             "output_schema": skill.output_schema_json,
             "requested_permissions": failure_context.get(
@@ -1599,6 +1614,9 @@ class CodexService:
         skill.function_requirements_json = [
             item.model_dump(mode="json") for item in manifest.function_requirements
         ]
+        skill.integration_requirements_json = [
+            item.model_dump(mode="json") for item in manifest.integration_requirements
+        ]
         skill.enabled = False
         self.db.commit()
         self.db.refresh(skill)
@@ -1615,6 +1633,7 @@ class CodexService:
             "input_schema_json": plan.get("input_schema"),
             "output_schema_json": plan.get("output_schema"),
             "function_requirements_json": list(plan.get("function_requirements", []) or []),
+            "integration_requirements_json": list(plan.get("integration_requirements", []) or []),
             "installed_path": None,
             "enabled": False,
         }
@@ -1708,6 +1727,11 @@ class CodexService:
                 blueprint.get("function_requirements")
                 if isinstance(blueprint.get("function_requirements"), list)
                 else plan.get("function_requirements", [])
+            ),
+            "integration_requirements": list(
+                blueprint.get("integration_requirements")
+                if isinstance(blueprint.get("integration_requirements"), list)
+                else plan.get("integration_requirements", [])
             ),
             "dependencies": dependencies,
             "permissions": sanitized_permissions,
@@ -1842,6 +1866,7 @@ Tester context:
         blueprint: dict[str, object],
     ) -> str:
         instruction = self._instruction("builder/update.md")
+        selected_operation_ids = self._blueprint_integration_operation_ids(blueprint)
         return f"""
 {instruction}
 
@@ -1858,6 +1883,9 @@ User improvement suggestion:
 
 ProductManager update blueprint:
 {json.dumps(blueprint, indent=2)}
+
+Selected integration operation context:
+{json.dumps(operation_context(selected_operation_ids), indent=2)}
 
 Current draft files:
 {json.dumps(self._read_files_from_dir(output_dir), indent=2)}
@@ -1948,6 +1976,8 @@ Payload:
             "skill_name": plan.get("skill_name"),
             "runtime": plan.get("runtime", "function"),
             "expected_behavior": plan.get("expected_output", {}),
+            "function_requirements": list(plan.get("function_requirements", []) or []),
+            "integration_requirements": list(plan.get("integration_requirements", []) or []),
             "permission_plan": permission_plan,
             "schedule": plan.get("schedule"),
             "acceptance_criteria": acceptance_criteria,
@@ -1989,6 +2019,12 @@ Payload:
             ),
             "test_expectations": ["validate manifest and generated skill behavior"],
             "interface_artifact_expectations": ["declare generated files and exposed entrypoints"],
+            "integration_operation_ids": [
+                str(operation_id)
+                for requirement in blueprint.get("integration_requirements", []) or []
+                if isinstance(requirement, dict)
+                for operation_id in requirement.get("operations", []) or []
+            ],
         }
         return {"schema_version": 1, "nodes": [node]}
 
@@ -2020,6 +2056,7 @@ Payload:
             "runtime": skill.runtime,
             "suggestion": suggestion,
             "function_requirements": list(skill.function_requirements_json or []),
+            "integration_requirements": list(skill.integration_requirements_json or []),
             "permission_plan": {
                 "build_time": {
                     "internet_research": bool(requested_network_domains or requested_dependencies),
@@ -2051,6 +2088,15 @@ Payload:
             ],
         }
         return decision
+
+    @staticmethod
+    def _blueprint_integration_operation_ids(blueprint: dict[str, object]) -> list[str]:
+        return [
+            str(operation_id)
+            for requirement in blueprint.get("integration_requirements", []) or []
+            if isinstance(requirement, dict)
+            for operation_id in requirement.get("operations", []) or []
+        ]
 
     def relative_path(self, path: Path) -> str:
         return path.resolve().relative_to(self.project_root).as_posix()

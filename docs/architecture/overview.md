@@ -72,6 +72,10 @@ The manifest `runtime` discriminator selects an execution protocol:
 
 The backend is the control plane for both protocols. Function discovery remains separate from the static trusted backend API catalog and invocation authority is derived from active manifests, current versions, runtime eligibility, and caller-target approval. Web-app content remains on a distinct untrusted origin inside a sandboxed iframe; the React UI retains trusted navigation, lifecycle, version, and permission controls. See [Function registry and invocation](../runtime/functions.md) and [Sandboxed web applications](../runtime/web_applications.md).
 
+## Trusted Integrations
+
+GitHub is the first secrets-backed integration. Trusted Settings manages one operating-system-stored credential, while skills declare and separately receive approval for registry-defined read-only operations and exact repository scope. Function and web-application containers call one scoped relay helper; the backend performs authenticated provider traffic and returns normalized data. See [GitHub integration capability](../integrations/github.md).
+
 ## Current Constraints
 
 The MVP is local and single-user. It intentionally avoids multi-user auth, cloud orchestration, autonomous background agents, unrestricted shell access, browser automation, secrets access, high-risk third-party actions, and silent package installation. Explicit memory facts are implemented, but automatic context selection, memory-aware chat, outcome learning, and long-term adaptation are not.

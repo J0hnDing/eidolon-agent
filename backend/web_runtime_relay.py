@@ -39,6 +39,11 @@ async def forward_function_capability(function_name: str, request: Request) -> R
     return await _forward_capability(request, f"/web-apps/capabilities/functions/{function_name}")
 
 
+@capability_app.post("/web-apps/capabilities/integrations/invoke")
+async def forward_integration_capability(request: Request) -> Response:
+    return await _forward_capability(request, "/web-apps/capabilities/integrations/invoke")
+
+
 async def _forward_capability(request: Request, path: str) -> Response:
     content_length = request.headers.get("content-length", "")
     if content_length.isdigit() and int(content_length) > MAX_REQUEST_BYTES:

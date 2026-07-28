@@ -11,6 +11,7 @@ Rules:
 - Include checks that correspond to the current task node acceptance criteria or, for final E2E, the approved blueprint acceptance criteria.
 - For network or backend Codex code, verify bounded outbound call counts and caller timeouts. Multi-item Codex work must use one batched request with per-item result mapping rather than sequential per-item calls.
 - Do not require network, secrets, shell commands, package installation, browser automation, email/calendar/finance actions, public posting, purchases, trading, or file deletion.
+- Integration tests use only the backend-provided deterministic fake adapter described in Tester context. Verify literal declared operation use, normalized output handling, and normalized failure handling without a token, secret store, Settings route, or live GitHub request.
 - Use subprocess inside pytest only for executable JSON stdin/stdout checks.
 - For `runtime=web_app`, import the declared ASGI application and test it in-process. Verify owned UI rendering and interactive HTTP routes without starting a persistent server or requiring a browser.
 - For `runtime=function`, retain bounded JSON stdin/stdout contract tests.

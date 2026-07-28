@@ -22,6 +22,7 @@ from app.services.default_permissions import (
     default_build_time_dependencies,
     effective_permission_plan,
 )
+from app.services.integration_registry import operation_context
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
@@ -794,6 +795,8 @@ class AgentWorkflowService:
         task_node = self._task_by_id(agent_run, task_node_id)
         tester_context = {
             "task_node": self._tester_task_node(task_node),
+            "integration_operation_context": operation_context(task_node.get("integration_operation_ids", [])),
+            "integration_test_adapter": "deterministic_fake",
             "parent_interface_artifacts": self.artifacts.direct_parent_interface_artifacts(agent_run, task_node),
             "test_file": f"tests/test_{task_node_id}.py",
             "workspace_paths": self._task_relevant_paths(task_node),
@@ -853,9 +856,21 @@ class AgentWorkflowService:
         skill_dir = self.proposed_service.skill_dir_for_record(skill)
         manifest_failure: ProposedSkillValidationRead | None = None
         manifest_runtime: dict[str, Any] = {}
+        declared_integration_operations: set[str] = set()
         try:
             manifest = validate_manifest_file(skill_dir / "manifest.json")
             manifest_runtime = manifest.permissions.model_dump(mode="json")
+            declared_integration_operations = {
+                operation_id
+                for requirement in manifest.integration_requirements
+                for operation_id in requirement.operations
+            }
+            approved_integration_operations = set(self._approved_integration_operation_ids(agent_run))
+            if declared_integration_operations - approved_integration_operations:
+                raise ManifestValidationError(
+                    "Manifest declares integration operations outside the approved build context: "
+                    f"{sorted(declared_integration_operations - approved_integration_operations)}"
+                )
             planned_runtime = str(self._agent_blueprint(agent_run).get("runtime") or "function")
             if manifest.runtime != planned_runtime:
                 raise ManifestValidationError(
@@ -877,7 +892,18 @@ class AgentWorkflowService:
             skill_dir,
             manifest_runtime,
             runtime=manifest.runtime if manifest_failure is None else "function",
+            declared_integration_operations=declared_integration_operations,
+            selected_integration_operations=set(self._approved_integration_operation_ids(agent_run)),
         )
+        if manifest_failure is None and agent_run.build_workflow == "task_dag":
+            scan = self._merge_task_integration_context_scans(
+                agent_run,
+                skill_dir,
+                manifest_runtime,
+                manifest.runtime,
+                declared_integration_operations,
+                scan,
+            )
         scan_payload = scan.model_dump()
         self.artifacts.write_json(agent_run, "capability_scan.json", scan_payload)
         if manifest_failure is not None:
@@ -903,6 +929,63 @@ class AgentWorkflowService:
             )
         return validation
 
+    def _merge_task_integration_context_scans(
+        self,
+        agent_run: AgentRun,
+        skill_dir: Path,
+        manifest_runtime: dict[str, Any],
+        runtime: str,
+        declared_operations: set[str],
+        full_scan: CapabilityScanResult,
+    ) -> CapabilityScanResult:
+        ordered_nodes = self.task_dags.topological_nodes(self._task_dag(agent_run))
+        path_owner: dict[str, str] = {}
+        for node in ordered_nodes:
+            for raw_path in [
+                *(node.get("expected_output_paths", []) or []),
+                *(node.get("file_write_claims", []) or []),
+            ]:
+                path_owner[str(raw_path).replace("\\", "/").removeprefix("./")] = str(node["id"])
+        scanned_files = set(full_scan.scanned_files)
+        findings = list(full_scan.findings)
+        scanner = StaticCapabilityScanner()
+        for node in ordered_nodes:
+            node_id = str(node["id"])
+            owned_paths = {path for path, owner in path_owner.items() if owner == node_id}
+            if not owned_paths:
+                continue
+            node_scan = scanner.scan(
+                skill_dir,
+                manifest_runtime,
+                runtime=runtime,
+                declared_integration_operations=declared_operations,
+                selected_integration_operations={
+                    str(operation_id)
+                    for operation_id in node.get("integration_operation_ids", []) or []
+                },
+                include_paths=owned_paths,
+            )
+            scanned_files.update(node_scan.scanned_files)
+            findings.extend(
+                finding
+                for finding in node_scan.findings
+                if finding.capability == "integration_operation"
+            )
+        unique = {
+            (finding.capability, finding.status, finding.path, finding.line, finding.evidence): finding
+            for finding in findings
+        }
+        merged_findings = sorted(
+            unique.values(),
+            key=lambda finding: (finding.path, finding.line, finding.capability, finding.evidence),
+        )
+        return CapabilityScanResult(
+            ok=not any(finding.blocking for finding in merged_findings),
+            scanned_files=sorted(scanned_files),
+            findings=merged_findings,
+            limitations=full_scan.limitations,
+        )
+
     def _capability_scan_failure(self, scan: CapabilityScanResult) -> ProposedSkillValidationRead:
         blocking = [finding for finding in scan.findings if finding.blocking]
         details = "; ".join(
@@ -925,6 +1008,8 @@ class AgentWorkflowService:
             "interface_contracts": self._final_interface_contracts(agent_run, skill),
             "test_file": "tests/test_final_e2e.py",
             "workspace_paths": self._skill_file_paths(skill),
+            "integration_operation_context": operation_context(self._approved_integration_operation_ids(agent_run)),
+            "integration_test_adapter": "deterministic_fake",
         }
         tester_step = self._start_step(
             agent_run,
@@ -973,6 +1058,7 @@ class AgentWorkflowService:
             "interface_contracts": self._final_interface_contracts(agent_run, skill),
             "failure": self._validation_failure_context("final_e2e", validation),
             "workspace_paths": self._skill_file_paths(skill),
+            "integration_operation_context": operation_context(self._approved_integration_operation_ids(agent_run)),
         }
         builder_step = self._start_step(
             agent_run,
@@ -1020,6 +1106,15 @@ class AgentWorkflowService:
             "blueprint_path": self.artifacts.relative_path(agent_run, "blueprint.json"),
             "permission_path": self.artifacts.relative_path(agent_run, "permissions.json"),
             "responsibility": "Tester writes or updates tests for the draft version, then validates manifest and test results.",
+            "integration_operation_context": operation_context(
+                [
+                    str(operation_id)
+                    for requirement in blueprint.get("integration_requirements", []) or []
+                    if isinstance(requirement, dict)
+                    for operation_id in requirement.get("operations", []) or []
+                ]
+            ),
+            "integration_test_adapter": "deterministic_fake",
         }
         tester_step = self._start_step(
             agent_run,
@@ -1036,6 +1131,8 @@ class AgentWorkflowService:
                 "exit_code": tester_result.returncode,
             }
             validation = version_service.validate_version(draft)
+            if validation.ok:
+                validation = self._validate_version_integration_context(draft, blueprint, validation)
         except CodexGenerationError as exc:
             tester_generation = {"stdout": "", "stderr": str(exc), "exit_code": 1}
             validation = ProposedSkillValidationRead(
@@ -1064,6 +1161,54 @@ class AgentWorkflowService:
         )
         return validation
 
+    def _validate_version_integration_context(
+        self,
+        draft: Any,
+        blueprint: dict[str, Any],
+        validation: ProposedSkillValidationRead,
+    ) -> ProposedSkillValidationRead:
+        version_dir = (self.project_root / draft.folder_path).resolve()
+        try:
+            manifest = validate_manifest_file(version_dir / "manifest.json")
+        except (FileNotFoundError, ManifestValidationError, OSError) as exc:
+            return ProposedSkillValidationRead(
+                ok=False,
+                manifest_valid=False,
+                tests_run=validation.tests_run,
+                tests_passed=validation.tests_passed,
+                error_message=str(exc),
+            )
+        selected_operations = {
+            str(operation_id)
+            for requirement in blueprint.get("integration_requirements", []) or []
+            if isinstance(requirement, dict)
+            for operation_id in requirement.get("operations", []) or []
+        }
+        declared_operations = {
+            operation_id
+            for requirement in manifest.integration_requirements
+            for operation_id in requirement.operations
+        }
+        if declared_operations - selected_operations:
+            return ProposedSkillValidationRead(
+                ok=False,
+                manifest_valid=True,
+                tests_run=validation.tests_run,
+                tests_passed=validation.tests_passed,
+                error_message=(
+                    "Draft manifest declares integration operations outside the approved update context: "
+                    f"{sorted(declared_operations - selected_operations)}"
+                ),
+            )
+        scan = StaticCapabilityScanner().scan(
+            version_dir,
+            manifest.permissions.model_dump(mode="json"),
+            runtime=manifest.runtime,
+            declared_integration_operations=declared_operations,
+            selected_integration_operations=selected_operations,
+        )
+        return validation if scan.ok else self._capability_scan_failure(scan)
+
     def _repair_update_version(
         self,
         agent_run: AgentRun,
@@ -1082,6 +1227,14 @@ class AgentWorkflowService:
             "test_result_json": validation.model_dump(mode="json"),
             "failure_log_path": self.artifacts.relative_path(agent_run, "update_version_test.log"),
             "project_files": self._version_file_snapshot(draft),
+            "integration_operation_context": operation_context(
+                [
+                    str(operation_id)
+                    for requirement in blueprint.get("integration_requirements", []) or []
+                    if isinstance(requirement, dict)
+                    for operation_id in requirement.get("operations", []) or []
+                ]
+            ),
         }
         builder_step = self._start_step(
             agent_run,
@@ -1214,6 +1367,7 @@ class AgentWorkflowService:
                 "permission_expansion": runtime_request.reason_json.get("permission_expansion", {}),
                 "runner_unsupported": runtime_request.reason_json.get("runner_unsupported", []),
                 "function_requirements": runtime_request.reason_json.get("function_requirements", []),
+                "integration_requirements": runtime_request.reason_json.get("integration_requirements", []),
                 "permissions": runtime_request.requested_permissions_json,
                 "product_manager_summary": pm_summary,
                 "permission_review_summary": permission_summary,
@@ -1425,6 +1579,7 @@ class AgentWorkflowService:
             input_schema_json=skill.input_schema_json,
             output_schema_json=skill.output_schema_json,
             function_requirements_json=list(skill.function_requirements_json or []),
+            integration_requirements_json=list(skill.integration_requirements_json or []),
             installed_path=None,
             enabled=False,
         )
@@ -1452,6 +1607,7 @@ class AgentWorkflowService:
             "input_schema_json": plan.get("input_schema"),
             "output_schema_json": plan.get("output_schema"),
             "function_requirements_json": list(plan.get("function_requirements", []) or []),
+            "integration_requirements_json": list(plan.get("integration_requirements", []) or []),
             "installed_path": None,
             "enabled": False,
         }
@@ -1811,6 +1967,7 @@ class AgentWorkflowService:
             "permission_bounds": self._agent_permission_bounds(self._permission_plan(agent_run)),
             "task_node": self._builder_task_node(task_node),
             "backend_api_context": backend_api_context(task_node.get("backend_api_ids", [])),
+            "integration_operation_context": operation_context(task_node.get("integration_operation_ids", [])),
             "parent_interface_artifacts": self.artifacts.direct_parent_interface_artifacts(agent_run, task_node),
             "workspace_paths": self._task_relevant_paths(task_node),
         }
@@ -1829,6 +1986,21 @@ class AgentWorkflowService:
         blueprint = self._agent_blueprint(agent_run)
         fields = ("goal", "runtime", "expected_behavior", "schedule", "acceptance_criteria")
         return {field: blueprint[field] for field in fields if field in blueprint}
+
+    def _approved_integration_operation_ids(self, agent_run: AgentRun) -> list[str]:
+        if agent_run.build_workflow == "task_dag":
+            return [
+                str(operation_id)
+                for node in self.task_dags.nodes(self._task_dag(agent_run))
+                for operation_id in node.get("integration_operation_ids", []) or []
+            ]
+        blueprint = self._agent_blueprint(agent_run)
+        return [
+            str(operation_id)
+            for requirement in blueprint.get("integration_requirements", []) or []
+            if isinstance(requirement, dict)
+            for operation_id in requirement.get("operations", []) or []
+        ]
 
     def _compact_interface_artifacts(self, artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         fields = ("task_id", "interfaces", "contracts_for_children", "known_limitations")

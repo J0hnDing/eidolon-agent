@@ -8,6 +8,8 @@ from urllib.parse import urlsplit
 from app.services.skill_package_files import iter_skill_files
 
 BROWSER_MODULES = {"playwright", "pyppeteer", "selenium"}
+CREDENTIAL_STORE_MODULES = {"keyring", "win32cred"}
+TEST_ONLY_MODULES = {"integration_test_adapter"}
 PROCESS_CALLS = {
     "asyncio.create_subprocess_exec",
     "asyncio.create_subprocess_shell",
@@ -35,6 +37,11 @@ EXCLUDED_PARTS = {".build-deps", ".deps", ".git", ".pytest_cache", "__pycache__"
 MAX_SOURCE_BYTES = 1_000_000
 WEB_ASSET_SUFFIXES = {".css", ".html", ".htm", ".js", ".mjs"}
 ABSOLUTE_BROWSER_URL = re.compile(r"https?://[^\s\"'<>)}]+", re.IGNORECASE)
+GITHUB_HOSTS = {"api.github.com", "github.com"}
+INTEGRATION_HELPERS = {
+    "integration_runtime_capabilities.call",
+    "web_runtime_capabilities.call_integration",
+}
 
 
 @dataclass(frozen=True)
@@ -74,6 +81,9 @@ class StaticCapabilityScanner:
         approved_runtime: dict[str, Any],
         *,
         runtime: str = "function",
+        declared_integration_operations: set[str] | None = None,
+        selected_integration_operations: set[str] | None = None,
+        include_paths: set[str] | None = None,
     ) -> CapabilityScanResult:
         skill_root = skill_dir.resolve()
         scanned_files: list[str] = []
@@ -91,6 +101,8 @@ class StaticCapabilityScanner:
             if any(part in EXCLUDED_PARTS or part.startswith(".") for part in relative_path.parts):
                 continue
             relative = relative_path.as_posix()
+            if include_paths is not None and relative not in include_paths:
+                continue
             scanned_files.append(relative)
             if source_path.stat().st_size > MAX_SOURCE_BYTES:
                 findings.append(
@@ -127,6 +139,8 @@ class StaticCapabilityScanner:
                     approved_secrets=approved_secrets,
                     approved_writes=approved_writes,
                     runtime=runtime,
+                    declared_integration_operations=declared_integration_operations or set(),
+                    selected_integration_operations=selected_integration_operations or set(),
                 )
             )
 
@@ -135,6 +149,8 @@ class StaticCapabilityScanner:
             if any(part in EXCLUDED_PARTS or part.startswith(".") for part in relative_path.parts):
                 continue
             relative = relative_path.as_posix()
+            if include_paths is not None and relative not in include_paths:
+                continue
             scanned_files.append(relative)
             if asset_path.stat().st_size > MAX_SOURCE_BYTES:
                 findings.append(
@@ -163,9 +179,10 @@ class StaticCapabilityScanner:
                 )
                 continue
             for match in ABSOLUTE_BROWSER_URL.finditer(source):
+                domain = self._url_domain(match.group(0))
                 findings.append(
                     CapabilityFinding(
-                        capability="browser_network",
+                        capability="direct_github_access" if domain in GITHUB_HOSTS else "browser_network",
                         status="blocked",
                         path=relative,
                         line=source.count("\n", 0, match.start()) + 1,
@@ -176,6 +193,23 @@ class StaticCapabilityScanner:
                         ),
                     )
                 )
+            for marker in (
+                "call_integration",
+                "/integrations/capabilities",
+                "/capabilities/integrations",
+                "PERSONAL_AGENT_",
+            ):
+                if marker in source:
+                    findings.append(
+                        CapabilityFinding(
+                            capability="browser_integration",
+                            status="blocked",
+                            path=relative,
+                            line=source.count("\n", 0, source.index(marker)) + 1,
+                            evidence=f"browser asset contains {marker}",
+                            message="Browser code cannot invoke integrations or receive runtime capability material.",
+                        )
+                    )
 
         findings = self._deduplicate(findings)
         return CapabilityScanResult(
@@ -198,6 +232,8 @@ class StaticCapabilityScanner:
         approved_secrets: set[str],
         approved_writes: set[str],
         runtime: str = "function",
+        declared_integration_operations: set[str],
+        selected_integration_operations: set[str],
     ) -> list[CapabilityFinding]:
         findings: list[CapabilityFinding] = []
         import_aliases = self._import_aliases(tree)
@@ -217,10 +253,54 @@ class StaticCapabilityScanner:
                 )
                 if finding is not None:
                     findings.append(finding)
+                integration_finding = self._integration_call_finding(
+                    node,
+                    relative_path,
+                    import_aliases,
+                    declared_integration_operations,
+                    selected_integration_operations,
+                )
+                if integration_finding is not None:
+                    findings.append(integration_finding)
             if isinstance(node, ast.Subscript):
                 finding = self._environment_subscript_finding(node, relative_path, approved_secrets)
                 if finding is not None:
                     findings.append(finding)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                lowered = node.value.lower()
+                if "/integrations/capabilities/" in lowered:
+                    findings.append(
+                        CapabilityFinding(
+                            capability="integration_internal_path",
+                            status="blocked",
+                            path=relative_path,
+                            line=getattr(node, "lineno", 1),
+                            evidence="references the internal integration HTTP path",
+                            message="Generated code must use the trusted integration helper, not the internal HTTP path.",
+                        )
+                    )
+                if "api.github.com" in lowered or "https://github.com" in lowered:
+                    findings.append(
+                        CapabilityFinding(
+                            capability="direct_github_access",
+                            status="blocked",
+                            path=relative_path,
+                            line=getattr(node, "lineno", 1),
+                            evidence="contains a direct GitHub host",
+                            message="Direct GitHub access is blocked; use the trusted integration helper.",
+                        )
+                    )
+                if lowered == "authorization" or lowered.startswith("bearer "):
+                    findings.append(
+                        CapabilityFinding(
+                            capability="authentication_header",
+                            status="blocked",
+                            path=relative_path,
+                            line=getattr(node, "lineno", 1),
+                            evidence="constructs authentication header material",
+                            message="Generated code cannot construct provider authentication or bearer headers.",
+                        )
+                    )
         return findings
 
     def _web_app_cache_findings(self, tree: ast.AST, relative_path: str) -> list[CapabilityFinding]:
@@ -297,6 +377,28 @@ class StaticCapabilityScanner:
                         message="Browser automation is blocked by backend policy.",
                     )
                 )
+            if root in CREDENTIAL_STORE_MODULES:
+                findings.append(
+                    CapabilityFinding(
+                        capability="credential_store",
+                        status="blocked",
+                        path=relative_path,
+                        line=node.lineno,
+                        evidence=f"imports {module}",
+                        message="Generated code cannot import operating-system credential-store APIs.",
+                    )
+                )
+            if root in TEST_ONLY_MODULES:
+                findings.append(
+                    CapabilityFinding(
+                        capability="test_adapter_in_runtime",
+                        status="blocked",
+                        path=relative_path,
+                        line=node.lineno,
+                        evidence=f"imports test-only module {module}",
+                        message="The deterministic integration adapter is available only to generated tests.",
+                    )
+                )
         return findings
 
     def _call_finding(
@@ -310,10 +412,32 @@ class StaticCapabilityScanner:
         import_aliases: dict[str, str],
     ) -> CapabilityFinding | None:
         call_name = self._resolve_import_alias(self._call_name(node.func), import_aliases)
+        if (
+            call_name in {"ctypes.WinDLL", "ctypes.windll.LoadLibrary"}
+            or "advapi32.Cred" in call_name
+            or any(name in call_name for name in ("CredRead", "CredWrite", "CredDelete"))
+        ):
+            return CapabilityFinding(
+                capability="credential_store",
+                status="blocked",
+                path=relative_path,
+                line=node.lineno,
+                evidence=f"calls operating-system credential API {call_name}",
+                message="Generated code cannot call operating-system credential-store APIs.",
+            )
         if call_name.startswith(NETWORK_CALL_PREFIXES) and node.args:
             url = self._literal_string(node.args[0])
             domain = self._url_domain(url or "")
             if domain:
+                if domain in GITHUB_HOSTS:
+                    return CapabilityFinding(
+                        capability="direct_github_access",
+                        status="blocked",
+                        path=relative_path,
+                        line=node.lineno,
+                        evidence=f"calls {call_name} with GitHub domain {domain}",
+                        message="Direct GitHub access is blocked; use the trusted integration helper.",
+                    )
                 return self._network_finding(
                     relative_path,
                     node.lineno,
@@ -368,6 +492,48 @@ class StaticCapabilityScanner:
                 line=node.lineno,
                 evidence=f"accesses unsafe literal path {literal_path}",
                 message="Code appears to access an absolute or parent-traversing filesystem path.",
+            )
+        return None
+
+    def _integration_call_finding(
+        self,
+        node: ast.Call,
+        relative_path: str,
+        import_aliases: dict[str, str],
+        declared_operations: set[str],
+        selected_operations: set[str],
+    ) -> CapabilityFinding | None:
+        call_name = self._resolve_import_alias(self._call_name(node.func), import_aliases)
+        if call_name not in INTEGRATION_HELPERS:
+            return None
+        operation_node = next((keyword.value for keyword in node.keywords if keyword.arg == "operation"), None)
+        operation_id = self._literal_string(operation_node) if operation_node is not None else None
+        if operation_id is None:
+            return CapabilityFinding(
+                capability="integration_operation",
+                status="blocked",
+                path=relative_path,
+                line=node.lineno,
+                evidence="dynamically constructs integration operation identifier",
+                message="Integration operation identifiers must be literal and selected by the approved build context.",
+            )
+        if operation_id not in declared_operations:
+            return CapabilityFinding(
+                capability="integration_operation",
+                status="undeclared",
+                path=relative_path,
+                line=node.lineno,
+                evidence=f"calls undeclared operation {operation_id}",
+                message="Generated code invokes an operation absent from the active manifest.",
+            )
+        if operation_id not in selected_operations:
+            return CapabilityFinding(
+                capability="integration_operation",
+                status="blocked",
+                path=relative_path,
+                line=node.lineno,
+                evidence=f"calls unselected operation {operation_id}",
+                message="Generated code invokes an operation outside its approved Builder context.",
             )
         return None
 
@@ -426,6 +592,8 @@ class StaticCapabilityScanner:
         approved_secrets: set[str],
     ) -> CapabilityFinding:
         allowed = secret_name.lower() in approved_secrets
+        if any(part in secret_name.lower() for part in ("github", "token", "credential", "secret")):
+            allowed = False
         return CapabilityFinding(
             capability="secrets",
             status="allowed" if allowed else "undeclared",

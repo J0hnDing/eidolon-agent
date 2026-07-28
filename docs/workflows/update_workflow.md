@@ -15,7 +15,7 @@ Updates are version-safe and do not use the new skill DAG build workflow in the 
 5. If approved, or if no extra build-time approval is needed, backend copies the active version into a draft/proposed version folder.
 6. Builder modifies only the draft.
 7. Tester writes/updates runtime-appropriate tests and validates the draft.
-8. Permission review compares active and draft manifest/dependencies.
+8. Permission review compares active and draft manifest/dependencies and the normalized integration contract.
 9. If runtime permissions are unchanged, activation can skip runtime reapproval.
 10. If permissions changed, user must approve runtime permissions before activation.
 11. User compares, activates, or discards.
@@ -29,6 +29,8 @@ Updates are version-safe and do not use the new skill DAG build workflow in the 
 - No update auto-runs.
 - No draft is created when ProductManager blocks/declines/asks for clarification.
 - ProductManager decisions are user-facing summaries, not workflow errors.
+- ProductManager receives the concise GitHub operation index. Builder and Tester receive detailed context only for operations selected in the update blueprint; Tester uses the deterministic fake adapter.
+- Unchanged integration fingerprints may reuse authorization. Operation, resource-scope, registry-contract, or validated-account changes require a new integration decision before activation.
 
 ## Context Available to Agents
 

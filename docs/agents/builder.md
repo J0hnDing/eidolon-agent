@@ -17,6 +17,7 @@ Builder reads:
 - compact backend-approved permission bounds with effective runtime permissions and explicit blocked capabilities;
 - current task node fields needed for the task;
 - backend API context for API ids selected by ProductManager on the current task node;
+- detailed GitHub integration context only for operation ids selected on the current task node;
 - interface artifacts from direct parent task nodes;
 - safe workspace paths for existing generated files when applicable. File contents are read from the controlled workspace instead of duplicated in the prompt.
 
@@ -27,6 +28,8 @@ Builder implements the current task node only. It must not jump ahead to child n
 Builder reads only the named workspace paths plus the backend-seeded manifest. It does not recursively inventory internal metadata, initialize version control, run tests, or repeatedly reread unchanged files; backend validation and Tester own those actions.
 
 When backend API context is present, Builder may use only those documented backend APIs. Function code uses the backend Skill Codex Call API as documented. Web-application server code uses the trusted `web_runtime_capabilities.call_codex` helper and never exposes the instance capability to browser code. Generated code must not invoke the Codex CLI, shell commands, or arbitrary subprocesses.
+
+When integration context is present, function code uses `integration_runtime_capabilities.call` and web-application server code uses `web_runtime_capabilities.call_integration`. Builder must use literal selected operation ids and registry schemas. It must not contact GitHub directly, construct authentication, call an internal relay path, expose integration use to browser code, or import the deterministic test adapter from implementation.
 
 Builder must honor runtime budgets in backend API context. Multi-item Codex work uses one bounded batched request with per-item result mapping instead of sequential per-item calls.
 

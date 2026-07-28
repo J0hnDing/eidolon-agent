@@ -60,6 +60,10 @@ def ensure_local_schema() -> None:
                 connection.execute(
                     text("ALTER TABLE skills ADD COLUMN function_requirements_json JSON NOT NULL DEFAULT '[]'")
                 )
+            if "integration_requirements_json" not in columns:
+                connection.execute(
+                    text("ALTER TABLE skills ADD COLUMN integration_requirements_json JSON NOT NULL DEFAULT '[]'")
+                )
             if "active_version_id" not in columns:
                 connection.execute(text("ALTER TABLE skills ADD COLUMN active_version_id INTEGER"))
             connection.execute(text("UPDATE skills SET status = 'installed', enabled = 0 WHERE status = 'disabled'"))

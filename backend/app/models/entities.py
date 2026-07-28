@@ -68,6 +68,7 @@ class Skill(Base):
     input_schema_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     output_schema_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     function_requirements_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    integration_requirements_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
     installed_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     active_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
@@ -96,6 +97,14 @@ class Skill(Base):
     function_access_approvals_as_target: Mapped[list["FunctionAccessApproval"]] = relationship(
         foreign_keys="FunctionAccessApproval.target_skill_id",
         back_populates="target_skill",
+        cascade="all, delete-orphan",
+    )
+    integration_authorizations: Mapped[list["IntegrationAuthorization"]] = relationship(
+        back_populates="skill",
+        cascade="all, delete-orphan",
+    )
+    integration_audit_records: Mapped[list["IntegrationAuditRecord"]] = relationship(
+        back_populates="skill",
         cascade="all, delete-orphan",
     )
 
@@ -181,6 +190,67 @@ class FunctionAccessApproval(Base):
         back_populates="function_access_approvals_as_target",
     )
     approval_request: Mapped["ApprovalRequest"] = relationship()
+
+
+class IntegrationConnection(Base):
+    __tablename__ = "integration_connections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    provider: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
+    secret_store_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    secret_reference: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    account_login: Mapped[str] = mapped_column(String(128), nullable=False)
+    account_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+    last_validated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class IntegrationAuthorization(Base):
+    __tablename__ = "integration_authorizations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id"), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    contract_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    approval_request_id: Mapped[int] = mapped_column(ForeignKey("approval_requests.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    invalidation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    skill: Mapped["Skill"] = relationship(back_populates="integration_authorizations")
+    approval_request: Mapped["ApprovalRequest"] = relationship()
+
+
+class IntegrationAuditRecord(Base):
+    __tablename__ = "integration_audit_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id"), nullable=False, index=True)
+    version_id: Mapped[int] = mapped_column(ForeignKey("skill_versions.id"), nullable=False, index=True)
+    skill_run_id: Mapped[int | None] = mapped_column(ForeignKey("skill_runs.id"), nullable=True, index=True)
+    web_app_instance_id: Mapped[str | None] = mapped_column(
+        ForeignKey("web_app_instances.id"), nullable=True, index=True
+    )
+    operation_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    resource: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    skill: Mapped["Skill"] = relationship(back_populates="integration_audit_records")
+    version: Mapped["SkillVersion"] = relationship()
+    skill_run: Mapped["SkillRun | None"] = relationship()
 
 
 class WebAppInstance(Base):

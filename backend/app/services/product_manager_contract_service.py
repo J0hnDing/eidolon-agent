@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.models import Skill
+from app.schemas.manifest import ManifestIntegrationRequirement
 from app.services.default_permissions import default_build_time_dependencies
 
 
@@ -21,6 +22,7 @@ class ProductManagerContractService:
             "suggestion",
             "permission_plan",
             "function_requirements",
+            "integration_requirements",
         }
         blueprint = {key: fallback[key] for key in allowed_fields if key in fallback}
         blueprint.update({key: value[key] for key in allowed_fields if key in value})
@@ -74,6 +76,44 @@ class ProductManagerContractService:
             requirements.append({"name": name, "reason": reason})
             seen_names.add(name)
         blueprint["function_requirements"] = requirements
+        raw_integrations = blueprint.get("integration_requirements")
+        if not isinstance(raw_integrations, list):
+            raw_integrations = fallback.get("integration_requirements", [])
+        integrations: list[dict[str, object]] = []
+        seen_providers: set[str] = set()
+        for item in raw_integrations if isinstance(raw_integrations, list) else []:
+            if not isinstance(item, dict):
+                continue
+            provider = str(item.get("provider") or "").strip()
+            operations = item.get("operations")
+            scope = item.get("resource_scope")
+            reason = str(item.get("reason") or "").strip()
+            if (
+                provider != "github"
+                or provider in seen_providers
+                or not isinstance(operations, list)
+                or not isinstance(scope, dict)
+                or not reason
+            ):
+                continue
+            try:
+                normalized = ManifestIntegrationRequirement.model_validate(
+                    {
+                        "provider": provider,
+                        "operations": [str(operation) for operation in operations],
+                        "resource_scope": {
+                            "repositories": [str(repository) for repository in scope.get("repositories", [])]
+                            if isinstance(scope.get("repositories"), list)
+                            else []
+                        },
+                        "reason": reason,
+                    }
+                )
+            except ValueError:
+                continue
+            integrations.append(normalized.model_dump(mode="json"))
+            seen_providers.add(provider)
+        blueprint["integration_requirements"] = integrations
         blueprint["permission_plan"] = self.sanitize_permission_plan(blueprint.get("permission_plan"), fallback)
         return blueprint
 
@@ -227,6 +267,11 @@ class ProductManagerContractService:
                         int(item) for item in raw.get("backend_api_ids", []) if str(item).strip().isdigit()
                     ]
                     if isinstance(raw.get("backend_api_ids"), list)
+                    else [],
+                    "integration_operation_ids": [
+                        str(item) for item in raw.get("integration_operation_ids", []) if str(item).strip()
+                    ]
+                    if isinstance(raw.get("integration_operation_ids"), list)
                     else [],
                 }
             )

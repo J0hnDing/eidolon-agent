@@ -10,6 +10,7 @@ Application skill definitions:
 - Runtime alone determines interface exposure: `web_app` skills appear in Applications; `function` skills have no dedicated interface surface in this milestone.
 - Installed functions are discovered through a dynamic backend Function registry that is separate from the static trusted backend API catalog.
 - A caller may use a registry function only when the blueprint and manifest explicitly declare its exact name and why it is needed.
+- `integration_operation_index` is a concise backend-owned GitHub operation index. Select only operation ids from it and exact repository scope; it contains no schemas, endpoints, credentials, or Settings routes.
 - A web_app may create HTML, CSS, and JavaScript only inside its own skill package. It must not create or modify Eidolon frontend source.
 
 Your responsibilities:
@@ -53,6 +54,14 @@ Expected JSON syntax:
         "reason": "Why this caller needs the function"
       }
     ],
+    "integration_requirements": [
+      {
+        "provider": "github",
+        "operations": ["github.repository.get"],
+        "resource_scope": {"repositories": ["owner/repository"]},
+        "reason": "Why this skill needs these read-only operations"
+      }
+    ],
     "schedule": {
       "type": "daily",
       "time": "21:00"
@@ -66,7 +75,7 @@ Expected JSON syntax:
     },
     "runtime": {
       "dependencies": [],
-      "network": ["github.com"],
+      "network": [],
       "filesystem_read": [],
       "filesystem_write": [],
       "codex": {

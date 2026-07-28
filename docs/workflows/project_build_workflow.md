@@ -50,7 +50,8 @@ Output for PM does NOT mean agent writes files directly, instead backend receive
 3. `pm_write_blueprint_and_permissions`
    - Inputs: `intent_prompt.json`.
    - Output: one structured response containing top-level `build_workflow`, `blueprint`, and `permission_plan` fields. The backend writes only the latter two as `blueprint.json` and `permissions.json`.
-   - Purpose: choose `single_codex` or `task_dag`; select the `function` or `web_app` execution protocol; describe the skill goal, expected user behavior, function-only schedule intent, and high-level acceptance criteria; draft both build-time needs and expected runtime permissions/dependencies.
+   - Purpose: choose `single_codex` or `task_dag`; select the `function` or `web_app` execution protocol; describe the skill goal, expected user behavior, function-only schedule intent, high-level acceptance criteria, and selected GitHub integration requirements; draft both build-time needs and expected runtime permissions/dependencies.
+   - ProductManager receives only the registry-derived integration operation id/title/description index, never schemas, endpoints, credential management, or secret-store details.
    - `build_workflow` is backend routing state stored on the agent run. It must not appear inside `blueprint` or in `blueprint.json` because downstream DAG, Builder, and Tester inputs do not need it.
    - Must not enumerate generated package files. Builder-owned paths are defined later by task-node `expected_output_paths` and `file_write_claims` in `task_dag.json`.
    - Must not include task nodes, dependencies between tasks, or test files.
@@ -78,14 +79,14 @@ The Codex Settings page can persist a backend-owned workflow override. `Automati
    - The registry rejects unknown workflow names. Workflow selection and execution are not hard-coded into the common pre-approval sequence.
 
 7. `pm_write_task_dag` (`task_dag` only)
-   - Inputs: `blueprint.json`, compact backend-approved `permission_bounds`, and the static backend API index file at `backend/app/static/backend_api_index.json`.
+   - Inputs: `blueprint.json`, compact backend-approved `permission_bounds`, the static backend API index, and the concise registry-derived integration operation index.
    - Output: `task_dag.json`.
    - Purpose: split the project into explicit task nodes with dependencies, difficulty, test requirements, output expectations, file write claims, interface artifact expectations, and any required backend API ids.
    - Must not include separate "test-only" task nodes. Tester actions are attached to the build nodes that require tests.
 
 ## Single-Codex Workflow
 
-The `single_codex` workflow package contains `workflow.py`, `prompts.py`, and `instructions/run.md`. Before the writable invocation, the backend creates the controlled proposed-skill folder, provisions and verifies approved dependencies, seeds `manifest.json`, and creates its `tests/` directory. The prompt contains the approved blueprint, effective permissions, and fixed workflow instructions. Within that one invocation Codex plans internally, creates the complete skill package, writes test files inside the existing backend-created `tests/` directory, runs a focused test command, and fixes failures before returning. It must not create or replace the test directory.
+The `single_codex` workflow package contains `workflow.py`, `prompts.py`, and `instructions/run.md`. Before the writable invocation, the backend creates the controlled proposed-skill folder, provisions and verifies approved dependencies, seeds `manifest.json`, and creates its `tests/` directory. The prompt contains the approved blueprint, effective permissions, fixed workflow instructions, and detailed registry context only for GitHub operations selected in the blueprint. Within that one invocation Codex plans internally, creates the complete skill package, writes test files inside the existing backend-created `tests/` directory, runs a focused test command, and fixes failures before returning. It must not create or replace the test directory.
 
 After the writable invocation returns, the backend runs the shared deterministic final validator: static capability scan, actual manifest/package validation, and authoritative execution of the generated tests. This validator does not invoke ProductManager, Builder, Tester, or another Codex agent. Any invocation or validation error permanently stops that single-Codex run; resume, task retry, and step retry cannot invoke Builder again. The user may start a separate new Project build, whose proposed workspace is atomically replaced without descending into sandbox-owned cache directories. Runtime permission review is created only after final validation passes.
 
@@ -133,7 +134,8 @@ The `task_dag` package contains its executor, prompt composition, and ProductMan
         "acceptance_criteria": ["string"],
         "test_expectations": ["string"],
         "interface_artifact_expectations": ["string"],
-        "backend_api_ids": []
+        "backend_api_ids": [],
+        "integration_operation_ids": []
       }
     ]
   }
@@ -149,6 +151,7 @@ Backend validation must reject the graph when:
 - a node id is not a safe path segment;
 - a node omits acceptance criteria or expected output paths;
 - a node references a backend API id that is not in the backend API catalog;
+- a node references an integration operation not selected in the approved blueprint;
 - the skill has no tested node;
 - two simultaneously ready nodes have overlapping `file_write_claims` without an explicit dependency ordering them.
 
@@ -197,11 +200,14 @@ Inputs:
 - the current task node fields needed to build the node;
 - direct-parent `interface_artifact.json` files only;
 - backend API context for ids listed in the current task node's `backend_api_ids`;
+- detailed registry context only for ids listed in the current task node's `integration_operation_ids`;
 - `workspace_paths` naming generated skill files the node may need. File contents are not embedded because Builder can read these paths inside its controlled workspace.
 
 The Builder prompt must not include backend bookkeeping fields such as `generation_request_id`, `blueprint_path`, `permission_path`, `task_dag_path`, `task_path`, task `index`, or task `status`. It must not include full source snapshots, manifest requirement summaries already enforced by the backend, or interface-artifact field lists already defined by Builder instructions. It should not receive the entire task DAG for a normal node build; dependency contracts come from direct-parent interface artifacts. The backend may still use transitive lineage for deterministic created-versus-updated validation.
 
 The full backend API context is loaded from the static file at `backend/app/static/backend_api_context.json`. ProductManager sees only the index file; Builder receives only the context entries selected by the current task node's `backend_api_ids`.
+
+GitHub integration context is derived directly from the typed registry. ProductManager sees the concise index; Builder receives schemas, examples, scope rules, and helper guidance only for the current node's selected ids. Function code must use `integration_runtime_capabilities.call`; web-application server code must use `web_runtime_capabilities.call_integration`.
 
 Behavior:
 
@@ -281,6 +287,7 @@ Inputs:
 - the current task node;
 - direct-parent interface artifacts;
 - `workspace_paths` for Builder-created files needed to test the node. Source contents are not duplicated in the prompt.
+- selected integration operation context and the deterministic fake adapter marker when the node uses GitHub.
 
 The Tester prompt for a node must not include the entire task DAG, task artifact paths, task status, task index, or other backend-only bookkeeping. It should receive `test_file` so it writes only the node-specific test file.
 
@@ -294,6 +301,7 @@ Behavior:
 - run tests through the safe validation path;
 - write `tasks/<task_id>/test_result.json`;
 - on failure, write `tasks/<task_id>/failure.log` and trigger `builder_fix_task`.
+- never use a live GitHub credential or request; verify helper use, normalized output, and failure behavior with the deterministic fake adapter.
 
 ### `tester_final_e2e`
 
@@ -305,6 +313,7 @@ Inputs:
 - approved blueprint acceptance criteria;
 - compact interface contracts;
 - safe package `workspace_paths`, excluding `.git`, `.agents`, caches, bytecode, and Codex bookkeeping files.
+- detailed integration context only for operations selected across the approved build, plus the deterministic fake adapter marker.
 
 Behavior:
 

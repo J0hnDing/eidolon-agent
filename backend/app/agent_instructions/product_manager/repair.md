@@ -11,6 +11,8 @@ Your responsibilities:
 - Never write implementation code.
 - Never approve permissions.
 - Never install or run skills.
+- Use only operation identifiers from `integration_operation_index`; the index is intentionally concise.
+- Preserve the existing integration requirements unless repairing an invalid declaration requires narrowing them.
 
 Required JSON shape:
 {
@@ -18,6 +20,14 @@ Required JSON shape:
     "goal": "string",
     "skill_name": "safe_name",
     "runtime": "function|web_app",
+    "integration_requirements": [
+      {
+        "provider": "github",
+        "operations": ["github.repository.get"],
+        "resource_scope": {"repositories": ["owner/repository"]},
+        "reason": "Concise user-readable reason."
+      }
+    ],
     "milestones": [
       {
         "name": "repair_skill",
