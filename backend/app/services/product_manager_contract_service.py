@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import re
+
+from jsonschema import Draft202012Validator, SchemaError
+
 from app.models import Skill
-from app.schemas.manifest import ManifestIntegrationRequirement
+from app.schemas.manifest import ManifestIntegrationResourceScope
 from app.services.default_permissions import default_build_time_dependencies
 
 
@@ -14,26 +18,50 @@ class ProductManagerContractService:
         allowed_fields = {
             "goal",
             "skill_name",
+            "display_name",
             "runtime",
+            "input_schema",
+            "output_schema",
             "expected_behavior",
             "schedule",
             "acceptance_criteria",
             "milestones",
             "suggestion",
             "permission_plan",
-            "function_requirements",
-            "integration_requirements",
+            "functions",
+            "integration_scopes",
         }
         blueprint = {key: fallback[key] for key in allowed_fields if key in fallback}
         blueprint.update({key: value[key] for key in allowed_fields if key in value})
         if not blueprint.get("goal"):
             blueprint["goal"] = fallback.get("goal")
-        # The backend-selected package identity is stable across every PM action.
-        # ProductManager may improve the display/goal wording but cannot rename
-        # the controlled folder or database record mid-workflow.
-        blueprint["skill_name"] = fallback.get("skill_name")
+        raw_skill_name = str(blueprint.get("skill_name") or fallback.get("skill_name") or "").strip()
+        if re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", raw_skill_name) is None:
+            raw_skill_name = str(fallback.get("skill_name") or "generated_skill")
+        blueprint["skill_name"] = raw_skill_name
+        blueprint["display_name"] = str(
+            blueprint.get("display_name")
+            or fallback.get("display_name")
+            or raw_skill_name.replace("_", " ").replace("-", " ").title()
+        )[:256]
         runtime = blueprint.get("runtime") or fallback.get("runtime", "function")
         blueprint["runtime"] = runtime if runtime in {"function", "web_app"} else "function"
+        blueprint["input_schema"] = self._object_schema(
+            blueprint.get("input_schema"),
+            fallback.get("input_schema"),
+        )
+        blueprint["output_schema"] = self._object_schema(
+            blueprint.get("output_schema"),
+            fallback.get("output_schema"),
+        )
+        if blueprint["runtime"] == "function" and (
+            blueprint["input_schema"] is None or blueprint["output_schema"] is None
+        ):
+            blueprint["input_schema"] = {"type": "object", "additionalProperties": True}
+            blueprint["output_schema"] = {"type": "object", "additionalProperties": True}
+        if blueprint["runtime"] == "web_app":
+            blueprint["input_schema"] = None
+            blueprint["output_schema"] = None
         if not isinstance(blueprint.get("schedule"), dict):
             fallback_schedule = fallback.get("schedule")
             blueprint["schedule"] = fallback_schedule if isinstance(fallback_schedule, dict) else None
@@ -61,61 +89,47 @@ class ProductManagerContractService:
         criteria = blueprint.get("acceptance_criteria")
         if not isinstance(criteria, list):
             blueprint["acceptance_criteria"] = list(fallback.get("acceptance_criteria", []) or [])
-        raw_requirements = blueprint.get("function_requirements")
-        if not isinstance(raw_requirements, list):
-            raw_requirements = fallback.get("function_requirements", [])
-        requirements: list[dict[str, str]] = []
-        seen_names: set[str] = set()
-        for item in raw_requirements if isinstance(raw_requirements, list) else []:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("name") or "").strip()
-            reason = str(item.get("reason") or "").strip()
-            if not name or not reason or name in seen_names:
-                continue
-            requirements.append({"name": name, "reason": reason})
-            seen_names.add(name)
-        blueprint["function_requirements"] = requirements
-        raw_integrations = blueprint.get("integration_requirements")
-        if not isinstance(raw_integrations, list):
-            raw_integrations = fallback.get("integration_requirements", [])
-        integrations: list[dict[str, object]] = []
-        seen_providers: set[str] = set()
-        for item in raw_integrations if isinstance(raw_integrations, list) else []:
-            if not isinstance(item, dict):
-                continue
-            provider = str(item.get("provider") or "").strip()
-            operations = item.get("operations")
-            scope = item.get("resource_scope")
-            reason = str(item.get("reason") or "").strip()
-            if (
-                provider != "github"
-                or provider in seen_providers
-                or not isinstance(operations, list)
-                or not isinstance(scope, dict)
-                or not reason
-            ):
-                continue
+        raw_functions = blueprint.get("functions")
+        if not isinstance(raw_functions, list):
+            raw_functions = fallback.get("functions", [])
+        blueprint["functions"] = self._unique_strings(raw_functions)
+        raw_scopes = blueprint.get("integration_scopes")
+        if not isinstance(raw_scopes, dict):
+            raw_scopes = fallback.get("integration_scopes", {})
+        scopes: dict[str, object] = {}
+        github_scope = raw_scopes.get("github") if isinstance(raw_scopes, dict) else None
+        if isinstance(github_scope, dict):
             try:
-                normalized = ManifestIntegrationRequirement.model_validate(
-                    {
-                        "provider": provider,
-                        "operations": [str(operation) for operation in operations],
-                        "resource_scope": {
-                            "repositories": [str(repository) for repository in scope.get("repositories", [])]
-                            if isinstance(scope.get("repositories"), list)
-                            else []
-                        },
-                        "reason": reason,
-                    }
-                )
+                scopes["github"] = ManifestIntegrationResourceScope.model_validate(
+                    github_scope
+                ).model_dump(mode="json")
             except ValueError:
-                continue
-            integrations.append(normalized.model_dump(mode="json"))
-            seen_providers.add(provider)
-        blueprint["integration_requirements"] = integrations
+                pass
+        blueprint["integration_scopes"] = scopes
         blueprint["permission_plan"] = self.sanitize_permission_plan(blueprint.get("permission_plan"), fallback)
         return blueprint
+
+    @staticmethod
+    def _unique_strings(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        result: list[str] = []
+        for item in value:
+            normalized = str(item).strip()
+            if normalized and normalized not in result:
+                result.append(normalized)
+        return result
+
+    @staticmethod
+    def _object_schema(value: object, fallback: object) -> dict[str, object] | None:
+        candidate = value if isinstance(value, dict) else fallback
+        if not isinstance(candidate, dict) or candidate.get("type") != "object":
+            return None
+        try:
+            Draft202012Validator.check_schema(candidate)
+        except SchemaError:
+            return None
+        return dict(candidate)
 
     def sanitize_permission_plan(self, value: object, fallback_plan: dict[str, object]) -> dict[str, object]:
         fallback_permissions = fallback_plan.get("requested_permissions")
@@ -263,15 +277,10 @@ class ProductManagerContractService:
                     ]
                     if isinstance(raw.get("interface_artifact_expectations"), list)
                     else [],
-                    "backend_api_ids": [
-                        int(item) for item in raw.get("backend_api_ids", []) if str(item).strip().isdigit()
+                    "function_ids": [
+                        str(item) for item in raw.get("function_ids", []) if str(item).strip()
                     ]
-                    if isinstance(raw.get("backend_api_ids"), list)
-                    else [],
-                    "integration_operation_ids": [
-                        str(item) for item in raw.get("integration_operation_ids", []) if str(item).strip()
-                    ]
-                    if isinstance(raw.get("integration_operation_ids"), list)
+                    if isinstance(raw.get("function_ids"), list)
                     else [],
                 }
             )

@@ -6,7 +6,7 @@ The authoritative operation contract is the typed registry in `backend/app/servi
 
 ## Trust Boundary
 
-The React Settings page is the only user-facing credential-management surface. Its routes are trusted settings routes and are deliberately absent from ProductManager and Builder backend API catalogs. Generated skills, runtime containers, browser code, agents, Codex prompts, and test adapters cannot create, inspect, enumerate, validate, replace, remove, or reveal credentials.
+The React Settings page is the only user-facing credential-management surface. Its routes are trusted settings routes and are deliberately absent from the unified function catalog. Generated skills, runtime containers, browser code, agents, Codex prompts, and test adapters cannot create, inspect, enumerate, validate, replace, remove, or reveal credentials.
 
 Production storage uses Windows Credential Manager through the narrow `SecretStore` interface. Eidolon's database stores only the provider, secret-store implementation id, opaque reference, sanitized status, validated account identity, and lifecycle timestamps. There is no environment-variable, configuration-file, SQLite-secret, generated-file, or application-encryption fallback. If the operating-system store is unavailable, locked, unsupported, or fails, connection management and invocation fail closed.
 
@@ -60,20 +60,19 @@ The active manifest declares authorization intent:
         "repositories": [
           "owner/repository"
         ]
-      },
-      "reason": "Read repository metadata and selected files."
+      }
     }
   ]
 }
 ```
 
-Only `github` is supported. Operations must exist in the registry and be unique. Repository scope is normalized to lowercase exact `owner/repository` values; duplicates, wildcards, organization-wide scope, account-wide scope, and path wildcards are invalid. Repository-scoped operations require at least one applicable repository. The non-repository trending operation requires an empty repository scope unless it is combined with repository-scoped operations in the same provider requirement. Reasons are trimmed, single-line, user-readable text of at most 300 characters.
+Only `github` is supported. Operations must exist in the registry and be unique. Repository scope is normalized to lowercase exact `owner/repository` values; duplicates, wildcards, organization-wide scope, account-wide scope, and path wildcards are invalid. Repository-scoped operations require at least one applicable repository. The non-repository trending operation requires an empty repository scope unless it is combined with repository-scoped operations in the same provider requirement.
 
 The declaration cannot contain credential material, headers, secret references, provider tokens, or capability tokens. The backend derives and persists the active normalized integration contract from the actual active manifest.
 
 ## Connection Versus Skill Authorization
 
-A connected GitHub account does not authorize any skill. Runtime review creates a separate `integration_access` approval showing provider, selected operations, reason, read-only status, normalized repositories, and current connection availability. Approval never happens automatically.
+A connected GitHub account does not authorize any skill. Runtime review creates a separate `integration_access` approval showing provider, selected operations, read-only status, normalized repositories, and current connection availability. Approval never happens automatically.
 
 The backend fingerprints:
 
@@ -116,7 +115,7 @@ Only then does trusted provider execution retrieve the credential. Caller-suppli
 
 ## Agent and Test Context
 
-ProductManager receives only operation id, title, and concise description. For Task DAG builds it may attach selected ids as `integration_operation_ids` on a node. Builder receives registry-derived schemas, examples, scope rules, helper guidance, and fake-test guidance only for that node's selected operations, alongside the existing selected backend API context. The single-Codex workflow receives detail only for operations in the approved blueprint. Update and repair prompts preserve the same selected-only rule.
+GitHub operations are integration-category entries in the unified function catalog. ProductManager receives only available entry ids, titles, concise descriptions, categories, and risks and selects exact ids in the blueprint. For Task DAG builds it assigns selected ids through each node's `function_ids`. Builder receives registry-derived schemas, examples, scope rules, helper guidance, and fake-test guidance only for that node's selected functions. The single-Codex workflow receives full context for every function selected in the blueprint. Update and repair prompts preserve the same selected-only rule.
 
 Tester receives the selected operation context plus `integration_test_adapter.DeterministicFakeIntegrationAdapter`. Generated tests require no token and make no live GitHub requests.
 

@@ -12,8 +12,7 @@ Application skill definitions:
 
 Your responsibilities:
 - For `write_task_dag`, split the approved blueprint into concrete DAG task nodes with dependencies, difficulty, tests required, expected outputs, file_write_claims, and interface artifact expectations.
-- For `write_task_dag`, read `backend_api_index` from the payload. It is loaded from `backend/app/static/backend_api_index.json`. If a task node needs one of those backend APIs, include the matching numeric id in that node's `backend_api_ids`. Do not invent API ids.
-- Read the concise `integration_operation_index` and assign only blueprint-selected operation ids to the nodes that need them. Do not ask for schemas, endpoints, credentials, Settings routes, or secret-store details.
+- Read `function_catalog_index`, which contains only the functions selected in the approved blueprint. Assign each selected function id to the task nodes that use it. Do not invent function ids.
 - Do not include test-only task nodes. Tester actions attach to task nodes with `requires_tests=true`.
 - Do not create standalone manifest_contract, readme, skill_guidance, or docs-only nodes for new builds. manifest.json is handled by backend.
 - Avoid splitting tightly coupled implementation work into multiple serial nodes that edit the same code file. Prefer one cohesive node per implementation file or contract boundary unless the later node is a genuinely separate extension with a clear parent interface contract.
@@ -42,8 +41,7 @@ For `write_task_dag`, return:
         "acceptance_criteria": ["string"],
         "test_expectations": ["string"],
         "interface_artifact_expectations": ["string"],
-        "backend_api_ids": [],
-        "integration_operation_ids": []
+        "function_ids": []
       }
     ]
   }

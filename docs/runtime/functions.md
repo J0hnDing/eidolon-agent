@@ -1,27 +1,24 @@
 # Function Registry and Invocation
 
-`runtime = function` is the machine-facing, one-shot JSON protocol. Installed functions do not host HTTP services and are not added to the static trusted backend API catalog. The backend owns a separate dynamic registry for installed, user-controlled capabilities.
+`runtime = function` is the machine-facing, one-shot JSON protocol. Installed functions do not host HTTP services. The backend records backend-core, installed user, and integration functions in one persistent catalog at `runtime/function_catalog.json`.
 
 ## Registry Contract
 
-`GET /functions` returns installed function records with backend-validated identity, description, active version, input/output JSON Schemas, derived risk, effective permissions, and availability reasons. Registry results never expose package paths, entrypoint commands, credentials, container identities, or unrelated lifecycle state.
+`GET /functions/catalog` returns all catalog entries with category, description, input/output JSON Schemas, invocation guidance, derived risk, availability state, and availability reasons. This is the source for the ProductManager catalog and Functions UI. Only available entries are included in ProductManager prompts.
+
+`GET /functions` remains the runtime-facing installed user-function discovery route. Results never expose package paths, entrypoint commands, credentials, container identities, or unrelated lifecycle state.
 
 An installed function is available for registry invocation only when it is enabled, has a current active function version, has valid object-shaped input/output schemas, has approved and supported runtime permissions, and its active manifest matches the backend identity. Disabled or otherwise unavailable functions remain discoverable with explicit reasons.
 
-Discovery is not authorization. A caller manifest must contain:
+Discovery is not authorization. ProductManager selects catalog ids in `blueprint.functions`; the backend derives installed user-function names in the caller manifest. A caller manifest contains:
 
 ```json
 {
-  "function_requirements": [
-    {
-      "name": "normalize_text",
-      "reason": "Normalize user-provided text before analysis."
-    }
-  ]
+  "function_requirements": ["normalize_text"]
 }
 ```
 
-Function code uses the trusted `function_runtime_capabilities.call_function` helper. Web-application server code uses `web_runtime_capabilities.call_function`. Browser code never receives either capability token.
+For Task DAG builds, ProductManager assigns approved catalog ids to nodes through `function_ids`; the backend gives each Builder full context only for that node. Single-Codex receives full context for every selected function. Function code uses the trusted `function_runtime_capabilities.call_function` helper. Web-application server code uses `web_runtime_capabilities.call_function`. Browser code never receives either capability token.
 
 GitHub integration calls use the parallel stable helper `integration_runtime_capabilities.call`. The operation must be literal, declared by the active manifest, approved for the caller's current integration fingerprint, and within exact repository scope. The helper carries no credential; the backend retrieves it only after all invocation checks and performs the provider request. See [GitHub integration capability](../integrations/github.md).
 

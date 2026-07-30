@@ -12,14 +12,16 @@ ProductManagerAgent owns project judgment, intent refinement, build-workflow sel
 - If the request is infeasible or unsupported, explain why and stop without creating blueprint, permission, or task DAG artifacts.
 - Write a concise blueprint without tasks or milestones.
 - Select `runtime = function` for bounded JSON stdin/stdout execution or `runtime = web_app` for a self-rendered interactive ASGI application.
+- For function skills, define the complete object-shaped input and output JSON Schemas in the blueprint.
+- Select every needed backend-core, user, or integration function by exact id from the backend-provided available catalog. Function selection has no reason field.
+- Provide exact integration resource scope separately when selected integration functions require it.
 - Include intended recurring schedule metadata only for function skills. Web applications use `schedule = null` because their service lifetime is not a scheduled bounded run.
 - Draft build-time and expected runtime permission intent in a separate permission file.
 - Return one top-level `build_workflow` value: `single_codex` for a self-contained small or medium build, or `task_dag` when explicit dependency boundaries and independently retryable tasks are needed.
 - Keep `build_workflow` outside the blueprint because it is backend routing state and must not be written to `blueprint.json`.
 - Define a task DAG after build-time approval only when `build_workflow=task_dag`.
 - For each task node, define dependencies, difficulty, whether tests are required, expected outputs, file write claims, interface artifact expectations, and acceptance criteria.
-- For each task node, include `backend_api_ids` only when the node needs a backend API from the backend-provided API index.
-- Select GitHub authorization intent only from the concise registry-derived integration index. For Task DAG builds, assign only the required selected ids through `integration_operation_ids`.
+- For Task DAG builds, assign only blueprint-selected functions to the nodes that use them through `function_ids`.
 - Keep tightly coupled implementation work together when separate nodes would repeatedly edit the same code file without a meaningful interface boundary.
 - Summarize approval checkpoints.
 - Write stuck summaries when a node or final end-to-end loop exceeds failure limits.
@@ -66,9 +68,9 @@ Schedule intent in `blueprint.json` uses the manifest schedule shape. Use `null`
 
 Task node files describe product work only. They should not contain backend bookkeeping paths such as `blueprint_path`, `permission_path`, or artifact directory paths.
 
-Task node `backend_api_ids` are numeric references to backend APIs. ProductManager sees only id, title, and description. The backend resolves those ids into detailed Builder context before the node is built. Scheduling is not represented as a backend API id; it is manifest metadata.
+The backend automatically supplies ProductManager with the available function-catalog index. ProductManager does not call a discovery endpoint. The index contains only the exact id, title, description, category, and risk needed for selection; it omits schemas, endpoints, authentication behavior, settings routes, credential state, and secret-store details.
 
-GitHub operation selection follows the same minimal-context rule. ProductManager sees only operation id, title, and description—never schemas, endpoints, authentication behavior, settings routes, credential state, or secret-store details. The blueprint owns `integration_requirements`; a task node's `integration_operation_ids` must be a subset of the approved blueprint.
+The blueprint's `functions` list is the authoritative selection. For a Task DAG, every node's `function_ids` must be a subset of that list and every selected function must be assigned to at least one node. The backend resolves each node's ids into full Builder context. For `single_codex`, it supplies full context for every blueprint-selected function. Scheduling is manifest metadata, not a catalog function.
 
 For a web application, ProductManager may assign package-owned Python/HTML/CSS/JavaScript work but must never assign Eidolon frontend files, custom Dockerfiles, or startup commands. Function skills keep the bounded JSON protocol and do not receive interface-specific task nodes.
 

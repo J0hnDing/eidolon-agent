@@ -70,7 +70,7 @@ The manifest `runtime` discriminator selects an execution protocol:
 - `function`: the bounded Python JSON stdin/stdout runner, optional scheduling, and backend-owned dynamic Function registry;
 - `web_app`: a version-pinned importable ASGI service with separate application-instance, browser-session, gateway, and bounded audit records.
 
-The backend is the control plane for both protocols. Function discovery remains separate from the static trusted backend API catalog and invocation authority is derived from active manifests, current versions, runtime eligibility, and caller-target approval. Web-app content remains on a distinct untrusted origin inside a sandboxed iframe; the React UI retains trusted navigation, lifecycle, version, and permission controls. See [Function registry and invocation](../runtime/functions.md) and [Sandboxed web applications](../runtime/web_applications.md).
+The backend is the control plane for both protocols. One persistent catalog describes backend-core, installed user, and integration functions and their current availability; invocation authority is still derived from active manifests, current versions, runtime eligibility, integration state, and caller-target approval. Web-app content remains on a distinct untrusted origin inside a sandboxed iframe; the React UI retains trusted navigation, lifecycle, version, permission, and function-catalog controls. See [Function registry and invocation](../runtime/functions.md) and [Sandboxed web applications](../runtime/web_applications.md).
 
 ## Trusted Integrations
 

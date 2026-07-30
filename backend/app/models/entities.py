@@ -67,7 +67,7 @@ class Skill(Base):
     instructions_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     input_schema_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     output_schema_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    function_requirements_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    function_requirements_json: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     integration_requirements_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
     installed_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     active_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)

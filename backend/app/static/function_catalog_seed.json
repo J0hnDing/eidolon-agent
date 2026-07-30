@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "functions": [
+    {
+      "id": "backend.codex.call",
+      "category": "backend_core",
+      "title": "Skill Codex Call",
+      "description": "Ask Eidolon to make one bounded Codex call from an installed skill.",
+      "risk_level": "low",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string"
+          },
+          "context": {
+            "type": "object"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "codex_permissions": {
+            "type": "object",
+            "properties": {
+              "call_response": {
+                "const": true
+              },
+              "internet_access": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "call_response"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "prompt",
+          "context",
+          "codex_permissions"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "response": {
+            "type": "string"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "internet_access": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "response",
+          "model",
+          "internet_access"
+        ],
+        "additionalProperties": false
+      },
+      "invocation": {
+        "function_helper": "POST /skills/{skill_id}/codex using PERSONAL_AGENT_SKILL_ID and PERSONAL_AGENT_BACKEND_URL",
+        "web_app_helper": "web_runtime_capabilities.call_codex(prompt=..., context=..., internet_access=...)",
+        "test_guidance": "Mock the backend helper. Do not shell out to Codex.",
+        "rules": [
+          "Batch multi-item work into one bounded Codex request.",
+          "internet_access=true requires approved runtime network access.",
+          "Shell and arbitrary filesystem access are not available."
+        ]
+      }
+    }
+  ]
+}

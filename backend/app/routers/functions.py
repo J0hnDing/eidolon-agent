@@ -3,14 +3,21 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.schemas.function_registry import (
+    FunctionCatalogEntryRead,
     FunctionContractRead,
     FunctionInvocationRequest,
     FunctionInvocationResponse,
 )
 from app.schemas.skill_run import SkillRunRead
+from app.services.function_catalog_service import FunctionCatalogService
 from app.services.function_registry_service import FunctionRegistryError, FunctionRegistryService
 
 router = APIRouter(prefix="/functions", tags=["functions"])
+
+
+@router.get("/catalog", response_model=list[FunctionCatalogEntryRead])
+def list_function_catalog(db: Session = Depends(get_db)) -> list[dict]:
+    return FunctionCatalogService(db).list_entries()
 
 
 @router.get("", response_model=list[FunctionContractRead])

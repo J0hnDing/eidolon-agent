@@ -2,11 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from app.services.integration_registry import OPERATIONS, operation_context, operation_index
+from app.services.integration_registry import OPERATIONS
 from app.services.manifest_validator import ManifestValidationError, validate_manifest
-from app.services.skill_plan_service import SkillPlanService
 from app.services.task_dag_service import TaskDagService
 from app.workflows.base import ProjectBuildWorkflowError
+from app.workflows.common.prompts import build_product_manager_prompt
 from app.workflows.single_codex.prompts import build_prompt
 
 
@@ -37,7 +37,6 @@ def github_requirement(**overrides) -> dict:
         "provider": "github",
         "operations": ["github.repository.get", "github.repository.file.read"],
         "resource_scope": {"repositories": ["OpenAI/Eidolon"]},
-        "reason": "Read repository metadata and selected files.",
     }
     value.update(overrides)
     return value
@@ -52,27 +51,35 @@ def test_registry_is_authoritative_and_context_is_selected_only() -> None:
         "github.pull_request.list",
         "github.repository.trending.list",
     }
-    assert all(item["operation"] in OPERATIONS for item in operation_index())
-    context = operation_context(["github.repository.file.read", "unknown"])
-    assert [item["operation"] for item in context] == ["github.repository.file.read"]
-    assert context[0]["input_schema"] == OPERATIONS["github.repository.file.read"].input_schema
-    assert "endpoint_template" not in context[0]
-    assert all(set(item) == {"operation", "title", "description"} for item in operation_index())
+    context = OPERATIONS["github.repository.file.read"].agent_context()
+    assert context["operation"] == "github.repository.file.read"
+    assert context["input_schema"] == OPERATIONS["github.repository.file.read"].input_schema
+    assert "endpoint_template" not in context
 
 
 def test_product_manager_and_single_codex_context_are_minimized(tmp_path) -> None:
-    product_manager_prompt = SkillPlanService().build_prompt("Build a GitHub repository reader.")
-    index_section = product_manager_prompt.split(
-        "Current GitHub integration operation index", 1
-    )[1].split("User Project mode request:", 1)[0]
-    assert "github.repository.get" in index_section
-    assert '"input_schema"' not in index_section
-    assert "endpoint_template" not in index_section
+    product_manager_prompt = build_product_manager_prompt(
+        "write_blueprint_and_permissions",
+        {
+            "intent_prompt": {"refined_prompt": "Build a GitHub repository reader."},
+            "function_catalog_index": [
+                {
+                    "id": "github.repository.get",
+                    "category": "integration",
+                    "title": "Read repository",
+                    "description": "Read repository metadata.",
+                }
+            ],
+        },
+    )
+    assert "github.repository.get" in product_manager_prompt
+    payload_section = product_manager_prompt.rsplit("Payload:", 1)[1]
+    assert '"input_schema"' not in payload_section
+    assert "endpoint_template" not in product_manager_prompt
     single_prompt = build_prompt(
         {
-            "integration_requirements": [
-                github_requirement(operations=["github.repository.get"])
-            ]
+            "functions": ["github.repository.get"],
+            "function_context": [OPERATIONS["github.repository.get"].agent_context()],
         },
         {},
         tmp_path,
@@ -95,8 +102,6 @@ def test_manifest_normalizes_exact_repository_scope() -> None:
         ({"resource_scope": {"repositories": ["openai/*"]}}, "exact owner/repository"),
         ({"resource_scope": {"repositories": ["openai/eidolon", "OpenAI/Eidolon"]}}, "duplicates"),
         ({"resource_scope": {"repositories": []}}, "require exact repository scope"),
-        ({"reason": "x" * 301}, "at most 300"),
-        ({"reason": "line one\nline two"}, "concise user-readable"),
         (
             {
                 "operations": ["github.repository.trending.list"],
@@ -133,12 +138,12 @@ def test_task_dag_rejects_operation_outside_approved_blueprint() -> None:
                 "expected_output_paths": ["skill.py"],
                 "file_write_claims": ["skill.py"],
                 "requires_tests": True,
-                "integration_operation_ids": ["github.issue.list"],
+                "function_ids": ["github.issue.list"],
             }
         ],
     }
-    blueprint = {"integration_requirements": [github_requirement(operations=["github.repository.get"])]}
-    with pytest.raises(ProjectBuildWorkflowError, match="unapproved integration operation"):
+    blueprint = {"functions": ["github.repository.get"]}
+    with pytest.raises(ProjectBuildWorkflowError, match="unapproved function"):
         TaskDagService().validate(task_dag, blueprint)
 
 
@@ -152,20 +157,17 @@ def test_task_dag_must_assign_every_approved_operation() -> None:
                 "expected_output_paths": ["skill.py"],
                 "file_write_claims": ["skill.py"],
                 "requires_tests": True,
-                "integration_operation_ids": [],
+                "function_ids": [],
             }
         ],
     }
-    blueprint = {"integration_requirements": [github_requirement(operations=["github.repository.get"])]}
-    with pytest.raises(ProjectBuildWorkflowError, match="does not assign approved integration operations"):
+    blueprint = {"functions": ["github.repository.get"]}
+    with pytest.raises(ProjectBuildWorkflowError, match="does not assign approved functions"):
         TaskDagService().validate(task_dag, blueprint)
 
 
-def test_settings_routes_are_absent_from_agent_backend_catalogs() -> None:
+def test_settings_routes_are_absent_from_function_catalog_seed() -> None:
     static_root = Path(__file__).resolve().parents[1] / "app" / "static"
-    combined = "\n".join(
-        (static_root / filename).read_text(encoding="utf-8")
-        for filename in ("backend_api_index.json", "backend_api_context.json")
-    )
+    combined = (static_root / "function_catalog_seed.json").read_text(encoding="utf-8")
     assert "/settings/integrations" not in combined
     assert "secret_reference" not in combined

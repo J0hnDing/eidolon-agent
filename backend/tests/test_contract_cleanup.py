@@ -6,7 +6,6 @@ from app.schemas.common import ScheduleStatus, SkillRuntime, SkillStatus
 from app.schemas.manifest import SkillManifest
 from app.schemas.skill import SkillRead
 from app.services.default_permissions import default_web_app_permissions
-from app.services.skill_plan_service import SkillGenerationPlan
 
 
 def test_agent_run_contract_uses_only_task_node_names() -> None:
@@ -25,7 +24,7 @@ def test_status_contracts_do_not_advertise_non_persisted_states() -> None:
 
 def test_runtime_is_the_only_interface_discriminator() -> None:
     assert set(get_args(SkillRuntime)) == {"function", "web_app"}
-    for schema in (SkillGenerationPlan, SkillManifest, SkillRead):
+    for schema in (SkillManifest, SkillRead):
         assert "interface_type" not in schema.model_fields
         assert "tool_ui_schema" not in schema.model_fields
         assert "tool_ui_schema_json" not in schema.model_fields

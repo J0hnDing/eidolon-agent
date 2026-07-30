@@ -205,7 +205,7 @@ class IntegrationService:
             repositories = list(requirement.resource_scope.repositories)
             explanation = (
                 f"Skill {skill.name} requests read-only GitHub integration access for "
-                f"{', '.join(requirement.operations)}. Reason: {requirement.reason} "
+                f"{', '.join(requirement.operations)}. "
                 f"Repository scope: {', '.join(repositories) if repositories else 'not repository-scoped'}. "
                 f"GitHub connection currently available: {'yes' if connection_available else 'no'}. "
                 "Approval authorizes only this skill and unchanged integration contract. It does not reveal the "
@@ -228,7 +228,6 @@ class IntegrationService:
                 reason_json={
                     "provider": requirement.provider,
                     "operations": list(requirement.operations),
-                    "reason": requirement.reason,
                     "read_only": True,
                     "resource_scope": {"repositories": repositories},
                     "connection_available": connection_available,
@@ -277,7 +276,6 @@ class IntegrationService:
             {
                 "provider": requirement.provider,
                 "operations": list(requirement.operations),
-                "reason": requirement.reason,
                 "read_only": True,
                 "resource_scope": requirement.resource_scope.model_dump(mode="json"),
                 "connection_available": connected,

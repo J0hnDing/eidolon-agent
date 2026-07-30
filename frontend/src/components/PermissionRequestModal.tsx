@@ -82,7 +82,6 @@ export default function PermissionRequestModal({
               <div key={`${String(review.provider)}-${index}`}>
                 <p><strong>{String(review.provider)}</strong> · read-only · connection {review.connection_available ? "available" : "unavailable"}</p>
                 <ChipList values={stringList(review.operations)} />
-                <p className="muted">{String(review.reason ?? "")}</p>
                 <p className="muted">Repositories: {repositoriesFromReview(review).join(", ") || "None"}</p>
               </div>
             ))}

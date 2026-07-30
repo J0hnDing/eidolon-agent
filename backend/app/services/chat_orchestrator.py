@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -9,21 +10,17 @@ from app.services.agent_workflow_service import AgentWorkflowService
 from app.services.codex_service import CodexService
 from app.services.direct_chat_service import DirectChatService
 from app.services.permission_service import PermissionService
-from app.services.skill_plan_service import SkillPlanService
 
 
 @dataclass
 class ChatOrchestrator:
     db: Session
     direct_chat_service: DirectChatService | None = None
-    skill_plan_service: SkillPlanService | None = None
     codex_service: CodexService | None = None
 
     def __post_init__(self) -> None:
         if self.direct_chat_service is None:
             self.direct_chat_service = DirectChatService(db=self.db)
-        if self.skill_plan_service is None:
-            self.skill_plan_service = SkillPlanService(db=self.db)
 
     def handle_message(
         self,
@@ -75,19 +72,21 @@ class ChatOrchestrator:
         message: str,
         conversation_id: str | None = None,
     ) -> SkillGenerationRequest:
-        plan = self.skill_plan_service.build_generation_plan(message)
-        plan["project_conversation"] = [{"role": "user", "content": message}]
+        placeholder_name = f"pending_project_{uuid4().hex[:12]}"
+        plan: dict[str, Any] = {
+            "project_conversation": [{"role": "user", "content": message}],
+        }
         if conversation_id:
             plan["frontend_conversation_id"] = conversation_id
         generation_request = SkillGenerationRequest(
             user_message=message,
-            proposed_skill_name=plan["skill_name"],
-            proposed_display_name=plan["display_name"],
+            proposed_skill_name=placeholder_name,
+            proposed_display_name="Pending project",
             plan_json=plan,
-            requested_permissions_json=plan["requested_permissions"],
-            requested_dependencies_json=plan["requested_dependencies"],
-            requested_network_domains_json=plan["requested_network_domains"],
-            risk_level=plan["risk_level"],
+            requested_permissions_json={},
+            requested_dependencies_json=[],
+            requested_network_domains_json=[],
+            risk_level="low",
             status="planned",
         )
         self.db.add(generation_request)
@@ -134,19 +133,14 @@ class ChatOrchestrator:
             for item in conversation
             if isinstance(item, dict)
         )
-        plan = self.skill_plan_service.build_generation_plan(combined_message)
-        plan["project_conversation"] = conversation
-        plan["original_user_message"] = existing_plan.get("original_user_message") or generation_request.user_message
+        plan = {
+            "project_conversation": conversation,
+            "original_user_message": existing_plan.get("original_user_message") or generation_request.user_message,
+        }
         if existing_plan.get("frontend_conversation_id"):
             plan["frontend_conversation_id"] = existing_plan["frontend_conversation_id"]
         generation_request.user_message = combined_message
-        generation_request.proposed_skill_name = plan["skill_name"]
-        generation_request.proposed_display_name = plan["display_name"]
         generation_request.plan_json = plan
-        generation_request.requested_permissions_json = plan["requested_permissions"]
-        generation_request.requested_dependencies_json = plan["requested_dependencies"]
-        generation_request.requested_network_domains_json = plan["requested_network_domains"]
-        generation_request.risk_level = plan["risk_level"]
         generation_request.status = "planned"
         generation_request.error_message = None
         self.db.commit()

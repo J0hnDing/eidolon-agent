@@ -7,7 +7,8 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 - `/chat`: normal chat and project-mode entry point, plus conversation history cleanup by frontend conversation id.
 - `/memory-facts`: explicit user memory CRUD.
 - `/skills`: skill listing/detail, installed-skill enable/disable, proposed skill workflow, runs, validation, install/reject/delete, files, versions, schedules, repair, runtime permissions, and backend-mediated skill Codex calls. Bare skill-record creation is not exposed; user-facing creation must use the controlled proposed-skill workflow.
-- `/functions`: dynamic installed-function discovery and ephemeral run-capability-authenticated invocation. This registry is machine-facing and remains separate from the static trusted backend API catalog.
+- `/functions/catalog`: the unified backend-core, user, and integration function catalog with availability state and reasons for ProductManager and the Functions UI.
+- `/functions`: installed user-function discovery and ephemeral run-capability-authenticated invocation.
 - `/web-apps`: lazy application sessions, instance diagnostics, bounded audit records, explicit stop, and instance-capability-authenticated Codex calls. The host-routed proxy is internal and omitted from OpenAPI.
 - `/settings/integrations/github`: trusted add/replace/status/remove management for the single write-only GitHub credential.
 - hidden integration capability routes: exact function-run and web-app-instance relay endpoints; no operation-specific public proxy or discovery route.
@@ -26,9 +27,9 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 
 Coordinates chat requests. Chat mode returns direct answers. Project mode creates generation requests, sends them through ProductManager intent refinement and plausibility review, and starts build-time approval planning only after ProductManager decides the request is ready to blueprint. If ProductManager asks for clarification, the next Project-mode chat reply is appended to the same generation request. Backend keyword heuristics must not silently create or block skills.
 
-### SkillPlanService and ProjectPlausibilityService
+### ProductManager planning
 
-Use Codex adapters when available to classify project plausibility and generate initial skill plans. Plans select the `function` or `web_app` execution protocol and require the corresponding entrypoint/test files. Fake adapters support tests and local development.
+There is no pre-ProductManager skill-plan service. Project mode creates a minimal pending generation request, then ProductManager refines intent, performs plausibility review, and writes the blueprint and permission plan. The blueprint owns the safe skill identity, runtime, complete function input/output JSON Schemas, selected function ids, integration resource scopes, schedule intent, and acceptance criteria. Fake Codex adapters support deterministic tests and local development.
 
 ### AgentWorkflowService
 
@@ -40,9 +41,7 @@ Workflow persistence and DAG reasoning are separate collaborators. `AgentRunArti
 
 Trusted workflow modules live under `backend/app/workflows/`. Each package owns its executor, Markdown instructions, and prompt composition. `common` owns intent refinement, plausibility review, blueprint generation, permission planning, and workflow selection before dispatch. `task_dag` owns task-DAG planning prompts, Builder/Tester/repair prompts, execution, final end-to-end test authoring, and DAG resume/retry behavior while delegating structural validation and ready-batch calculation to `TaskDagService`. `single_codex` owns the prompt and executor for one Codex planning, build, and test-authoring invocation; any invocation or validation error is terminal for that run, and its resume/retry endpoints cannot invoke Builder again. A separate new single-Codex build atomically stages an obsolete proposed folder before creating a clean workspace, so sandbox-owned cache ACLs do not block replacement. Both workflows use the same deterministic backend scan/manifest/package/test validator. Unknown workflow names are rejected by the registry.
 
-When ProductManager returns task DAG JSON, the backend exposes the static `backend/app/static/backend_api_index.json` file containing id, title, and description only. ProductManager may add `backend_api_ids` to a task node. Before Builder runs that node, the backend resolves those ids from the static `backend/app/static/backend_api_context.json` file and appends only the selected entries to Builder input as `backend_api_context`. Scheduling is not a Builder backend API; recurring intent belongs in `manifest.json` schedule metadata.
-
-The typed GitHub operation registry follows the same selected-context principle without duplicating the static backend API files. ProductManager receives only registry-derived operation id/title/description and may add `integration_operation_ids` to a task node. Builder and Tester receive detailed registry context only for those ids. The single-Codex workflow receives only operations selected in the approved blueprint.
+`FunctionCatalogService` persists one catalog at `runtime/function_catalog.json`, seeded with checked-in backend-core definitions and refreshed from the typed integration registry plus installed user-function contracts. ProductManager receives only currently available entries as id/category/title/description/risk. The blueprint selects function ids. A Task DAG assigns those approved ids to nodes through `function_ids`; the backend resolves full schemas and invocation guidance into that node's `function_context`. The single-Codex workflow receives full context for every blueprint-selected function. Disabled user skills, invalid or stale function contracts, missing runtime approval, and disconnected integrations remain visible in the UI but are not offered to ProductManager.
 
 The project-build workflow registry is backend-managed and contains only trusted checked-in executors. ProductManager selects a registered name; it cannot supply executable workflow code.
 
@@ -66,7 +65,7 @@ Persists and validates unified invocation choices against the live App Server mo
 
 ### PermissionService
 
-Deterministically reviews permissions, dependencies, and declared function relationships. It creates approval requests, refreshes stale pending requests, approves/denies requests, detects permission expansion, checks install/run eligibility, and syncs waiting agent steps. Build-time and runtime reviews show every declared function, why the caller needs it, target risk/availability, which low-risk relationships need no extra approval, and which medium/high-risk relationships have separate caller-target requests. The permission router resumes a linked generation run after a build-time approval regardless of whether the decision came from Chat or the global Approval Requests page. Runtime `permissions.codex.call_response` is granted by default. Runtime `permissions.codex.internet_access` is supported only when the skill also has approved runtime `network` entries. Other Codex permission fields are blocked in this milestone.
+Deterministically reviews permissions, dependencies, and declared function relationships. It creates approval requests, refreshes stale pending requests, approves/denies requests, detects permission expansion, checks install/run eligibility, and syncs waiting agent steps. Build-time and runtime reviews show every declared target's risk and availability, which low-risk relationships need no extra approval, and which medium/high-risk relationships have separate caller-target requests. The permission router resumes a linked generation run after a build-time approval regardless of whether the decision came from Chat or the global Approval Requests page. Runtime `permissions.codex.call_response` is granted by default. Runtime `permissions.codex.internet_access` is supported only when the skill also has approved runtime `network` entries. Other Codex permission fields are blocked in this milestone.
 
 ### FunctionRegistryService
 
@@ -118,11 +117,11 @@ Request body:
 
 Backend checks installed/enabled status, `runtime = function`, runtime approval, manifest validity, `permissions.codex.call_response`, `permissions.codex.internet_access`, and whether requested Codex internet access is backed by approved runtime `network` entries. Web applications cannot use this skill-id route; they use the instance-scoped trusted helper and `/web-apps/capabilities/codex`. Shell access remains prohibited; skills must not call the Codex CLI directly.
 
-Current PM-visible backend API catalog entries:
+Current backend-core function catalog entries:
 
-- `1`: Skill Codex Call API.
+- `backend.codex.call`: bounded Skill Codex call.
 
-Inferred but not added yet: runtime cache helper API, runtime permission status API, skill run metadata API, and memory lookup API. These are not PM-visible until their contracts and permissions are designed.
+New backend-core functions are not PM-visible until their catalog contracts and permissions are designed.
 
 ### SkillVersionService
 

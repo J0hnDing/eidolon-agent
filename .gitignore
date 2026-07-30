@@ -8,4 +8,5 @@ node_modules/
 dist/
 *.tsbuildinfo
 .pytest_tmp/
+.pytest_tmp_*/
 /runtime/

@@ -34,14 +34,6 @@ from app.services.project_plausibility import (
     default_project_plausibility_adapter,
 )
 from app.services.proposed_skill_service import ProposedSkillService
-from app.services.skill_plan_service import (
-    FakeSkillPlanAdapter,
-    RealSkillPlanAdapter,
-    SkillGenerationPlan,
-    SkillPlanError,
-    SkillPlanService,
-    parse_json_object,
-)
 
 
 @pytest.fixture
@@ -117,18 +109,53 @@ class FixedPlausibilityAdapter:
         return self.result
 
 
-class FixedSkillPlanAdapter:
+class FixedBlueprintAdapter(FakeCodexAdapter):
     def __init__(self, plan: dict | None = None) -> None:
         self.plan = plan or skill_plan()
         self.called = False
-        self.prompt = ""
-        self.message = ""
 
-    def build_plan(self, prompt: str, message: str) -> dict:
+    def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+        if plan.get("codex_task") != "product_manager_write_blueprint_and_permissions":
+            return super().generate(prompt, output_dir, plan)
         self.called = True
-        self.prompt = prompt
-        self.message = message
-        return dict(self.plan)
+        source = self.plan
+        permission_plan = {
+            "build_time": {
+                "internet_research": bool(
+                    source.get("requested_network_domains") or source.get("requested_dependencies")
+                ),
+                "dependencies": list(source.get("requested_dependencies", [])),
+            },
+            "runtime": {
+                **dict(source["requested_permissions"]),
+                "dependencies": list(source.get("requested_dependencies", [])),
+            },
+        }
+        blueprint = {
+            "goal": source["goal"],
+            "skill_name": source["skill_name"],
+            "display_name": source["display_name"],
+            "runtime": source.get("runtime", "function"),
+            "input_schema": source.get("input_schema"),
+            "output_schema": source.get("output_schema"),
+            "expected_behavior": ["Implement the requested capability."],
+            "functions": [],
+            "integration_scopes": {},
+            "schedule": source.get("schedule"),
+            "acceptance_criteria": ["manifest.json is valid", "tests pass"],
+        }
+        return subprocess.CompletedProcess(
+            args=["fixed-blueprint"],
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "build_workflow": "task_dag",
+                    "blueprint": blueprint,
+                    "permission_plan": permission_plan,
+                }
+            ),
+            stderr="",
+        )
 
 
 class RecordingDirectChatAdapter:
@@ -146,6 +173,16 @@ class RecordingDirectChatAdapter:
 
 
 def approve_build_time_permissions(db_session: Session, generation_request: SkillGenerationRequest) -> None:
+    if "skill_name" not in generation_request.plan_json:
+        prepared_plan = skill_plan()
+        generation_request.plan_json = prepared_plan
+        generation_request.proposed_skill_name = prepared_plan["skill_name"]
+        generation_request.proposed_display_name = prepared_plan["display_name"]
+        generation_request.requested_permissions_json = prepared_plan["requested_permissions"]
+        generation_request.requested_dependencies_json = prepared_plan["requested_dependencies"]
+        generation_request.requested_network_domains_json = prepared_plan["requested_network_domains"]
+        generation_request.risk_level = prepared_plan["risk_level"]
+        db_session.commit()
     permission_service = PermissionService(db_session)
     request = permission_service.create_build_time_request(generation_request)
     permission_service.approve_request(request)
@@ -189,34 +226,6 @@ def skill_plan(**overrides) -> dict:
     return plan
 
 
-def test_skill_plan_requires_manifest_but_not_readme_or_optional_instructions() -> None:
-    minimal_files = ["manifest.json", "skill.py", "tests/test_skill.py"]
-
-    parsed = SkillGenerationPlan.model_validate(skill_plan(files_to_generate=minimal_files))
-
-    assert parsed.files_to_generate == minimal_files
-    with pytest.raises(ValueError, match="manifest.json"):
-        SkillGenerationPlan.model_validate(
-            skill_plan(files_to_generate=["skill.py", "tests/test_skill.py"])
-        )
-
-
-def test_fake_skill_plan_names_github_trending_request_and_keeps_weekly_schedule() -> None:
-    plan = SkillPlanService(adapter=FakeSkillPlanAdapter()).build_generation_plan(
-        "Build a weekly skill that parses the top 10 trending GitHub projects and lets Codex analyze each of them."
-    )
-
-    assert plan["skill_name"] == "weekly_github_trending_insights"
-    assert plan["display_name"] == "Weekly GitHub Trending Insights"
-    assert plan["schedule"] == {
-        "type": "weekly",
-        "day": "monday",
-        "time": "09:00",
-        "timezone": "America/Toronto",
-        "input": {},
-    }
-
-
 def test_chat_mode_returns_direct_answer(db_session: Session) -> None:
     adapter = RecordingDirectChatAdapter("Inflation is a broad rise in prices.")
     response = ChatOrchestrator(
@@ -247,7 +256,7 @@ def test_chat_mode_does_not_create_skill_proposal_from_reusable_request(db_sessi
 
 
 def test_project_mode_creates_skill_proposal(db_session: Session) -> None:
-    plan_adapter = FixedSkillPlanAdapter(
+    codex_adapter = FixedBlueprintAdapter(
         skill_plan(
             skill_name="ai_infra_news_digest",
             display_name="Ai Infra News Digest",
@@ -265,7 +274,7 @@ def test_project_mode_creates_skill_proposal(db_session: Session) -> None:
     )
     response = ChatOrchestrator(
         db_session,
-        skill_plan_service=SkillPlanService(adapter=plan_adapter),
+        codex_service=CodexService(db_session, adapter=codex_adapter),
     ).handle_message(
         "Create a reusable skill that summarizes AI chip news from Nvidia and AMD.",
         mode="project",
@@ -277,19 +286,18 @@ def test_project_mode_creates_skill_proposal(db_session: Session) -> None:
     assert generation_request.status == "awaiting_approval"
     assert generation_request.plan_json["skill_name"] == "ai_infra_news_digest"
     assert generation_request.plan_json["runtime"] == "function"
-    assert plan_adapter.called is True
+    assert codex_adapter.called is True
     assert permission_request.request_scope == "build_time"
     assert permission_request.status == "pending"
 
 
 def test_chat_response_model_serializes_generation_request_fields(db_session: Session) -> None:
+    codex_adapter = FixedBlueprintAdapter(
+        skill_plan(skill_name="ai_infra_news_digest", display_name="Ai Infra News Digest")
+    )
     response = ChatOrchestrator(
         db_session,
-        skill_plan_service=SkillPlanService(
-            adapter=FixedSkillPlanAdapter(
-                skill_plan(skill_name="ai_infra_news_digest", display_name="Ai Infra News Digest")
-            )
-        ),
+        codex_service=CodexService(db_session, adapter=codex_adapter),
     ).handle_message(
         "Create a reusable skill that summarizes AI chip news from Nvidia and AMD.",
         mode="project",
@@ -303,7 +311,6 @@ def test_chat_response_model_serializes_generation_request_fields(db_session: Se
 
 
 def test_project_mode_uses_product_manager_review_before_blueprint(db_session: Session) -> None:
-    plan_adapter = FixedSkillPlanAdapter()
     codex_adapter = FakeCodexAdapter()
     tasks: list[str] = []
     prompts: dict[str, str] = {}
@@ -317,7 +324,6 @@ def test_project_mode_uses_product_manager_review_before_blueprint(db_session: S
 
     response = ChatOrchestrator(
         db_session,
-        skill_plan_service=SkillPlanService(adapter=plan_adapter),
         codex_service=CodexService(db_session, adapter=RecordingAdapter()),
     ).handle_message(
         "Create a reusable skill that summarizes AI chip news from Nvidia and AMD.",
@@ -325,7 +331,6 @@ def test_project_mode_uses_product_manager_review_before_blueprint(db_session: S
     )
 
     generation_request = response["generation_request"]
-    assert plan_adapter.called is True
     assert tasks[:3] == [
         "product_manager_refine_intent",
         "product_manager_build_review",
@@ -467,27 +472,25 @@ def test_project_mode_does_not_use_backend_unsafe_keyword_heuristic(db_session: 
 
 
 def test_generation_request_contains_plan_permissions_and_dependencies(db_session: Session) -> None:
-    generation_request = ChatOrchestrator(
-        db_session,
-        skill_plan_service=SkillPlanService(
-            adapter=FixedSkillPlanAdapter(
-                skill_plan(
-                    requested_permissions={
-                        "network": ["nvidia.com", "amd.com"],
-                        "filesystem_read": [],
-                        "filesystem_write": ["./cache"],
-                        "secrets": [],
-                        "shell": False,
-                    },
-                    requested_network_domains=["nvidia.com", "amd.com"],
-                    requested_dependencies=["requests"],
-                    risk_level="medium",
-                )
-            )
-        ),
-    ).create_generation_request(
-        "Create an automation for tracking Nvidia and AMD news."
+    codex_adapter = FixedBlueprintAdapter(
+        skill_plan(
+            requested_permissions={
+                "network": ["nvidia.com", "amd.com"],
+                "filesystem_read": [],
+                "filesystem_write": ["./cache"],
+                "secrets": [],
+                "shell": False,
+            },
+            requested_network_domains=["nvidia.com", "amd.com"],
+            requested_dependencies=["requests"],
+            risk_level="medium",
+        )
     )
+    response = ChatOrchestrator(
+        db_session,
+        codex_service=CodexService(db_session, adapter=codex_adapter),
+    ).handle_message("Create an automation for tracking Nvidia and AMD news.", mode="project")
+    generation_request = response["generation_request"]
 
     assert generation_request.plan_json["files_to_generate"]
     assert generation_request.requested_permissions_json["network"]
@@ -496,21 +499,20 @@ def test_generation_request_contains_plan_permissions_and_dependencies(db_sessio
 
 
 def test_build_time_permission_allows_skill_own_cache_read(db_session: Session) -> None:
+    codex_adapter = FixedBlueprintAdapter(
+        skill_plan(
+            requested_permissions={
+                "network": [],
+                "filesystem_read": ["./cache"],
+                "filesystem_write": ["./cache"],
+                "secrets": [],
+                "shell": False,
+            },
+        )
+    )
     response = ChatOrchestrator(
         db_session,
-        skill_plan_service=SkillPlanService(
-            adapter=FixedSkillPlanAdapter(
-                skill_plan(
-                    requested_permissions={
-                        "network": [],
-                        "filesystem_read": ["./cache"],
-                        "filesystem_write": ["./cache"],
-                        "secrets": [],
-                        "shell": False,
-                    },
-                )
-            )
-        ),
+        codex_service=CodexService(db_session, adapter=codex_adapter),
     ).handle_message("Create a local game tool with cache-backed state.", mode="project")
 
     permission_request = response["permission_request"]
@@ -520,21 +522,20 @@ def test_build_time_permission_allows_skill_own_cache_read(db_session: Session) 
 
 
 def test_stale_blocked_build_time_request_is_refreshed_before_approval(db_session: Session) -> None:
+    codex_adapter = FixedBlueprintAdapter(
+        skill_plan(
+            requested_permissions={
+                "network": [],
+                "filesystem_read": ["./cache"],
+                "filesystem_write": ["./cache"],
+                "secrets": [],
+                "shell": False,
+            },
+        )
+    )
     response = ChatOrchestrator(
         db_session,
-        skill_plan_service=SkillPlanService(
-            adapter=FixedSkillPlanAdapter(
-                skill_plan(
-                    requested_permissions={
-                        "network": [],
-                        "filesystem_read": ["./cache"],
-                        "filesystem_write": ["./cache"],
-                        "secrets": [],
-                        "shell": False,
-                    },
-                )
-            )
-        ),
+        codex_service=CodexService(db_session, adapter=codex_adapter),
     ).handle_message("Create a local game tool with cache-backed state.", mode="project")
     permission_request = response["permission_request"]
     permission_request.risk_level = "blocked"
@@ -546,8 +547,8 @@ def test_stale_blocked_build_time_request_is_refreshed_before_approval(db_sessio
     assert approved.risk_level == "low"
 
 
-def test_skill_plan_service_uses_adapter_decided_runtime_and_io_schemas() -> None:
-    adapter = FixedSkillPlanAdapter(
+def test_product_manager_blueprint_owns_runtime_and_io_schemas(db_session: Session) -> None:
+    adapter = FixedBlueprintAdapter(
         skill_plan(
             skill_name="calculator_tool",
             display_name="Calculator Tool",
@@ -564,7 +565,11 @@ def test_skill_plan_service_uses_adapter_decided_runtime_and_io_schemas() -> Non
         )
     )
 
-    plan = SkillPlanService(adapter=adapter).build_generation_plan("Build a calculator tool.")
+    response = ChatOrchestrator(
+        db_session,
+        codex_service=CodexService(db_session, adapter=adapter),
+    ).handle_message("Build a calculator tool.", mode="project")
+    plan = response["generation_request"].plan_json
 
     assert adapter.called is True
     assert plan["runtime"] == "function"
@@ -849,8 +854,9 @@ def test_generated_skill_with_optional_instructions_runs_tests_but_not_skill_tas
     generation_request = ChatOrchestrator(db_session).create_generation_request(
         "Create a workflow skill with reusable instructions."
     )
-    generation_request.plan_json["files_to_generate"].append("SKILL.md")
     approve_build_time_permissions(db_session, generation_request)
+    generation_request.plan_json["files_to_generate"].append("SKILL.md")
+    db_session.commit()
 
     skill, validation = CodexService(
         db_session,
@@ -1236,54 +1242,6 @@ def test_real_direct_chat_adapter_uses_read_only_codex_exec(
     assert captured["kwargs"]["cwd"] == tmp_path
     assert captured["kwargs"]["input"] == "Answer normally."
     assert captured["kwargs"]["encoding"] == "utf-8"
-
-
-def test_real_skill_plan_adapter_uses_read_only_codex_exec(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict = {}
-
-    def fake_run(command, **kwargs):
-        captured["command"] = command
-        captured["kwargs"] = kwargs
-        return subprocess.CompletedProcess(args=command, returncode=0, stdout=json.dumps(skill_plan()), stderr="")
-
-    monkeypatch.setattr("app.services.skill_plan_service.subprocess.run", fake_run)
-
-    adapter = RealSkillPlanAdapter(command="codex", timeout_seconds=10, workdir=tmp_path)
-    adapter.build_plan("Return a plan.", "Build a skill.")
-
-    command = captured["command"]
-    assert command[0] == "codex"
-    assert command.index("--ask-for-approval") < command.index("exec")
-    assert command[command.index("-C") + 1] == str(tmp_path)
-    assert command[command.index("--sandbox") + 1] == "read-only"
-    assert command[-1] == "-"
-    assert captured["kwargs"]["input"] == "Return a plan."
-    assert captured["kwargs"]["encoding"] == "utf-8"
-
-
-def test_skill_plan_parser_wraps_malformed_json() -> None:
-    with pytest.raises(SkillPlanError, match="malformed JSON"):
-        parse_json_object('noise {"goal": "Build", "skill_name": "bad" trailing} noise')
-
-
-def test_chat_route_returns_400_for_skill_plan_error(
-    monkeypatch: pytest.MonkeyPatch,
-    db_session: Session,
-) -> None:
-    def raise_plan_error(self, *args, **kwargs):
-        raise SkillPlanError("Codex returned malformed JSON for the skill generation plan")
-
-    monkeypatch.setattr("app.services.chat_orchestrator.ChatOrchestrator.handle_message", raise_plan_error)
-
-    with pytest.raises(HTTPException) as exc_info:
-        chat_router.chat(ChatRequest(message="Build a wordle game", mode="project"), db_session)
-
-    assert exc_info.value.status_code == 400
-    assert "Could not create a project plan" in exc_info.value.detail
-    assert "malformed JSON" in exc_info.value.detail
 
 
 def test_chat_route_returns_400_for_agent_workflow_error(

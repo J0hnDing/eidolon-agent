@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from app.models import Skill, SkillGenerationRequest
+from app.services.function_catalog_service import FunctionCatalogService
 from app.workflows.base import SINGLE_CODEX_WORKFLOW, ProjectBuildWorkflowError
 from app.workflows.single_codex.prompts import build_prompt
 
@@ -40,6 +41,10 @@ class SingleCodexBuildWorkflow:
                 "action": "single_codex_build",
                 "blueprint_json": agent_run.blueprint_json,
                 "permission_plan": permission_plan,
+                "function_context": FunctionCatalogService(
+                    service.db,
+                    project_root=service.project_root,
+                ).context((agent_run.blueprint_json or {}).get("functions", [])),
             },
             logs="Codex is handling planning, implementation, and testing in one controlled skill workspace.",
         )

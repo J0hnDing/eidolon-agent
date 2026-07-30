@@ -26,6 +26,7 @@ from app.models import (
     SkillSchedule,
     SkillVersion,
 )
+from app.schemas.manifest import SkillManifest
 from app.schemas.proposed_skill import ProposedSkillValidationRead, SkillFileRead
 from app.services.dependency_environment import (
     DEPENDENCY_STATE_FILE,
@@ -160,13 +161,13 @@ class ProposedSkillService:
                     skill.instructions_path = manifest.instructions_path
                     skill.input_schema_json = manifest.input_schema
                     skill.output_schema_json = manifest.output_schema
-                    skill.function_requirements_json = [
-                        item.model_dump(mode="json") for item in manifest.function_requirements
-                    ]
+                    skill.function_requirements_json = list(manifest.function_requirements)
                     skill.integration_requirements_json = [
                         item.model_dump(mode="json") for item in manifest.integration_requirements
                     ]
                     skill.installed_path = self._relative_path(active_dir)
+                    if self._ensure_synced_active_version(skill, active_dir, manifest):
+                        changed = True
                     changed = True
                 continue
             skill = Skill(
@@ -179,9 +180,7 @@ class ProposedSkillService:
                 instructions_path=manifest.instructions_path,
                 input_schema_json=manifest.input_schema,
                 output_schema_json=manifest.output_schema,
-                function_requirements_json=[
-                    item.model_dump(mode="json") for item in manifest.function_requirements
-                ],
+                function_requirements_json=list(manifest.function_requirements),
                 integration_requirements_json=[
                     item.model_dump(mode="json") for item in manifest.integration_requirements
                 ],
@@ -189,9 +188,47 @@ class ProposedSkillService:
                 enabled=False,
             )
             self.db.add(skill)
+            self.db.flush()
+            self._ensure_synced_active_version(skill, active_dir, manifest)
             changed = True
         if changed:
             self.db.commit()
+
+    def _ensure_synced_active_version(
+        self,
+        skill: Skill,
+        active_dir: Path,
+        manifest: SkillManifest,
+    ) -> bool:
+        if skill.active_version_id is not None:
+            return False
+        version_name = active_dir.name if active_dir.parent.name == "versions" else "v1"
+        version = self.db.scalar(
+            select(SkillVersion)
+            .where(SkillVersion.skill_id == skill.id)
+            .where(SkillVersion.version == version_name)
+        )
+        manifest_json = manifest.model_dump(mode="json")
+        if version is None:
+            folder_path = self._relative_path(active_dir)
+            version = SkillVersion(
+                skill_id=skill.id,
+                version=version_name,
+                status="active",
+                folder_path=folder_path,
+                manifest_json=manifest_json,
+                code_snapshot_path=folder_path,
+                created_by="system",
+                permission_fingerprint=self._permission_fingerprint(manifest_json),
+                test_status="not_run",
+                validation_status="valid",
+            )
+            self.db.add(version)
+            self.db.flush()
+        else:
+            version.status = "active"
+        skill.active_version_id = version.id
+        return True
 
     def read_skill_files(self, skill: Skill) -> list[SkillFileRead]:
         skill_dir = self.skill_dir_for_record(skill)
@@ -317,9 +354,7 @@ class ProposedSkillService:
         skill.instructions_path = manifest.instructions_path
         skill.input_schema_json = manifest.input_schema
         skill.output_schema_json = manifest.output_schema
-        skill.function_requirements_json = [
-            item.model_dump(mode="json") for item in manifest.function_requirements
-        ]
+        skill.function_requirements_json = list(manifest.function_requirements)
         skill.integration_requirements_json = [
             item.model_dump(mode="json") for item in manifest.integration_requirements
         ]
@@ -341,6 +376,9 @@ class ProposedSkillService:
             self._remove_tree_best_effort(proposed_trash)
         if displaced_install is not None:
             self._remove_tree_best_effort(displaced_install[1])
+        from app.services.function_catalog_service import FunctionCatalogService
+
+        FunctionCatalogService(self.db, project_root=self.project_root).register_user_function(skill)
         return skill
 
     def reject_proposed_skill(self, skill: Skill) -> None:
@@ -406,6 +444,9 @@ class ProposedSkillService:
                 agent_run.skill_id = None
             self.db.delete(skill)
             self.db.commit()
+            from app.services.function_catalog_service import FunctionCatalogService
+
+            FunctionCatalogService(self.db, project_root=self.project_root).remove_user_function(skill.name)
         except Exception:
             self.db.rollback()
             for original, quarantined in reversed(staged_trees):

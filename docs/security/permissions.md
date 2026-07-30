@@ -20,7 +20,7 @@ Runtime approval is based on the actual generated `manifest.json`. Installation 
 
 Declared `function_requirements` are shown during build-time and runtime review but are not permissions inherited from the target. Low-risk targets need no additional caller approval. Medium- and high-risk targets create a separate `function_access` approval tied to the caller and target. That approval is reusable only while the target risk, permissions, dependencies, and JSON callable schemas keep the same backend fingerprint. It never overrides a disabled target, missing runtime approval, unsupported permission, or blocked platform policy.
 
-GitHub connection and skill authorization are separate decisions. Every actual-manifest `integration_requirements` entry creates or reuses a separate, never-automatic `integration_access` review showing read-only operations, reason, exact repositories, and connection availability. Its fingerprint includes provider, operations, normalized scope, and registry contract versions. Expansion or account identity change requires reapproval. See [GitHub integration capability](../integrations/github.md).
+GitHub connection and skill authorization are separate decisions. Every actual-manifest `integration_requirements` entry creates or reuses a separate, never-automatic `integration_access` review showing read-only operations, exact repositories, and connection availability. Its fingerprint includes provider, operations, normalized scope, and registry contract versions. Expansion or account identity change requires reapproval. See [GitHub integration capability](../integrations/github.md).
 
 ### Schedule
 

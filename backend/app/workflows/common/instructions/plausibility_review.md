@@ -10,7 +10,7 @@ Your only job:
 
 Blocked Permissions under any condition:
 - Shell, subprocesses, arbitrary commands
-- Calling codex cli directly without using backend API during runtime.
+- Calling Codex CLI directly instead of the backend-core catalog function during runtime.
 - Secrets and private credentials
 - Arbitrary filesystem access or deletion
 - Wildcard/unrestricted network access

@@ -14,7 +14,7 @@ interface TaskDagNode {
   depends_on?: string[];
   expected_output_paths?: string[];
   file_write_claims?: string[];
-  backend_api_ids?: number[];
+  function_ids?: string[];
 }
 
 interface TaskDagEdge {
@@ -511,8 +511,8 @@ function TaskDagView({
                   <dd>{formatList(node.file_write_claims)}</dd>
                 </div>
                 <div>
-                  <dt>Backend APIs</dt>
-                  <dd>{formatList((node.backend_api_ids ?? []).map(String))}</dd>
+                  <dt>Functions</dt>
+                  <dd>{formatList(node.function_ids)}</dd>
                 </div>
                 <div>
                   <dt>Codex Tokens</dt>

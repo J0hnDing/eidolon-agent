@@ -8,9 +8,9 @@ Application skill definitions:
 - `runtime=function`: bounded one-shot Python execution through JSON stdin/stdout.
 - `runtime=web_app`: a persistent, importable ASGI application such as `app:app` that owns its HTML, CSS, JavaScript, interaction, state, and domain logic inside the skill package.
 - Runtime alone determines interface exposure: `web_app` skills appear in Applications; `function` skills have no dedicated interface surface in this milestone.
-- Installed functions are discovered through a dynamic backend Function registry that is separate from the static trusted backend API catalog.
-- A caller may use a registry function only when the blueprint and manifest explicitly declare its exact name and why it is needed.
-- `integration_operation_index` is a concise backend-owned GitHub operation index. Select only operation ids from it and exact repository scope; it contains no schemas, endpoints, credentials, or Settings routes.
+- `function_catalog_index` is the backend-owned list of currently available backend-core, user, and integration functions.
+- Select functions only by exact `id` from that catalog. Selection does not grant runtime authorization.
+- Integration functions require exact provider resource scope in `integration_scopes`; credentials, endpoints, and secret-store details are never shown.
 - A web_app may create HTML, CSS, and JavaScript only inside its own skill package. It must not create or modify Eidolon frontend source.
 
 Your responsibilities:
@@ -19,6 +19,8 @@ Your responsibilities:
 - Choose the backend build workflow in the top-level `build_workflow` field. Use `single_codex` for a small or medium self-contained skill that Codex can plan, build, and test in one controlled workspace. Use `task_dag` when the build needs independently retryable tasks, explicit dependency boundaries, or staged integration.
 - Do not place `build_workflow` inside `blueprint`; it is backend routing information and is not part of `blueprint.json`.
 - Select `runtime=web_app` only when the request needs a self-rendered interactive application. Otherwise use `runtime=function`.
+- For `runtime=function`, define complete object-shaped `input_schema` and `output_schema` JSON Schemas in the blueprint. These schemas are the callable contract and are not delegated to Builder.
+- Put every needed backend-core, user, or integration function id in `functions`. Do not add explanations or reason fields.
 - If a function skill needs recurring execution, include intended schedule metadata in the blueprint as manifest intent. Web applications use `schedule: null` because persistent services are not bounded scheduled runs.
 - Do not include default-allowed permissions in the returned permission plan. The backend appends them after any required approval.
 
@@ -46,22 +48,15 @@ Expected JSON syntax:
   "blueprint": {
     "goal": "string",
     "skill_name": "safe_name",
+    "display_name": "Human readable name",
     "runtime": "function|web_app",
+    "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+    "output_schema": {"type": "object", "properties": {}, "additionalProperties": false},
     "expected_behavior": ["This should be detailed user experience"],
-    "function_requirements": [
-      {
-        "name": "installed_function_name",
-        "reason": "Why this caller needs the function"
-      }
-    ],
-    "integration_requirements": [
-      {
-        "provider": "github",
-        "operations": ["github.repository.get"],
-        "resource_scope": {"repositories": ["owner/repository"]},
-        "reason": "Why this skill needs these read-only operations"
-      }
-    ],
+    "functions": ["exact.catalog.function.id"],
+    "integration_scopes": {
+      "github": {"repositories": ["owner/repository"]}
+    },
     "schedule": {
       "type": "daily",
       "time": "21:00"

@@ -114,13 +114,6 @@ class ManifestSchedule(BaseModel):
         return self
 
 
-class ManifestFunctionRequirement(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
-    reason: str = Field(min_length=1, max_length=1000)
-
-
 class ManifestIntegrationResourceScope(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -153,15 +146,6 @@ class ManifestIntegrationRequirement(BaseModel):
     provider: Literal["github"]
     operations: list[str] = Field(min_length=1, max_length=20)
     resource_scope: ManifestIntegrationResourceScope = Field(default_factory=ManifestIntegrationResourceScope)
-    reason: str = Field(min_length=1, max_length=300)
-
-    @field_validator("reason")
-    @classmethod
-    def validate_reason(cls, reason: str) -> str:
-        normalized = reason.strip()
-        if not normalized or any(character in normalized for character in "\r\n"):
-            raise ValueError("integration reason must be concise user-readable text")
-        return normalized
 
     @model_validator(mode="after")
     def validate_requirement(self) -> "ManifestIntegrationRequirement":
@@ -198,7 +182,7 @@ class SkillManifest(BaseModel):
     instructions_path: str | None = Field(default=None, min_length=1)
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
-    function_requirements: list[ManifestFunctionRequirement] = Field(default_factory=list)
+    function_requirements: list[str] = Field(default_factory=list)
     integration_requirements: list[ManifestIntegrationRequirement] = Field(default_factory=list)
     dependencies: list[str] = Field(default_factory=list)
     permissions: ManifestPermissions
@@ -262,12 +246,19 @@ class SkillManifest(BaseModel):
             raise ValueError(f"invalid JSON Schema: {exc.message}") from exc
         return schema
 
+    @field_validator("function_requirements")
+    @classmethod
+    def validate_function_requirements(cls, requirements: list[str]) -> list[str]:
+        for requirement in requirements:
+            if re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", requirement) is None:
+                raise ValueError("function requirements must contain installed function names")
+        return requirements
+
     @model_validator(mode="after")
     def validate_skill_contract(self) -> "SkillManifest":
-        requirement_names = [requirement.name for requirement in self.function_requirements]
-        if len(requirement_names) != len(set(requirement_names)):
+        if len(self.function_requirements) != len(set(self.function_requirements)):
             raise ValueError("function_requirements cannot contain duplicate function names")
-        if self.name in requirement_names:
+        if self.name in self.function_requirements:
             raise ValueError("a skill cannot require itself as a function")
         providers = [requirement.provider for requirement in self.integration_requirements]
         if len(providers) != len(set(providers)):

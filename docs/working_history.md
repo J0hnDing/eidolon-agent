@@ -1,7 +1,6 @@
 ## 2026-07-18 00:36 — Eidolon Rename And Relocation Hardening
 
 - Category: bugfix
-- Related TODOs: TODO-014
 - Area: unknown
 
 ### Summary
@@ -15,7 +14,6 @@ Automatic memory selection, memory-aware responses, outcome feedback, and contro
 ## 2026-07-17 02:51 — Function Registry And Risk-Based Cross-Skill Invocation
 
 - Category: feature
-- Related TODOs: TODO-010, TODO-013
 - Area: unknown
 
 ### Summary
@@ -29,7 +27,6 @@ Nested function calls are intentionally rejected and tracked in TODO-013. Legacy
 ## 2026-07-17 00:00 — Web Application Open And Modal Reliability
 
 - Category: bugfix
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -43,7 +40,6 @@ Concurrent session opens from separate browser contexts still use the backend op
 ## 2026-07-16 23:26 — Exact Agent Transcripts And Backend Step Identity
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -57,7 +53,6 @@ Agent Run 1 ProductManager outputs for intent refinement and plausibility review
 ## 2026-07-16 21:47 — Pre-Build Dependency Provisioning
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -71,7 +66,6 @@ Dependency provisioning currently applies to new Project builds; update and repa
 ## 2026-07-16 14:39 — Action-Specific Codex Hard Timeouts
 
 - Category: feature
-- Related TODOs: TODO-012
 - Area: unknown
 
 ### Summary
@@ -85,7 +79,6 @@ Progress-aware idle timeout, whole-workflow execution budgets, streamed partial 
 ## 2026-07-16 11:55 — Runtime-Only Interface Contract
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -99,7 +92,6 @@ This change intentionally removed the prior function-facing interface; the later
 ## 2026-07-16 11:44 — Evidence-Based Static Capability Scanning
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -113,7 +105,6 @@ The deliberately passive scanner may miss dynamic behavior; the runtime sandbox 
 ## 2026-07-16 11:19 — Terminal Single-Codex Error Handling
 
 - Category: bugfix
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -127,7 +118,6 @@ Existing failed run and generated-package records remain historical and are not 
 ## 2026-07-16 10:49 — Precise Network Import Capability Scanning
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -141,7 +131,6 @@ The scanner remains a bounded heuristic and does not infer behavior hidden behin
 ## 2026-07-16 03:59 — Project Approval And Skill Lifecycle E2E Recovery
 
 - Category: bugfix
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -155,7 +144,6 @@ None known.
 ## 2026-07-16 01:59 — First-Class Sandboxed Web Application Skills
 
 - Category: feature
-- Related TODOs: TODO-010
 - Area: unknown
 
 ### Summary
@@ -169,7 +157,6 @@ Domain-level Docker egress enforcement remains deferred in TODO-010. Function re
 ## 2026-07-15 22:23 — Executable-Only Skill Contract
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -183,7 +170,6 @@ None known.
 ## 2026-07-14 23:02 — Backend Service And Frontend Page Decomposition
 
 - Category: refactor
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -197,7 +183,6 @@ Update and repair orchestration still shares the main workflow service, and some
 ## 2026-07-14 01:06 — Skill Exit-Code Error Summaries
 
 - Category: bugfix
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -211,7 +196,6 @@ Exit codes identify the terminating condition but cannot always identify the ext
 ## 2026-07-14 01:35 — Deterministic Final Validation and Static Capability Scan
 
 - Category: feature
-- Related TODOs: TODO-001
 - Area: unknown
 
 ### Summary
@@ -225,7 +209,6 @@ The static scanner is intentionally heuristic and cannot prove the absence of dy
 ## 2026-07-14 00:20 — Runtime Codex Failure Diagnostics
 
 - Category: bugfix
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -239,7 +222,6 @@ Existing completed runs cannot recover failed CLI stderr that was discarded befo
 ## 2026-07-13 00:58 — Project Build Workflow Override
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -253,7 +235,6 @@ The override applies to new Project builds and does not rewrite workflows alread
 ## 2026-07-13 00:55 — Canonical Contracts, Structured TODO, And Ruff
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -267,7 +248,6 @@ The confirmed architectural work remains in `docs/todo.md`; service and page dec
 ## 2026-07-12 23:50 — Repository Consistency And Safety Audit
 
 - Category: research
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -281,7 +261,6 @@ Architectural findings that are not unambiguous bugs remain report-only. In part
 ## 2026-07-12 20:50 — Modular Project Build Workflows
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -295,7 +274,6 @@ Independent backend acceptance-criteria and authoritative test validation after 
 ## 2026-07-12 15:00 — Codex CLI Compatibility And Per-Task Model Routing
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -309,7 +287,6 @@ Only the `codex_cli` provider is implemented. The local non-agentic model adapte
 ## 2026-07-12 14:45 — Skill Runtime Token History
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -323,7 +300,6 @@ Direct Chat token tracking remains outside runtime history. Runtime Codex calls 
 ## 2026-07-12 01:39 — Project Build Context Optimization And GitHub E2E
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -337,7 +313,6 @@ Re-measure token usage after the two reverts before treating the 44.1% reduction
 ## 2026-07-11 02:38 — Codex Build Usage Tracking
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -351,7 +326,6 @@ The scheduler batches parallel-safe nodes but does not yet execute shared-worksp
 ## 2026-07-09 00:50 — ProductManager Build Instruction Split
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -365,7 +339,6 @@ Existing compatibility DB/API fields such as `requested_network_domains_json` re
 ## 2026-07-08 15:06 — Remove Hybrid Skill Variant
 
 - Category: refactor
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -379,7 +352,6 @@ Superseded by the later executable-only skill contract.
 ## 2026-07-08 02:34 — Manifest Schedule Registration
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -393,7 +365,6 @@ Proposed skills generated before this change are not renamed in place.
 ## 2026-07-08 01:52 — Skill Codex API And DAG API Context
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -407,7 +378,6 @@ Potential backend APIs for runtime cache, permission status, skill-run metadata,
 ## 2026-07-07 21:43 — Backend Manifest Skeletons
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -421,7 +391,6 @@ None known.
 ## 2026-07-07 02:32 — DAG Build Workflow
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -435,7 +404,6 @@ True concurrent isolated-workspace DAG execution remains deferred.
 ## 2026-07-04 13:09 — Two-Phase ProductManager Build Review
 
 - Category: feature
-- Related TODOs: none
 - Area: unknown
 
 ### Summary
@@ -449,7 +417,6 @@ A durable backend conversation table may be needed if multi-device chat continui
 ## 2026-07-24 17:32 — Minimal GitHub Integration Capability
 
 - Category: feature
-- Related TODOs: TODO-015
 - Area: backend-integrations
 
 ### Summary
@@ -459,3 +426,29 @@ Implemented trusted Windows Credential Manager-backed GitHub connection manageme
 ### Limitations
 
 The explicit local/dev runtime fallback remains less isolated than Docker; production Docker runtimes block direct GitHub host resolution and all runtime integration calls are still enforced by the authenticated backend relay.
+
+## 2026-07-29 19:12 — Unified function catalog and PM blueprint routing
+
+- Category: feature
+- Area: skills and agent workflows
+
+### Summary
+
+Removed SkillPlanService and the legacy backend API catalogs. ProductManager now refines intent, reviews plausibility, and writes the authoritative blueprint with function schemas and exact unified-catalog selections. The backend persists backend-core, user, and integration functions with live availability, derives manifest requirements, assigns selected functions through Task DAG nodes, and injects resolved full context into Builder or single-Codex prompts. Added the Functions UI plus an installed demo function and consuming web application. Ruff, 363 backend tests, 16 frontend tests, the frontend production build, and two sample tests passed.
+
+### Limitations
+
+Manual UI and runtime end-to-end testing was intentionally not run at the user request.
+
+## 2026-07-29 23:33 — Restore GitHub function catalog availability
+
+- Category: bugfix
+- Area: integrations and function catalog
+
+### Summary
+
+Changed the unified function catalog to construct GitHub integration state through the production integration-service factory, preserving Windows Credential Manager availability checks. Extended the catalog lifecycle test to verify GitHub functions transition from unavailable to available when the connection becomes usable. Ruff and 39 focused catalog/integration tests passed.
+
+### Limitations
+
+No live GitHub API request was made.

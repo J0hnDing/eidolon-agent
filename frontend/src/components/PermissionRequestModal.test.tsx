@@ -23,7 +23,6 @@ describe("PermissionRequestModal integration review", () => {
       reason_json: {
         provider: "github",
         operations: ["github.repository.get", "github.repository.file.read"],
-        reason: "Read approved repository content.",
         read_only: true,
         resource_scope: { repositories: ["octo/demo"] },
         connection_available: false,
@@ -50,7 +49,6 @@ describe("PermissionRequestModal integration review", () => {
     expect(screen.getByText("GitHub integration authorization")).toBeTruthy();
     expect(screen.getByText("github.repository.get")).toBeTruthy();
     expect(screen.getByText("github.repository.file.read")).toBeTruthy();
-    expect(screen.getByText("Read approved repository content.")).toBeTruthy();
     expect(screen.getByText("Repositories: octo/demo")).toBeTruthy();
     expect(screen.getByText(/connection unavailable/)).toBeTruthy();
   });

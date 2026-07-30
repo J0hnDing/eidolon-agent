@@ -177,7 +177,6 @@ def test_integration_expansion_uses_separate_version_authorization(
             "provider": "github",
             "operations": ["github.repository.get"],
             "resource_scope": {"repositories": ["octo/demo"]},
-            "reason": "Read approved repository metadata.",
         }
     ]
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")

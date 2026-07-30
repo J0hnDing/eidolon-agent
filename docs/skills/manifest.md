@@ -24,12 +24,8 @@ For new Project-mode builds, the backend derives an initial skeleton from the ap
     "properties": {},
     "additionalProperties": true
   },
-  "function_requirements": [
-    {
-      "name": "installed_function_name",
-      "reason": "Why this skill needs the function."
-    }
-  ],
+  "function_requirements": ["installed_function_name"],
+  "integration_requirements": [],
   "dependencies": [],
   "permissions": {
     "network": [],
@@ -48,11 +44,11 @@ For new Project-mode builds, the backend derives an initial skeleton from the ap
 
 Installation state, enabled state, active version, provenance, and risk level are backend-owned. They are not canonical manifest fields. The validator reads older packages that still contain `risk_level`, `created_by`, or `enabled` for compatibility, but canonical serialization and new generation omit them. Risk is derived deterministically from permissions and dependencies when the backend updates the skill record.
 
-New function plans declare object-shaped `input_schema` and `output_schema` JSON Schemas. The backend validates the schemas themselves and validates every registry input and successful output against them. Older installed functions with missing schemas remain directly runnable and schedulable for compatibility, but appear unavailable for cross-skill registry invocation until updated with explicit contracts.
+The ProductManager blueprint declares object-shaped `input_schema` and `output_schema` JSON Schemas for new function skills. Builder implements that contract but does not redefine it. The backend validates the schemas themselves and validates every registry input and successful output against them. Older installed functions with missing schemas remain directly runnable and schedulable for compatibility, but appear unavailable for cross-skill registry invocation until updated with explicit contracts.
 
-`function_requirements` declares caller relationships. Each entry contains the exact installed function name and a user-readable reason. Discovery does not add entries automatically, requirements are not Python dependencies, and the caller does not inherit the target function's permissions. A skill cannot require itself and duplicate target names are invalid.
+`function_requirements` declares caller relationships as exact installed user-function names. ProductManager selects unified catalog ids in the blueprint; the backend derives this manifest list for selected user functions. There is no per-function reason field. Requirements are not Python dependencies, and the caller does not inherit the target function's permissions. A skill cannot require itself and duplicate target names are invalid.
 
-`integration_requirements` declares GitHub authorization intent separately from ordinary network permission. Each entry contains provider `github`, unique registry operation ids, exact normalized repository scope when required, and a concise reason. Wildcards and credentials are invalid. The detailed contract and example live in [GitHub integration capability](../integrations/github.md).
+`integration_requirements` declares GitHub authorization intent separately from ordinary network permission. The backend derives entries from blueprint-selected integration function ids and ProductManager's exact provider resource scope. Each entry contains provider `github`, unique operation ids, and exact normalized repository scope when required; it has no reason field. Wildcards and credentials are invalid. The detailed contract and example live in [GitHub integration capability](../integrations/github.md).
 
 `schedule` is ProductManager-owned manifest intent for recurring bounded function execution. Use `null` when no recurring run was requested. `web_app` manifests must use `null`; persistent services are not scheduled `SkillRun` jobs. Supported function schedule forms are:
 

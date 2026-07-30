@@ -392,6 +392,9 @@ def update_skill(skill_id: int, payload: SkillUpdate, db: Session = Depends(get_
             skill.enabled = payload.enabled
     db.commit()
     db.refresh(skill)
+    from app.services.function_catalog_service import FunctionCatalogService
+
+    FunctionCatalogService(db).refresh()
     return skill
 
 

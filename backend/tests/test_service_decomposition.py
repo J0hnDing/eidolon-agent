@@ -63,7 +63,7 @@ def test_product_manager_contract_service_keeps_only_backend_fields() -> None:
     )
 
     assert "unknown" not in blueprint
-    assert blueprint["skill_name"] == "sample"
+    assert blueprint["skill_name"] == "untrusted_rename"
     assert blueprint["permission_plan"]["runtime"]["filesystem_write"] == ["report.json"]  # type: ignore[index]
 
 

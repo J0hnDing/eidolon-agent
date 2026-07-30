@@ -48,15 +48,15 @@ Output for PM does NOT mean agent writes files directly, instead backend receive
    - Must not create blueprint, permission, or DAG artifacts.
 
 3. `pm_write_blueprint_and_permissions`
-   - Inputs: `intent_prompt.json`.
+   - Inputs: `intent_prompt.json` and the backend-supplied available function-catalog index.
    - Output: one structured response containing top-level `build_workflow`, `blueprint`, and `permission_plan` fields. The backend writes only the latter two as `blueprint.json` and `permissions.json`.
-   - Purpose: choose `single_codex` or `task_dag`; select the `function` or `web_app` execution protocol; describe the skill goal, expected user behavior, function-only schedule intent, high-level acceptance criteria, and selected GitHub integration requirements; draft both build-time needs and expected runtime permissions/dependencies.
-   - ProductManager receives only the registry-derived integration operation id/title/description index, never schemas, endpoints, credential management, or secret-store details.
+   - Purpose: choose `single_codex` or `task_dag`; name the skill; select the `function` or `web_app` execution protocol; define the complete function input/output schemas; describe the skill goal, expected user behavior, function-only schedule intent, high-level acceptance criteria, selected catalog functions, and any required integration resource scope; draft both build-time needs and expected runtime permissions/dependencies.
+   - ProductManager receives only available catalog ids, titles, descriptions, categories, and risks, never detailed schemas, endpoints, credential management, or secret-store details.
    - `build_workflow` is backend routing state stored on the agent run. It must not appear inside `blueprint` or in `blueprint.json` because downstream DAG, Builder, and Tester inputs do not need it.
    - Must not enumerate generated package files. Builder-owned paths are defined later by task-node `expected_output_paths` and `file_write_claims` in `task_dag.json`.
    - Must not include task nodes, dependencies between tasks, or test files.
    - Must not approve permissions.
-   - The backend-selected `skill_name` is immutable during this step. ProductManager may refine the goal and behavior but cannot rename the controlled database record or package folder.
+   - ProductManager owns `skill_name` in the blueprint. The backend validates it before creating the controlled database record and package folder.
 
 The Codex Settings page can persist a backend-owned workflow override. `Automatic` keeps the ProductManager choice. `Simple` forces `single_codex`, and `Task DAG` forces `task_dag` for every new Project build, regardless of the top-level value returned by ProductManager. The agent run stores the effective workflow and the ProductManager step records whether selection came from ProductManager or the settings override.
 
@@ -79,14 +79,14 @@ The Codex Settings page can persist a backend-owned workflow override. `Automati
    - The registry rejects unknown workflow names. Workflow selection and execution are not hard-coded into the common pre-approval sequence.
 
 7. `pm_write_task_dag` (`task_dag` only)
-   - Inputs: `blueprint.json`, compact backend-approved `permission_bounds`, the static backend API index, and the concise registry-derived integration operation index.
+   - Inputs: `blueprint.json`, compact backend-approved `permission_bounds`, and the concise index of functions selected in the blueprint.
    - Output: `task_dag.json`.
-   - Purpose: split the project into explicit task nodes with dependencies, difficulty, test requirements, output expectations, file write claims, interface artifact expectations, and any required backend API ids.
+   - Purpose: split the project into explicit task nodes with dependencies, difficulty, test requirements, output expectations, file write claims, interface artifact expectations, and the selected function ids needed by each node.
    - Must not include separate "test-only" task nodes. Tester actions are attached to the build nodes that require tests.
 
 ## Single-Codex Workflow
 
-The `single_codex` workflow package contains `workflow.py`, `prompts.py`, and `instructions/run.md`. Before the writable invocation, the backend creates the controlled proposed-skill folder, provisions and verifies approved dependencies, seeds `manifest.json`, and creates its `tests/` directory. The prompt contains the approved blueprint, effective permissions, fixed workflow instructions, and detailed registry context only for GitHub operations selected in the blueprint. Within that one invocation Codex plans internally, creates the complete skill package, writes test files inside the existing backend-created `tests/` directory, runs a focused test command, and fixes failures before returning. It must not create or replace the test directory.
+The `single_codex` workflow package contains `workflow.py`, `prompts.py`, and `instructions/run.md`. Before the writable invocation, the backend creates the controlled proposed-skill folder, provisions and verifies approved dependencies, seeds `manifest.json`, and creates its `tests/` directory. The prompt contains the approved blueprint, effective permissions, fixed workflow instructions, and full context for every catalog function selected in the blueprint. Within that one invocation Codex plans internally, creates the complete skill package, writes test files inside the existing backend-created `tests/` directory, runs a focused test command, and fixes failures before returning. It must not create or replace the test directory.
 
 After the writable invocation returns, the backend runs the shared deterministic final validator: static capability scan, actual manifest/package validation, and authoritative execution of the generated tests. This validator does not invoke ProductManager, Builder, Tester, or another Codex agent. Any invocation or validation error permanently stops that single-Codex run; resume, task retry, and step retry cannot invoke Builder again. The user may start a separate new Project build, whose proposed workspace is atomically replaced without descending into sandbox-owned cache directories. Runtime permission review is created only after final validation passes.
 
@@ -134,8 +134,7 @@ The `task_dag` package contains its executor, prompt composition, and ProductMan
         "acceptance_criteria": ["string"],
         "test_expectations": ["string"],
         "interface_artifact_expectations": ["string"],
-        "backend_api_ids": [],
-        "integration_operation_ids": []
+        "function_ids": []
       }
     ]
   }
@@ -150,8 +149,8 @@ Backend validation must reject the graph when:
 - a dependency references a missing node;
 - a node id is not a safe path segment;
 - a node omits acceptance criteria or expected output paths;
-- a node references a backend API id that is not in the backend API catalog;
-- a node references an integration operation not selected in the approved blueprint;
+- a node references a function not selected in the approved blueprint;
+- a selected blueprint function is not assigned to any node;
 - the skill has no tested node;
 - two simultaneously ready nodes have overlapping `file_write_claims` without an explicit dependency ordering them.
 
@@ -199,15 +198,12 @@ Inputs:
 - compact `permission_bounds` derived from approved `permissions.json`, including effective runtime permissions, approved build dependencies/research, and blocked capabilities;
 - the current task node fields needed to build the node;
 - direct-parent `interface_artifact.json` files only;
-- backend API context for ids listed in the current task node's `backend_api_ids`;
-- detailed registry context only for ids listed in the current task node's `integration_operation_ids`;
+- full function context only for ids listed in the current task node's `function_ids`;
 - `workspace_paths` naming generated skill files the node may need. File contents are not embedded because Builder can read these paths inside its controlled workspace.
 
 The Builder prompt must not include backend bookkeeping fields such as `generation_request_id`, `blueprint_path`, `permission_path`, `task_dag_path`, `task_path`, task `index`, or task `status`. It must not include full source snapshots, manifest requirement summaries already enforced by the backend, or interface-artifact field lists already defined by Builder instructions. It should not receive the entire task DAG for a normal node build; dependency contracts come from direct-parent interface artifacts. The backend may still use transitive lineage for deterministic created-versus-updated validation.
 
-The full backend API context is loaded from the static file at `backend/app/static/backend_api_context.json`. ProductManager sees only the index file; Builder receives only the context entries selected by the current task node's `backend_api_ids`.
-
-GitHub integration context is derived directly from the typed registry. ProductManager sees the concise index; Builder receives schemas, examples, scope rules, and helper guidance only for the current node's selected ids. Function code must use `integration_runtime_capabilities.call`; web-application server code must use `web_runtime_capabilities.call_integration`.
+The backend resolves full context from the persistent unified catalog. ProductManager sees the concise available-only index; Builder receives schemas, examples, constraints, invocation guidance, and test guidance only for the current node's selected ids. Integration function code must use `integration_runtime_capabilities.call`; web-application server code must use `web_runtime_capabilities.call_integration`.
 
 Behavior:
 
@@ -215,7 +211,7 @@ Behavior:
 - write only inside the controlled proposed skill folder;
 - respect `file_write_claims` unless the backend grants an explicit serialized exception;
 - treat the backend-seeded `manifest.json` as the package contract starting point instead of inventing a separate manifest shape;
-- preserve the blueprint's explicit `function_requirements` and use only the trusted runtime helper for those declared targets;
+- preserve the backend-derived manifest requirements for blueprint-selected functions and use only their catalog-documented trusted helpers;
 - produce or update skill package files for the node;
 - write temporary `interface_artifact.json` at the controlled skill-folder root;
 - let the backend validate the sidecar and move it to `runtime/agent_runs/run_<id>/tasks/<task_id>/interface_artifact.json`; Builder never writes under `runtime/agent_runs`;

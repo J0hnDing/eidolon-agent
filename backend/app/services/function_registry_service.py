@@ -59,7 +59,7 @@ class FunctionRegistryService:
             .where(Skill.runtime == "function")
             .order_by(Skill.name)
         ).all()
-        requirements = self._requirements_by_name(caller) if caller is not None else {}
+        requirements = self._requirements_by_name(caller) if caller is not None else set()
         return [
             self.contract_for_skill(
                 skill,
@@ -160,13 +160,12 @@ class FunctionRegistryService:
     ) -> list[FunctionRequirementReview]:
         manifest = manifest or self._manifest_for_caller(caller)
         reviews: list[FunctionRequirementReview] = []
-        for requirement in manifest.function_requirements:
-            target = self.db.scalar(select(Skill).where(Skill.name == requirement.name))
+        for function_name in manifest.function_requirements:
+            target = self.db.scalar(select(Skill).where(Skill.name == function_name))
             if target is None or target.status != "installed" or target.runtime != "function":
                 reviews.append(
                     FunctionRequirementReview(
-                        name=requirement.name,
-                        reason=requirement.reason,
+                        name=function_name,
                         availability_reasons=["Required function is not installed"],
                     )
                 )
@@ -179,7 +178,6 @@ class FunctionRegistryService:
                 approval = self._create_access_request(
                     caller,
                     target,
-                    requirement.reason,
                     caller_version_id=caller_version_id,
                 )
                 approval_request_id = approval.approval_request_id
@@ -191,8 +189,7 @@ class FunctionRegistryService:
                 access_state = "unavailable"
             reviews.append(
                 FunctionRequirementReview(
-                    name=requirement.name,
-                    reason=requirement.reason,
+                    name=function_name,
                     target_skill_id=target.id,
                     description=contract.description,
                     risk_level=contract.risk_level,
@@ -272,11 +269,11 @@ class FunctionRegistryService:
         source: str,
         initiating_action: str,
     ) -> SkillRun:
-        requirement = self._requirements_by_name(caller.skill).get(target_name)
+        requirement_declared = target_name in self._requirements_by_name(caller.skill)
         target = self.db.scalar(select(Skill).where(Skill.name == target_name))
         if target is None or target.runtime != "function":
             raise FunctionRegistryError("Target function is not installed")
-        if requirement is None:
+        if not requirement_declared:
             return self._blocked_run(
                 target,
                 input_json,
@@ -468,20 +465,17 @@ class FunctionRegistryService:
     def _manifest_for_caller(self, caller: Skill) -> SkillManifest:
         return validate_manifest_file(self.proposed_service.skill_dir_for_record(caller) / "manifest.json")
 
-    def _requirements_by_name(self, caller: Skill | None) -> dict[str, dict[str, str]]:
+    def _requirements_by_name(self, caller: Skill | None) -> set[str]:
         if caller is None:
-            return {}
+            return set()
         try:
             manifest = self._manifest_for_caller(caller)
-            return {
-                requirement.name: requirement.model_dump(mode="json")
-                for requirement in manifest.function_requirements
-            }
+            return set(manifest.function_requirements)
         except (FileNotFoundError, ManifestValidationError, ProposedSkillError):
             return {
-                str(requirement.get("name")): dict(requirement)
+                str(requirement)
                 for requirement in (caller.function_requirements_json or [])
-                if isinstance(requirement, dict) and requirement.get("name")
+                if isinstance(requirement, str) and requirement
             }
 
     def _access_state(self, caller: Skill | None, target: Skill) -> str:
@@ -519,7 +513,6 @@ class FunctionRegistryService:
         self,
         caller: Skill,
         target: Skill,
-        requirement_reason: str,
         *,
         caller_version_id: int | None,
     ) -> FunctionAccessApproval:
@@ -536,7 +529,6 @@ class FunctionRegistryService:
         explanation = (
             f"Skill {caller.name} requests access to function {target.name}: {contract.description}. "
             f"The target's backend-derived risk is {contract.risk_level}. "
-            f"Reason from the caller manifest: {requirement_reason}. "
             "Approving allows only this caller-to-function relationship while the target risk and callable "
             "permission contract remain materially unchanged. It does not approve blocked permissions, enable "
             "either skill, authorize other callers, or allow nested function calls."
@@ -563,7 +555,6 @@ class FunctionRegistryService:
                 "target_description": contract.description,
                 "target_risk_level": contract.risk_level,
                 "target_contract_fingerprint": fingerprint,
-                "requirement_reason": requirement_reason,
                 "approval_means": "This caller may invoke this target function through the backend control plane.",
                 "approval_does_not_mean": [
                     "other skills may invoke the target",

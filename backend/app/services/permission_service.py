@@ -264,9 +264,7 @@ class PermissionService:
             },
             reason_json={
                 "blocked_reasons": blocked_reasons,
-                "function_requirements": [
-                    item.model_dump(mode="json") for item in manifest.function_requirements
-                ],
+                "function_requirements": list(manifest.function_requirements),
                 "integration_requirements": [
                     item.model_dump(mode="json") for item in manifest.integration_requirements
                 ],

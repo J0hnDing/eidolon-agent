@@ -81,13 +81,11 @@ def test_manifest_validates_json_schemas_and_function_requirements() -> None:
     data = valid_manifest()
     data["input_schema"] = {"type": "object"}
     data["output_schema"] = {"type": "object"}
-    data["function_requirements"] = [
-        {"name": "normalize_text", "reason": "Normalize text before analysis."}
-    ]
+    data["function_requirements"] = ["normalize_text"]
 
     manifest = validate_manifest(data)
 
-    assert manifest.function_requirements[0].name == "normalize_text"
+    assert manifest.function_requirements[0] == "normalize_text"
 
 
 def test_manifest_rejects_invalid_or_non_object_function_schema() -> None:
@@ -104,17 +102,12 @@ def test_manifest_rejects_invalid_or_non_object_function_schema() -> None:
 
 def test_manifest_rejects_duplicate_and_self_function_requirements() -> None:
     duplicate = valid_manifest()
-    duplicate["function_requirements"] = [
-        {"name": "normalize_text", "reason": "First use."},
-        {"name": "normalize_text", "reason": "Second use."},
-    ]
+    duplicate["function_requirements"] = ["normalize_text", "normalize_text"]
     with pytest.raises(ManifestValidationError, match="duplicate"):
         validate_manifest(duplicate)
 
     self_reference = valid_manifest()
-    self_reference["function_requirements"] = [
-        {"name": self_reference["name"], "reason": "Recursive use."}
-    ]
+    self_reference["function_requirements"] = [self_reference["name"]]
     with pytest.raises(ManifestValidationError, match="cannot require itself"):
         validate_manifest(self_reference)
 

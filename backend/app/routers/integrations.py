@@ -8,6 +8,7 @@ from app.schemas.integration import (
     IntegrationInvocationRequest,
     IntegrationInvocationResponse,
 )
+from app.services.function_catalog_service import FunctionCatalogService
 from app.services.function_registry_service import FunctionRegistryError, FunctionRegistryService
 from app.services.integration_service import (
     IntegrationCaller,
@@ -29,7 +30,9 @@ def put_github_connection(
     db: Session = Depends(get_db),
 ) -> GitHubConnectionStatus:
     try:
-        return build_default_integration_service(db).put_github_connection(payload.token.get_secret_value())
+        result = build_default_integration_service(db).put_github_connection(payload.token.get_secret_value())
+        FunctionCatalogService(db).refresh()
+        return result
     except IntegrationError as exc:
         raise _http_error(exc) from None
 
@@ -38,6 +41,7 @@ def put_github_connection(
 def remove_github_connection(db: Session = Depends(get_db)) -> Response:
     try:
         build_default_integration_service(db).remove_github_connection()
+        FunctionCatalogService(db).refresh()
     except IntegrationError as exc:
         raise _http_error(exc) from None
     return Response(status_code=status.HTTP_204_NO_CONTENT)

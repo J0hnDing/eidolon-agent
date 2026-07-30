@@ -1,0 +1,27 @@
+{
+  "manifest_version": 1,
+  "name": "demo_text_transform_app",
+  "display_name": "Demo Text Transform App",
+  "description": "A tiny web application that calls the Demo Text Transform function on the server.",
+  "runtime": "web_app",
+  "entrypoint": "app:app",
+  "instructions_path": null,
+  "input_schema": null,
+  "output_schema": null,
+  "function_requirements": [
+    "demo_text_transform"
+  ],
+  "integration_requirements": [],
+  "dependencies": [],
+  "permissions": {
+    "network": [],
+    "filesystem_read": [],
+    "filesystem_write": [],
+    "secrets": [],
+    "shell": false,
+    "codex": {
+      "internet_access": false
+    }
+  },
+  "schedule": null
+}

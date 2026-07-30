@@ -9,9 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import AgentRun, AgentRunStep, ApprovalRequest, MemoryFact, Skill, SkillGenerationRequest
+from app.schemas.manifest import ManifestPermissions, classify_permission_risk
 from app.schemas.proposed_skill import ProposedSkillValidationRead
 from app.services.agent_run_artifact_store import AgentRunArtifactStore
-from app.services.backend_api_catalog import backend_api_context
 from app.services.build_dependency_service import BuildDependencyError, BuildDependencyService
 from app.services.capability_scanner import CapabilityScanResult, StaticCapabilityScanner
 from app.services.codex_routing_service import CodexRoutingService
@@ -22,7 +22,7 @@ from app.services.default_permissions import (
     default_build_time_dependencies,
     effective_permission_plan,
 )
-from app.services.integration_registry import operation_context
+from app.services.function_catalog_service import FunctionCatalogService
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
@@ -795,7 +795,7 @@ class AgentWorkflowService:
         task_node = self._task_by_id(agent_run, task_node_id)
         tester_context = {
             "task_node": self._tester_task_node(task_node),
-            "integration_operation_context": operation_context(task_node.get("integration_operation_ids", [])),
+            "function_context": self._function_context(task_node.get("function_ids", [])),
             "integration_test_adapter": "deterministic_fake",
             "parent_interface_artifacts": self.artifacts.direct_parent_interface_artifacts(agent_run, task_node),
             "test_file": f"tests/test_{task_node_id}.py",
@@ -959,10 +959,12 @@ class AgentWorkflowService:
                 manifest_runtime,
                 runtime=runtime,
                 declared_integration_operations=declared_operations,
-                selected_integration_operations={
-                    str(operation_id)
-                    for operation_id in node.get("integration_operation_ids", []) or []
-                },
+                selected_integration_operations=set(
+                    FunctionCatalogService(
+                        self.db,
+                        project_root=self.project_root,
+                    ).integration_operation_ids(node.get("function_ids", []))
+                ),
                 include_paths=owned_paths,
             )
             scanned_files.update(node_scan.scanned_files)
@@ -1008,7 +1010,7 @@ class AgentWorkflowService:
             "interface_contracts": self._final_interface_contracts(agent_run, skill),
             "test_file": "tests/test_final_e2e.py",
             "workspace_paths": self._skill_file_paths(skill),
-            "integration_operation_context": operation_context(self._approved_integration_operation_ids(agent_run)),
+            "function_context": self._function_context(self._agent_blueprint(agent_run).get("functions", [])),
             "integration_test_adapter": "deterministic_fake",
         }
         tester_step = self._start_step(
@@ -1058,7 +1060,7 @@ class AgentWorkflowService:
             "interface_contracts": self._final_interface_contracts(agent_run, skill),
             "failure": self._validation_failure_context("final_e2e", validation),
             "workspace_paths": self._skill_file_paths(skill),
-            "integration_operation_context": operation_context(self._approved_integration_operation_ids(agent_run)),
+            "function_context": self._function_context(self._agent_blueprint(agent_run).get("functions", [])),
         }
         builder_step = self._start_step(
             agent_run,
@@ -1106,14 +1108,7 @@ class AgentWorkflowService:
             "blueprint_path": self.artifacts.relative_path(agent_run, "blueprint.json"),
             "permission_path": self.artifacts.relative_path(agent_run, "permissions.json"),
             "responsibility": "Tester writes or updates tests for the draft version, then validates manifest and test results.",
-            "integration_operation_context": operation_context(
-                [
-                    str(operation_id)
-                    for requirement in blueprint.get("integration_requirements", []) or []
-                    if isinstance(requirement, dict)
-                    for operation_id in requirement.get("operations", []) or []
-                ]
-            ),
+            "function_context": self._function_context(blueprint.get("functions", [])),
             "integration_test_adapter": "deterministic_fake",
         }
         tester_step = self._start_step(
@@ -1227,14 +1222,7 @@ class AgentWorkflowService:
             "test_result_json": validation.model_dump(mode="json"),
             "failure_log_path": self.artifacts.relative_path(agent_run, "update_version_test.log"),
             "project_files": self._version_file_snapshot(draft),
-            "integration_operation_context": operation_context(
-                [
-                    str(operation_id)
-                    for requirement in blueprint.get("integration_requirements", []) or []
-                    if isinstance(requirement, dict)
-                    for operation_id in requirement.get("operations", []) or []
-                ]
-            ),
+            "function_context": self._function_context(blueprint.get("functions", [])),
         }
         builder_step = self._start_step(
             agent_run,
@@ -1691,13 +1679,64 @@ class AgentWorkflowService:
         plan["blueprint_json"] = blueprint
         plan["permission_plan"] = permission_plan
         runtime_permissions = self._runtime_permissions_from_plan(permission_plan)
+        function_catalog = FunctionCatalogService(self.db, project_root=self.project_root)
+        selected_functions = function_catalog.validate_available_ids(blueprint.get("functions"))
+        user_functions = function_catalog.user_function_names(selected_functions)
+        integration_operations = function_catalog.integration_operation_ids(selected_functions)
+        integration_scopes = (
+            blueprint.get("integration_scopes")
+            if isinstance(blueprint.get("integration_scopes"), dict)
+            else {}
+        )
+        integration_requirements = []
+        if integration_operations:
+            github_scope = integration_scopes.get("github")
+            github_scope = github_scope if isinstance(github_scope, dict) else {"repositories": []}
+            integration_requirements.append(
+                {
+                    "provider": "github",
+                    "operations": integration_operations,
+                    "resource_scope": github_scope,
+                }
+            )
+        skill_runtime = str(blueprint.get("runtime") or "function")
+        skill_name = self.proposed_service.validate_skill_name(str(blueprint["skill_name"]))
+        display_name = str(blueprint.get("display_name") or skill_name.replace("_", " ").title())
+        plan.update(
+            {
+                "goal": blueprint.get("goal") or generation_request.user_message,
+                "skill_name": skill_name,
+                "display_name": display_name,
+                "runtime": skill_runtime,
+                "input_schema": blueprint.get("input_schema"),
+                "output_schema": blueprint.get("output_schema"),
+                "functions": selected_functions,
+                "function_requirements": user_functions,
+                "integration_requirements": integration_requirements,
+                "schedule": blueprint.get("schedule"),
+                "files_to_generate": [
+                    "manifest.json",
+                    "README.md",
+                    "app.py" if skill_runtime == "web_app" else "skill.py",
+                    "tests/test_app.py" if skill_runtime == "web_app" else "tests/test_skill.py",
+                ],
+            }
+        )
         plan["requested_permissions"] = runtime_permissions
         plan["requested_network_domains"] = runtime_permissions["network"]
         plan["requested_dependencies"] = runtime["dependencies"]
+        risk_level = classify_permission_risk(
+            ManifestPermissions.model_validate(runtime_permissions),
+            list(runtime["dependencies"]),
+        )
+        plan["risk_level"] = risk_level
         generation_request.plan_json = plan
         generation_request.requested_permissions_json = runtime_permissions
         generation_request.requested_dependencies_json = runtime["dependencies"]
         generation_request.requested_network_domains_json = runtime_permissions["network"]
+        generation_request.proposed_skill_name = skill_name
+        generation_request.proposed_display_name = display_name
+        generation_request.risk_level = risk_level
         self.db.commit()
         self.db.refresh(generation_request)
         return permission_plan
@@ -1944,6 +1983,7 @@ class AgentWorkflowService:
             "file_write_claims",
             "acceptance_criteria",
             "interface_artifact_expectations",
+            "function_ids",
         ]
         return {key: task_node[key] for key in useful_fields if key in task_node}
 
@@ -1953,6 +1993,7 @@ class AgentWorkflowService:
             "summary",
             "acceptance_criteria",
             "test_expectations",
+            "function_ids",
         ]
         return {key: task_node[key] for key in useful_fields if key in task_node}
 
@@ -1966,8 +2007,7 @@ class AgentWorkflowService:
             "action": "builder_build_task",
             "permission_bounds": self._agent_permission_bounds(self._permission_plan(agent_run)),
             "task_node": self._builder_task_node(task_node),
-            "backend_api_context": backend_api_context(task_node.get("backend_api_ids", [])),
-            "integration_operation_context": operation_context(task_node.get("integration_operation_ids", [])),
+            "function_context": self._function_context(task_node.get("function_ids", [])),
             "parent_interface_artifacts": self.artifacts.direct_parent_interface_artifacts(agent_run, task_node),
             "workspace_paths": self._task_relevant_paths(task_node),
         }
@@ -1989,18 +2029,23 @@ class AgentWorkflowService:
 
     def _approved_integration_operation_ids(self, agent_run: AgentRun) -> list[str]:
         if agent_run.build_workflow == "task_dag":
-            return [
-                str(operation_id)
+            function_ids = [
+                str(function_id)
                 for node in self.task_dags.nodes(self._task_dag(agent_run))
-                for operation_id in node.get("integration_operation_ids", []) or []
+                for function_id in node.get("function_ids", []) or []
             ]
-        blueprint = self._agent_blueprint(agent_run)
-        return [
-            str(operation_id)
-            for requirement in blueprint.get("integration_requirements", []) or []
-            if isinstance(requirement, dict)
-            for operation_id in requirement.get("operations", []) or []
-        ]
+        else:
+            function_ids = list(self._agent_blueprint(agent_run).get("functions", []) or [])
+        return FunctionCatalogService(
+            self.db,
+            project_root=self.project_root,
+        ).integration_operation_ids(function_ids)
+
+    def _function_context(self, function_ids: object) -> list[dict[str, Any]]:
+        return FunctionCatalogService(
+            self.db,
+            project_root=self.project_root,
+        ).context(function_ids)
 
     def _compact_interface_artifacts(self, artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         fields = ("task_id", "interfaces", "contracts_for_children", "known_limitations")

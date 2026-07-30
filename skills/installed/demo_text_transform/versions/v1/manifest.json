@@ -1,0 +1,54 @@
+{
+  "manifest_version": 1,
+  "name": "demo_text_transform",
+  "display_name": "Demo Text Transform",
+  "description": "A small function used to verify catalog registration and cross-skill invocation.",
+  "runtime": "function",
+  "entrypoint": "skill.py",
+  "instructions_path": null,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "transformed_text": {
+        "type": "string"
+      },
+      "character_count": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "required": [
+      "transformed_text",
+      "character_count"
+    ],
+    "additionalProperties": false
+  },
+  "function_requirements": [],
+  "integration_requirements": [],
+  "dependencies": [],
+  "permissions": {
+    "network": [],
+    "filesystem_read": [],
+    "filesystem_write": [],
+    "secrets": [],
+    "shell": false,
+    "codex": {
+      "internet_access": false
+    }
+  },
+  "schedule": null
+}

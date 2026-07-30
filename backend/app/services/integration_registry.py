@@ -391,30 +391,5 @@ _OPERATIONS = (
 OPERATIONS = MappingProxyType({operation.operation_id: operation for operation in _OPERATIONS})
 
 
-def operation_index() -> list[dict[str, str]]:
-    return [
-        {
-            "operation": operation.operation_id,
-            "title": operation.title,
-            "description": operation.description,
-        }
-        for operation in _OPERATIONS
-    ]
-
-
-def operation_context(operation_ids: object) -> list[dict[str, Any]]:
-    if not isinstance(operation_ids, list):
-        return []
-    selected: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for raw_operation_id in operation_ids:
-        operation_id = str(raw_operation_id)
-        operation = OPERATIONS.get(operation_id)
-        if operation is not None and operation_id not in seen:
-            selected.append(operation.agent_context())
-            seen.add(operation_id)
-    return selected
-
-
 def registry_contract_identity(operation_ids: list[str]) -> dict[str, int]:
     return {operation_id: OPERATIONS[operation_id].contract_version for operation_id in sorted(operation_ids)}

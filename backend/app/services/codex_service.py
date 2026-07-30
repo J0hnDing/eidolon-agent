@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,13 +12,12 @@ from sqlalchemy.orm import Session
 from app.models import Skill, SkillGenerationRequest, SkillVersion
 from app.schemas.codex_routing import ResolvedInvocationSettings
 from app.schemas.skill_codex import SkillCodexRequest
-from app.services.backend_api_catalog import backend_api_index
 from app.services.codex_cli_service import codex_cli_service, should_use_real_codex
 from app.services.codex_invocation_recorder import CodexInvocationRecorder
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
 from app.services.default_permissions import default_build_time_dependencies
 from app.services.dependency_environment import build_dependency_environment
-from app.services.integration_registry import operation_context, operation_index
+from app.services.function_catalog_service import FunctionCatalogError, FunctionCatalogService
 from app.services.manifest_validator import classify_permission_risk, validate_manifest_file
 from app.services.permission_service import PermissionService
 from app.services.product_manager_contract_service import ProductManagerContractService
@@ -304,7 +304,7 @@ class FakeCodexAdapter:
                 stderr="",
             )
         if task == "product_manager_build_blueprint" or task == "product_manager_write_blueprint":
-            blueprint = self._build_blueprint_from_plan(plan["generation_plan"], plan.get("user_message", ""))
+            blueprint = self._build_blueprint_from_request(plan, str(plan.get("user_message", "")))
             return subprocess.CompletedProcess(
                 args=["fake-codex-product-manager"],
                 returncode=0,
@@ -318,7 +318,7 @@ class FakeCodexAdapter:
                 stderr="",
             )
         if task == "product_manager_write_blueprint_and_permissions":
-            blueprint = self._build_blueprint_from_plan(plan["generation_plan"], plan.get("user_message", ""))
+            blueprint = self._build_blueprint_from_request(plan, str(plan.get("user_message", "")))
             permission_plan = self._permission_plan_from_generation_plan(plan.get("generation_plan", {}))
             return subprocess.CompletedProcess(
                 args=["fake-codex-product-manager-blueprint-permissions"],
@@ -603,25 +603,39 @@ class FakeCodexAdapter:
             "internet_access": bool(raw_codex.get("internet_access", bool(network))),
         }
 
-    def _build_blueprint_from_plan(self, plan: dict, user_message: str) -> dict:
+    def _build_blueprint_from_request(self, plan: dict, user_message: str) -> dict:
+        identity = _fallback_skill_identity(user_message)
+        runtime = _fallback_runtime(user_message)
+        available_ids = {
+            str(entry.get("id"))
+            for entry in plan.get("function_catalog_index", []) or []
+            if isinstance(entry, dict)
+        }
+        functions = []
+        if "github" in user_message.lower() and "trending" in user_message.lower():
+            if "github.repository.trending.list" in available_ids:
+                functions.append("github.repository.trending.list")
         acceptance_criteria = [
             "manifest.json is valid",
             "required skill files exist",
             "skill tests pass",
             (
                 "web application exposes its self-rendered ASGI interface"
-                if plan.get("runtime") == "web_app"
+                if runtime == "web_app"
                 else "function skill uses JSON stdin/stdout"
             ),
         ]
         return {
-            "goal": plan.get("goal") or user_message,
-            "skill_name": plan.get("skill_name"),
-            "runtime": plan.get("runtime", "function"),
-            "expected_behavior": plan.get("expected_output", {}),
-            "function_requirements": list(plan.get("function_requirements", []) or []),
-            "integration_requirements": list(plan.get("integration_requirements", []) or []),
-            "schedule": plan.get("schedule"),
+            "goal": user_message,
+            "skill_name": identity["skill_name"],
+            "display_name": identity["display_name"],
+            "runtime": runtime,
+            "input_schema": {"type": "object", "additionalProperties": True} if runtime == "function" else None,
+            "output_schema": {"type": "object", "additionalProperties": True} if runtime == "function" else None,
+            "expected_behavior": ["Implement the requested reusable capability."],
+            "functions": functions,
+            "integration_scopes": {"github": {"repositories": []}} if functions else {},
+            "schedule": _fallback_schedule(user_message) if runtime == "function" else None,
             "acceptance_criteria": acceptance_criteria,
         }
 
@@ -654,12 +668,7 @@ class FakeCodexAdapter:
             ),
             "test_expectations": ["validate manifest and generated skill behavior"],
             "interface_artifact_expectations": ["declare generated files and exposed entrypoints"],
-            "integration_operation_ids": [
-                str(operation_id)
-                for requirement in blueprint.get("integration_requirements", []) or []
-                if isinstance(requirement, dict)
-                for operation_id in requirement.get("operations", []) or []
-            ],
+            "function_ids": list(blueprint.get("functions", []) or []),
         }
         return {"schema_version": 1, "nodes": [node]}
 
@@ -847,6 +856,75 @@ def default_codex_adapter() -> CodexAdapter:
     if should_use_real_codex():
         return RealCodexAdapter()
     return FakeCodexAdapter()
+
+
+def _fallback_skill_identity(message: str) -> dict[str, str]:
+    words = re.findall(r"[a-z0-9]+", message.lower())
+    stopwords = {
+        "a",
+        "an",
+        "and",
+        "app",
+        "application",
+        "build",
+        "create",
+        "for",
+        "from",
+        "i",
+        "make",
+        "my",
+        "of",
+        "on",
+        "project",
+        "skill",
+        "that",
+        "the",
+        "to",
+        "use",
+        "web",
+        "with",
+    }
+    selected: list[str] = []
+    for word in words:
+        if word in stopwords or len(word) < 3:
+            continue
+        if word not in selected:
+            selected.append(word)
+        if len(selected) == 4:
+            break
+    if not selected:
+        selected = ["generated", "skill"]
+    skill_name = "_".join(selected)[:80].strip("_") or "generated_skill"
+    return {
+        "skill_name": skill_name,
+        "display_name": skill_name.replace("_", " ").title(),
+    }
+
+
+def _fallback_runtime(message: str) -> str:
+    lowered = message.lower()
+    markers = ("web app", "web application", "interactive dashboard", "browser application")
+    return "web_app" if any(marker in lowered for marker in markers) else "function"
+
+
+def _fallback_schedule(message: str) -> dict[str, object] | None:
+    lowered = message.lower()
+    if "weekly" in lowered:
+        return {
+            "type": "weekly",
+            "day": "monday",
+            "time": "09:00",
+            "timezone": "America/Toronto",
+            "input": {},
+        }
+    if "daily" in lowered:
+        return {
+            "type": "daily",
+            "time": "09:00",
+            "timezone": "America/Toronto",
+            "input": {},
+        }
+    return None
 
 
 @dataclass
@@ -1077,12 +1155,16 @@ class CodexService:
         intent_prompt: dict[str, object],
     ) -> tuple[dict[str, object], dict[str, object], str]:
         plan = generation_request.plan_json
+        function_catalog_index = FunctionCatalogService(
+            self.db,
+            project_root=self.project_root,
+        ).available_index()
         payload = {
             "codex_task": "product_manager_write_blueprint_and_permissions",
             "user_message": generation_request.user_message,
             "intent_prompt": intent_prompt,
             "generation_plan": plan,
-            "integration_operation_index": operation_index(),
+            "function_catalog_index": function_catalog_index,
         }
         fallback = self._fallback_build_blueprint(generation_request)
         fallback_permission_plan = self.product_manager_contracts.sanitize_permission_plan(
@@ -1091,7 +1173,10 @@ class CodexService:
         result = self._generate_product_manager(
             self.build_product_manager_prompt(
                 "write_blueprint_and_permissions",
-                {"intent_prompt": intent_prompt, "integration_operation_index": operation_index()},
+                {
+                    "intent_prompt": intent_prompt,
+                    "function_catalog_index": function_catalog_index,
+                },
             ),
             payload,
         )
@@ -1105,6 +1190,13 @@ class CodexService:
         )
         blueprint = self.product_manager_contracts.sanitize_blueprint(parsed.get("blueprint"), fallback)
         blueprint.pop("permission_plan", None)
+        try:
+            blueprint["functions"] = FunctionCatalogService(
+                self.db,
+                project_root=self.project_root,
+            ).validate_available_ids(blueprint.get("functions"))
+        except FunctionCatalogError as exc:
+            raise CodexGenerationError(str(exc)) from exc
         permission_plan = self.product_manager_contracts.sanitize_permission_plan(
             parsed.get("permission_plan"),
             generation_request.plan_json,
@@ -1118,25 +1210,36 @@ class CodexService:
         generation_request: SkillGenerationRequest,
         blueprint: dict[str, object],
         permission_bounds: dict[str, object],
-        backend_api_index_payload: list[dict[str, object]] | None = None,
         *,
         prompt_builder: Callable[[dict[str, object]], str] = build_task_dag_product_manager_prompt,
     ) -> dict[str, object]:
+        selected_function_context = FunctionCatalogService(
+            self.db,
+            project_root=self.project_root,
+        ).context(blueprint.get("functions"))
+        function_catalog_index = [
+            {
+                "id": entry["id"],
+                "category": entry["category"],
+                "title": entry["title"],
+                "description": entry["description"],
+                "risk_level": entry["risk_level"],
+            }
+            for entry in selected_function_context
+        ]
         payload = {
             "codex_task": "product_manager_write_task_dag",
             "user_message": generation_request.user_message,
             "blueprint_json": blueprint,
             "permission_bounds": permission_bounds,
             "generation_plan": generation_request.plan_json,
-            "backend_api_index": backend_api_index_payload or backend_api_index(),
-            "integration_operation_index": operation_index(),
+            "function_catalog_index": function_catalog_index,
         }
         fallback = self._fallback_task_dag(generation_request, blueprint)
         prompt_payload = {
             "blueprint_json": blueprint,
             "permission_bounds": permission_bounds,
-            "backend_api_index": payload["backend_api_index"],
-            "integration_operation_index": payload["integration_operation_index"],
+            "function_catalog_index": function_catalog_index,
         }
         result = self._generate_product_manager(
             prompt_builder(prompt_payload),
@@ -1169,11 +1272,19 @@ class CodexService:
         return self.product_manager_contracts.sanitize_build_review(parsed, fallback)
 
     def product_manager_repair_blueprint(self, skill: Skill, user_request: str | None) -> dict[str, object]:
+        function_catalog_index = FunctionCatalogService(
+            self.db,
+            project_root=self.project_root,
+        ).available_index()
         payload = {
             "codex_task": "product_manager_repair_blueprint",
             "skill_name": skill.name,
+            "runtime": skill.runtime,
+            "input_schema": skill.input_schema_json,
+            "output_schema": skill.output_schema_json,
+            "functions": self._skill_function_ids(skill),
             "user_request": user_request or f"Repair skill {skill.name}.",
-            "integration_operation_index": operation_index(),
+            "function_catalog_index": function_catalog_index,
         }
         fallback = self._fallback_repair_blueprint(skill, user_request)
         result = self._generate_product_manager(
@@ -1181,16 +1292,29 @@ class CodexService:
             payload,
         )
         parsed = self._parse_product_manager_json(result, fallback={"blueprint": fallback})
-        return self.product_manager_contracts.sanitize_blueprint(parsed.get("blueprint"), fallback)
+        blueprint = self.product_manager_contracts.sanitize_blueprint(parsed.get("blueprint"), fallback)
+        blueprint["functions"] = FunctionCatalogService(
+            self.db,
+            project_root=self.project_root,
+        ).validate_available_ids(blueprint.get("functions"))
+        return blueprint
 
     def product_manager_update_review(self, skill: Skill, suggestion: str) -> dict[str, object]:
+        function_catalog_index = FunctionCatalogService(
+            self.db,
+            project_root=self.project_root,
+        ).available_index()
         payload = {
             "codex_task": "product_manager_update_review",
             "skill_name": skill.name,
             "description": skill.description,
             "suggestion": suggestion,
+            "runtime": skill.runtime,
+            "input_schema": skill.input_schema_json,
+            "output_schema": skill.output_schema_json,
+            "functions": self._skill_function_ids(skill),
             "project_files": self._read_skill_files(skill),
-            "integration_operation_index": operation_index(),
+            "function_catalog_index": function_catalog_index,
         }
         fallback = self._fallback_update_review(skill, suggestion)
         result = self._generate_product_manager(
@@ -1198,7 +1322,14 @@ class CodexService:
             payload,
         )
         parsed = self._parse_product_manager_json(result, fallback=fallback)
-        return self.product_manager_contracts.sanitize_update_review(skill, suggestion, parsed, fallback)
+        review = self.product_manager_contracts.sanitize_update_review(skill, suggestion, parsed, fallback)
+        blueprint = review.get("blueprint")
+        if isinstance(blueprint, dict):
+            blueprint["functions"] = FunctionCatalogService(
+                self.db,
+                project_root=self.project_root,
+            ).validate_available_ids(blueprint.get("functions"))
+        return review
 
     def product_manager_summary(self, summary_type: str, context: dict[str, object], fallback_summary: str) -> str:
         return fallback_summary
@@ -1388,8 +1519,15 @@ class CodexService:
             "blueprint_json": blueprint,
             "permission_plan": permission_plan,
         }
+        builder_blueprint = {
+            **blueprint,
+            "function_context": FunctionCatalogService(
+                self.db,
+                project_root=self.project_root,
+            ).context(blueprint.get("functions")),
+        }
         result = self._generate_writable_skill(
-            prompt_builder(blueprint, permission_plan, proposed_dir),
+            prompt_builder(builder_blueprint, permission_plan, proposed_dir),
             proposed_dir,
             plan_for_adapter,
         )
@@ -1611,9 +1749,7 @@ class CodexService:
         skill.instructions_path = manifest.instructions_path
         skill.input_schema_json = manifest.input_schema
         skill.output_schema_json = manifest.output_schema
-        skill.function_requirements_json = [
-            item.model_dump(mode="json") for item in manifest.function_requirements
-        ]
+        skill.function_requirements_json = list(manifest.function_requirements)
         skill.integration_requirements_json = [
             item.model_dump(mode="json") for item in manifest.integration_requirements
         ]
@@ -1721,18 +1857,10 @@ class CodexService:
             "runtime": runtime,
             "entrypoint": "app:app" if runtime == "web_app" else "skill.py",
             "instructions_path": self._planned_instructions_path(plan),
-            "input_schema": plan.get("input_schema"),
-            "output_schema": plan.get("output_schema"),
-            "function_requirements": list(
-                blueprint.get("function_requirements")
-                if isinstance(blueprint.get("function_requirements"), list)
-                else plan.get("function_requirements", [])
-            ),
-            "integration_requirements": list(
-                blueprint.get("integration_requirements")
-                if isinstance(blueprint.get("integration_requirements"), list)
-                else plan.get("integration_requirements", [])
-            ),
+            "input_schema": blueprint.get("input_schema", plan.get("input_schema")),
+            "output_schema": blueprint.get("output_schema", plan.get("output_schema")),
+            "function_requirements": list(plan.get("function_requirements", [])),
+            "integration_requirements": list(plan.get("integration_requirements", [])),
             "dependencies": dependencies,
             "permissions": sanitized_permissions,
             "schedule": (
@@ -1866,7 +1994,10 @@ Tester context:
         blueprint: dict[str, object],
     ) -> str:
         instruction = self._instruction("builder/update.md")
-        selected_operation_ids = self._blueprint_integration_operation_ids(blueprint)
+        function_context = FunctionCatalogService(
+            self.db,
+            project_root=self.project_root,
+        ).context(blueprint.get("functions"))
         return f"""
 {instruction}
 
@@ -1884,8 +2015,8 @@ User improvement suggestion:
 ProductManager update blueprint:
 {json.dumps(blueprint, indent=2)}
 
-Selected integration operation context:
-{json.dumps(operation_context(selected_operation_ids), indent=2)}
+Selected function context:
+{json.dumps(function_context, indent=2)}
 
 Current draft files:
 {json.dumps(self._read_files_from_dir(output_dir), indent=2)}
@@ -1945,41 +2076,45 @@ Payload:
         return workspace
 
     def _fallback_build_blueprint(self, generation_request: SkillGenerationRequest) -> dict[str, object]:
-        plan = generation_request.plan_json
+        identity = _fallback_skill_identity(generation_request.user_message)
+        runtime = _fallback_runtime(generation_request.user_message)
         acceptance_criteria = [
             "manifest.json is valid",
             "required skill files exist",
             "skill tests pass",
             (
                 "web application exposes its self-rendered ASGI interface"
-                if plan.get("runtime") == "web_app"
+                if runtime == "web_app"
                 else "function skill uses JSON stdin/stdout"
             ),
         ]
-        runtime_dependencies = list(plan.get("requested_dependencies", []) or [])
         permission_plan = {
             "build_time": {
-                "internet_research": bool(plan.get("requested_network_domains") or plan.get("requested_dependencies")),
-                "dependencies": [
-                    dependency
-                    for dependency in runtime_dependencies
-                    if str(dependency).lower() not in default_build_time_dependencies()
-                ],
+                "internet_research": False,
+                "dependencies": [],
             },
             "runtime": {
-                **self._flat_runtime_permissions(plan),
-                "dependencies": runtime_dependencies,
+                "network": [],
+                "filesystem_read": [],
+                "filesystem_write": [],
+                "secrets": [],
+                "shell": False,
+                "codex": {"call_response": True, "internet_access": False},
+                "dependencies": [],
             },
         }
         return {
-            "goal": plan.get("goal") or generation_request.user_message,
-            "skill_name": plan.get("skill_name"),
-            "runtime": plan.get("runtime", "function"),
-            "expected_behavior": plan.get("expected_output", {}),
-            "function_requirements": list(plan.get("function_requirements", []) or []),
-            "integration_requirements": list(plan.get("integration_requirements", []) or []),
+            "goal": generation_request.user_message,
+            "skill_name": identity["skill_name"],
+            "display_name": identity["display_name"],
+            "runtime": runtime,
+            "input_schema": {"type": "object", "additionalProperties": True} if runtime == "function" else None,
+            "output_schema": {"type": "object", "additionalProperties": True} if runtime == "function" else None,
+            "expected_behavior": ["Implement the requested reusable capability."],
+            "functions": [],
+            "integration_scopes": {},
             "permission_plan": permission_plan,
-            "schedule": plan.get("schedule"),
+            "schedule": _fallback_schedule(generation_request.user_message) if runtime == "function" else None,
             "acceptance_criteria": acceptance_criteria,
         }
 
@@ -1988,10 +2123,8 @@ Payload:
         generation_request: SkillGenerationRequest,
         blueprint: dict[str, object],
     ) -> dict[str, object]:
-        plan = generation_request.plan_json
-        expected_files = self.product_manager_contracts.skill_package_files(
-            plan.get("files_to_generate") or ["manifest.json"]
-        )
+        runtime = str(blueprint.get("runtime") or "function")
+        expected_files = ["manifest.json", "README.md", "app.py" if runtime == "web_app" else "skill.py"]
         if "manifest.json" not in expected_files:
             expected_files.insert(0, "manifest.json")
         node = {
@@ -2012,19 +2145,14 @@ Payload:
                     "skill tests pass",
                     (
                         "web application exposes its declared ASGI entrypoint"
-                        if plan.get("runtime") == "web_app"
+                        if runtime == "web_app"
                         else "function skill uses JSON stdin/stdout"
                     ),
                 ]
             ),
             "test_expectations": ["validate manifest and generated skill behavior"],
             "interface_artifact_expectations": ["declare generated files and exposed entrypoints"],
-            "integration_operation_ids": [
-                str(operation_id)
-                for requirement in blueprint.get("integration_requirements", []) or []
-                if isinstance(requirement, dict)
-                for operation_id in requirement.get("operations", []) or []
-            ],
+            "function_ids": list(blueprint.get("functions", []) or []),
         }
         return {"schema_version": 1, "nodes": [node]}
 
@@ -2032,7 +2160,12 @@ Payload:
         return {
             "goal": user_request or f"Repair {skill.name}.",
             "skill_name": skill.name,
+            "display_name": skill.name.replace("_", " ").replace("-", " ").title(),
             "runtime": skill.runtime,
+            "input_schema": skill.input_schema_json,
+            "output_schema": skill.output_schema_json,
+            "functions": self._skill_function_ids(skill),
+            "integration_scopes": self._skill_integration_scopes(skill),
             "milestones": [
                 {
                     "name": "repair_skill",
@@ -2055,8 +2188,9 @@ Payload:
             "skill_name": skill.name,
             "runtime": skill.runtime,
             "suggestion": suggestion,
-            "function_requirements": list(skill.function_requirements_json or []),
-            "integration_requirements": list(skill.integration_requirements_json or []),
+            "functions": self._skill_function_ids(skill),
+            "input_schema": skill.input_schema_json,
+            "output_schema": skill.output_schema_json,
             "permission_plan": {
                 "build_time": {
                     "internet_research": bool(requested_network_domains or requested_dependencies),
@@ -2090,13 +2224,25 @@ Payload:
         return decision
 
     @staticmethod
-    def _blueprint_integration_operation_ids(blueprint: dict[str, object]) -> list[str]:
-        return [
-            str(operation_id)
-            for requirement in blueprint.get("integration_requirements", []) or []
-            if isinstance(requirement, dict)
-            for operation_id in requirement.get("operations", []) or []
-        ]
+    def _skill_function_ids(skill: Skill) -> list[str]:
+        function_ids = [str(name) for name in skill.function_requirements_json or []]
+        for requirement in skill.integration_requirements_json or []:
+            if not isinstance(requirement, dict):
+                continue
+            function_ids.extend(str(operation) for operation in requirement.get("operations", []) or [])
+        return list(dict.fromkeys(function_ids))
+
+    @staticmethod
+    def _skill_integration_scopes(skill: Skill) -> dict[str, object]:
+        scopes: dict[str, object] = {}
+        for requirement in skill.integration_requirements_json or []:
+            if not isinstance(requirement, dict):
+                continue
+            provider = str(requirement.get("provider") or "").strip()
+            resource_scope = requirement.get("resource_scope")
+            if provider and isinstance(resource_scope, dict):
+                scopes[provider] = resource_scope
+        return scopes
 
     def relative_path(self, path: Path) -> str:
         return path.resolve().relative_to(self.project_root).as_posix()

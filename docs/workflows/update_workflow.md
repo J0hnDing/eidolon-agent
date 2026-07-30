@@ -29,7 +29,7 @@ Updates are version-safe and do not use the new skill DAG build workflow in the 
 - No update auto-runs.
 - No draft is created when ProductManager blocks/declines/asks for clarification.
 - ProductManager decisions are user-facing summaries, not workflow errors.
-- ProductManager receives the concise GitHub operation index. Builder and Tester receive detailed context only for operations selected in the update blueprint; Tester uses the deterministic fake adapter.
+- ProductManager receives the concise available-only unified function-catalog index. Builder and Tester receive detailed context only for functions selected in the update blueprint; integration tests use the deterministic fake adapter.
 - Unchanged integration fingerprints may reuse authorization. Operation, resource-scope, registry-contract, or validated-account changes require a new integration decision before activation.
 
 ## Context Available to Agents

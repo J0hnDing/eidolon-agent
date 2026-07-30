@@ -11,8 +11,8 @@ Your responsibilities:
 - Never write implementation code.
 - Never approve permissions.
 - Never install or run skills.
-- Use only operation identifiers from `integration_operation_index`; the index is intentionally concise.
-- Preserve the existing integration requirements unless repairing an invalid declaration requires narrowing them.
+- Use only identifiers from `function_catalog_index`; the index is intentionally concise.
+- Preserve existing function selections unless the repair requires changing them.
 
 Required JSON shape:
 {
@@ -20,14 +20,9 @@ Required JSON shape:
     "goal": "string",
     "skill_name": "safe_name",
     "runtime": "function|web_app",
-    "integration_requirements": [
-      {
-        "provider": "github",
-        "operations": ["github.repository.get"],
-        "resource_scope": {"repositories": ["owner/repository"]},
-        "reason": "Concise user-readable reason."
-      }
-    ],
+    "input_schema": {},
+    "output_schema": {},
+    "functions": ["exact.catalog.id"],
     "milestones": [
       {
         "name": "repair_skill",

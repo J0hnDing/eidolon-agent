@@ -13,7 +13,6 @@ from app.db import Base
 from app.models import AgentRun, AgentRunStep, CodexRoutingSettings, MemoryFact, Skill, SkillGenerationRequest, SkillRun
 from app.routers.agent_runs import delete_agent_run
 from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
-from app.services.backend_api_catalog import backend_api_index_file
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.codex_service import CodexService, FakeCodexAdapter
 from app.services.default_permissions import default_banned_permissions
@@ -329,8 +328,8 @@ def test_approved_build_uses_pm_builder_tester_and_permission_artifacts(tmp_path
     task_artifact = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "tasks" / "core_skill.json"
     interface_artifact = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "tasks" / "core_skill" / "interface_artifact.json"
     assert task_dag_artifact.is_file()
-    assert backend_api_index_file().is_file()
-    assert not (tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "backend_api_index.json").exists()
+    assert (tmp_path / "runtime" / "function_catalog.json").is_file()
+    assert not (tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "function_catalog.json").exists()
     dag_step = next(
         step
         for step in agent_run.steps
@@ -346,7 +345,7 @@ def test_approved_build_uses_pm_builder_tester_and_permission_artifacts(tmp_path
     assert dependency_step.input_json is None
     assert dependency_step.output_json is None
     assert dependency_step.id < dag_step.id < builder_step.id
-    assert dag_step.input_json["backend_api_index_file"] == backend_api_index_file().as_posix()
+    assert dag_step.input_json["function_catalog_index"] == []
     assert task_artifact.is_file()
     assert interface_artifact.is_file()
     assert "task_id" not in json.loads(interface_artifact.read_text(encoding="utf-8"))
@@ -767,15 +766,19 @@ def test_build_workflow_executes_pm_task_dag_in_dependency_order(tmp_path: Path,
     assert "task_path" not in tester_steps[0].input_json
 
 
-def test_builder_receives_backend_api_context_for_task_node(tmp_path: Path, db_session: Session) -> None:
+def test_builder_receives_function_context_for_task_node(tmp_path: Path, db_session: Session) -> None:
     generation_request = create_generation_request(db_session)
 
     class ApiTaskAdapter(FakeCodexAdapter):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             result = super().generate(prompt, output_dir, plan)
+            if plan.get("codex_task") == "product_manager_write_blueprint_and_permissions":
+                payload = json.loads(result.stdout)
+                payload["blueprint"]["functions"] = ["backend.codex.call"]
+                return subprocess.CompletedProcess(args=result.args, returncode=0, stdout=json.dumps(payload), stderr="")
             if plan.get("codex_task") == "product_manager_write_task_dag":
                 payload = json.loads(result.stdout)
-                payload["task_dag"]["nodes"][0]["backend_api_ids"] = [1]
+                payload["task_dag"]["nodes"][0]["function_ids"] = ["backend.codex.call"]
                 return subprocess.CompletedProcess(args=result.args, returncode=0, stdout=json.dumps(payload), stderr="")
             return result
 
@@ -791,12 +794,12 @@ def test_builder_receives_backend_api_context_for_task_node(tmp_path: Path, db_s
 
     assert validation.ok is True
     builder_step = next(step for step in agent_run.steps if step.step_name == "builder")
-    assert "backend_api_ids" not in builder_step.input_json["task_node"]
-    assert builder_step.input_json["backend_api_context"][0]["title"] == "Skill Codex Call API"
-    runtime_budget = builder_step.input_json["backend_api_context"][0]["runtime_budget"]
-    assert runtime_budget["default_entrypoint_timeout_seconds"] == 120
-    assert runtime_budget["maximum_recommended_codex_calls_per_run"] == 1
-    assert "backend_api_context_file" not in builder_step.input_json
+    assert builder_step.input_json["task_node"]["function_ids"] == ["backend.codex.call"]
+    function_context = builder_step.input_json["function_context"]
+    assert function_context[0]["title"] == "Skill Codex Call"
+    assert "POST /skills/{skill_id}/codex" in function_context[0]["invocation"]["function_helper"]
+    assert "input_schema" in function_context[0]
+    assert "output_schema" in function_context[0]
 
 
 def test_builder_interface_artifact_is_validated_and_moved_to_agent_run(
@@ -1033,7 +1036,7 @@ def test_builder_and_tester_agents_receive_trimmed_task_context(tmp_path: Path, 
     assert '"permission_bounds"' in task_dag_prompt
     assert '"default_allowed"' not in task_dag_prompt
     assert '"banned_permissions"' not in task_dag_prompt
-    assert '"backend_api_index"' in task_dag_prompt
+    assert '"function_catalog_index"' in task_dag_prompt
     assert '"intent_prompt"' not in task_dag_prompt
     assert '"generation_plan"' not in task_dag_prompt
     builder_prompt = next(
@@ -1364,7 +1367,7 @@ def test_task_dag_sanitizer_does_not_read_package_files_from_blueprint(db_sessio
         "acceptance_criteria": ["valid"],
         "test_expectations": ["valid"],
         "interface_artifact_expectations": [],
-        "backend_api_ids": [],
+        "function_ids": [],
     }
     fallback = {
         "schema_version": 1,
@@ -1408,7 +1411,7 @@ def test_blueprint_sanitizer_removes_expected_files(db_session: Session) -> None
 
     sanitized = CodexService(db_session).product_manager_contracts.sanitize_blueprint(raw, fallback)
 
-    assert sanitized["skill_name"] == "fallback_skill"
+    assert sanitized["skill_name"] == "generated_skill"
     assert "expected_files" not in sanitized
     assert "summary" not in sanitized
     assert "decision" not in sanitized

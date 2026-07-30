@@ -9,6 +9,7 @@ Routes are defined in `frontend/src/App.tsx`:
 - `/chat`
 - `/memory`
 - `/skills`
+- `/functions`
 - `/apps`
 - `/apps/:skillId`
 - `/skills/:skillId`
@@ -31,7 +32,7 @@ Chat supports explicit modes:
 
 Build-time and runtime approvals are rendered inline in the chat transcript. Approval messages must remain in chat history when the user navigates away and returns. Project chat synchronizes its conversation-scoped generation request, linked agent run, proposed skill, and latest build/runtime approvals from the backend, so a response lost after a committed request or a decision made on the global Approval Requests page is recovered inline without duplicating messages.
 
-Medium/high-risk caller-to-function relationships use normal Approval Requests entries with caller name, target function, description, derived risk, manifest reason, and explicit approval boundaries. Low-risk declared relationships are summarized during runtime review and do not create redundant approval rows. There is no dedicated Function application or Tools UI.
+Medium/high-risk caller-to-function relationships use normal Approval Requests entries with caller name, target function, description, derived risk, and explicit approval boundaries. Low-risk declared relationships are summarized during runtime review and do not create redundant approval rows.
 
 Chat persistence is local frontend storage managed by `frontend/src/lib/chatStore.ts`. Project conversations also store the pending generation request id while ProductManager is waiting for clarification so the user's next reply stays attached to the same request.
 Users can delete any chat conversation from the chat list. Deletion removes the local transcript and asks the backend to remove any persisted message rows for the same frontend conversation id; Project-mode approval records remain available through the approval pages.
@@ -43,6 +44,10 @@ Approving a Project build-time request from either its inline chat card or the g
 ## Skills Page
 
 Lists skills in one list with their `function` or `web_app` runtime. Installed enabled web applications expose an Open Application action. User-facing creation goes through the proposed-skill workflow, not bare database record creation.
+
+## Functions Page
+
+`/functions` displays the backend-owned unified catalog. It includes backend-core, installed user, and integration functions in every state, with id, description, category, risk, version, availability, and unavailability reasons. The page polls the catalog so enablement, deletion, dependency changes, and integration connection changes remain visible. Only available entries are injected into ProductManager prompts.
 
 ## Skill Detail Page
 
@@ -74,7 +79,7 @@ If the backend gateway domain is customized, `VITE_WEB_APP_GATEWAY_DOMAIN` must 
 
 ## Agent Runs Pages
 
-Agent Runs list and detail pages show run status, current task node or parallel active nodes, current step, step logs, DAG progress, node failures, and applicable retry/cancel controls. ProductManager, Builder, and Tester steps expose the exact complete prompt sent to Codex—including instructions and composed inputs—and the exact final response returned by Codex. Backend-only permission, dependency, validation, finalization, and bounded-stop steps are labeled `Backend` and show only a fixed summary, never agent input/output controls. Historical agent steps without a recoverable exact transcript are labeled unavailable instead of falling back to normalized workflow JSON. Task-DAG failures expose run-level and failed-step retry actions. Single-Codex errors are terminal and expose no retry action; only a pre-invocation quota pause may resume. The detail page has Build Details and Skill Run History tabs. Build Details renders the recorded task DAG with task node status, dependencies, expected output paths, file write claims, backend API ids, per-node Codex tokens, build totals, usage pause reason, and resume control. Skill Run History lists runs for the linked skill with separate runtime Codex totals and per-invocation success/failure metadata, including retained CLI diagnostics for failed calls. Skill detail shows completed agent-run token totals.
+Agent Runs list and detail pages show run status, current task node or parallel active nodes, current step, step logs, DAG progress, node failures, and applicable retry/cancel controls. ProductManager, Builder, and Tester steps expose the exact complete prompt sent to Codex—including instructions and composed inputs—and the exact final response returned by Codex. Backend-only permission, dependency, validation, finalization, and bounded-stop steps are labeled `Backend` and show only a fixed summary, never agent input/output controls. Historical agent steps without a recoverable exact transcript are labeled unavailable instead of falling back to normalized workflow JSON. Task-DAG failures expose run-level and failed-step retry actions. Single-Codex errors are terminal and expose no retry action; only a pre-invocation quota pause may resume. The detail page has Build Details and Skill Run History tabs. Build Details renders the recorded task DAG with task node status, dependencies, expected output paths, file write claims, assigned function ids, per-node Codex tokens, build totals, usage pause reason, and resume control. Skill Run History lists runs for the linked skill with separate runtime Codex totals and per-invocation success/failure metadata, including retained CLI diagnostics for failed calls. Skill detail shows completed agent-run token totals.
 
 ## Codex Settings
 
@@ -82,7 +87,7 @@ Agent Runs list and detail pages show run status, current task node or parallel 
 
 The same trusted Settings page includes the single GitHub connection. It shows connected/disconnected/unavailable state, validated account identity, last validation time, and sanitized errors, with add, replace, and remove actions. The token input is password-style, is cleared after submission, and is never returned or redisplayed.
 
-Runtime approval uses the existing `PermissionRequestModal`. GitHub `integration_access` reviews show provider, operation ids, user-readable reason, read-only status, normalized repositories, and current connection availability. Connection state alone never marks a skill approved.
+Runtime approval uses the existing `PermissionRequestModal`. GitHub `integration_access` reviews show provider, operation ids, read-only status, normalized repositories, and current connection availability. Connection state alone never marks a skill approved.
 
 ## Targeted Polling
 

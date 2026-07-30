@@ -44,7 +44,6 @@ def integration_requirement(
         "provider": "github",
         "operations": operations or ["github.repository.get"],
         "resource_scope": {"repositories": repositories if repositories is not None else ["octo/demo"]},
-        "reason": "Read approved repository data.",
     }
 
 

@@ -6,7 +6,6 @@ from app.models import MemoryFact, Message
 from app.schemas.skill_generation import ChatRequest, ChatResponse
 from app.services.agent_workflow_service import AgentWorkflowError
 from app.services.chat_orchestrator import ChatOrchestrator
-from app.services.skill_plan_service import SkillPlanError
 
 router = APIRouter(tags=["chat"])
 
@@ -20,11 +19,6 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)):
             generation_request_id=payload.generation_request_id,
             conversation_id=payload.conversation_id,
         )
-    except SkillPlanError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Could not create a project plan from that request. {exc}",
-        ) from exc
     except AgentWorkflowError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

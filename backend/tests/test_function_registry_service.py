@@ -3,6 +3,7 @@ import json
 from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -11,12 +12,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
 from app.models import ApprovalRequest, Skill, SkillRun, SkillVersion
+from app.services.function_catalog_service import FunctionCatalogService
 from app.services.function_registry_service import (
     FunctionCaller,
     FunctionRegistryError,
     FunctionRegistryService,
 )
 from app.services.permission_service import PermissionService
+from app.services.proposed_skill_service import ProposedSkillService
 
 
 @pytest.fixture
@@ -65,7 +68,7 @@ def make_function(
     project_root: Path,
     name: str,
     *,
-    requirements: list[dict[str, str]] | None = None,
+    requirements: list[str] | None = None,
     network: list[str] | None = None,
     input_schema: dict[str, Any] | None = None,
     output_schema: dict[str, Any] | None = None,
@@ -163,6 +166,56 @@ def test_registry_exposes_backend_validated_contract(tmp_path: Path, db_session:
     assert "entrypoint" not in contracts[0].model_dump()
 
 
+def test_unified_catalog_persists_categories_states_and_user_lifecycle(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection_state = {"connected": False}
+    monkeypatch.setattr(
+        "app.services.function_catalog_service.build_default_integration_service",
+        lambda _db: SimpleNamespace(
+            connection_status=lambda: SimpleNamespace(connected=connection_state["connected"])
+        ),
+    )
+    target = make_function(db_session, tmp_path, "normalize_text")
+    catalog = FunctionCatalogService(db_session, project_root=tmp_path)
+
+    catalog.register_user_function(target)
+    entries = {entry["id"]: entry for entry in catalog.list_entries(refresh=False)}
+
+    assert (tmp_path / "runtime" / "function_catalog.json").is_file()
+    assert entries["backend.codex.call"]["category"] == "backend_core"
+    assert entries["backend.codex.call"]["availability"] == "available"
+    assert entries["normalize_text"]["category"] == "user"
+    assert entries["normalize_text"]["availability"] == "available"
+    assert entries["github.repository.get"]["category"] == "integration"
+    assert entries["github.repository.get"]["availability"] == "unavailable"
+    assert entries["github.repository.get"]["availability_reasons"] == [
+        "GitHub connection is not configured"
+    ]
+    available_index = {entry["id"]: entry for entry in catalog.available_index()}
+    assert available_index["backend.codex.call"]["risk_level"] == "low"
+    assert "input_schema" not in available_index["backend.codex.call"]
+    assert "github.repository.get" not in available_index
+
+    connection_state["connected"] = True
+    connected = {entry["id"]: entry for entry in catalog.list_entries()}
+    assert connected["github.repository.get"]["availability"] == "available"
+    assert "github.repository.get" in {
+        entry["id"] for entry in catalog.available_index()
+    }
+
+    target.enabled = False
+    db_session.commit()
+    disabled = {entry["id"]: entry for entry in catalog.list_entries()}
+    assert disabled["normalize_text"]["availability"] == "disabled"
+
+    ProposedSkillService(db_session, project_root=tmp_path).delete_skill(target)
+    remaining_ids = {entry["id"] for entry in catalog.list_entries(refresh=False)}
+    assert "normalize_text" not in remaining_ids
+
+
 def test_declared_low_risk_function_invokes_without_caller_approval(
     tmp_path: Path,
     db_session: Session,
@@ -172,7 +225,7 @@ def test_declared_low_risk_function_invokes_without_caller_approval(
         db_session,
         tmp_path,
         "caller",
-        requirements=[{"name": target.name, "reason": "Normalize user-provided text"}],
+        requirements=[target.name],
     )
     runner = FakeRunner(db_session)
     registry = service(db_session, tmp_path, runner)
@@ -224,7 +277,7 @@ def test_medium_risk_relationship_requires_specific_approval(tmp_path: Path, db_
         db_session,
         tmp_path,
         "caller",
-        requirements=[{"name": target.name, "reason": "Look up approved public data"}],
+        requirements=[target.name],
     )
     runner = FakeRunner(db_session)
     registry = service(db_session, tmp_path, runner)
@@ -263,7 +316,7 @@ def test_changed_target_permission_contract_makes_approval_stale(
         db_session,
         tmp_path,
         "caller",
-        requirements=[{"name": target.name, "reason": "Look up approved public data"}],
+        requirements=[target.name],
     )
     runner = FakeRunner(db_session)
     registry = service(db_session, tmp_path, runner)
@@ -296,7 +349,7 @@ def test_incompatible_input_is_blocked_and_output_contract_is_enforced(
         db_session,
         tmp_path,
         "caller",
-        requirements=[{"name": target.name, "reason": "Normalize user-provided text"}],
+        requirements=[target.name],
     )
     runner = FakeRunner(db_session, output={"unexpected": True})
     registry = service(db_session, tmp_path, runner)

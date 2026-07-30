@@ -3,9 +3,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from app.models import Skill, SkillGenerationRequest
-from app.services.backend_api_catalog import backend_api_index, backend_api_index_file
 from app.services.codex_service import CodexGenerationError
-from app.services.integration_registry import operation_index
+from app.services.function_catalog_service import FunctionCatalogService
 from app.workflows.base import (
     FINAL_E2E_FAILURE_KEY,
     MAX_TASK_FAILURES,
@@ -29,13 +28,11 @@ class TaskDagBuildWorkflow:
         agent_run: AgentRun,
         permission_plan: dict[str, Any],
     ) -> tuple[AgentRun, Skill, Any]:
-        api_index = backend_api_index()
         permission_bounds = service._agent_permission_bounds(permission_plan)
         task_dag = service.codex_service.product_manager_write_task_dag(
             generation_request,
             agent_run.blueprint_json or {},
             permission_bounds,
-            api_index,
             prompt_builder=build_product_manager_prompt,
         )
         service.task_dags.validate(task_dag, agent_run.blueprint_json or {})
@@ -55,9 +52,10 @@ class TaskDagBuildWorkflow:
                     "action": "pm_write_task_dag",
                     "blueprint_json": agent_run.blueprint_json,
                     "permission_bounds": permission_bounds,
-                    "backend_api_index": api_index,
-                    "backend_api_index_file": backend_api_index_file().as_posix(),
-                    "integration_operation_index": operation_index(),
+                    "function_catalog_index": FunctionCatalogService(
+                        service.db,
+                        project_root=service.project_root,
+                    ).context((agent_run.blueprint_json or {}).get("functions", [])),
                 },
                 logs="ProductManager wrote task_dag.json after build-time approval.",
             ),

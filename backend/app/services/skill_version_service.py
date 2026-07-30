@@ -352,9 +352,7 @@ class SkillVersionService:
         skill.instructions_path = manifest.instructions_path
         skill.input_schema_json = manifest.input_schema
         skill.output_schema_json = manifest.output_schema
-        skill.function_requirements_json = [
-            item.model_dump(mode="json") for item in manifest.function_requirements
-        ]
+        skill.function_requirements_json = list(manifest.function_requirements)
         skill.integration_requirements_json = [
             item.model_dump(mode="json") for item in manifest.integration_requirements
         ]

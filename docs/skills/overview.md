@@ -9,7 +9,7 @@ Every skill contains executable Python code and tests. A skill may optionally in
 - `function` is the bounded one-shot Python JSON stdin/stdout protocol. Function skills may run directly, on approved schedules, or through the backend Function registry, but have no dedicated interface page.
 - `web_app` is a persistent importable ASGI protocol. It owns self-rendered HTML/CSS/JavaScript and interaction inside its package and is opened through the Applications UI on a controlled untrusted origin.
 
-Runtime is both the execution contract and the sole interface discriminator: `web_app` packages appear in Applications, while `function` packages do not receive a user-facing application interface. Installed functions are dynamically discoverable through a backend-owned registry that is separate from the static trusted backend API catalog. Invocation still requires current runtime eligibility plus an explicit caller manifest relationship. See [Function registry and invocation](../runtime/functions.md).
+Runtime is both the execution contract and the sole interface discriminator: `web_app` packages appear in Applications, while `function` packages do not receive a user-facing application interface. Backend-core, installed user, and integration functions share one backend-owned catalog. Invocation still requires current runtime eligibility plus an explicit caller manifest relationship or integration authorization. See [Function registry and invocation](../runtime/functions.md).
 
 ## Skill Folders
 

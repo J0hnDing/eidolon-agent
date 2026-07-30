@@ -18,6 +18,23 @@ FunctionAccessState = Literal[
 ]
 
 
+class FunctionCatalogEntryRead(BaseModel):
+    id: str
+    category: Literal["backend_core", "user", "integration"]
+    title: str
+    description: str
+    risk_level: RiskLevel
+    input_schema: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = None
+    availability: FunctionAvailability
+    availability_reasons: list[str] = Field(default_factory=list)
+    invocation: dict[str, Any] = Field(default_factory=dict)
+    call_name: str | None = None
+    provider: str | None = None
+    skill_id: int | None = None
+    active_version: str | None = None
+
+
 class FunctionContractRead(BaseModel):
     skill_id: int
     name: str
@@ -36,7 +53,6 @@ class FunctionContractRead(BaseModel):
 
 class FunctionRequirementReview(BaseModel):
     name: str
-    reason: str
     target_skill_id: int | None = None
     description: str | None = None
     risk_level: RiskLevel | None = None

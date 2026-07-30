@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.backend_api_catalog import valid_backend_api_ids
-from app.services.integration_registry import OPERATIONS
 from app.workflows.base import ProjectBuildWorkflowError
 
 
@@ -30,51 +28,26 @@ class TaskDagService:
                 raise ProjectBuildWorkflowError(f"Task node {node_id} must include acceptance criteria")
             if not node.get("expected_output_paths"):
                 raise ProjectBuildWorkflowError(f"Task node {node_id} must include expected output paths")
-            for api_id in node.get("backend_api_ids", []) or []:
-                try:
-                    normalized_api_id = int(api_id)
-                except (TypeError, ValueError):
+            approved_function_ids = set(blueprint.get("functions", []) or [])
+            function_ids = node.get("function_ids", []) or []
+            if len(function_ids) != len(set(function_ids)):
+                raise ProjectBuildWorkflowError(f"Task node {node_id} contains duplicate function ids")
+            for function_id in function_ids:
+                if function_id not in approved_function_ids:
                     raise ProjectBuildWorkflowError(
-                        f"Task node {node_id} references invalid backend API id: {api_id}"
-                    ) from None
-                if normalized_api_id not in valid_backend_api_ids():
-                    raise ProjectBuildWorkflowError(f"Task node {node_id} references unknown backend API id: {api_id}")
-            approved_operation_ids = {
-                str(operation_id)
-                for requirement in blueprint.get("integration_requirements", []) or []
-                if isinstance(requirement, dict)
-                for operation_id in requirement.get("operations", []) or []
-            }
-            integration_operation_ids = node.get("integration_operation_ids", []) or []
-            if len(integration_operation_ids) != len(set(integration_operation_ids)):
-                raise ProjectBuildWorkflowError(
-                    f"Task node {node_id} contains duplicate integration operation ids"
-                )
-            for operation_id in integration_operation_ids:
-                if operation_id not in OPERATIONS:
-                    raise ProjectBuildWorkflowError(
-                        f"Task node {node_id} references unknown integration operation: {operation_id}"
-                    )
-                if operation_id not in approved_operation_ids:
-                    raise ProjectBuildWorkflowError(
-                        f"Task node {node_id} references unapproved integration operation: {operation_id}"
+                        f"Task node {node_id} references unapproved function: {function_id}"
                     )
             node_by_id[node_id] = node
-        assigned_operation_ids = {
-            str(operation_id)
+        assigned_function_ids = {
+            str(function_id)
             for node in nodes
-            for operation_id in node.get("integration_operation_ids", []) or []
+            for function_id in node.get("function_ids", []) or []
         }
-        blueprint_operation_ids = {
-            str(operation_id)
-            for requirement in blueprint.get("integration_requirements", []) or []
-            if isinstance(requirement, dict)
-            for operation_id in requirement.get("operations", []) or []
-        }
-        if blueprint_operation_ids - assigned_operation_ids:
+        blueprint_function_ids = {str(function_id) for function_id in blueprint.get("functions", []) or []}
+        if blueprint_function_ids - assigned_function_ids:
             raise ProjectBuildWorkflowError(
-                "Task DAG does not assign approved integration operations: "
-                f"{sorted(blueprint_operation_ids - assigned_operation_ids)}"
+                "Task DAG does not assign approved functions: "
+                f"{sorted(blueprint_function_ids - assigned_function_ids)}"
             )
         for node in nodes:
             for dependency in node.get("depends_on", []):

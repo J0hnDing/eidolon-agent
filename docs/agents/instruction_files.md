@@ -66,7 +66,7 @@ Instruction files should define role behavior and constraints. Backend code shou
 
 `workflows/task_dag/instructions/product_manager.md` is used only after build-time approval for `pm_write_task_dag`.
 
-The common ProductManager instructions receive only the concise GitHub operation index. Task-DAG Builder/Tester instructions and the single-Codex instruction consume registry-derived context only for approved operation ids. Update and repair role instructions preserve the same selected-only boundary.
+The common ProductManager blueprint instruction receives the concise available-only unified function-catalog index. Task-DAG Builder/Tester instructions consume full catalog context only for function ids assigned to the current node. The single-Codex instruction receives full context for every blueprint-selected function. Update and repair role instructions preserve the same selected-only boundary.
 
 ProductManager summary calls currently use deterministic backend fallback summaries instead of a separate PM summary instruction file.
 

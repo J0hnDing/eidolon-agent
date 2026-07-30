@@ -13,6 +13,8 @@ export type MemoryCategory =
 export type RiskLevel = "low" | "medium" | "high" | "blocked";
 export type SkillRuntime = "function" | "web_app";
 export type SkillStatus = "building" | "proposed" | "installed" | "failed" | "deleted";
+export type FunctionCategory = "backend_core" | "user" | "integration";
+export type FunctionAvailability = "available" | "disabled" | "unavailable";
 export type ChatMode = "chat" | "project";
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired" | "superseded";
 export type PermissionRequestScope = "build_time" | "runtime";
@@ -69,6 +71,23 @@ export interface Skill {
   enabled: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface FunctionCatalogEntry {
+  id: string;
+  category: FunctionCategory;
+  title: string;
+  description: string;
+  risk_level: RiskLevel;
+  input_schema: Record<string, unknown> | null;
+  output_schema: Record<string, unknown> | null;
+  availability: FunctionAvailability;
+  availability_reasons: string[];
+  invocation: Record<string, unknown>;
+  call_name: string | null;
+  provider: string | null;
+  skill_id: number | null;
+  active_version: string | null;
 }
 
 export type SkillUpdateInput = Pick<Skill, "enabled">;
@@ -651,6 +670,7 @@ export const api = {
       method: "DELETE",
     }),
   listSkills: () => request<Skill[]>("/skills"),
+  listFunctionCatalog: () => request<FunctionCatalogEntry[]>("/functions/catalog"),
   openWebApp: (skillId: number) =>
     request<WebAppOpenResponse>(`/web-apps/${skillId}/sessions`, { method: "POST" }),
   listWebAppInstances: (skillId: number) => request<WebAppInstance[]>(`/web-apps/${skillId}/instances`),
