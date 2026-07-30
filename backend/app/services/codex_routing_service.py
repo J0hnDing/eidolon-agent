@@ -155,6 +155,7 @@ class CodexRoutingService:
         routes = [
             ("chat", "chat", None),
             *[("product_manager", action, None) for action in _PM_ACTIONS],
+            ("builder", "single_codex_build", None),
             *[("builder", "skill_build_task", difficulty) for difficulty in ("easy", "medium", "hard")],
             ("builder", "skill_repair", None),
             ("builder", "skill_update", None),
@@ -187,11 +188,17 @@ class CodexRoutingService:
             return payload.product_manager.default, specific, source
         if role == "builder":
             route = difficulty if action in {"skill_build_task", "skill_generation"} and difficulty else None
-            if action in {"skill_repair", "skill_update_repair"}:
+            if action == "single_codex_build":
+                route = "single_codex"
+            elif action in {"skill_repair", "skill_update_repair"}:
                 route = "repair"
             elif action == "skill_update":
                 route = "update"
-            specific = getattr(payload.builder, route) if route in {"easy", "medium", "hard", "repair", "update"} else empty
+            specific = (
+                getattr(payload.builder, route)
+                if route in {"single_codex", "easy", "medium", "hard", "repair", "update"}
+                else empty
+            )
             source = f"builder.{route}" if route and (specific.model or specific.reasoning_effort) else "builder.default"
             return payload.builder.default, specific, source
         if role == "tester":

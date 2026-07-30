@@ -4,6 +4,8 @@ Eidolon supports one trusted, secrets-backed integration provider: GitHub. Insta
 
 The authoritative operation contract is the typed registry in `backend/app/services/integration_registry.py`. Adjacent documentation links here instead of reproducing that contract.
 
+For the distinction between adding a GitHub operation and adding a different provider, see [Extending the function catalog](../runtime/function_extension_guide.md).
+
 ## Trust Boundary
 
 The React Settings page is the only user-facing credential-management surface. Its routes are trusted settings routes and are deliberately absent from the unified function catalog. Generated skills, runtime containers, browser code, agents, Codex prompts, and test adapters cannot create, inspect, enumerate, validate, replace, remove, or reveal credentials.

@@ -79,6 +79,39 @@ def test_builder_routes_by_task_difficulty_and_inherits_role_defaults(db_session
     assert hard.route_source == "builder.hard"
 
 
+def test_single_codex_builder_has_independent_route(db_session: Session) -> None:
+    payload = CodexRoutingSettingsPayload.model_validate(
+        {
+            "builder": {
+                "default": {"model": "gpt-fast", "reasoning_effort": "low"},
+                "single_codex": {"model": "gpt-smart", "reasoning_effort": "xhigh"},
+            }
+        }
+    )
+    service = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
+    service.update_settings(payload)
+
+    resolved = service.resolve(role="builder", action="single_codex_build")
+
+    assert resolved.effective_model == "gpt-smart"
+    assert resolved.effective_reasoning_effort == "xhigh"
+    assert resolved.route_source == "builder.single_codex"
+
+
+def test_settings_validate_single_codex_builder_choice(db_session: Session) -> None:
+    payload = CodexRoutingSettingsPayload.model_validate(
+        {
+            "builder": {
+                "single_codex": {"model": "gpt-fast", "reasoning_effort": "xhigh"},
+            }
+        }
+    )
+    service = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
+
+    with pytest.raises(CodexRoutingError, match="does not support reasoning effort 'xhigh'"):
+        service.update_settings(payload)
+
+
 def test_project_build_workflow_override_round_trips_and_defaults_to_automatic(db_session: Session) -> None:
     service = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
 

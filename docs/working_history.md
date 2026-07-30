@@ -452,3 +452,29 @@ Changed the unified function catalog to construct GitHub integration state throu
 ### Limitations
 
 No live GitHub API request was made.
+
+## 2026-07-30 10:57 — Document function catalog extension flows
+
+- Category: documentation
+- Area: functions and integrations
+
+### Summary
+
+Added a concise function-extension blueprint covering installed user functions, new operations for an existing integration provider, entirely new providers, and backend-core functions. The guide distinguishes catalog metadata from callable implementation and keeps provider-specific behavior out of unrelated provider modules. Linked it from AGENTS.md, the documentation index, function runtime docs, and GitHub integration docs.
+
+### Limitations
+
+none
+
+## 2026-07-30 11:43 — Single-Codex Builder model routing
+
+- Category: feature
+- Area: Codex settings and project builds
+
+### Summary
+
+Added a dedicated single_codex Builder routing choice with live model and reasoning-effort validation, backend action resolution, Settings UI controls, API typing, regression tests, and current-behavior documentation. Existing saved settings inherit the Builder default until the user chooses an override. Ruff passed, all 365 backend tests passed, all 17 frontend tests passed, the production frontend build passed, and git diff --check passed.
+
+### Limitations
+
+none

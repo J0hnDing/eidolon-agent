@@ -61,7 +61,7 @@ Discovers Codex Desktop and PATH executables, probes their semantic versions, ho
 
 ### CodexRoutingService
 
-Persists and validates unified invocation choices against the live App Server model catalog. Resolution precedence is invocation override, action or Builder-difficulty setting, role default, legacy environment default, then the catalog default. It returns requested and effective values plus the route source. The current provider is `codex_cli`; the contract keeps provider identity explicit so a future adapter can participate without being implemented here.
+Persists and validates unified invocation choices against the live App Server model catalog. Resolution precedence is invocation override, action or Builder workflow/difficulty setting, role default, legacy environment default, then the catalog default. The single-Codex build action has its own Builder route; Task-DAG Builder calls continue to route by backend-validated node difficulty. The service returns requested and effective values plus the route source. The current provider is `codex_cli`; the contract keeps provider identity explicit so a future adapter can participate without being implemented here.
 
 ### PermissionService
 

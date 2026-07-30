@@ -350,6 +350,7 @@ export interface CodexRoutingSettingsPayload {
   };
   builder: {
     default: CodexInvocationChoice;
+    single_codex: CodexInvocationChoice;
     easy: CodexInvocationChoice;
     medium: CodexInvocationChoice;
     hard: CodexInvocationChoice;

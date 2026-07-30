@@ -232,9 +232,10 @@ export default function UsageSettingsPage() {
           <section className="detail-panel stack">
             <div>
               <h2>Builder routing</h2>
-              <p className="muted">Build tasks route by the validated <code>difficulty</code> field already present in each task DAG node. ProductManager does not choose model IDs.</p>
+              <p className="muted">Single Codex has its own route. Task DAG builds route by each backend-validated node difficulty. ProductManager does not choose model IDs.</p>
             </div>
             <RoutingRow label="Default" choice={routing.builder.default} models={catalog.models} onChange={(choice) => updateChoice("builder", "default", choice)} />
+            <RoutingRow label="Single Codex" choice={routing.builder.single_codex} fallback={routing.builder.default} models={catalog.models} onChange={(choice) => updateChoice("builder", "single_codex", choice)} />
             <RoutingRow label="Easy task" choice={routing.builder.easy} fallback={routing.builder.default} models={catalog.models} onChange={(choice) => updateChoice("builder", "easy", choice)} />
             <RoutingRow label="Medium task" choice={routing.builder.medium} fallback={routing.builder.default} models={catalog.models} onChange={(choice) => updateChoice("builder", "medium", choice)} />
             <RoutingRow label="Hard task" choice={routing.builder.hard} fallback={routing.builder.default} models={catalog.models} onChange={(choice) => updateChoice("builder", "hard", choice)} />

@@ -40,16 +40,16 @@ Routing settings cover:
 
 - normal Chat independently;
 - ProductManager refine-intent, plausibility, blueprint/permissions, task-DAG, repair, and update actions;
-- Builder `easy`, `medium`, and `hard` DAG nodes plus repair and update actions;
+- Builder single-Codex builds, `easy`, `medium`, and `hard` DAG nodes, plus repair and update actions;
 - Tester task, final end-to-end, and update actions.
 
-Builder routing reads the backend-validated `difficulty` already present on the task node. The task DAG contains no model or reasoning-effort fields, so ProductManager cannot invent or select model ids.
+The single-Codex workflow uses the explicit Builder `single_codex` route. Task-DAG Builder routing reads the backend-validated `difficulty` already present on each task node. The task DAG contains no model or reasoning-effort fields, so ProductManager cannot invent or select model ids.
 
 Precedence is:
 
 ```text
 explicit invocation override
-action or Builder difficulty setting
+action or Builder workflow/difficulty setting
 role default
 legacy PERSONAL_AGENT_CODEX_MODEL / PERSONAL_AGENT_CODEX_REASONING_EFFORT
 Codex catalog default

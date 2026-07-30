@@ -36,6 +36,7 @@ The product and repository are named **Eidolon**. Existing environment variables
 - [Sandbox execution](security/sandbox_execution.md)
 - [Sandboxed web applications](runtime/web_applications.md)
 - [Function registry and invocation](runtime/functions.md)
+- [Extending the function catalog](runtime/function_extension_guide.md)
 - [Scheduling](runtime/scheduling.md)
 
 ## Integrations, Roadmap, and History

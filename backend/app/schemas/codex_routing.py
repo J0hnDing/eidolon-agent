@@ -29,6 +29,7 @@ class BuilderRouting(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     default: InvocationChoice = Field(default_factory=InvocationChoice)
+    single_codex: InvocationChoice = Field(default_factory=InvocationChoice)
     easy: InvocationChoice = Field(default_factory=InvocationChoice)
     medium: InvocationChoice = Field(default_factory=InvocationChoice)
     hard: InvocationChoice = Field(default_factory=InvocationChoice)

@@ -22,6 +22,8 @@ For Task DAG builds, ProductManager assigns approved catalog ids to nodes throug
 
 GitHub integration calls use the parallel stable helper `integration_runtime_capabilities.call`. The operation must be literal, declared by the active manifest, approved for the caller's current integration fingerprint, and within exact repository scope. The helper carries no credential; the backend retrieves it only after all invocation checks and performs the provider request. See [GitHub integration capability](../integrations/github.md).
 
+For concise extension blueprints covering user, integration, and backend-core functions, see [Extending the function catalog](function_extension_guide.md).
+
 ## Authorization
 
 The backend evaluates the direct caller-to-target relationship on every call:
