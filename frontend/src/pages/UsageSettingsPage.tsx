@@ -9,6 +9,7 @@ import {
   CodexRoutingSettingsPayload,
   CodexUsageWindow,
   GitHubConnectionStatus,
+  PermissionPolicy,
   api,
 } from "../api/client";
 
@@ -17,6 +18,7 @@ export default function UsageSettingsPage() {
   const [cliStatus, setCliStatus] = useState<CodexCliStatus | null>(null);
   const [catalog, setCatalog] = useState<CodexModelCatalog | null>(null);
   const [routing, setRouting] = useState<CodexRoutingSettings | null>(null);
+  const [permissionPolicy, setPermissionPolicy] = useState<PermissionPolicy | null>(null);
   const [github, setGitHub] = useState<GitHubConnectionStatus | null>(null);
   const [githubToken, setGitHubToken] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -26,18 +28,20 @@ export default function UsageSettingsPage() {
   async function loadUsage(refresh = false) {
     setError(null);
     try {
-      const [nextUsage, nextCliStatus, nextCatalog, nextRouting, nextGitHub] = await Promise.all([
+      const [nextUsage, nextCliStatus, nextCatalog, nextRouting, nextGitHub, nextPermissionPolicy] = await Promise.all([
         api.getCodexUsage(),
         api.getCodexCliStatus(refresh),
         api.getCodexModels(refresh),
         api.getCodexRoutingSettings(),
         api.getGitHubConnection(),
+        api.getPermissionPolicy(),
       ]);
       setUsage(nextUsage);
       setCliStatus(nextCliStatus);
       setCatalog(nextCatalog);
       setRouting(nextRouting);
       setGitHub(nextGitHub);
+      setPermissionPolicy(nextPermissionPolicy);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load Codex usage");
     } finally {
@@ -128,6 +132,36 @@ export default function UsageSettingsPage() {
       </header>
       {error && <p className="error-text">{error}</p>}
       {saved && <p className="success-text">{saved}</p>}
+      {permissionPolicy && (
+        <section className="detail-panel stack">
+          <div>
+            <h2>Permission policy</h2>
+            <p className="muted">
+              Read-only current policy loaded from <code>{permissionPolicy.source}</code>. Agent instructions do not duplicate these classifications.
+            </p>
+          </div>
+          <div className="section-grid">
+            <div>
+              <h3>Default allowed</h3>
+              <pre>{JSON.stringify(permissionPolicy.default_allowed, null, 2)}</pre>
+            </div>
+            <div>
+              <h3>Requires approval</h3>
+              <pre>{JSON.stringify(permissionPolicy.requires_approval, null, 2)}</pre>
+            </div>
+          </div>
+          <div>
+            <h3>Blocked</h3>
+            <ul>
+              {permissionPolicy.blocked.map((capability) => <li key={capability}>{capability}</li>)}
+            </ul>
+          </div>
+          <div>
+            <h3>Web application policy</h3>
+            <pre>{JSON.stringify(permissionPolicy.web_app, null, 2)}</pre>
+          </div>
+        </section>
+      )}
       {github && (
         <section className="detail-panel stack">
           <div>

@@ -199,24 +199,21 @@ class AgentRunArtifactStore:
         agent_run: AgentRun,
     ) -> None:
         declared_paths = set(artifact.created_paths) | set(artifact.updated_paths)
-        expected_paths = {
+        write_paths = {
             str(path).replace("\\", "/").removeprefix("./")
-            for path in task_node.get("expected_output_paths", []) or []
+            for path in task_node.get("write_paths", []) or []
         }
-        missing_declarations = expected_paths - declared_paths
+        missing_declarations = write_paths - declared_paths
         if missing_declarations:
             raise ProjectBuildWorkflowError(
-                f"Interface artifact does not declare expected task outputs: {sorted(missing_declarations)}"
+                f"Interface artifact does not declare required task write paths: {sorted(missing_declarations)}"
             )
-        allowed_paths = {
-            str(path).replace("\\", "/").removeprefix("./")
-            for path in task_node.get("file_write_claims", []) or []
-        }
+        allowed_paths = set(write_paths)
         allowed_paths.add("manifest.json")
         unexpected_paths = declared_paths - allowed_paths
         if unexpected_paths:
             raise ProjectBuildWorkflowError(
-                f"Interface artifact declares paths outside task file_write_claims: {sorted(unexpected_paths)}"
+                f"Interface artifact declares paths outside task write_paths: {sorted(unexpected_paths)}"
             )
 
         parent_paths = self._parent_declared_paths(agent_run, task_node)

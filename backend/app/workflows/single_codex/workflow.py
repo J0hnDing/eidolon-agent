@@ -40,7 +40,7 @@ class SingleCodexBuildWorkflow:
             input_json={
                 "action": "single_codex_build",
                 "blueprint_json": agent_run.blueprint_json,
-                "permission_plan": permission_plan,
+                "permission_bounds": service._agent_permission_bounds(permission_plan),
                 "function_context": FunctionCatalogService(
                     service.db,
                     project_root=service.project_root,

@@ -144,6 +144,33 @@ def test_product_manager_action_override_is_independent(db_session: Session) -> 
     assert resolved.route_source == "product_manager.task_dag"
 
 
+@pytest.mark.parametrize("legacy_action", ["skill_plan", "project_plausibility"])
+def test_removed_product_manager_actions_use_only_the_default_route(
+    db_session: Session,
+    legacy_action: str,
+) -> None:
+    payload = CodexRoutingSettingsPayload.model_validate(
+        {
+            "product_manager": {
+                "default": {"model": "gpt-fast", "reasoning_effort": "low"},
+                "plausibility_review": {"model": "gpt-smart", "reasoning_effort": "high"},
+                "blueprint_and_permissions": {
+                    "model": "gpt-smart",
+                    "reasoning_effort": "high",
+                },
+            }
+        }
+    )
+    service = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
+    service.update_settings(payload)
+
+    resolved = service.resolve(role="product_manager", action=legacy_action)
+
+    assert resolved.effective_model == "gpt-fast"
+    assert resolved.effective_reasoning_effort == "low"
+    assert resolved.route_source == "product_manager.default"
+
+
 def test_settings_reject_effort_not_advertised_by_selected_model(db_session: Session) -> None:
     payload = CodexRoutingSettingsPayload.model_validate(
         {"chat": {"model": "gpt-fast", "reasoning_effort": "xhigh"}}

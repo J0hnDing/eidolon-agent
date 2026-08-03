@@ -14,29 +14,29 @@ def test_task_dag_service_validates_and_batches_ready_nodes() -> None:
         "nodes": [
             {
                 "id": "alpha",
+                "task_prompt": "Build alpha.",
                 "depends_on": [],
                 "parallel_safe": True,
                 "requires_tests": True,
-                "expected_output_paths": ["alpha.py"],
-                "file_write_claims": ["alpha.py"],
+                "write_paths": ["alpha.py"],
                 "acceptance_criteria": ["alpha passes"],
             },
             {
                 "id": "beta",
+                "task_prompt": "Build beta.",
                 "depends_on": [],
                 "parallel_safe": True,
                 "requires_tests": False,
-                "expected_output_paths": ["beta.py"],
-                "file_write_claims": ["beta.py"],
+                "write_paths": ["beta.py"],
                 "acceptance_criteria": ["beta passes"],
             },
             {
                 "id": "merge",
+                "task_prompt": "Merge alpha and beta.",
                 "depends_on": ["alpha", "beta"],
                 "parallel_safe": False,
                 "requires_tests": True,
-                "expected_output_paths": ["skill.py"],
-                "file_write_claims": ["skill.py"],
+                "write_paths": ["skill.py"],
                 "acceptance_criteria": ["integration passes"],
             },
         ]
@@ -64,7 +64,7 @@ def test_product_manager_contract_service_keeps_only_backend_fields() -> None:
 
     assert "unknown" not in blueprint
     assert blueprint["skill_name"] == "untrusted_rename"
-    assert blueprint["permission_plan"]["runtime"]["filesystem_write"] == ["report.json"]  # type: ignore[index]
+    assert "filesystem_write" not in blueprint["permission_plan"]["runtime"]  # type: ignore[operator]
 
 
 def test_product_manager_contract_keeps_web_app_approval_requests() -> None:

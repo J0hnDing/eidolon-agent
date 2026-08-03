@@ -10,7 +10,11 @@ For a new Project build, build-time approval lets the backend provision the list
 
 For DAG builds, ProductManager returns build-time intent and expected runtime intent as structured JSON after `blueprint.json` exists and before the task DAG is created. The backend writes `permissions.json`, reads `blueprint.json` and `permissions.json`, performs deterministic review, and presents one build-time approval prompt with the blueprint summary plus permission summary. ProductManager must not return task DAG JSON until this approval is granted; the backend writes `task_dag.json` after approval.
 
-ProductManager returns only permissions that need user approval. Backend-owned defaults and blocked capabilities live in `backend/app/static/default_permissions.json`. After build-time approval, the backend rewrites `permissions.json` as one minimal effective permission object with defaults already merged into its build-time and runtime fields. Builder receives that object once as compact `permission_bounds`; the static defaults and blocked policy are not duplicated into `permissions.json`.
+`backend/app/static/default_permissions.json` is the canonical agent-facing permission policy. Its three planning sections are `default_allowed`, `requires_approval`, and `blocked`. No agent instruction file contains a second permission list. Plausibility receives only `blocked`; blueprint and update planning receive the complete policy; post-approval ProductManager, Builder, Tester, repair, update, and single-Codex actions receive effective `permission_bounds` whose `blocked` field comes from the same config.
+
+ProductManager returns the exact `requires_approval` shape only. Every ProductManager output-schema request regenerates the strict permission-plan JSON Schema from that config section; nested fields are required, unknown fields are rejected, and list values must be unique non-empty strings. Backend sanitization independently uses the same template and discards unknown permission fields. After build-time approval, the backend rewrites `permissions.json` as one minimal effective permission object with `default_allowed` merged into its build-time and runtime fields. The blocked policy is supplied in agent context rather than persisted into `permissions.json`.
+
+The trusted Settings API exposes the current policy read-only at `GET /settings/permission-policy`, and the Settings page renders that response. The API and UI do not maintain another policy definition.
 
 Immediately after approval, the backend creates a clean proposed-skill workspace and provisions approved runtime requirements into `.deps`. Missing build-only requirements are isolated in `.build-deps`; platform `pytest` availability is verified through the same backend interpreter. Both folders are placed on the Codex and authoritative-test `PYTHONPATH`, and the backend interpreter directory is first on `PATH`. Provisioning is atomic and reused after successful verification. Failure stops before any post-approval Codex invocation. `.build-deps` is never installed with the skill, while `.deps` is copied as part of the versioned runtime package.
 
@@ -32,7 +36,7 @@ Schedule approval activates an application schedule. It does not bypass runtime 
 low, medium, high, blocked
 ```
 
-Examples:
+Current examples, summarized from the canonical config and deterministic enforcement:
 
 - Low: no requested permissions, own `./cache` read/write, backend-mediated Codex call/response without internet.
 - Medium: explicit public domains, package dependencies, web scraping, or Codex internet access.

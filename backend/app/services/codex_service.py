@@ -14,8 +14,14 @@ from app.schemas.codex_routing import ResolvedInvocationSettings
 from app.schemas.skill_codex import SkillCodexRequest
 from app.services.codex_cli_service import codex_cli_service, should_use_real_codex
 from app.services.codex_invocation_recorder import CodexInvocationRecorder
+from app.services.codex_output_schema import write_temporary_output_schema
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
-from app.services.default_permissions import default_build_time_dependencies
+from app.services.default_permissions import (
+    agent_permission_bounds,
+    blocked_permissions,
+    default_build_time_dependencies,
+    planning_permission_policy,
+)
 from app.services.dependency_environment import build_dependency_environment
 from app.services.function_catalog_service import FunctionCatalogError, FunctionCatalogService
 from app.services.manifest_validator import classify_permission_risk, validate_manifest_file
@@ -175,20 +181,27 @@ class RealCodexAdapter:
         )
         if self.model:
             command.extend(["--model", self.model])
+        output_schema_path = write_temporary_output_schema(plan.get("codex_task"), output_dir)
+        if output_schema_path is not None:
+            command.extend(["--output-schema", str(output_schema_path)])
         command.append("-")
         timeout_seconds = self.timeout_seconds if self.timeout_seconds is not None else codex_action_timeout_seconds(plan)
-        result = subprocess.run(
-            command,
-            cwd=output_dir,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=build_dependency_environment(output_dir),
-            timeout=timeout_seconds,
-            shell=False,
-        )
+        try:
+            result = subprocess.run(
+                command,
+                cwd=output_dir,
+                input=prompt,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=build_dependency_environment(output_dir),
+                timeout=timeout_seconds,
+                shell=False,
+            )
+        finally:
+            if output_schema_path is not None:
+                output_schema_path.unlink(missing_ok=True)
         events = self._json_events(result.stdout)
         result.codex_usage = self._usage_from_events(events)  # type: ignore[attr-defined]
         settings = self.invocation_settings
@@ -299,20 +312,6 @@ class FakeCodexAdapter:
                             "refined_prompt": plan.get("user_message", ""),
                             "selected_memory_facts": plan.get("selected_memory_facts", []),
                         }
-                    }
-                ),
-                stderr="",
-            )
-        if task == "product_manager_build_blueprint" or task == "product_manager_write_blueprint":
-            blueprint = self._build_blueprint_from_request(plan, str(plan.get("user_message", "")))
-            return subprocess.CompletedProcess(
-                args=["fake-codex-product-manager"],
-                returncode=0,
-                stdout=json.dumps(
-                    {
-                        "blueprint": blueprint,
-                        "decision": "request_permission",
-                        "summary": f"Build {blueprint['skill_name']} as a reusable skill.",
                     }
                 ),
                 stderr="",
@@ -509,11 +508,11 @@ class FakeCodexAdapter:
         if not isinstance(context, dict):
             return
         task_node = context.get("task_node")
-        if not isinstance(task_node, dict) or not task_node.get("id"):
+        if not isinstance(task_node, dict):
             return
         expected_paths = [
             str(path).replace("\\", "/").removeprefix("./")
-            for path in task_node.get("expected_output_paths", []) or []
+            for path in task_node.get("write_paths", []) or []
             if (output_dir / str(path)).is_file()
         ]
         parent_paths: set[str] = set()
@@ -544,7 +543,7 @@ class FakeCodexAdapter:
                 "input_schema": plan.get("input_schema") or {},
                 "output_schema": plan.get("output_schema") or {},
             },
-            "contracts_for_children": list(task_node.get("interface_artifact_expectations", []) or []),
+            "contracts_for_children": ["Child tasks may rely on the interfaces declared in this artifact."],
             "known_limitations": [],
         }
         (output_dir / "interface_artifact.json").write_text(json.dumps(artifact, indent=2), encoding="utf-8")
@@ -645,14 +644,12 @@ class FakeCodexAdapter:
             expected_files.insert(0, "manifest.json")
         node = {
             "id": "core_skill",
-            "title": "Core skill package",
-            "summary": "Create the core proposed skill package.",
+            "task_prompt": "Create the core proposed skill package.",
             "depends_on": [],
             "difficulty": "easy",
             "requires_tests": True,
             "parallel_safe": True,
-            "expected_output_paths": expected_files,
-            "file_write_claims": [path for path in expected_files if path != "manifest.json"],
+            "write_paths": [path for path in expected_files if path != "manifest.json"],
             "acceptance_criteria": list(
                 blueprint.get("acceptance_criteria")
                 or [
@@ -667,7 +664,6 @@ class FakeCodexAdapter:
                 ]
             ),
             "test_expectations": ["validate manifest and generated skill behavior"],
-            "interface_artifact_expectations": ["declare generated files and exposed entrypoints"],
             "function_ids": list(blueprint.get("functions", []) or []),
         }
         return {"schema_version": 1, "nodes": [node]}
@@ -1093,9 +1089,6 @@ class CodexService:
             )
         return resolved
 
-    def product_manager_build_blueprint(self, generation_request: SkillGenerationRequest) -> dict[str, object]:
-        return self.product_manager_write_blueprint(generation_request, intent_prompt={})
-
     def product_manager_refine_intent(
         self,
         generation_request: SkillGenerationRequest,
@@ -1138,17 +1131,6 @@ class CodexService:
             "selected_memory_facts": selected_memory_facts or [],
         }
 
-    def product_manager_write_blueprint(
-        self,
-        generation_request: SkillGenerationRequest,
-        intent_prompt: dict[str, object],
-    ) -> dict[str, object]:
-        blueprint, _permission_plan, _build_workflow = self.product_manager_write_blueprint_and_permissions(
-            generation_request,
-            intent_prompt,
-        )
-        return blueprint
-
     def product_manager_write_blueprint_and_permissions(
         self,
         generation_request: SkillGenerationRequest,
@@ -1159,12 +1141,14 @@ class CodexService:
             self.db,
             project_root=self.project_root,
         ).available_index()
+        permission_policy = planning_permission_policy()
         payload = {
             "codex_task": "product_manager_write_blueprint_and_permissions",
             "user_message": generation_request.user_message,
             "intent_prompt": intent_prompt,
             "generation_plan": plan,
             "function_catalog_index": function_catalog_index,
+            "permission_policy": permission_policy,
         }
         fallback = self._fallback_build_blueprint(generation_request)
         fallback_permission_plan = self.product_manager_contracts.sanitize_permission_plan(
@@ -1176,6 +1160,7 @@ class CodexService:
                 {
                     "intent_prompt": intent_prompt,
                     "function_catalog_index": function_catalog_index,
+                    "permission_policy": permission_policy,
                 },
             ),
             payload,
@@ -1253,19 +1238,24 @@ class CodexService:
         generation_request: SkillGenerationRequest,
         intent_prompt: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        blocked = blocked_permissions()
         payload = {
             "codex_task": "product_manager_build_review",
             "user_message": generation_request.user_message,
             "intent_prompt": intent_prompt or {},
             "project_conversation": generation_request.plan_json.get("project_conversation", []),
             "pending_user_prompt": generation_request.plan_json.get("pending_user_prompt"),
+            "blocked": blocked,
         }
         fallback = {
             "decision": "proceed_to_blueprint",
             "user_prompt": None,
         }
         result = self._generate_product_manager(
-            self.build_product_manager_prompt("build_review", {"intent_prompt": intent_prompt or {}}),
+            self.build_product_manager_prompt(
+                "build_review",
+                {"intent_prompt": intent_prompt or {}, "blocked": blocked},
+            ),
             payload,
         )
         parsed = self._parse_product_manager_json(result, fallback=fallback)
@@ -1304,6 +1294,7 @@ class CodexService:
             self.db,
             project_root=self.project_root,
         ).available_index()
+        permission_policy = planning_permission_policy()
         payload = {
             "codex_task": "product_manager_update_review",
             "skill_name": skill.name,
@@ -1315,6 +1306,7 @@ class CodexService:
             "functions": self._skill_function_ids(skill),
             "project_files": self._read_skill_files(skill),
             "function_catalog_index": function_catalog_index,
+            "permission_policy": permission_policy,
         }
         fallback = self._fallback_update_review(skill, suggestion)
         result = self._generate_product_manager(
@@ -1356,7 +1348,7 @@ class CodexService:
         }
         prompt = (
             "You are Codex responding to an installed local skill through the backend Skill Codex Call API.\n"
-            "Return exactly one JSON object with this shape: {\"response\": \"string\", \"notes\": []}.\n"
+            "Return exactly one JSON object matching the supplied output schema and no prose.\n"
             "Do not perform shell actions, filesystem changes, browser automation, purchases, posting, or secrets access.\n\n"
             f"Skill: {skill.name}\n"
             f"Requested model: {payload.model or 'default'}\n"
@@ -1518,6 +1510,7 @@ class CodexService:
             "builder_writes_tests": True,
             "blueprint_json": blueprint,
             "permission_plan": permission_plan,
+            "permission_bounds": agent_permission_bounds(permission_plan),
         }
         builder_blueprint = {
             **blueprint,
@@ -1527,7 +1520,7 @@ class CodexService:
             ).context(blueprint.get("functions")),
         }
         result = self._generate_writable_skill(
-            prompt_builder(builder_blueprint, permission_plan, proposed_dir),
+            prompt_builder(builder_blueprint, agent_permission_bounds(permission_plan), proposed_dir),
             proposed_dir,
             plan_for_adapter,
         )
@@ -1611,6 +1604,7 @@ class CodexService:
             "codex_task": "skill_update_repair",
             "version_id": version.id,
             "builder_writes_tests": False,
+            "permission_bounds": failure_context.get("permission_bounds", {}),
         }
         prompt = self.build_repair_prompt(skill, version_dir, failure_context)
         result = self._generate_builder_with_test_guard(prompt, version_dir, plan)
@@ -1624,6 +1618,7 @@ class CodexService:
         version: SkillVersion,
         suggestion: str,
         blueprint: dict[str, object],
+        permission_bounds: dict[str, object],
     ) -> subprocess.CompletedProcess[str]:
         version_dir = (self.project_root / version.folder_path).resolve()
         installed_root = (self.project_root / "skills" / "installed").resolve()
@@ -1635,8 +1630,9 @@ class CodexService:
             "suggestion": suggestion,
             "blueprint_json": blueprint,
             "project_files": self._read_files_from_dir(version_dir),
+            "permission_bounds": permission_bounds,
         }
-        prompt = self.build_update_prompt(skill, version, version_dir, suggestion, blueprint)
+        prompt = self.build_update_prompt(skill, version, version_dir, suggestion, blueprint, permission_bounds)
         result = self._generate_builder_with_test_guard(prompt, version_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex update failed")
@@ -1659,6 +1655,7 @@ class CodexService:
             "acceptance_criteria": tester_context.get("acceptance_criteria", []),
             "interface_contracts": tester_context.get("interface_contracts", []),
             "workspace_paths": tester_context.get("workspace_paths", []),
+            "permission_bounds": tester_context.get("permission_bounds", {}),
             "input_schema": skill.input_schema_json,
             "output_schema": skill.output_schema_json,
             **({"blueprint_contract": tester_context["blueprint_contract"]} if "blueprint_contract" in tester_context else {}),
@@ -1694,6 +1691,7 @@ class CodexService:
             "acceptance_criteria": tester_context.get("acceptance_criteria", []),
             "interface_artifacts": tester_context.get("interface_artifacts", []),
             "code_files": tester_context.get("code_files", {}),
+            "permission_bounds": tester_context.get("permission_bounds", {}),
             "input_schema": skill.input_schema_json,
             "output_schema": skill.output_schema_json,
             **({"blueprint_json": tester_context["blueprint_json"]} if "blueprint_json" in tester_context else {}),
@@ -1992,6 +1990,7 @@ Tester context:
         output_dir: Path,
         suggestion: str,
         blueprint: dict[str, object],
+        permission_bounds: dict[str, object],
     ) -> str:
         instruction = self._instruction("builder/update.md")
         function_context = FunctionCatalogService(
@@ -2015,6 +2014,9 @@ User improvement suggestion:
 ProductManager update blueprint:
 {json.dumps(blueprint, indent=2)}
 
+Permission bounds:
+{json.dumps(permission_bounds, indent=2)}
+
 Selected function context:
 {json.dumps(function_context, indent=2)}
 
@@ -2024,16 +2026,11 @@ Current draft files:
 
     def build_product_manager_prompt(self, task: str, payload: dict[str, object]) -> str:
         if task in {
-            "build_blueprint",
             "build_review",
             "refine_intent",
             "write_blueprint_and_permissions",
-            "write_blueprint",
-            "write_permissions",
         }:
             return build_common_product_manager_prompt(task, payload)
-        if task == "write_task_dag":
-            return build_task_dag_product_manager_prompt(payload)
         instruction_by_task = {
             "repair_blueprint": "product_manager/repair.md",
             "update_review": "product_manager/update.md",
@@ -2129,14 +2126,12 @@ Payload:
             expected_files.insert(0, "manifest.json")
         node = {
             "id": "core_skill",
-            "title": "Core skill package",
-            "summary": "Create the core proposed skill package.",
+            "task_prompt": "Create the core proposed skill package.",
             "depends_on": [],
             "difficulty": "easy",
             "requires_tests": True,
             "parallel_safe": True,
-            "expected_output_paths": expected_files,
-            "file_write_claims": [path for path in expected_files if path != "manifest.json"],
+            "write_paths": [path for path in expected_files if path != "manifest.json"],
             "acceptance_criteria": list(
                 blueprint.get("acceptance_criteria")
                 or [
@@ -2151,7 +2146,6 @@ Payload:
                 ]
             ),
             "test_expectations": ["validate manifest and generated skill behavior"],
-            "interface_artifact_expectations": ["declare generated files and exposed entrypoints"],
             "function_ids": list(blueprint.get("functions", []) or []),
         }
         return {"schema_version": 1, "nodes": [node]}

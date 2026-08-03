@@ -18,9 +18,11 @@ from app.services.codex_routing_service import CodexRoutingService
 from app.services.codex_service import CodexGenerationError, CodexService
 from app.services.codex_usage_service import codex_usage_service
 from app.services.default_permissions import (
-    default_banned_permissions,
+    agent_permission_bounds,
+    blocked_permissions,
     default_build_time_dependencies,
     effective_permission_plan,
+    planning_permission_policy,
 )
 from app.services.function_catalog_service import FunctionCatalogService
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
@@ -136,6 +138,7 @@ class AgentWorkflowService:
             input_json={
                 "action": "pm_review_plausibility",
                 "intent_prompt": downstream_intent,
+                "blocked": blocked_permissions(),
             },
             logs="ProductManager reviewed clarity, plausibility, and MVP support before blueprint creation.",
         )
@@ -241,6 +244,7 @@ class AgentWorkflowService:
                 input_json={
                     "action": "pm_write_blueprint_and_permissions",
                     "intent_prompt": intent_prompt,
+                    "permission_policy": planning_permission_policy(),
                 },
                 logs="ProductManager wrote the skill blueprint and permission plan.",
             ),
@@ -472,7 +476,11 @@ class AgentWorkflowService:
                 agent_run,
                 "product_manager",
                 task_node_id="update_version",
-                input_json={"skill_id": skill.id, "suggestion": suggestion},
+                input_json={
+                    "skill_id": skill.id,
+                    "suggestion": suggestion,
+                    "permission_policy": planning_permission_policy(),
+                },
                 logs="ProductManager evaluated the improvement suggestion against the current skill and project rules.",
             ),
             pm_status,
@@ -546,6 +554,7 @@ class AgentWorkflowService:
         summary: str,
     ) -> AgentRun:
         version_service = SkillVersionService(self.db, project_root=self.project_root)
+        permission_bounds = self._permission_bounds_for_run(agent_run, skill)
         agent_run.status = "running"
         agent_run.current_step = "builder"
         agent_run.error_message = None
@@ -563,11 +572,18 @@ class AgentWorkflowService:
                     "blueprint_json": blueprint,
                     "blueprint_path": self.artifacts.relative_path(agent_run, "blueprint.json"),
                     "permission_path": self.artifacts.relative_path(agent_run, "permissions.json"),
+                    "permission_bounds": permission_bounds,
                     "project_files": self._version_file_snapshot(draft),
                 },
                 logs="Builder is modifying only the copied draft version folder.",
             )
-            result = self.codex_service.update_skill_version(skill, draft, suggestion, blueprint)
+            result = self.codex_service.update_skill_version(
+                skill,
+                draft,
+                suggestion,
+                blueprint,
+                permission_bounds,
+            )
             self._finish_step(
                 agent_run,
                 builder_step,
@@ -795,6 +811,7 @@ class AgentWorkflowService:
         task_node = self._task_by_id(agent_run, task_node_id)
         tester_context = {
             "task_node": self._tester_task_node(task_node),
+            "permission_bounds": self._permission_bounds_for_run(agent_run, skill),
             "function_context": self._function_context(task_node.get("function_ids", [])),
             "integration_test_adapter": "deterministic_fake",
             "parent_interface_artifacts": self.artifacts.direct_parent_interface_artifacts(agent_run, task_node),
@@ -941,10 +958,7 @@ class AgentWorkflowService:
         ordered_nodes = self.task_dags.topological_nodes(self._task_dag(agent_run))
         path_owner: dict[str, str] = {}
         for node in ordered_nodes:
-            for raw_path in [
-                *(node.get("expected_output_paths", []) or []),
-                *(node.get("file_write_claims", []) or []),
-            ]:
+            for raw_path in node.get("write_paths", []) or []:
                 path_owner[str(raw_path).replace("\\", "/").removeprefix("./")] = str(node["id"])
         scanned_files = set(full_scan.scanned_files)
         findings = list(full_scan.findings)
@@ -1006,6 +1020,7 @@ class AgentWorkflowService:
     def _write_final_e2e_test(self, agent_run: AgentRun, skill: Skill) -> None:
         tester_context = {
             "blueprint_contract": self._final_blueprint_contract(agent_run),
+            "permission_bounds": self._permission_bounds_for_run(agent_run, skill),
             "acceptance_criteria": self._final_acceptance_criteria(agent_run),
             "interface_contracts": self._final_interface_contracts(agent_run, skill),
             "test_file": "tests/test_final_e2e.py",
@@ -1100,6 +1115,7 @@ class AgentWorkflowService:
         code_files = self._version_file_snapshot(draft)
         tester_context = {
             "mode": "update",
+            "permission_bounds": self._permission_bounds_for_run(agent_run, skill),
             "skill_id": skill.id,
             "version_id": draft.id,
             "blueprint_json": blueprint,
@@ -1215,6 +1231,7 @@ class AgentWorkflowService:
     ) -> Any:
         context = {
             "user_request": agent_run.user_request,
+            "permission_bounds": self._permission_bounds_for_run(agent_run, skill),
             "skill_id": skill.id,
             "version_id": draft.id,
             "blueprint_json": blueprint,
@@ -1907,17 +1924,14 @@ class AgentWorkflowService:
             "nodes": [
                 {
                     "id": agent_run.current_task_id or DEFAULT_TASK_ID,
-                    "title": "Compatibility task",
-                    "summary": "Compatibility task node.",
+                    "task_prompt": "Build the compatibility task node.",
                     "depends_on": [],
                     "difficulty": "medium",
                     "requires_tests": True,
                     "parallel_safe": True,
-                    "expected_output_paths": ["manifest.json"],
-                    "file_write_claims": ["manifest.json"],
+                    "write_paths": ["manifest.json"],
                     "acceptance_criteria": ["validation passes"],
                     "test_expectations": ["tests pass"],
-                    "interface_artifact_expectations": ["declare generated files"],
                 }
             ],
         }
@@ -1931,11 +1945,10 @@ class AgentWorkflowService:
                 return node
         return {
             "id": task_id,
-            "title": task_id.replace("_", " ").title(),
+            "task_prompt": "Build the requested task node.",
             "depends_on": [],
             "acceptance_criteria": [],
-            "expected_output_paths": ["manifest.json"],
-            "file_write_claims": ["manifest.json"],
+            "write_paths": ["manifest.json"],
             "requires_tests": True,
         }
 
@@ -1977,23 +1990,17 @@ class AgentWorkflowService:
 
     def _builder_task_node(self, task_node: dict[str, Any]) -> dict[str, Any]:
         useful_fields = [
-            "id",
-            "summary",
-            "expected_output_paths",
-            "file_write_claims",
+            "task_prompt",
+            "write_paths",
             "acceptance_criteria",
-            "interface_artifact_expectations",
-            "function_ids",
         ]
         return {key: task_node[key] for key in useful_fields if key in task_node}
 
     def _tester_task_node(self, task_node: dict[str, Any]) -> dict[str, Any]:
         useful_fields = [
-            "id",
-            "summary",
+            "task_prompt",
             "acceptance_criteria",
             "test_expectations",
-            "function_ids",
         ]
         return {key: task_node[key] for key in useful_fields if key in task_node}
 
@@ -2005,7 +2012,7 @@ class AgentWorkflowService:
     ) -> dict[str, Any]:
         context = {
             "action": "builder_build_task",
-            "permission_bounds": self._agent_permission_bounds(self._permission_plan(agent_run)),
+            "permission_bounds": self._permission_bounds_for_run(agent_run, skill),
             "task_node": self._builder_task_node(task_node),
             "function_context": self._function_context(task_node.get("function_ids", [])),
             "parent_interface_artifacts": self.artifacts.direct_parent_interface_artifacts(agent_run, task_node),
@@ -2014,13 +2021,31 @@ class AgentWorkflowService:
         return context
 
     def _agent_permission_bounds(self, permission_plan: dict[str, Any]) -> dict[str, Any]:
-        build_time = permission_plan.get("build_time") if isinstance(permission_plan.get("build_time"), dict) else {}
-        runtime = permission_plan.get("runtime") if isinstance(permission_plan.get("runtime"), dict) else {}
-        return {
-            "build_time": dict(build_time),
-            "runtime": dict(runtime),
-            "blocked_capabilities": default_banned_permissions(),
-        }
+        return agent_permission_bounds(permission_plan)
+
+    def _permission_bounds_for_run(self, agent_run: AgentRun, skill: Skill | None = None) -> dict[str, Any]:
+        permission_plan = self._permission_plan(agent_run)
+        if permission_plan:
+            return self._agent_permission_bounds(effective_permission_plan(permission_plan))
+        if skill is not None:
+            manifest_path = self.proposed_service.skill_dir_for_record(skill) / "manifest.json"
+            try:
+                manifest = validate_manifest_file(manifest_path)
+            except (FileNotFoundError, ManifestValidationError, OSError):
+                pass
+            else:
+                return self._agent_permission_bounds(
+                    effective_permission_plan(
+                        {
+                            "build_time": {"dependencies": list(manifest.dependencies)},
+                            "runtime": {
+                                **manifest.permissions.model_dump(mode="json"),
+                                "dependencies": list(manifest.dependencies),
+                            },
+                        }
+                    )
+                )
+        return self._agent_permission_bounds(effective_permission_plan({}))
 
     def _final_blueprint_contract(self, agent_run: AgentRun) -> dict[str, Any]:
         blueprint = self._agent_blueprint(agent_run)
@@ -2070,11 +2095,10 @@ class AgentWorkflowService:
 
     def _task_relevant_paths(self, task_node: dict[str, Any]) -> list[str]:
         paths = ["manifest.json"]
-        for key in ("expected_output_paths", "file_write_claims"):
-            for item in task_node.get(key, []) or []:
-                value = str(item)
-                if value and value not in paths and not value.startswith("tests/"):
-                    paths.append(value)
+        for item in task_node.get("write_paths", []) or []:
+            value = str(item)
+            if value and value not in paths and not value.startswith("tests/"):
+                paths.append(value)
         return paths
 
     def _final_acceptance_criteria(self, agent_run: AgentRun) -> list[str]:

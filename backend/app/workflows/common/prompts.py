@@ -6,12 +6,9 @@ from app.workflows.instructions import load_instruction
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _INSTRUCTION_BY_TASK = {
-    "build_blueprint": "blueprint_and_permissions.md",
     "build_review": "plausibility_review.md",
     "refine_intent": "refine_intent.md",
     "write_blueprint_and_permissions": "blueprint_and_permissions.md",
-    "write_blueprint": "blueprint_and_permissions.md",
-    "write_permissions": "blueprint_and_permissions.md",
 }
 
 

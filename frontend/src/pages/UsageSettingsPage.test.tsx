@@ -6,6 +6,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api/client";
 import UsageSettingsPage from "./UsageSettingsPage";
 
+const permissionPolicy = {
+  source: "backend/app/static/default_permissions.json",
+  default_allowed: { runtime: { python_standard_library: true } },
+  requires_approval: { runtime: { network: [] } },
+  blocked: ["Shell, subprocess, and arbitrary command execution."],
+  web_app: { supported: ["scripts"], blocked: ["popups"] },
+};
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -72,6 +80,7 @@ describe("GitHub Settings connection", () => {
       },
       updated_at: null,
     });
+    vi.spyOn(api, "getPermissionPolicy").mockResolvedValue(permissionPolicy);
     vi.spyOn(api, "getGitHubConnection").mockResolvedValue({
       provider: "github",
       connected: false,
@@ -97,6 +106,9 @@ describe("GitHub Settings connection", () => {
 
     render(<UsageSettingsPage />);
     const input = await screen.findByLabelText("GitHub token");
+    expect(screen.getByRole("heading", { name: "Permission policy" })).toBeTruthy();
+    expect(screen.getByText("Shell, subprocess, and arbitrary command execution.")).toBeTruthy();
+    expect(document.body.textContent).toContain("python_standard_library");
     fireEvent.change(input, { target: { value: sentinel } });
     fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
 
@@ -187,6 +199,7 @@ describe("Codex model routing", () => {
       updated_at: null,
     };
     vi.spyOn(api, "getCodexRoutingSettings").mockResolvedValue(routing);
+    vi.spyOn(api, "getPermissionPolicy").mockResolvedValue(permissionPolicy);
     vi.spyOn(api, "getGitHubConnection").mockResolvedValue({
       provider: "github",
       connected: false,

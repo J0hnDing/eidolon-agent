@@ -40,7 +40,7 @@ Builder context:
 
 Product structure:
 - Follow only the permission bounds, current task node, direct-parent interface artifacts, selected function context, and workspace paths in Builder context.
-- Build only the current task node and respect its file_write_claims.
+- Build only the current task node and write every file listed in its write_paths.
 - Treat the folder above as the only writable workspace. Do not write by absolute path or traverse outside it.
 - Write interface_artifact.json at the controlled skill-folder root. Do not write directly under runtime/agent_runs; the backend validates and moves the sidecar there.
 - Do not write blueprint.json, permissions.json, task_dag.json, or task JSON files; those are backend-owned workflow artifacts.

@@ -9,11 +9,9 @@ const LIVE_RUN_STATUSES = new Set(["pending", "running", "waiting_for_approval"]
 
 interface TaskDagNode {
   id: string;
-  title?: string;
-  summary?: string;
+  task_prompt?: string;
   depends_on?: string[];
-  expected_output_paths?: string[];
-  file_write_claims?: string[];
+  write_paths?: string[];
   function_ids?: string[];
 }
 
@@ -490,25 +488,18 @@ function TaskDagView({
           return (
             <article className="task-dag-node" key={node.id}>
               <header>
-                <div>
-                  <h3>{node.title || node.id}</h3>
-                  <p className="muted">{node.id}</p>
-                </div>
+                <h3>{node.id}</h3>
                 <span className={`badge status-${status}`}>{status}</span>
               </header>
-              {node.summary && <p>{node.summary}</p>}
+              {node.task_prompt && <p>{node.task_prompt}</p>}
               <dl className="compact-grid detail-grid">
                 <div>
                   <dt>Depends On</dt>
                   <dd>{formatList(node.depends_on)}</dd>
                 </div>
                 <div>
-                  <dt>Output Paths</dt>
-                  <dd>{formatList(node.expected_output_paths)}</dd>
-                </div>
-                <div>
-                  <dt>Write Claims</dt>
-                  <dd>{formatList(node.file_write_claims)}</dd>
+                  <dt>Write Paths</dt>
+                  <dd>{formatList(node.write_paths)}</dd>
                 </div>
                 <div>
                   <dt>Functions</dt>

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from jsonschema import Draft202012Validator
 from pydantic import TypeAdapter
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -15,6 +16,7 @@ from app.routers import chat as chat_router
 from app.schemas.skill_generation import ChatRequest, ChatResponse
 from app.services.agent_workflow_service import AgentWorkflowError
 from app.services.chat_orchestrator import ChatOrchestrator
+from app.services.codex_output_schema import output_schema_for_action
 from app.services.codex_service import (
     CODEX_ACTION_TIMEOUT_SECONDS,
     DEFAULT_CODEX_ACTION_TIMEOUT_SECONDS,
@@ -27,12 +29,6 @@ from app.services.codex_service import (
 )
 from app.services.direct_chat_service import DirectChatService, RealDirectChatAdapter
 from app.services.permission_service import PermissionService
-from app.services.project_plausibility import (
-    FakeProjectPlausibilityAdapter,
-    ProjectPlausibilityResult,
-    RealProjectPlausibilityAdapter,
-    default_project_plausibility_adapter,
-)
 from app.services.proposed_skill_service import ProposedSkillService
 
 
@@ -97,16 +93,6 @@ class RecordingCodexAdapter:
         assert tests_dir.is_dir()
         (tests_dir / "test_skill.py").write_text("def test_generated():\n    assert True\n", encoding="utf-8")
         return subprocess.CompletedProcess(args=["recording-codex"], returncode=0, stdout="ok", stderr="")
-
-
-class FixedPlausibilityAdapter:
-    def __init__(self, result: ProjectPlausibilityResult) -> None:
-        self.result = result
-        self.called = False
-
-    def evaluate(self, prompt: str, message: str) -> ProjectPlausibilityResult:
-        self.called = True
-        return self.result
 
 
 class FixedBlueprintAdapter(FakeCodexAdapter):
@@ -338,7 +324,10 @@ def test_project_mode_uses_product_manager_review_before_blueprint(db_session: S
     ]
     assert "performing plausibility review" in prompts["product_manager_build_review"]
     assert '"blueprint"' not in prompts["product_manager_build_review"]
-    assert "Expected JSON syntax" in prompts["product_manager_write_blueprint_and_permissions"]
+    assert "matching the supplied output schema" in prompts[
+        "product_manager_write_blueprint_and_permissions"
+    ]
+    assert "Expected JSON syntax" not in prompts["product_manager_write_blueprint_and_permissions"]
     assert '"expected_files"' not in prompts["product_manager_write_blueprint_and_permissions"]
     assert "For `write_task_dag`, return" not in prompts["product_manager_write_blueprint_and_permissions"]
     agent_run = db_session.query(AgentRun).filter_by(generation_request_id=generation_request.id).one()
@@ -925,12 +914,181 @@ def test_real_codex_adapter_uses_restricted_exec_command(tmp_path: Path, monkeyp
     assert "--skip-git-repo-check" in command
     assert "--ephemeral" in command
     assert "--search" not in command
+    assert "--output-schema" not in command
     assert command[-1] == "-"
     assert captured["kwargs"]["cwd"] == output_dir
     assert captured["kwargs"]["input"] == "Generate only this proposed skill."
     assert captured["kwargs"]["encoding"] == "utf-8"
     assert captured["kwargs"]["timeout"] == 10
     assert (output_dir / "codex_prompt.txt").is_file()
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        "product_manager_refine_intent",
+        "product_manager_build_review",
+        "product_manager_write_blueprint_and_permissions",
+        "product_manager_write_task_dag",
+        "product_manager_repair_blueprint",
+        "product_manager_update_review",
+        "skill_runtime_codex",
+    ],
+)
+def test_machine_consumed_codex_actions_have_valid_output_schemas(action: str) -> None:
+    schema = output_schema_for_action(action)
+
+    assert schema is not None
+    Draft202012Validator.check_schema(schema)
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert all(property_schema.get("description") for property_schema in schema["properties"].values())
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_fields"),
+    [
+        (
+            "product_manager_write_blueprint_and_permissions",
+            {
+                "goal",
+                "skill_name",
+                "display_name",
+                "runtime",
+                "input_schema",
+                "output_schema",
+                "expected_behavior",
+                "functions",
+                "integration_scopes",
+                "schedule",
+                "acceptance_criteria",
+            },
+        ),
+        (
+            "product_manager_repair_blueprint",
+            {
+                "goal",
+                "skill_name",
+                "runtime",
+                "input_schema",
+                "output_schema",
+                "functions",
+                "milestones",
+            },
+        ),
+        (
+            "product_manager_update_review",
+            {
+                "goal",
+                "skill_name",
+                "runtime",
+                "suggestion",
+                "input_schema",
+                "output_schema",
+                "functions",
+                "milestones",
+                "permission_plan",
+            },
+        ),
+    ],
+)
+def test_product_manager_output_schemas_constrain_known_blueprint_fields(
+    action: str,
+    expected_fields: set[str],
+) -> None:
+    schema = output_schema_for_action(action)
+
+    assert schema is not None
+    blueprint_schema = schema["properties"]["blueprint"]
+    assert blueprint_schema["additionalProperties"] is False
+    assert set(blueprint_schema["properties"]) == expected_fields
+    assert set(blueprint_schema["required"]) == expected_fields
+
+
+def test_build_blueprint_schema_keeps_nested_callable_schemas_open() -> None:
+    schema = output_schema_for_action("product_manager_write_blueprint_and_permissions")
+
+    assert schema is not None
+    blueprint_schema = schema["properties"]["blueprint"]
+    validator = Draft202012Validator(blueprint_schema)
+    blueprint = {
+        "goal": "Build a reusable formatter.",
+        "skill_name": "formatter",
+        "display_name": "Formatter",
+        "runtime": "function",
+        "input_schema": {
+            "type": "object",
+            "properties": {"user_defined_field": {"type": "string"}},
+            "required": ["user_defined_field"],
+            "additionalProperties": False,
+        },
+        "output_schema": {
+            "type": "object",
+            "properties": {"another_dynamic_field": {"type": "number"}},
+        },
+        "expected_behavior": ["Format the supplied value."],
+        "functions": [],
+        "integration_scopes": {},
+        "schedule": None,
+        "acceptance_criteria": ["Returns bounded JSON output."],
+    }
+
+    assert validator.is_valid(blueprint)
+    assert validator.is_valid({**blueprint, "input_schema": None, "output_schema": None})
+    assert validator.is_valid({**blueprint, "unexpected_field": True}) is False
+    assert validator.is_valid({key: value for key, value in blueprint.items() if key != "goal"}) is False
+
+
+def test_task_dag_output_schema_uses_the_simplified_node_contract() -> None:
+    schema = output_schema_for_action("product_manager_write_task_dag")
+
+    assert schema is not None
+    node_schema = schema["properties"]["task_dag"]["properties"]["nodes"]["items"]
+    assert node_schema["required"] == [
+        "id",
+        "task_prompt",
+        "depends_on",
+        "difficulty",
+        "requires_tests",
+        "parallel_safe",
+        "write_paths",
+        "acceptance_criteria",
+        "test_expectations",
+        "function_ids",
+    ]
+    assert set(node_schema["properties"]) == set(node_schema["required"])
+
+
+@pytest.mark.parametrize("action", ["single_codex_build", "skill_build_task", "tester_write_tests", "chat"])
+def test_file_and_text_codex_actions_do_not_have_output_schemas(action: str) -> None:
+    assert output_schema_for_action(action) is None
+
+
+def test_real_codex_adapter_passes_and_removes_action_output_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_run(command, **kwargs):
+        schema_path = Path(command[command.index("--output-schema") + 1])
+        captured["command"] = command
+        captured["schema_path"] = schema_path
+        captured["schema"] = json.loads(schema_path.read_text(encoding="utf-8"))
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout='{"decision":"proceed_to_blueprint","user_prompt":null}', stderr="")
+
+    monkeypatch.setattr("app.services.codex_service.subprocess.run", fake_run)
+
+    output_dir = tmp_path / "runtime" / "product_manager"
+    RealCodexAdapter(command="codex", timeout_seconds=10, enable_search="false").generate(
+        "Return the plausibility decision.",
+        output_dir,
+        {"codex_task": "product_manager_build_review"},
+    )
+
+    assert "--output-schema" in captured["command"]
+    assert captured["schema"]["required"] == ["decision", "user_prompt"]
+    assert captured["schema_path"].exists() is False
 
 
 @pytest.mark.parametrize(
@@ -1180,41 +1338,6 @@ def test_real_codex_adapter_auto_search_honors_permission_plan(
     assert "--search" not in captured["command"]
 
 
-def test_real_project_plausibility_adapter_uses_read_only_codex_exec(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict = {}
-
-    def fake_run(command, **kwargs):
-        captured["command"] = command
-        captured["kwargs"] = kwargs
-        return subprocess.CompletedProcess(
-            args=command,
-            returncode=0,
-            stdout=json.dumps({"plausible": True, "reason": "Reusable and bounded.", "optional_projects": []}),
-            stderr="",
-        )
-
-    monkeypatch.setattr("app.services.project_plausibility.subprocess.run", fake_run)
-
-    adapter = RealProjectPlausibilityAdapter(command="codex", timeout_seconds=10, workdir=tmp_path)
-    result = adapter.evaluate("Return JSON only.", "Create a reusable reporting skill.")
-
-    command = captured["command"]
-    assert result.plausible is True
-    assert command[0] == "codex"
-    assert command.index("--ask-for-approval") < command.index("exec")
-    assert command[command.index("-C") + 1] == str(tmp_path)
-    assert command[command.index("--sandbox") + 1] == "read-only"
-    assert command[command.index("--ask-for-approval") + 1] == "never"
-    assert "--search" not in command
-    assert command[-1] == "-"
-    assert captured["kwargs"]["cwd"] == tmp_path
-    assert captured["kwargs"]["input"] == "Return JSON only."
-    assert captured["kwargs"]["encoding"] == "utf-8"
-
-
 def test_real_direct_chat_adapter_uses_read_only_codex_exec(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1298,11 +1421,9 @@ def test_default_codex_mode_uses_real_when_cli_is_available(
     )
 
     assert isinstance(default_codex_adapter(), RealCodexAdapter)
-    assert isinstance(default_project_plausibility_adapter(), RealProjectPlausibilityAdapter)
 
 
 def test_default_codex_mode_can_be_forced_fake(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PERSONAL_AGENT_CODEX_MODE", "fake")
 
     assert isinstance(default_codex_adapter(), FakeCodexAdapter)
-    assert isinstance(default_project_plausibility_adapter(), FakeProjectPlausibilityAdapter)

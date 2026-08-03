@@ -13,13 +13,29 @@
       }
     }
   },
-  "banned_permissions": [
-    "DO NOT use shell access.",
-    "DO NOT use secrets.",
-    "DO NOT read or write arbitrary filesystem paths.",
-    "DO NOT use unrestricted network access.",
-    "DO NOT use browser automation.",
-    "DO NOT perform email, calendar, finance, purchase, trading, public posting, file deletion, or arbitrary command actions."
+  "requires_approval": {
+    "build_time": {
+      "internet_research": false,
+      "dependencies": []
+    },
+    "runtime": {
+      "dependencies": [],
+      "network": [],
+      "codex": {
+        "internet_access": false
+      }
+    }
+  },
+  "blocked": [
+    "Shell, subprocess, and arbitrary command execution.",
+    "Secrets and private credentials.",
+    "Filesystem access outside the skill's own ./cache directory, including file deletion.",
+    "Unrestricted or wildcard network access.",
+    "Browser automation.",
+    "Email, calendar, finance, purchase, trading, or public-posting actions.",
+    "Runtime package installation, custom Dockerfiles, custom startup commands, and process-management code.",
+    "Calling Codex CLI directly instead of an approved backend capability.",
+    "Dependency specifiers that use URLs, Git references, local paths, command flags, or similar unsafe forms."
   ],
   "web_app": {
     "supported": [

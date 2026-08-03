@@ -11,7 +11,34 @@ class TaskDagService:
     @staticmethod
     def nodes(task_dag: dict[str, Any]) -> list[dict[str, Any]]:
         raw_nodes = task_dag.get("nodes")
-        return [dict(node) for node in raw_nodes if isinstance(node, dict)] if isinstance(raw_nodes, list) else []
+        if not isinstance(raw_nodes, list):
+            return []
+        nodes: list[dict[str, Any]] = []
+        for raw_node in raw_nodes:
+            if not isinstance(raw_node, dict):
+                continue
+            node = dict(raw_node)
+            if "task_prompt" not in node and "summary" in node:
+                node["task_prompt"] = node["summary"]
+            if "write_paths" not in node:
+                node["write_paths"] = list(
+                    dict.fromkeys(
+                        [
+                            *(node.get("expected_output_paths", []) or []),
+                            *(node.get("file_write_claims", []) or []),
+                        ]
+                    )
+                )
+            for legacy_field in (
+                "title",
+                "summary",
+                "expected_output_paths",
+                "file_write_claims",
+                "interface_artifact_expectations",
+            ):
+                node.pop(legacy_field, None)
+            nodes.append(node)
+        return nodes
 
     def validate(self, task_dag: dict[str, Any], blueprint: dict[str, Any]) -> None:
         nodes = self.nodes(task_dag)
@@ -24,10 +51,15 @@ class TaskDagService:
                 raise ProjectBuildWorkflowError(f"Task node id is not a safe path segment: {node_id}")
             if node_id in node_by_id:
                 raise ProjectBuildWorkflowError(f"Duplicate task node id: {node_id}")
+            if not str(node.get("task_prompt") or "").strip():
+                raise ProjectBuildWorkflowError(f"Task node {node_id} must include a task prompt")
             if not node.get("acceptance_criteria"):
                 raise ProjectBuildWorkflowError(f"Task node {node_id} must include acceptance criteria")
-            if not node.get("expected_output_paths"):
-                raise ProjectBuildWorkflowError(f"Task node {node_id} must include expected output paths")
+            write_paths = node.get("write_paths", []) or []
+            if not write_paths:
+                raise ProjectBuildWorkflowError(f"Task node {node_id} must include write paths")
+            if len(write_paths) != len(set(write_paths)):
+                raise ProjectBuildWorkflowError(f"Task node {node_id} contains duplicate write paths")
             approved_function_ids = set(blueprint.get("functions", []) or [])
             function_ids = node.get("function_ids", []) or []
             if len(function_ids) != len(set(function_ids)):
@@ -66,10 +98,10 @@ class TaskDagService:
                     task_dag, right["id"], left["id"]
                 ):
                     continue
-                overlap = set(left.get("file_write_claims", [])) & set(right.get("file_write_claims", []))
+                overlap = set(left.get("write_paths", [])) & set(right.get("write_paths", []))
                 if overlap:
                     raise ProjectBuildWorkflowError(
-                        f"Task nodes {left['id']} and {right['id']} have overlapping file write claims "
+                        f"Task nodes {left['id']} and {right['id']} have overlapping write paths "
                         f"without dependency ordering: {sorted(overlap)}"
                     )
 

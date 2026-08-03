@@ -56,13 +56,13 @@ The single-Codex workflow uses `workflows/single_codex/instructions/run.md` for 
 
 Each project-build package loads its own instruction files and composes its own prompts. `CodexService` supplies shared Codex invocation, parsing, routing, usage, workspace, and safety primitives. Update and standalone repair prompts continue to use role-relative files under `backend/app/agent_instructions/`.
 
-Instruction files should define role behavior and constraints. Backend code should coordinate state, validate outputs, and enforce safety.
+Instruction files define role behavior and how to consume supplied permission context. Permission classifications must not be copied into them: `backend/app/static/default_permissions.json` is the source of truth for `default_allowed`, `requires_approval`, and `blocked`. Backend code loads that policy, coordinates state, validates outputs, and enforces safety.
 
 `workflows/common/instructions/refine_intent.md` is used for `pm_refine_intent` and returns only `intent_prompt.json`. It must not make plausibility decisions, ask clarification questions, or return blueprint, permission, or task DAG artifacts.
 
-`workflows/common/instructions/plausibility_review.md` is used for the build plausibility action and returns only an intent/plausibility decision. It must not receive blueprint instructions or return blueprint, permission, or task DAG artifacts.
+`workflows/common/instructions/plausibility_review.md` is the single project-build plausibility prompt. It returns only an intent/plausibility decision and receives the config-derived `blocked` field, not default or approval-required policy. It must not receive blueprint instructions or return blueprint, permission, or task DAG artifacts.
 
-`workflows/common/instructions/blueprint_and_permissions.md` is used for `pm_write_blueprint_and_permissions`. The backend parses the response into backend-only workflow selection plus separate blueprint and permission-plan artifacts.
+`workflows/common/instructions/blueprint_and_permissions.md` is used for `pm_write_blueprint_and_permissions`. It receives the full config-derived `permission_policy`; the backend parses the response into backend-only workflow selection plus separate blueprint and permission-plan artifacts.
 
 `workflows/task_dag/instructions/product_manager.md` is used only after build-time approval for `pm_write_task_dag`.
 

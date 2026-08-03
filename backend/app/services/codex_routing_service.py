@@ -27,8 +27,6 @@ _PM_ACTIONS = {
     "product_manager_write_task_dag": "task_dag",
     "product_manager_repair_blueprint": "repair",
     "product_manager_update_review": "update",
-    "skill_plan": "blueprint_and_permissions",
-    "project_plausibility": "plausibility_review",
 }
 
 

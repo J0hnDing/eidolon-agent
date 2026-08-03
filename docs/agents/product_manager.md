@@ -8,6 +8,7 @@ ProductManagerAgent owns project judgment, intent refinement, build-workflow sel
 - Read backend-selected explicit user memory facts when they are relevant to the Project-mode request.
 - Rewrite the request into a clearer build prompt before plausibility review.
 - Decide whether the refined request is plausible, unclear, unsupported, or worth building without creating blueprint, permission, or task DAG artifacts.
+- During plausibility review, use only the backend-supplied `blocked` section of the canonical permission config.
 - If the request is unclear, ask one user-facing clarification question and wait for the next Project-mode chat reply on the same generation request.
 - If the request is infeasible or unsupported, explain why and stop without creating blueprint, permission, or task DAG artifacts.
 - Write a concise blueprint without tasks or milestones.
@@ -17,10 +18,11 @@ ProductManagerAgent owns project judgment, intent refinement, build-workflow sel
 - Provide exact integration resource scope separately when selected integration functions require it.
 - Include intended recurring schedule metadata only for function skills. Web applications use `schedule = null` because their service lifetime is not a scheduled bounded run.
 - Draft build-time and expected runtime permission intent in a separate permission file.
+- During blueprint or update planning, use the complete config-derived `permission_policy`: omit `default_allowed`, return the exact `requires_approval` shape, and reject needs listed in `blocked`.
 - Return one top-level `build_workflow` value: `single_codex` for a self-contained small or medium build, or `task_dag` when explicit dependency boundaries and independently retryable tasks are needed.
 - Keep `build_workflow` outside the blueprint because it is backend routing state and must not be written to `blueprint.json`.
 - Define a task DAG after build-time approval only when `build_workflow=task_dag`.
-- For each task node, define dependencies, difficulty, whether tests are required, expected outputs, file write claims, interface artifact expectations, and acceptance criteria.
+- For each task node, define a direct task prompt, dependencies, difficulty, whether tests are required, required write paths, acceptance criteria, and test expectations.
 - For Task DAG builds, assign only blueprint-selected functions to the nodes that use them through `function_ids`.
 - Keep tightly coupled implementation work together when separate nodes would repeatedly edit the same code file without a meaningful interface boundary.
 - Summarize approval checkpoints.
@@ -56,8 +58,8 @@ Backend state enforces this split:
 - Before `proceed_to_blueprint`, `AgentWorkflowService` does not create a building skill and does not write `blueprint.json`, `permissions.json`, or `task_dag.json`.
 - After `proceed_to_blueprint`, ProductManager returns one response containing `build_workflow`, blueprint, and permission-plan fields. The backend stores `build_workflow` on the agent run and writes only `blueprint.json` and `permissions.json`.
 - Backend performs deterministic build-time permission review and waits for user approval.
-- After approval the backend resolves the registered workflow. Only `task_dag` invokes ProductManager again to return task DAG JSON and write `task_dag.json`; `single_codex` invokes Codex once with the blueprint and effective permissions.
-- Task-DAG planning receives compact backend-approved permission bounds rather than default policy and banned-permission prose duplicated from `permissions.json`.
+- After approval the backend resolves the registered workflow. Only `task_dag` invokes ProductManager again to return task DAG JSON and write `task_dag.json`; `single_codex` invokes Codex once with the blueprint and effective permission bounds.
+- Task-DAG planning receives compact backend-approved permission bounds, including config-derived `blocked`, rather than duplicated policy prose.
 - Backend derives the initial package `manifest.json` from `blueprint.json` and `permissions.json`; ProductManager does not write generated skill files directly. If ProductManager included schedule intent in the blueprint, the manifest skeleton carries it into `manifest.json`.
 
 Schedule intent in `blueprint.json` uses the manifest schedule shape. Use `null` when the user did not request recurrence. For recurrence, use one of:

@@ -6,7 +6,7 @@ The backend also starts one persistent local `codex app-server --stdio` child pr
 
 DAG builds keep a 5% reserve in both account windows. A new ready-node batch is not admitted when either window has less than 5% remaining; already admitted parallel-ready work is allowed to reach its batch boundary before the run pauses.
 
-Project-build Codex CLI invocations use JSONL output plus the final-message file. The backend persists the `turn.completed` token breakdown for ProductManager, Builder, and Tester invocations. Records include adapter, role, route source, requested/effective model, requested/effective reasoning effort, and Builder difficulty when applicable. Installed skill runtime calls use the same normalized invocation shape but are stored on the active skill run; they and direct chat are not added to project-build token totals.
+Project-build Codex CLI invocations use JSONL output plus the final-message file. ProductManager actions also pass an action-specific JSON Schema through `--output-schema`; blueprint responses constrain their known build, repair, or update fields while leaving the nested callable input/output JSON Schema documents open for user-defined properties. Their existing prompt contracts and backend parsing, sanitization, catalog checks, and fallbacks remain defense in depth. Builder, Tester, and single-Codex build calls do not use a final-response schema because their authoritative outputs are controlled files and validation results. The backend persists the `turn.completed` token breakdown for ProductManager, Builder, and Tester invocations. Records include adapter, role, route source, requested/effective model, requested/effective reasoning effort, and Builder difficulty when applicable. Installed skill runtime calls use the same normalized invocation shape but are stored on the active skill run; they and direct chat are not added to project-build token totals.
 
 ## Defaults
 
@@ -101,10 +101,11 @@ whole-workflow budgets, and partial recovery are not part of these hard limits a
 
 ## Sandbox Modes
 
-- Chat and plausibility: read-only project root.
-- ProductManager workflow actions: read-only `runtime/product_manager` workspace. ProductManager returns structured JSON on stdout; the backend parses it and writes workflow artifacts such as `blueprint.json`, `permissions.json`, and `task_dag.json`.
+- Chat: read-only project root.
+- Plausibility: read-only project root with a final-response JSON Schema for the machine-consumed decision.
+- ProductManager workflow actions: read-only `runtime/product_manager` workspace. ProductManager returns CLI-schema-constrained JSON on stdout; the backend parses and sanitizes it, then writes workflow artifacts such as `blueprint.json`, `permissions.json`, and `task_dag.json`.
 - Builder/Tester skill generation, build, repair, and update: `workspace-write` scoped to the controlled skill or draft-version directory passed with `-C`.
-- Backend-mediated skill Codex calls: read-only runtime workspace.
+- Backend-mediated skill Codex calls: read-only runtime workspace with a final-response JSON Schema for the bounded response envelope.
 
 Codex must not modify backend/frontend app source when generating application skills.
 

@@ -369,6 +369,17 @@ export interface CodexRoutingSettings extends CodexRoutingSettingsPayload {
   updated_at: string | null;
 }
 
+export interface PermissionPolicy {
+  source: string;
+  default_allowed: Record<string, unknown>;
+  requires_approval: Record<string, unknown>;
+  blocked: string[];
+  web_app: {
+    supported: string[];
+    blocked: string[];
+  };
+}
+
 export interface CodexModelOption {
   id: string;
   model: string;
@@ -681,6 +692,7 @@ export const api = {
   getCodexUsage: () => request<CodexAccountUsage>("/usage/codex"),
   getCodexCliStatus: (refresh = false) => request<CodexCliStatus>(`/usage/codex/cli?refresh=${refresh}`),
   getCodexRoutingSettings: () => request<CodexRoutingSettings>("/settings/codex-routing"),
+  getPermissionPolicy: () => request<PermissionPolicy>("/settings/permission-policy"),
   updateCodexRoutingSettings: (payload: CodexRoutingSettingsPayload) =>
     request<CodexRoutingSettings>("/settings/codex-routing", {
       method: "PUT",

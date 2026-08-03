@@ -1,6 +1,6 @@
 # BuilderAgent
 
-BuilderAgent writes and repairs generated skill files inside controlled skill folders, one DAG task node at a time.
+BuilderAgent writes and repairs generated skill files inside controlled skill folders, one DAG task node at a time. Permission classifications come from `backend/app/static/default_permissions.json`, not Builder instruction prose.
 
 ## Modes
 
@@ -14,13 +14,13 @@ update
 
 Builder reads:
 
-- compact backend-approved permission bounds with effective runtime permissions and explicit blocked capabilities;
-- current task node fields needed for the task;
+- compact backend-approved permission bounds with effective runtime permissions and a `blocked` field loaded from the canonical config;
+- the current task's `task_prompt`, `write_paths`, and `acceptance_criteria` only;
 - full function context only for catalog ids assigned by ProductManager on the current task node;
 - interface artifacts from direct parent task nodes;
 - safe workspace paths for existing generated files when applicable. File contents are read from the controlled workspace instead of duplicated in the prompt.
 
-Builder should not be prompted with backend bookkeeping fields such as artifact paths, task indexes, task status, generation request ids, or the entire task DAG for ordinary node work. It also should not receive duplicated manifest requirements, interface-artifact schemas, full source snapshots, transitive ancestor artifacts, or function context for other nodes.
+Builder should not be prompted with the node id, selected function ids, dependencies, difficulty, test policy, parallel-admission policy, test expectations, backend artifact paths, task indexes, task status, generation request ids, or the entire task DAG for ordinary node work. Selected function ids are resolved by the backend into detailed `function_context`. Builder also should not receive duplicated manifest requirements, interface-artifact schemas, full source snapshots, transitive ancestor artifacts, or function context for other nodes.
 
 Builder implements the current task node only. It must not jump ahead to child nodes unless the current node explicitly defines shared setup as part of its acceptance criteria.
 

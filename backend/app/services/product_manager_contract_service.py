@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from jsonschema import Draft202012Validator, SchemaError
 
 from app.models import Skill
 from app.schemas.manifest import ManifestIntegrationResourceScope
-from app.services.default_permissions import default_build_time_dependencies
+from app.services.default_permissions import approval_required_permissions, default_build_time_dependencies
 
 
 class ProductManagerContractService:
@@ -132,53 +133,53 @@ class ProductManagerContractService:
         return dict(candidate)
 
     def sanitize_permission_plan(self, value: object, fallback_plan: dict[str, object]) -> dict[str, object]:
-        fallback_permissions = fallback_plan.get("requested_permissions")
-        fallback_permissions = fallback_permissions if isinstance(fallback_permissions, dict) else {}
-        default_permissions = {
-            "network": list(fallback_plan.get("requested_network_domains", []) or []),
-            "filesystem_read": [],
-            "filesystem_write": [],
-            "secrets": [],
-            "shell": False,
-        }
-        if fallback_permissions:
-            default_permissions = {**default_permissions, **dict(fallback_permissions)}
-            for key in ("filesystem_read", "filesystem_write"):
-                default_permissions[key] = [
-                    path
-                    for path in list(default_permissions.get(key, []) or [])
-                    if str(path).replace("\\", "/").removeprefix("./").rstrip("/") != "cache"
-                ]
-        default_dependencies = list(fallback_plan.get("requested_dependencies", []) or [])
-        if not isinstance(value, dict):
-            value = {}
-        build_time = value.get("build_time") if isinstance(value.get("build_time"), dict) else {}
-        runtime = value.get("runtime") if isinstance(value.get("runtime"), dict) else {}
-        legacy_permissions = runtime.get("permissions") if isinstance(runtime.get("permissions"), dict) else None
-        permissions = legacy_permissions if legacy_permissions is not None else {**default_permissions, **runtime}
-        sanitized_permissions = {
-            "network": list(permissions.get("network", []) or []),
-            "filesystem_read": list(permissions.get("filesystem_read", []) or []),
-            "filesystem_write": list(permissions.get("filesystem_write", []) or []),
-            "secrets": list(permissions.get("secrets", []) or []),
-            "shell": bool(permissions.get("shell", False)),
-        }
-        raw_codex = permissions.get("codex") if isinstance(permissions.get("codex"), dict) else {}
-        sanitized_permissions["codex"] = {"internet_access": bool(raw_codex.get("internet_access", False))}
-        network = sanitized_permissions["network"]
-        dependencies = list(runtime.get("dependencies", default_dependencies) or [])
-        build_time_dependencies = [
-            dependency
-            for dependency in list(build_time.get("dependencies", dependencies) or [])
-            if str(dependency).lower() not in default_build_time_dependencies()
-        ]
-        return {
+        requested_permissions = fallback_plan.get("requested_permissions")
+        requested_permissions = requested_permissions if isinstance(requested_permissions, dict) else {}
+        requested_dependencies = list(fallback_plan.get("requested_dependencies", []) or [])
+        requested_network = list(
+            fallback_plan.get("requested_network_domains") or requested_permissions.get("network", []) or []
+        )
+        requested_codex = (
+            requested_permissions.get("codex") if isinstance(requested_permissions.get("codex"), dict) else {}
+        )
+        fallback = {
             "build_time": {
-                "internet_research": bool(build_time.get("internet_research", bool(network or dependencies))),
-                "dependencies": build_time_dependencies,
+                "internet_research": bool(requested_network or requested_dependencies),
+                "dependencies": requested_dependencies,
             },
-            "runtime": {**sanitized_permissions, "dependencies": dependencies},
+            "runtime": {
+                "dependencies": requested_dependencies,
+                "network": requested_network,
+                "codex": {
+                    "internet_access": bool(requested_codex.get("internet_access", requested_network)),
+                },
+            },
         }
+        sanitized = self._sanitize_permission_template(value, approval_required_permissions(), fallback)
+        sanitized["build_time"]["dependencies"] = [
+            dependency
+            for dependency in sanitized["build_time"]["dependencies"]
+            if dependency.lower() not in default_build_time_dependencies()
+        ]
+        return sanitized
+
+    def _sanitize_permission_template(self, value: object, template: object, fallback: object = None) -> Any:
+        if isinstance(template, dict):
+            source = value if isinstance(value, dict) else {}
+            fallback_source = fallback if isinstance(fallback, dict) else {}
+            return {
+                key: self._sanitize_permission_template(
+                    source.get(key, fallback_source.get(key)),
+                    nested_template,
+                    fallback_source.get(key),
+                )
+                for key, nested_template in template.items()
+            }
+        if isinstance(template, list):
+            return self._unique_strings(value if value is not None else fallback)
+        if isinstance(template, bool):
+            return bool(fallback if value is None else value)
+        raise ValueError(f"Unsupported permission policy template value: {type(template).__name__}")
 
     def sanitize_update_review(
         self,
@@ -252,30 +253,22 @@ class ProductManagerContractService:
             difficulty = str(raw.get("difficulty") or "medium")
             if difficulty not in {"easy", "medium", "hard"}:
                 difficulty = "medium"
-            expected_paths = self.skill_package_files(raw.get("expected_output_paths"))
-            claims = self.skill_package_files(raw.get("file_write_claims")) or list(expected_paths)
+            write_paths = self.skill_package_files(raw.get("write_paths"))
             criteria = raw.get("acceptance_criteria")
             sanitized_nodes.append(
                 {
                     "id": node_id,
-                    "title": str(raw.get("title") or node_id.replace("_", " ").title()),
-                    "summary": str(raw.get("summary") or "Build this task node."),
+                    "task_prompt": str(raw.get("task_prompt") or "Build this task node."),
                     "depends_on": [str(item) for item in raw.get("depends_on", []) if str(item).strip()]
                     if isinstance(raw.get("depends_on"), list)
                     else [],
                     "difficulty": difficulty,
                     "requires_tests": bool(raw.get("requires_tests", False)),
                     "parallel_safe": bool(raw.get("parallel_safe", True)),
-                    "expected_output_paths": expected_paths,
-                    "file_write_claims": [path for path in claims if path != "manifest.json"],
+                    "write_paths": [path for path in write_paths if path != "manifest.json"],
                     "acceptance_criteria": [str(item) for item in criteria] if isinstance(criteria, list) else [],
                     "test_expectations": [str(item) for item in raw.get("test_expectations", [])]
                     if isinstance(raw.get("test_expectations"), list)
-                    else [],
-                    "interface_artifact_expectations": [
-                        str(item) for item in raw.get("interface_artifact_expectations", [])
-                    ]
-                    if isinstance(raw.get("interface_artifact_expectations"), list)
                     else [],
                     "function_ids": [
                         str(item) for item in raw.get("function_ids", []) if str(item).strip()

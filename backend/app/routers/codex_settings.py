@@ -7,9 +7,19 @@ from app.schemas.codex_routing import (
     CodexRoutingSettingsPayload,
     CodexRoutingSettingsRead,
 )
+from app.schemas.permission_policy import PermissionPolicyRead
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
+from app.services.default_permissions import default_permission_policy
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+
+@router.get("/permission-policy", response_model=PermissionPolicyRead)
+def get_permission_policy() -> dict[str, object]:
+    return {
+        "source": "backend/app/static/default_permissions.json",
+        **default_permission_policy(),
+    }
 
 
 @router.get("/codex-routing", response_model=CodexRoutingSettingsRead)

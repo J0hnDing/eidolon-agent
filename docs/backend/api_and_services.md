@@ -20,6 +20,7 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 - `/usage/codex/cli`: effective Codex CLI executable, version, source, candidates, and compatibility status.
 - `/settings/codex-models`: live account-aware model catalog and supported reasoning efforts from Codex App Server.
 - `/settings/codex-routing`: read or replace the validated single-user invocation routing settings and optional Project build workflow override.
+- `/settings/permission-policy`: read the current checked-in permission policy, including default-allowed, approval-required, blocked, and web-application classifications.
 
 ## Service Responsibilities
 
@@ -29,7 +30,7 @@ Coordinates chat requests. Chat mode returns direct answers. Project mode create
 
 ### ProductManager planning
 
-There is no pre-ProductManager skill-plan service. Project mode creates a minimal pending generation request, then ProductManager refines intent, performs plausibility review, and writes the blueprint and permission plan. The blueprint owns the safe skill identity, runtime, complete function input/output JSON Schemas, selected function ids, integration resource scopes, schedule intent, and acceptance criteria. Fake Codex adapters support deterministic tests and local development.
+There is no pre-ProductManager skill-plan service. Project mode creates a minimal pending generation request, then ProductManager refines intent, performs plausibility review, and writes the blueprint and permission plan. Plausibility receives only the `blocked` section of `backend/app/static/default_permissions.json`; blueprint and update planning receive its complete `default_allowed`/`requires_approval`/`blocked` policy. The blueprint owns the safe skill identity, runtime, complete function input/output JSON Schemas, selected function ids, integration resource scopes, schedule intent, and acceptance criteria. Fake Codex adapters support deterministic tests and local development.
 
 ### AgentWorkflowService
 
@@ -47,7 +48,7 @@ The project-build workflow registry is backend-managed and contains only trusted
 
 ### CodexService
 
-Acts as the Codex application facade for shared real/fake adapter integration, structured-output parsing, model routing, controlled workspaces, manifest helpers, and invocation safety. `ProductManagerContractService` separately normalizes untrusted ProductManager blueprint, permission, review, and task-DAG JSON into backend-owned allowlisted contracts. Project-build prompt composition is supplied by the owning workflow package. Update and standalone repair prompt composition remains role-based until those workflows are modularized. ProductManager Codex calls are forced to `read-only`; writable workflow/Builder/Tester calls are forced to `workspace-write` and scoped to controlled skill or draft-version directories.
+Acts as the Codex application facade for shared real/fake adapter integration, structured-output parsing, model routing, controlled workspaces, manifest helpers, and invocation safety. `ProductManagerContractService` separately normalizes untrusted ProductManager blueprint, permission, review, and task-DAG JSON into backend-owned allowlisted contracts; permission output is restricted to the config-derived approval template. Project-build prompt composition is supplied by the owning workflow package. Update and standalone repair prompt composition remains role-based until those workflows are modularized. ProductManager Codex calls are forced to `read-only`; writable workflow/Builder/Tester calls are forced to `workspace-write` and scoped to controlled skill or draft-version directories.
 
 `CodexInvocationRecorder` normalizes per-invocation token metadata into an adapter-neutral record and separately buffers the exact composed prompt and exact final adapter response until the active workflow step consumes them. `AgentWorkflowService` attaches both records to the active agent step and maintains agent-run totals. Backend-only steps never consume or expose an agent transcript. Successful runtime calls update separate token totals; failed calls retain the resolved CLI path/version/source, exit code, error type, concise error detail, and a bounded stderr tail while leaving token totals at zero when no completed turn exists.
 

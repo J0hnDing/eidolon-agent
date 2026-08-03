@@ -8,7 +8,7 @@ _PACKAGE_DIR = Path(__file__).resolve().parent
 
 def build_prompt(
     blueprint: dict[str, object],
-    permission_plan: dict[str, object],
+    permission_bounds: dict[str, object],
     output_dir: Path,
 ) -> str:
     instruction = load_instruction(_PACKAGE_DIR, "run.md")
@@ -21,8 +21,8 @@ Controlled skill folder:
 Blueprint:
 {json.dumps(blueprint, indent=2)}
 
-Effective permissions:
-{json.dumps(permission_plan, indent=2)}
+Permission bounds:
+{json.dumps(permission_bounds, indent=2)}
 
 Selected function context:
 {json.dumps(blueprint.get("function_context", []), indent=2)}

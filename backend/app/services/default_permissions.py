@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -6,23 +7,83 @@ from typing import Any
 DEFAULT_PERMISSION_POLICY_FILE = Path(__file__).resolve().parents[1] / "static" / "default_permissions.json"
 
 
+def _validate_permission_template(value: object, path: str) -> None:
+    if isinstance(value, dict):
+        if not value:
+            raise ValueError(f"Permission policy template {path!r} must not be empty")
+        for key, nested_value in value.items():
+            if not isinstance(key, str) or not key:
+                raise ValueError(f"Permission policy template {path!r} has an invalid key")
+            _validate_permission_template(nested_value, f"{path}.{key}")
+        return
+    if isinstance(value, list):
+        if value:
+            raise ValueError(f"Permission policy list template {path!r} must be empty")
+        return
+    if isinstance(value, bool):
+        return
+    raise ValueError(f"Permission policy template {path!r} has unsupported type {type(value).__name__}")
+
+
 @lru_cache(maxsize=1)
+def _load_default_permission_policy() -> dict[str, Any]:
+    policy = json.loads(DEFAULT_PERMISSION_POLICY_FILE.read_text(encoding="utf-8"))
+    if not isinstance(policy, dict):
+        raise ValueError("Default permission policy must be a JSON object")
+    required_sections = {
+        "default_allowed": dict,
+        "requires_approval": dict,
+        "blocked": list,
+        "web_app": dict,
+    }
+    for section, expected_type in required_sections.items():
+        if not isinstance(policy.get(section), expected_type):
+            raise ValueError(f"Default permission policy section {section!r} is missing or invalid")
+    if not all(isinstance(item, str) and item.strip() for item in policy["blocked"]):
+        raise ValueError("Default permission policy blocked entries must be non-empty strings")
+    _validate_permission_template(policy["requires_approval"], "requires_approval")
+    return policy
+
+
 def default_permission_policy() -> dict[str, Any]:
-    return json.loads(DEFAULT_PERMISSION_POLICY_FILE.read_text(encoding="utf-8"))
+    return deepcopy(_load_default_permission_policy())
+
+
+def planning_permission_policy() -> dict[str, Any]:
+    policy = default_permission_policy()
+    return deepcopy(
+        {
+            "default_allowed": policy["default_allowed"],
+            "requires_approval": policy["requires_approval"],
+            "blocked": policy["blocked"],
+        }
+    )
 
 
 def default_allowed_permissions() -> dict[str, Any]:
-    return dict(default_permission_policy().get("default_allowed", {}))
+    return deepcopy(default_permission_policy()["default_allowed"])
 
 
-def default_banned_permissions() -> list[str]:
-    return [str(item) for item in default_permission_policy().get("banned_permissions", [])]
+def approval_required_permissions() -> dict[str, Any]:
+    return deepcopy(default_permission_policy()["requires_approval"])
+
+
+def blocked_permissions() -> list[str]:
+    return list(default_permission_policy()["blocked"])
+
+
+def agent_permission_bounds(permission_plan: dict[str, Any]) -> dict[str, Any]:
+    build_time = permission_plan.get("build_time") if isinstance(permission_plan.get("build_time"), dict) else {}
+    runtime = permission_plan.get("runtime") if isinstance(permission_plan.get("runtime"), dict) else {}
+    return {
+        "build_time": deepcopy(build_time),
+        "runtime": deepcopy(runtime),
+        "blocked": blocked_permissions(),
+    }
 
 
 def default_web_app_permissions() -> dict[str, list[str]]:
-    policy = default_permission_policy().get("web_app", {})
-    if not isinstance(policy, dict):
-        return {"supported": [], "blocked": []}
+    policy = default_permission_policy()["web_app"]
     return {
         "supported": [str(item) for item in policy.get("supported", [])],
         "blocked": [str(item) for item in policy.get("blocked", [])],

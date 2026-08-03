@@ -478,3 +478,42 @@ Added a dedicated single_codex Builder routing choice with live model and reason
 ### Limitations
 
 none
+
+## 2026-08-02 16:10 — Simplify Task DAG node contract
+
+- Category: refactor
+- Area: backend-project-build-execution
+
+### Summary
+
+Replaced task-node title and summary with stable id plus task_prompt; unified expected_output_paths and file_write_claims as required write_paths; removed ProductManager-authored interface artifact expectations; trimmed Builder and Tester node projections; added the exact ProductManager output schema; updated backend validation, artifact ownership, fallback behavior, Agent Run UI, agent instructions, workflow documentation, and regression coverage. Ruff passed, 133 focused backend tests passed, all 380 backend tests passed, all 17 frontend tests passed, the production frontend build passed, and git diff --check passed.
+
+### Limitations
+
+Real isolated-workspace parallel execution remains deferred. Projector-managed TODO-008 still uses the retired file_write_claims term because the current agent API has no TODO edit route.
+
+## 2026-08-02 16:48 — Config-derived agent permission policy
+
+- Category: refactor
+- Area: backend permissions and agent workflows
+
+### Summary
+
+Made backend/app/static/default_permissions.json the canonical agent-facing permission policy with default_allowed, requires_approval, and blocked sections. Plausibility now receives only blocked; blueprint and update ProductManager actions receive the full policy; structured permission output and backend sanitization derive from the approval template; and post-approval ProductManager, Builder, Tester, repair, update, and single-Codex paths receive effective permission_bounds with config-derived blocked values. Removed duplicated policy lists from instruction files, updated workflow/security/agent/backend documentation, and added regression coverage.
+
+### Limitations
+
+Deterministic backend enforcement remains authoritative, and approved network domains still are not domain-firewalled as documented. No skill was installed or run.
+
+## 2026-08-02 17:22 — Permission schema derivation and Settings policy display
+
+- Category: feature
+- Area: backend permissions and frontend settings
+
+### Summary
+
+Made ProductManager permission-plan output schemas regenerate from the canonical requires_approval config template on every schema request, return independent deep copies, and enforce required nested fields, no unknown fields, and unique non-empty string lists. Added strict config-template validation. Added the read-only GET /settings/permission-policy contract and displayed the current default-allowed, approval-required, blocked, and web-application policy plus source path in Codex Settings without duplicating policy values in TypeScript. Updated security, backend API, and frontend documentation and added backend/UI regression coverage.
+
+### Limitations
+
+The policy remains checked-in and read-only in Settings; changing it still requires editing the canonical backend config and restarting/reloading the backend. Existing documented network-domain enforcement limitations remain unchanged.

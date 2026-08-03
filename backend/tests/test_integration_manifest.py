@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from app.services.default_permissions import planning_permission_policy
 from app.services.integration_registry import OPERATIONS
 from app.services.manifest_validator import ManifestValidationError, validate_manifest
 from app.services.task_dag_service import TaskDagService
@@ -62,6 +63,7 @@ def test_product_manager_and_single_codex_context_are_minimized(tmp_path) -> Non
         "write_blueprint_and_permissions",
         {
             "intent_prompt": {"refined_prompt": "Build a GitHub repository reader."},
+            "permission_policy": planning_permission_policy(),
             "function_catalog_index": [
                 {
                     "id": "github.repository.get",
@@ -134,9 +136,9 @@ def test_task_dag_rejects_operation_outside_approved_blueprint() -> None:
         "nodes": [
             {
                 "id": "core",
+                "task_prompt": "Build the core skill.",
                 "acceptance_criteria": ["works"],
-                "expected_output_paths": ["skill.py"],
-                "file_write_claims": ["skill.py"],
+                "write_paths": ["skill.py"],
                 "requires_tests": True,
                 "function_ids": ["github.issue.list"],
             }
@@ -153,9 +155,9 @@ def test_task_dag_must_assign_every_approved_operation() -> None:
         "nodes": [
             {
                 "id": "core",
+                "task_prompt": "Build the core skill.",
                 "acceptance_criteria": ["works"],
-                "expected_output_paths": ["skill.py"],
-                "file_write_claims": ["skill.py"],
+                "write_paths": ["skill.py"],
                 "requires_tests": True,
                 "function_ids": [],
             }
