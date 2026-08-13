@@ -1,5 +1,6 @@
 import io
 import json
+import queue
 import subprocess
 
 import pytest
@@ -71,31 +72,51 @@ def test_model_catalog_normalizes_advertised_efforts() -> None:
 
 
 def test_codex_usage_service_normalizes_primary_and_secondary_windows(monkeypatch) -> None:
+    output: queue.Queue[str] = queue.Queue()
+
+    class FakeStdin(io.StringIO):
+        def flush(self) -> None:
+            request = json.loads(self.getvalue().splitlines()[-1])
+            if request.get("method") == "initialize":
+                output.put(json.dumps({"id": request["id"], "result": {"userAgent": "test"}}) + "\n")
+            elif request.get("method") == "account/rateLimits/read":
+                output.put(
+                    json.dumps(
+                        {
+                            "id": request["id"],
+                            "result": {
+                                "rateLimits": {},
+                                "rateLimitsByLimitId": {
+                                    "codex": {
+                                        "limitId": "codex",
+                                        "planType": "plus",
+                                        "primary": {
+                                            "usedPercent": 20,
+                                            "windowDurationMins": 300,
+                                            "resetsAt": 1_800_000_000,
+                                        },
+                                        "secondary": {
+                                            "usedPercent": 35,
+                                            "windowDurationMins": 10080,
+                                            "resetsAt": 1_800_100_000,
+                                        },
+                                        "rateLimitReachedType": None,
+                                    }
+                                },
+                            },
+                        }
+                    )
+                    + "\n"
+                )
+
+    class FakeStdout:
+        def readline(self) -> str:
+            return output.get(timeout=2)
+
     class FakeProcess:
         def __init__(self) -> None:
-            self.stdin = io.StringIO()
-            self.stdout = io.StringIO(
-                json.dumps({"id": 1, "result": {"userAgent": "test"}})
-                + "\n"
-                + json.dumps(
-                    {
-                        "id": 2,
-                        "result": {
-                            "rateLimits": {},
-                            "rateLimitsByLimitId": {
-                                "codex": {
-                                    "limitId": "codex",
-                                    "planType": "plus",
-                                    "primary": {"usedPercent": 20, "windowDurationMins": 300, "resetsAt": 1_800_000_000},
-                                    "secondary": {"usedPercent": 35, "windowDurationMins": 10080, "resetsAt": 1_800_100_000},
-                                    "rateLimitReachedType": None,
-                                }
-                            },
-                        },
-                    }
-                )
-                + "\n"
-            )
+            self.stdin = FakeStdin()
+            self.stdout = FakeStdout()
 
         def poll(self):
             return None

@@ -12,9 +12,9 @@ building -> failed
 ## Proposed Skill Workflow
 
 1. Project mode creates a generation request.
-2. ProductManager refines intent and returns a plausibility decision; the backend writes the decision artifact.
-3. If the request needs clarification, the same Project-mode chat continues the same generation request and ProductManager repeats intent/plausibility review.
-4. If the request is plausible, ProductManager returns blueprint and permission JSON; the backend writes the artifacts.
+2. ProductManager refines intent once and starts a persistent `pm_plan_build` Codex App Server thread; the backend writes `decision.json` after each turn.
+3. If the request needs clarification, the same Project-mode chat resumes that thread with the latest answer. If it is rejected, the thread is archived and no planning artifacts are created.
+4. On `proceed_to_approval`, ProductManager returns the complete blueprint, permission plan, and workflow in one response; only then does the backend write planning artifacts and continue to approval. The thread is archived after this terminal planning outcome.
 5. The app creates a build-time approval request from the blueprint summary and permission plan.
 6. User approves generation.
 7. Backend creates a clean proposed workspace, installs and verifies approved dependencies, and stops before Codex if provisioning fails.

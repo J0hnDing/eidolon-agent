@@ -367,44 +367,45 @@ _OUTPUT_SCHEMAS: dict[str, dict[str, object]] = {
                             "type": "string",
                             "description": "Clear downstream build request preserving user intent.",
                         },
-                        "selected_memory_facts": {
-                            "type": "array",
-                            "items": _UNCONSTRAINED_OBJECT,
-                            "description": "Relevant explicit memory facts used during refinement.",
-                        },
                     },
-                    ["schema_version", "refined_prompt", "selected_memory_facts"],
+                    ["schema_version", "refined_prompt"],
                 ),
                 "Refined intent passed to later ProductManager actions.",
             )
         },
         ["intent_prompt"],
     ),
-    "product_manager_build_review": _object_schema(
+    "product_manager_plan_build": _object_schema(
         {
             "decision": {
                 "type": "string",
-                "enum": ["proceed_to_blueprint", "ask_user_for_input", "stop_inplausible"],
-                "description": "Next action after plausibility review.",
+                "enum": ["ask_user_for_input", "stop_inplausible", "proceed_to_approval"],
+                "description": "Clarify, reject, or return a complete build plan for approval.",
             },
             "user_prompt": {
                 "type": ["string", "null"],
-                "description": "Clarification or explanation for the user; null when proceeding.",
+                "description": "One clarification question or rejection explanation; null when proceeding.",
             },
-        },
-        ["decision", "user_prompt"],
-    ),
-    "product_manager_write_blueprint_and_permissions": _object_schema(
-        {
             "build_workflow": {
-                "type": "string",
-                "enum": ["single_codex", "task_dag"],
-                "description": "Backend workflow used to build the skill.",
+                "anyOf": [
+                    {"type": "null"},
+                    {
+                        "type": "string",
+                        "enum": ["single_codex", "task_dag"],
+                    },
+                ],
+                "description": "Backend workflow used to build the skill; null unless proceeding.",
             },
-            "blueprint": _described(_BUILD_BLUEPRINT_SCHEMA, "Skill implementation contract."),
-            "permission_plan": {},
+            "blueprint": {
+                "anyOf": [{"type": "null"}, _BUILD_BLUEPRINT_SCHEMA],
+                "description": "Complete skill contract when proceeding; null otherwise.",
+            },
+            "permission_plan": {
+                "anyOf": [{"type": "null"}, {}],
+                "description": "Approval-required build/runtime permissions when proceeding; null otherwise.",
+            },
         },
-        ["build_workflow", "blueprint", "permission_plan"],
+        ["decision", "user_prompt", "build_workflow", "blueprint", "permission_plan"],
     ),
     "product_manager_write_task_dag": _object_schema(
         {
@@ -548,8 +549,8 @@ def output_schema_for_action(action: object) -> dict[str, object] | None:
         return None
     schema = deepcopy(stored_schema)
     permission_schema = permission_plan_output_schema()
-    if action_name == "product_manager_write_blueprint_and_permissions":
-        schema["properties"]["permission_plan"] = permission_schema  # type: ignore[index]
+    if action_name == "product_manager_plan_build":
+        schema["properties"]["permission_plan"]["anyOf"][1] = permission_schema  # type: ignore[index]
     elif action_name == "product_manager_update_review":
         schema["properties"]["blueprint"]["properties"]["permission_plan"] = permission_schema  # type: ignore[index]
     return schema

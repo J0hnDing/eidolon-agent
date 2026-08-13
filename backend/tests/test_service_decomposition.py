@@ -114,6 +114,8 @@ def test_codex_invocation_recorder_keeps_build_usage_buffer_separate() -> None:
             "cli_path": None,
             "cli_version": None,
             "cli_source": None,
+            "thread_id": None,
+            "turn_id": None,
             "input_tokens": 10,
             "total_tokens": 12,
         }

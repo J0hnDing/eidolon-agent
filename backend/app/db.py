@@ -85,6 +85,10 @@ def ensure_local_schema() -> None:
                 connection.execute(text("ALTER TABLE skills DROP COLUMN tool_ui_schema_json"))
         if "skill_generation_requests" in table_names:
             columns = {column["name"] for column in inspector.get_columns("skill_generation_requests")}
+            if "product_manager_thread_id" not in columns:
+                connection.execute(
+                    text("ALTER TABLE skill_generation_requests ADD COLUMN product_manager_thread_id VARCHAR(128)")
+                )
             if "proposed_skill_type" in columns:
                 connection.execute(text("ALTER TABLE skill_generation_requests DROP COLUMN proposed_skill_type"))
         if "skill_schedules" in table_names:
@@ -228,7 +232,36 @@ def ensure_local_schema() -> None:
             connection.execute(text("UPDATE agent_run_steps SET step_name = 'product_manager' WHERE step_name IN ('planner', 'reviewer')"))
             connection.execute(text("UPDATE agent_run_steps SET step_name = 'product_manager' WHERE step_name IN ('permission_analyst', 'security_reviewer')"))
             connection.execute(text("UPDATE agent_run_steps SET step_name = 'builder' WHERE step_name = 'repairer'"))
+        _remove_retired_product_manager_routing(connection, table_names)
         _remove_retired_skill_contract_json(connection, table_names)
+
+
+def _remove_retired_product_manager_routing(connection, table_names: set[str]) -> None:
+    """Drop routing keys that no longer have a live ProductManager action."""
+
+    if "codex_routing_settings" not in table_names:
+        return
+    rows = connection.execute(
+        text("SELECT id, settings_json FROM codex_routing_settings WHERE settings_json IS NOT NULL")
+    ).all()
+    for row_id, raw_value in rows:
+        try:
+            value = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(value, dict):
+            continue
+        product_manager = value.get("product_manager")
+        if not isinstance(product_manager, dict) or "plausibility_review" not in product_manager:
+            continue
+        cleaned = dict(value)
+        cleaned_product_manager = dict(product_manager)
+        cleaned_product_manager.pop("plausibility_review", None)
+        cleaned["product_manager"] = cleaned_product_manager
+        connection.execute(
+            text("UPDATE codex_routing_settings SET settings_json = :value WHERE id = :row_id"),
+            {"value": json.dumps(cleaned), "row_id": row_id},
+        )
 
 
 def _remove_retired_skill_contract_json(connection, table_names: set[str]) -> None:

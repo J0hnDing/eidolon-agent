@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db import Base
 from app.models import AgentRun, MemoryFact, Message, Skill, SkillGenerationRequest
 from app.routers import chat as chat_router
+from app.schemas.codex_routing import ResolvedInvocationSettings
 from app.schemas.skill_generation import ChatRequest, ChatResponse
 from app.services.agent_workflow_service import AgentWorkflowError
 from app.services.chat_orchestrator import ChatOrchestrator
@@ -29,6 +30,8 @@ from app.services.codex_service import (
 )
 from app.services.direct_chat_service import DirectChatService, RealDirectChatAdapter
 from app.services.permission_service import PermissionService
+from app.services.product_manager_contract_service import ProductManagerContractError
+from app.services.product_manager_session_service import ProductManagerTurnResult
 from app.services.proposed_skill_service import ProposedSkillService
 
 
@@ -101,7 +104,7 @@ class FixedBlueprintAdapter(FakeCodexAdapter):
         self.called = False
 
     def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
-        if plan.get("codex_task") != "product_manager_write_blueprint_and_permissions":
+        if plan.get("codex_task") != "product_manager_plan_build":
             return super().generate(prompt, output_dir, plan)
         self.called = True
         source = self.plan
@@ -113,8 +116,9 @@ class FixedBlueprintAdapter(FakeCodexAdapter):
                 "dependencies": list(source.get("requested_dependencies", [])),
             },
             "runtime": {
-                **dict(source["requested_permissions"]),
                 "dependencies": list(source.get("requested_dependencies", [])),
+                "network": list(source.get("requested_network_domains", [])),
+                "codex": {"internet_access": False},
             },
         }
         blueprint = {
@@ -135,6 +139,8 @@ class FixedBlueprintAdapter(FakeCodexAdapter):
             returncode=0,
             stdout=json.dumps(
                 {
+                    "decision": "proceed_to_approval",
+                    "user_prompt": None,
                     "build_workflow": "task_dag",
                     "blueprint": blueprint,
                     "permission_plan": permission_plan,
@@ -296,7 +302,7 @@ def test_chat_response_model_serializes_generation_request_fields(db_session: Se
     assert isinstance(data["permission_request"]["id"], int)
 
 
-def test_project_mode_uses_product_manager_review_before_blueprint(db_session: Session) -> None:
+def test_project_mode_uses_one_product_manager_planning_action(db_session: Session) -> None:
     codex_adapter = FakeCodexAdapter()
     tasks: list[str] = []
     prompts: dict[str, str] = {}
@@ -317,19 +323,15 @@ def test_project_mode_uses_product_manager_review_before_blueprint(db_session: S
     )
 
     generation_request = response["generation_request"]
-    assert tasks[:3] == [
+    assert tasks[:2] == [
         "product_manager_refine_intent",
-        "product_manager_build_review",
-        "product_manager_write_blueprint_and_permissions",
+        "product_manager_plan_build",
     ]
-    assert "performing plausibility review" in prompts["product_manager_build_review"]
-    assert '"blueprint"' not in prompts["product_manager_build_review"]
-    assert "matching the supplied output schema" in prompts[
-        "product_manager_write_blueprint_and_permissions"
-    ]
-    assert "Expected JSON syntax" not in prompts["product_manager_write_blueprint_and_permissions"]
-    assert '"expected_files"' not in prompts["product_manager_write_blueprint_and_permissions"]
-    assert "For `write_task_dag`, return" not in prompts["product_manager_write_blueprint_and_permissions"]
+    assert "deciding whether and how" in prompts["product_manager_plan_build"]
+    assert "matching the supplied output schema" in prompts["product_manager_plan_build"]
+    assert "Expected JSON syntax" not in prompts["product_manager_plan_build"]
+    assert '"expected_files"' not in prompts["product_manager_plan_build"]
+    assert "For `write_task_dag`, return" not in prompts["product_manager_plan_build"]
     agent_run = db_session.query(AgentRun).filter_by(generation_request_id=generation_request.id).one()
     steps = sorted(agent_run.steps, key=lambda step: step.id)
     decisions = [
@@ -337,7 +339,7 @@ def test_project_mode_uses_product_manager_review_before_blueprint(db_session: S
         for step in steps
         if (step.output_json or {}).get("decision_json")
     ]
-    assert decisions == ["proceed_to_blueprint"]
+    assert decisions == ["proceed_to_approval"]
     permission_step = next(step for step in steps if step.action == "backend_build_time_permission_review")
     assert permission_step.step_name == "backend"
     assert permission_step.approval_request_id == response["permission_request"].id
@@ -351,8 +353,7 @@ def test_project_build_instructions_are_colocated_with_workflow_packages() -> No
     workflow_root = app_dir / "workflows"
 
     assert (workflow_root / "common" / "instructions" / "refine_intent.md").is_file()
-    assert (workflow_root / "common" / "instructions" / "plausibility_review.md").is_file()
-    assert (workflow_root / "common" / "instructions" / "blueprint_and_permissions.md").is_file()
+    assert (workflow_root / "common" / "instructions" / "plan_build.md").is_file()
     assert (workflow_root / "task_dag" / "instructions" / "product_manager.md").is_file()
     assert (workflow_root / "task_dag" / "instructions" / "builder.md").is_file()
     assert (workflow_root / "task_dag" / "instructions" / "repair.md").is_file()
@@ -365,15 +366,18 @@ def test_project_build_instructions_are_colocated_with_workflow_packages() -> No
 def test_unsupported_project_reports_pm_reason_without_artifacts(db_session: Session, tmp_path: Path) -> None:
     class UnsupportedAdapter(FakeCodexAdapter):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
-            if plan.get("codex_task") == "product_manager_build_review":
+            if plan.get("codex_task") == "product_manager_plan_build":
                 return subprocess.CompletedProcess(
                     args=["fake"],
                     returncode=0,
-                        stdout=json.dumps(
-                            {
-                                "decision": "stop_inplausible",
-                                "user_prompt": "File deletion is blocked. Ask for safe cleanup guidance in normal chat instead.",
-                            }
+                    stdout=json.dumps(
+                        {
+                            "decision": "stop_inplausible",
+                            "user_prompt": "File deletion is blocked. Ask for safe cleanup guidance in normal chat instead.",
+                            "build_workflow": None,
+                            "blueprint": None,
+                            "permission_plan": None,
+                        }
                     ),
                     stderr="",
                 )
@@ -400,22 +404,25 @@ def test_unclear_project_asks_for_input_then_same_chat_reply_builds_plan(
 ) -> None:
     class ClarifyingAdapter(FakeCodexAdapter):
         def __init__(self) -> None:
-            self.review_calls = 0
+            self.plan_calls = 0
+            self.refine_calls = 0
 
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
-            if plan.get("codex_task") == "product_manager_build_review":
-                self.review_calls += 1
-                if self.review_calls == 1:
+            if plan.get("codex_task") == "product_manager_refine_intent":
+                self.refine_calls += 1
+            if plan.get("codex_task") == "product_manager_plan_build":
+                self.plan_calls += 1
+                if self.plan_calls <= 2:
                     return subprocess.CompletedProcess(
                         args=["fake"],
                         returncode=0,
                         stdout=json.dumps(
                             {
                                 "decision": "ask_user_for_input",
-                                "summary": "ProductManager needs the intended repeated workflow.",
-                                "reason": "The request is too vague to blueprint safely.",
                                 "user_prompt": "What repeated task should this skill help with?",
-                                "optional_projects": [],
+                                "build_workflow": None,
+                                "blueprint": None,
+                                "permission_plan": None,
                             }
                         ),
                         stderr="",
@@ -441,11 +448,20 @@ def test_unclear_project_asks_for_input_then_same_chat_reply_builds_plan(
         conversation_id="chat-1",
     )
 
-    assert second_response["type"] == "skill_generation_plan"
+    assert second_response["type"] == "project_needs_input"
+    third_response = orchestrator.handle_message(
+        "The notes are Markdown files selected by the user each time.",
+        mode="project",
+        generation_request_id=generation_request.id,
+        conversation_id="chat-1",
+    )
+
+    assert third_response["type"] == "skill_generation_plan"
     db_session.refresh(generation_request)
     assert generation_request.status == "awaiting_approval"
-    assert codex_adapter.review_calls == 2
-    assert "Make it summarize recurring local meeting notes" in generation_request.user_message
+    assert codex_adapter.refine_calls == 1
+    assert codex_adapter.plan_calls == 3
+    assert "Markdown files selected by the user" in generation_request.user_message
     agent_run = db_session.query(AgentRun).filter_by(generation_request_id=generation_request.id).one()
     assert (tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "blueprint.json").is_file()
 
@@ -458,6 +474,128 @@ def test_project_mode_does_not_use_backend_unsafe_keyword_heuristic(db_session: 
 
     assert response["type"] == "skill_generation_plan"
     assert db_session.query(SkillGenerationRequest).count() == 1
+
+
+def test_product_manager_can_reject_after_clarification_without_creating_artifacts(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    class RejectAfterClarificationAdapter(FakeCodexAdapter):
+        def __init__(self) -> None:
+            self.plan_calls = 0
+
+        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            if plan.get("codex_task") == "product_manager_plan_build":
+                self.plan_calls += 1
+                decision = (
+                    {
+                        "decision": "ask_user_for_input",
+                        "user_prompt": "Should the skill delete the source files after processing?",
+                        "build_workflow": None,
+                        "blueprint": None,
+                        "permission_plan": None,
+                    }
+                    if self.plan_calls == 1
+                    else {
+                        "decision": "stop_inplausible",
+                        "user_prompt": (
+                            "Automatic file deletion is blocked. "
+                            "Generate a non-destructive cleanup report instead."
+                        ),
+                        "build_workflow": None,
+                        "blueprint": None,
+                        "permission_plan": None,
+                    }
+                )
+                return subprocess.CompletedProcess(
+                    args=["fake"], returncode=0, stdout=json.dumps(decision), stderr=""
+                )
+            return super().generate(prompt, output_dir, plan)
+
+    adapter = RejectAfterClarificationAdapter()
+    orchestrator = ChatOrchestrator(
+        db_session,
+        codex_service=CodexService(db_session, adapter=adapter, project_root=tmp_path),
+    )
+    first = orchestrator.handle_message("Build a cleanup skill.", mode="project")
+    second = orchestrator.handle_message(
+        "Yes, delete them automatically.",
+        mode="project",
+        generation_request_id=first["generation_request"].id,
+    )
+
+    assert second["type"] == "project_not_plausible"
+    generation_request = db_session.get(SkillGenerationRequest, first["generation_request"].id)
+    agent_run = db_session.query(AgentRun).filter_by(generation_request_id=generation_request.id).one()
+    artifact_root = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}"
+    assert generation_request.status == "failed"
+    assert generation_request.proposed_skill_id is None
+    assert not (artifact_root / "blueprint.json").exists()
+    assert not (artifact_root / "permissions.json").exists()
+    assert db_session.query(Skill).count() == 0
+
+
+def test_product_manager_unavailable_function_fails_without_build_artifacts(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    class UnknownFunctionAdapter(FixedBlueprintAdapter):
+        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            result = super().generate(prompt, output_dir, plan)
+            if plan.get("codex_task") != "product_manager_plan_build":
+                return result
+            output = json.loads(result.stdout)
+            output["blueprint"]["functions"] = ["missing.function"]
+            return subprocess.CompletedProcess(
+                args=result.args,
+                returncode=0,
+                stdout=json.dumps(output),
+                stderr="",
+            )
+
+    response = ChatOrchestrator(
+        db_session,
+        codex_service=CodexService(
+            db_session,
+            adapter=UnknownFunctionAdapter(),
+            project_root=tmp_path,
+        ),
+    ).handle_message("Build a reusable local workflow skill.", mode="project")
+
+    generation_request = response["generation_request"]
+    agent_run = db_session.query(AgentRun).filter_by(generation_request_id=generation_request.id).one()
+    artifact_root = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}"
+    assert generation_request.status == "failed"
+    assert generation_request.error_message == "Unknown function id: missing.function"
+    assert generation_request.proposed_skill_id is None
+    assert not (artifact_root / "blueprint.json").exists()
+    assert not (artifact_root / "permissions.json").exists()
+
+
+def test_product_manager_blocked_permission_field_fails_closed(db_session: Session) -> None:
+    result = FixedBlueprintAdapter().generate(
+        "plan",
+        Path.cwd(),
+        {"codex_task": "product_manager_plan_build"},
+    )
+    response = json.loads(result.stdout)
+    response["permission_plan"]["runtime"]["filesystem_write"] = ["C:/"]
+
+    with pytest.raises(ProductManagerContractError, match="invalid planning response"):
+        CodexService(db_session).product_manager_contracts.sanitize_plan_build(response, {})
+
+
+def test_product_manager_incomplete_function_schema_fails_closed(db_session: Session) -> None:
+    result = FixedBlueprintAdapter().generate(
+        "plan",
+        Path.cwd(),
+        {"codex_task": "product_manager_plan_build"},
+    )
+    response = json.loads(result.stdout)
+    response["blueprint"]["input_schema"] = None
+
+    with pytest.raises(ProductManagerContractError, match="complete object-shaped input_schema"):
+        CodexService(db_session).product_manager_contracts.sanitize_plan_build(response, {})
 
 
 def test_generation_request_contains_plan_permissions_and_dependencies(db_session: Session) -> None:
@@ -927,8 +1065,7 @@ def test_real_codex_adapter_uses_restricted_exec_command(tmp_path: Path, monkeyp
     "action",
     [
         "product_manager_refine_intent",
-        "product_manager_build_review",
-        "product_manager_write_blueprint_and_permissions",
+        "product_manager_plan_build",
         "product_manager_write_task_dag",
         "product_manager_repair_blueprint",
         "product_manager_update_review",
@@ -949,7 +1086,7 @@ def test_machine_consumed_codex_actions_have_valid_output_schemas(action: str) -
     ("action", "expected_fields"),
     [
         (
-            "product_manager_write_blueprint_and_permissions",
+            "product_manager_plan_build",
             {
                 "goal",
                 "skill_name",
@@ -1000,16 +1137,18 @@ def test_product_manager_output_schemas_constrain_known_blueprint_fields(
 
     assert schema is not None
     blueprint_schema = schema["properties"]["blueprint"]
+    if action == "product_manager_plan_build":
+        blueprint_schema = blueprint_schema["anyOf"][1]
     assert blueprint_schema["additionalProperties"] is False
     assert set(blueprint_schema["properties"]) == expected_fields
     assert set(blueprint_schema["required"]) == expected_fields
 
 
 def test_build_blueprint_schema_keeps_nested_callable_schemas_open() -> None:
-    schema = output_schema_for_action("product_manager_write_blueprint_and_permissions")
+    schema = output_schema_for_action("product_manager_plan_build")
 
     assert schema is not None
-    blueprint_schema = schema["properties"]["blueprint"]
+    blueprint_schema = schema["properties"]["blueprint"]["anyOf"][1]
     validator = Draft202012Validator(blueprint_schema)
     blueprint = {
         "goal": "Build a reusable formatter.",
@@ -1075,28 +1214,162 @@ def test_real_codex_adapter_passes_and_removes_action_output_schema(
         captured["command"] = command
         captured["schema_path"] = schema_path
         captured["schema"] = json.loads(schema_path.read_text(encoding="utf-8"))
-        return subprocess.CompletedProcess(args=command, returncode=0, stdout='{"decision":"proceed_to_blueprint","user_prompt":null}', stderr="")
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout='{"intent_prompt":{"schema_version":1,"refined_prompt":"Build it."}}',
+            stderr="",
+        )
 
     monkeypatch.setattr("app.services.codex_service.subprocess.run", fake_run)
 
     output_dir = tmp_path / "runtime" / "product_manager"
     RealCodexAdapter(command="codex", timeout_seconds=10, enable_search="false").generate(
-        "Return the plausibility decision.",
+        "Return the refined intent.",
         output_dir,
-        {"codex_task": "product_manager_build_review"},
+        {"codex_task": "product_manager_refine_intent"},
     )
 
     assert "--output-schema" in captured["command"]
-    assert captured["schema"]["required"] == ["decision", "user_prompt"]
+    assert captured["schema"]["required"] == ["intent_prompt"]
     assert captured["schema_path"].exists() is False
+
+
+def test_product_manager_session_reuses_thread_and_sends_only_latest_answer(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingSession:
+        def __init__(self) -> None:
+            self.starts: list[dict[str, object]] = []
+            self.resumes: list[str] = []
+            self.inputs: list[str] = []
+
+        def start_thread(self, **kwargs) -> str:
+            self.starts.append(kwargs)
+            return "pm-thread-1"
+
+        def resume_thread(self, thread_id: str) -> None:
+            self.resumes.append(thread_id)
+
+        def run_structured_turn(
+            self,
+            thread_id: str,
+            input_text: str,
+            output_schema: dict[str, object],
+            **kwargs,
+        ) -> ProductManagerTurnResult:
+            self.inputs.append(input_text)
+            if len(self.inputs) == 1:
+                output = {
+                    "decision": "ask_user_for_input",
+                    "user_prompt": "Which recurring source should the skill process?",
+                    "build_workflow": None,
+                    "blueprint": None,
+                    "permission_plan": None,
+                }
+            else:
+                blueprint = {
+                    "goal": "Summarize selected Markdown meeting notes.",
+                    "skill_name": "meeting_notes_summary",
+                    "display_name": "Meeting Notes Summary",
+                    "runtime": "function",
+                    "input_schema": {"type": "object", "additionalProperties": True},
+                    "output_schema": {"type": "object", "additionalProperties": True},
+                    "expected_behavior": ["Summarize the selected notes."],
+                    "functions": [],
+                    "integration_scopes": {},
+                    "schedule": None,
+                    "acceptance_criteria": ["Returns a bounded action-item summary."],
+                }
+                output = {
+                    "decision": "proceed_to_approval",
+                    "user_prompt": None,
+                    "build_workflow": "single_codex",
+                    "blueprint": json.dumps(blueprint),
+                    "permission_plan": {
+                        "build_time": {"internet_research": False, "dependencies": []},
+                        "runtime": {
+                            "dependencies": [],
+                            "network": [],
+                            "codex": {"internet_access": False},
+                        },
+                    },
+                }
+            return ProductManagerTurnResult(
+                output_text=json.dumps(output),
+                thread_id=thread_id,
+                turn_id=f"turn-{len(self.inputs)}",
+                usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                model="gpt-test",
+                reasoning_effort="high",
+                items=[],
+                events=[],
+            )
+
+    session = RecordingSession()
+    monkeypatch.setattr(
+        "app.services.product_manager_session_service.product_manager_session_service",
+        session,
+    )
+    generation_request = ChatOrchestrator(db_session).create_generation_request(
+        "Build a recurring notes summarizer."
+    )
+    service = CodexService(
+        db_session,
+        adapter=RealCodexAdapter(command="codex"),
+        project_root=tmp_path,
+    )
+    resolve_calls = 0
+
+    def resolve(**kwargs) -> ResolvedInvocationSettings:
+        nonlocal resolve_calls
+        resolve_calls += 1
+        return ResolvedInvocationSettings(
+            role="product_manager",
+            action="product_manager_plan_build",
+            route_source="product_manager.blueprint_and_permissions",
+            requested_model="gpt-test",
+            effective_model="gpt-test",
+            requested_reasoning_effort="high",
+            effective_reasoning_effort="high",
+        )
+
+    monkeypatch.setattr(service.routing_service, "resolve", resolve)
+    intent = {"schema_version": 1, "refined_prompt": "Build a recurring notes summarizer."}
+
+    first = service.product_manager_plan_build(generation_request, intent)
+    plan = dict(generation_request.plan_json)
+    plan["project_conversation"] = [
+        *plan["project_conversation"],
+        {"role": "assistant", "content": first["user_prompt"]},
+        {"role": "user", "content": "Markdown meeting notes selected for each run."},
+    ]
+    generation_request.plan_json = plan
+    db_session.commit()
+    second = service.product_manager_plan_build(generation_request, intent)
+
+    assert first["decision"] == "ask_user_for_input"
+    assert second["decision"] == "proceed_to_approval"
+    assert generation_request.product_manager_thread_id == "pm-thread-1"
+    assert resolve_calls == 1
+    assert len(session.starts) == 1
+    assert session.starts[0]["sandbox"] == "read-only"
+    assert session.starts[0]["approval_policy"] == "never"
+    assert session.resumes == ["pm-thread-1"]
+    assert "function_catalog_index" in session.inputs[0]
+    assert "permission_policy" in session.inputs[0]
+    assert session.inputs[1].startswith("The user answered your clarification:")
+    assert "Markdown meeting notes selected for each run." in session.inputs[1]
+    assert "function_catalog_index" not in session.inputs[1]
 
 
 @pytest.mark.parametrize(
     ("action", "expected_timeout"),
     [
         ("product_manager_refine_intent", 120),
-        ("product_manager_build_review", 120),
-        ("product_manager_write_blueprint_and_permissions", 180),
+        ("product_manager_plan_build", 180),
         ("product_manager_write_task_dag", 180),
         ("product_manager_repair_blueprint", 180),
         ("product_manager_update_review", 180),
@@ -1171,18 +1444,22 @@ def test_product_manager_codex_calls_force_read_only_sandbox(
         project_root=tmp_path,
     )
 
-    intent_prompt = service.product_manager_refine_intent(generation_request)
-    decision = service.product_manager_build_review(generation_request)
-    blueprint, permission_plan, build_workflow = service.product_manager_write_blueprint_and_permissions(
+    service.product_manager_refine_intent(generation_request)
+    service.product_manager_write_task_dag(
         generation_request,
-        intent_prompt,
+        {
+            "goal": plan["goal"],
+            "skill_name": plan["skill_name"],
+            "runtime": "function",
+            "input_schema": plan["input_schema"],
+            "output_schema": plan["output_schema"],
+            "functions": [],
+        },
+        {"build_time": {}, "runtime": {}},
     )
-    assert build_workflow == "task_dag"
-    service.product_manager_write_task_dag(generation_request, blueprint, permission_plan)
-    assert service.product_manager_summary("build_blocked", decision, "Fallback summary.") == "Fallback summary."
 
     invocation_commands = [command for command in captured_commands if "exec" in command]
-    assert len(invocation_commands) == 4
+    assert len(invocation_commands) == 2
     for command in invocation_commands:
         assert command[command.index("-C") + 1] == str(tmp_path / "runtime" / "product_manager")
         assert command[command.index("--sandbox") + 1] == "read-only"

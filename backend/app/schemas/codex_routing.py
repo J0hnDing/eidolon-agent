@@ -18,7 +18,6 @@ class ProductManagerRouting(BaseModel):
 
     default: InvocationChoice = Field(default_factory=InvocationChoice)
     refine_intent: InvocationChoice = Field(default_factory=InvocationChoice)
-    plausibility_review: InvocationChoice = Field(default_factory=InvocationChoice)
     blueprint_and_permissions: InvocationChoice = Field(default_factory=InvocationChoice)
     task_dag: InvocationChoice = Field(default_factory=InvocationChoice)
     repair: InvocationChoice = Field(default_factory=InvocationChoice)

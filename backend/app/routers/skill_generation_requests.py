@@ -147,7 +147,14 @@ def deny_generation_request(request_id: int, db: Session = Depends(get_db)) -> S
     if generation_request is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generation request not found")
     if generation_request.status in {"planned", "needs_input"}:
+        from app.services.codex_service import CodexService
+
+        archive_warning = CodexService(db).archive_product_manager_thread(generation_request)
         generation_request.status = "cancelled"
+        if archive_warning:
+            plan = dict(generation_request.plan_json or {})
+            plan["product_manager_thread_archive_warning"] = archive_warning
+            generation_request.plan_json = plan
         db.commit()
         db.refresh(generation_request)
         return generation_request

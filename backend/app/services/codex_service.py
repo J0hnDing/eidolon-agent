@@ -2,6 +2,7 @@ import json
 import os
 import re
 import subprocess
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
@@ -14,11 +15,10 @@ from app.schemas.codex_routing import ResolvedInvocationSettings
 from app.schemas.skill_codex import SkillCodexRequest
 from app.services.codex_cli_service import codex_cli_service, should_use_real_codex
 from app.services.codex_invocation_recorder import CodexInvocationRecorder
-from app.services.codex_output_schema import write_temporary_output_schema
+from app.services.codex_output_schema import output_schema_for_action, write_temporary_output_schema
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
 from app.services.default_permissions import (
     agent_permission_bounds,
-    blocked_permissions,
     default_build_time_dependencies,
     planning_permission_policy,
 )
@@ -26,7 +26,10 @@ from app.services.dependency_environment import build_dependency_environment
 from app.services.function_catalog_service import FunctionCatalogError, FunctionCatalogService
 from app.services.manifest_validator import classify_permission_risk, validate_manifest_file
 from app.services.permission_service import PermissionService
-from app.services.product_manager_contract_service import ProductManagerContractService
+from app.services.product_manager_contract_service import (
+    ProductManagerContractError,
+    ProductManagerContractService,
+)
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
 from app.services.skill_package_files import snapshot_skill_files
 from app.workflows.base import DEFAULT_BUILD_WORKFLOW
@@ -106,8 +109,7 @@ DEFAULT_CODEX_ACTION_TIMEOUT_SECONDS = 300
 
 CODEX_ACTION_TIMEOUT_SECONDS = {
     "product_manager_refine_intent": 120,
-    "product_manager_build_review": 120,
-    "product_manager_write_blueprint_and_permissions": 180,
+    "product_manager_plan_build": 180,
     "product_manager_write_task_dag": 180,
     "product_manager_repair_blueprint": 180,
     "product_manager_update_review": 180,
@@ -318,14 +320,16 @@ class FakeCodexAdapter:
                 ),
                 stderr="",
             )
-        if task == "product_manager_write_blueprint_and_permissions":
+        if task == "product_manager_plan_build":
             blueprint = self._build_blueprint_from_request(plan, str(plan.get("user_message", "")))
             permission_plan = self._permission_plan_from_generation_plan(plan.get("generation_plan", {}))
             return subprocess.CompletedProcess(
-                args=["fake-codex-product-manager-blueprint-permissions"],
+                args=["fake-codex-product-manager-plan-build"],
                 returncode=0,
                 stdout=json.dumps(
                     {
+                        "decision": "proceed_to_approval",
+                        "user_prompt": None,
                         "build_workflow": DEFAULT_BUILD_WORKFLOW,
                         "blueprint": blueprint,
                         "permission_plan": permission_plan,
@@ -339,18 +343,6 @@ class FakeCodexAdapter:
                 args=["fake-codex-product-manager-task-dag"],
                 returncode=0,
                 stdout=json.dumps({"task_dag": dag}),
-                stderr="",
-            )
-        if task == "product_manager_build_review":
-            return subprocess.CompletedProcess(
-                args=["fake-codex-product-manager-review"],
-                returncode=0,
-                stdout=json.dumps(
-                    {
-                        "decision": "proceed_to_blueprint",
-                        "user_prompt": None,
-                    }
-                ),
                 stderr="",
             )
         if task == "product_manager_repair_blueprint":
@@ -582,8 +574,17 @@ class FakeCodexAdapter:
                 "dependencies": build_time_dependencies,
             },
             "runtime": {
-                **self._flat_runtime_permissions(plan),
                 "dependencies": runtime_dependencies,
+                "network": list(plan.get("requested_network_domains", []) or []),
+                "codex": {
+                    "internet_access": bool(
+                        (
+                            (plan.get("requested_permissions") or {}).get("codex", {})
+                            if isinstance(plan.get("requested_permissions"), dict)
+                            else {}
+                        ).get("internet_access", False)
+                    ),
+                },
             },
         }
 
@@ -1152,11 +1153,11 @@ class CodexService:
             "selected_memory_facts": selected_memory_facts or [],
         }
 
-    def product_manager_write_blueprint_and_permissions(
+    def product_manager_plan_build(
         self,
         generation_request: SkillGenerationRequest,
         intent_prompt: dict[str, object],
-    ) -> tuple[dict[str, object], dict[str, object], str]:
+    ) -> dict[str, object]:
         plan = generation_request.plan_json
         function_catalog_index = FunctionCatalogService(
             self.db,
@@ -1164,38 +1165,33 @@ class CodexService:
         ).available_index()
         permission_policy = planning_permission_policy()
         payload = {
-            "codex_task": "product_manager_write_blueprint_and_permissions",
+            "codex_task": "product_manager_plan_build",
             "user_message": generation_request.user_message,
             "intent_prompt": intent_prompt,
             "generation_plan": plan,
             "function_catalog_index": function_catalog_index,
             "permission_policy": permission_policy,
         }
-        fallback = self._fallback_build_blueprint(generation_request)
-        fallback_permission_plan = self.product_manager_contracts.sanitize_permission_plan(
-            fallback.get("permission_plan"), generation_request.plan_json
-        )
-        result = self._generate_product_manager(
-            self.build_product_manager_prompt(
-                "write_blueprint_and_permissions",
-                {
-                    "intent_prompt": intent_prompt,
-                    "function_catalog_index": function_catalog_index,
-                    "permission_policy": permission_policy,
-                },
-            ),
+        initial_prompt_payload: dict[str, object] = {
+            "intent_prompt": intent_prompt,
+            "function_catalog_index": function_catalog_index,
+            "permission_policy": permission_policy,
+        }
+        result = self._generate_product_manager_plan_session(
+            generation_request,
+            self.build_product_manager_prompt("plan_build", initial_prompt_payload),
             payload,
         )
-        parsed = self._parse_product_manager_json(
-            result,
-            fallback={
-                "build_workflow": DEFAULT_BUILD_WORKFLOW,
-                "blueprint": fallback,
-                "permission_plan": fallback_permission_plan,
-            },
+        parsed = self._decode_product_manager_session_blueprint(
+            self._parse_product_manager_json_strict(result)
         )
-        blueprint = self.product_manager_contracts.sanitize_blueprint(parsed.get("blueprint"), fallback)
-        blueprint.pop("permission_plan", None)
+        try:
+            planned = self.product_manager_contracts.sanitize_plan_build(parsed, generation_request.plan_json)
+        except ProductManagerContractError as exc:
+            raise CodexGenerationError(str(exc)) from exc
+        blueprint = planned.get("blueprint")
+        if not isinstance(blueprint, dict):
+            return planned
         try:
             blueprint["functions"] = FunctionCatalogService(
                 self.db,
@@ -1203,13 +1199,188 @@ class CodexService:
             ).validate_available_ids(blueprint.get("functions"))
         except FunctionCatalogError as exc:
             raise CodexGenerationError(str(exc)) from exc
-        permission_plan = self.product_manager_contracts.sanitize_permission_plan(
-            parsed.get("permission_plan"),
-            generation_request.plan_json,
+        planned["blueprint"] = blueprint
+        return planned
+
+    def _generate_product_manager_plan_session(
+        self,
+        generation_request: SkillGenerationRequest,
+        initial_prompt: str,
+        payload: dict[str, object],
+    ) -> subprocess.CompletedProcess[str]:
+        if not isinstance(self.adapter, RealCodexAdapter):
+            return self._generate_product_manager(initial_prompt, payload)
+
+        from app.services.product_manager_session_service import product_manager_session_service
+
+        schema = self._product_manager_session_output_schema()
+        if schema is None:
+            raise CodexGenerationError("ProductManager planning output schema is unavailable")
+        plan = dict(generation_request.plan_json or {})
+        stored_route = plan.get("product_manager_session_route")
+        if isinstance(stored_route, dict):
+            settings = ResolvedInvocationSettings.model_validate(stored_route)
+        else:
+            try:
+                settings = self.routing_service.resolve(
+                    role="product_manager",
+                    action="product_manager_plan_build",
+                )
+            except CodexRoutingError as exc:
+                raise CodexGenerationError(str(exc)) from exc
+            plan["product_manager_session_route"] = settings.model_dump(mode="json")
+
+        thread_id = generation_request.product_manager_thread_id
+        latest_reply = self._latest_project_user_reply(generation_request)
+        session_schema_note = (
+            "\n\nStructured-output transport note: when decision is proceed_to_approval, "
+            "encode the complete blueprint object as a compact JSON string in the blueprint field. "
+            "Use null for blueprint on all other decisions."
         )
-        raw_build_workflow = parsed.get("build_workflow")
-        build_workflow = str(raw_build_workflow).strip() if raw_build_workflow else DEFAULT_BUILD_WORKFLOW
-        return blueprint, permission_plan, build_workflow
+        turn_input = initial_prompt + session_schema_note
+        try:
+            if thread_id:
+                product_manager_session_service.resume_thread(thread_id)
+                turn_input = (
+                    "The user answered your clarification:\n\n"
+                    f"{latest_reply}\n\n"
+                    "Reassess the request and return the same structured planning contract."
+                )
+            else:
+                thread_id = product_manager_session_service.start_thread(
+                    cwd=self._product_manager_workspace(),
+                    model=settings.effective_model,
+                    reasoning_effort=settings.effective_reasoning_effort,
+                    sandbox=PRODUCT_MANAGER_SANDBOX,
+                    approval_policy="never",
+                )
+                generation_request.product_manager_thread_id = thread_id
+                generation_request.plan_json = plan
+                self.db.commit()
+            turn = product_manager_session_service.run_structured_turn(
+                thread_id,
+                turn_input,
+                schema,
+                timeout_seconds=codex_action_timeout_seconds(payload),
+                model=settings.effective_model,
+                reasoning_effort=settings.effective_reasoning_effort,
+            )
+        except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
+            if not thread_id or plan.get("product_manager_session_recovery_attempted"):
+                raise CodexGenerationError(f"ProductManager session failed: {exc}") from exc
+            plan["product_manager_session_recovery_attempted"] = True
+            recovery_payload = {
+                "intent_prompt": payload.get("intent_prompt", {}),
+                "project_conversation": plan.get("project_conversation", []),
+                "function_catalog_index": payload.get("function_catalog_index", []),
+                "permission_policy": payload.get("permission_policy", {}),
+            }
+            recovery_prompt = (
+                self.build_product_manager_prompt("plan_build", recovery_payload) + session_schema_note
+            )
+            try:
+                replacement_thread_id = product_manager_session_service.start_thread(
+                    cwd=self._product_manager_workspace(),
+                    model=settings.effective_model,
+                    reasoning_effort=settings.effective_reasoning_effort,
+                    sandbox=PRODUCT_MANAGER_SANDBOX,
+                    approval_policy="never",
+                )
+                generation_request.product_manager_thread_id = replacement_thread_id
+                thread_id = replacement_thread_id
+                generation_request.plan_json = plan
+                self.db.commit()
+                turn = product_manager_session_service.run_structured_turn(
+                    thread_id,
+                    recovery_prompt,
+                    schema,
+                    timeout_seconds=codex_action_timeout_seconds(payload),
+                    model=settings.effective_model,
+                    reasoning_effort=settings.effective_reasoning_effort,
+                )
+            except (OSError, RuntimeError, TimeoutError, ValueError) as recovery_exc:
+                raise CodexGenerationError(
+                    f"ProductManager session recovery failed: {recovery_exc}"
+                ) from recovery_exc
+
+        generation_request.plan_json = plan
+        self.db.commit()
+        result = subprocess.CompletedProcess(
+            args=["codex", "app-server", "product-manager-plan"],
+            returncode=0,
+            stdout=turn.output_text,
+            stderr="",
+        )
+        result.codex_usage = turn.usage  # type: ignore[attr-defined]
+        result.codex_requested_model = settings.requested_model  # type: ignore[attr-defined]
+        result.codex_model = turn.model or settings.effective_model  # type: ignore[attr-defined]
+        result.codex_requested_reasoning_effort = settings.requested_reasoning_effort  # type: ignore[attr-defined]
+        result.codex_reasoning_effort = turn.reasoning_effort or settings.effective_reasoning_effort  # type: ignore[attr-defined]
+        result.codex_route_source = settings.route_source  # type: ignore[attr-defined]
+        result.codex_role = settings.role  # type: ignore[attr-defined]
+        result.codex_difficulty = None  # type: ignore[attr-defined]
+        result.codex_adapter = "codex_app_server"  # type: ignore[attr-defined]
+        result.codex_thread_id = turn.thread_id  # type: ignore[attr-defined]
+        result.codex_turn_id = turn.turn_id  # type: ignore[attr-defined]
+        self.invocations.record_build_result(
+            result,
+            payload,
+            default_adapter_name="codex_app_server",
+            prompt=turn_input,
+        )
+        return result
+
+    @staticmethod
+    def _product_manager_session_output_schema() -> dict[str, object] | None:
+        """Return an App Server strict schema without unconstrained nested JSON objects."""
+        schema = output_schema_for_action("product_manager_plan_build")
+        if schema is None:
+            return None
+        strict_schema = deepcopy(schema)
+        properties = strict_schema.get("properties")
+        if isinstance(properties, dict):
+            properties["blueprint"] = {
+                "type": ["string", "null"],
+                "description": (
+                    "Complete blueprint encoded as compact JSON when proceeding; null otherwise."
+                ),
+            }
+        return strict_schema
+
+    @staticmethod
+    def _decode_product_manager_session_blueprint(parsed: dict[str, object]) -> dict[str, object]:
+        blueprint = parsed.get("blueprint")
+        if not isinstance(blueprint, str):
+            return parsed
+        try:
+            decoded = json.loads(blueprint)
+        except json.JSONDecodeError as exc:
+            raise CodexGenerationError("ProductManager blueprint was not valid JSON") from exc
+        if not isinstance(decoded, dict):
+            raise CodexGenerationError("ProductManager blueprint must decode to an object")
+        parsed["blueprint"] = decoded
+        return parsed
+
+    @staticmethod
+    def _latest_project_user_reply(generation_request: SkillGenerationRequest) -> str:
+        conversation = generation_request.plan_json.get("project_conversation", [])
+        if isinstance(conversation, list):
+            for item in reversed(conversation):
+                if isinstance(item, dict) and item.get("role") == "user":
+                    return str(item.get("content") or "")
+        return generation_request.user_message
+
+    def archive_product_manager_thread(self, generation_request: SkillGenerationRequest) -> str | None:
+        thread_id = generation_request.product_manager_thread_id
+        if not thread_id or not isinstance(self.adapter, RealCodexAdapter):
+            return None
+        from app.services.product_manager_session_service import product_manager_session_service
+
+        try:
+            product_manager_session_service.archive_thread(thread_id)
+        except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
+            return str(exc)[:500]
+        return None
 
     def product_manager_write_task_dag(
         self,
@@ -1253,34 +1424,6 @@ class CodexService:
         )
         parsed = self._parse_product_manager_json(result, fallback={"task_dag": fallback})
         return self.product_manager_contracts.sanitize_task_dag(parsed.get("task_dag"), fallback, blueprint)
-
-    def product_manager_build_review(
-        self,
-        generation_request: SkillGenerationRequest,
-        intent_prompt: dict[str, object] | None = None,
-    ) -> dict[str, object]:
-        blocked = blocked_permissions()
-        payload = {
-            "codex_task": "product_manager_build_review",
-            "user_message": generation_request.user_message,
-            "intent_prompt": intent_prompt or {},
-            "project_conversation": generation_request.plan_json.get("project_conversation", []),
-            "pending_user_prompt": generation_request.plan_json.get("pending_user_prompt"),
-            "blocked": blocked,
-        }
-        fallback = {
-            "decision": "proceed_to_blueprint",
-            "user_prompt": None,
-        }
-        result = self._generate_product_manager(
-            self.build_product_manager_prompt(
-                "build_review",
-                {"intent_prompt": intent_prompt or {}, "blocked": blocked},
-            ),
-            payload,
-        )
-        parsed = self._parse_product_manager_json(result, fallback=fallback)
-        return self.product_manager_contracts.sanitize_build_review(parsed, fallback)
 
     def product_manager_repair_blueprint(self, skill: Skill, user_request: str | None) -> dict[str, object]:
         function_catalog_index = FunctionCatalogService(
@@ -2046,11 +2189,7 @@ Current draft files:
 """.strip()
 
     def build_product_manager_prompt(self, task: str, payload: dict[str, object]) -> str:
-        if task in {
-            "build_review",
-            "refine_intent",
-            "write_blueprint_and_permissions",
-        }:
+        if task in {"refine_intent", "plan_build"}:
             return build_common_product_manager_prompt(task, payload)
         instruction_by_task = {
             "repair_blueprint": "product_manager/repair.md",
@@ -2087,6 +2226,23 @@ Payload:
             except json.JSONDecodeError:
                 return fallback
         return parsed if isinstance(parsed, dict) else fallback
+
+    @staticmethod
+    def _parse_product_manager_json_strict(result: subprocess.CompletedProcess[str]) -> dict[str, object]:
+        if result.returncode != 0:
+            raise CodexGenerationError(
+                f"ProductManager planning failed with exit code {result.returncode}: {(result.stderr or '').strip()}"
+            )
+        raw = (result.stdout or "").strip()
+        if not raw:
+            raise CodexGenerationError("ProductManager planning returned no structured response")
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise CodexGenerationError("ProductManager planning returned invalid JSON") from exc
+        if not isinstance(parsed, dict):
+            raise CodexGenerationError("ProductManager planning response must be a JSON object")
+        return parsed
 
     def _product_manager_workspace(self) -> Path:
         workspace = self.project_root / "runtime" / "product_manager"

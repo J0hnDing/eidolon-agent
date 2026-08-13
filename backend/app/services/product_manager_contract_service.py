@@ -7,7 +7,12 @@ from jsonschema import Draft202012Validator, SchemaError
 
 from app.models import Skill
 from app.schemas.manifest import ManifestIntegrationResourceScope
+from app.services.codex_output_schema import output_schema_for_action
 from app.services.default_permissions import approval_required_permissions, default_build_time_dependencies
+
+
+class ProductManagerContractError(ValueError):
+    pass
 
 
 class ProductManagerContractService:
@@ -216,22 +221,98 @@ class ProductManagerContractService:
         )
         return {"decision": decision, "summary": summary, "blueprint": blueprint}
 
-    @staticmethod
-    def sanitize_build_review(parsed: dict[str, object], fallback: dict[str, object]) -> dict[str, object]:
-        allowed = {"proceed_to_blueprint", "ask_user_for_input", "stop_inplausible"}
-        decision = parsed.get("decision")
-        if decision not in allowed:
-            decision = fallback["decision"]
+    def sanitize_plan_build(
+        self,
+        parsed: dict[str, object],
+        fallback_plan: dict[str, object],
+    ) -> dict[str, object]:
+        schema = output_schema_for_action("product_manager_plan_build")
+        if schema is None:
+            raise ProductManagerContractError("ProductManager planning schema is unavailable")
+        errors = sorted(Draft202012Validator(schema).iter_errors(parsed), key=lambda error: list(error.path))
+        if errors:
+            detail = "; ".join(error.message for error in errors[:3])
+            raise ProductManagerContractError(f"ProductManager returned an invalid planning response: {detail}")
+
+        decision = str(parsed.get("decision") or "")
         user_prompt = parsed.get("user_prompt")
-        if not isinstance(user_prompt, str) or not user_prompt.strip():
-            user_prompt = None
-        if decision != "proceed_to_blueprint" and user_prompt is None:
-            user_prompt = (
-                "Please clarify the requested skill."
-                if decision == "ask_user_for_input"
-                else "This request is not supported as an application skill."
-            )
-        return {"decision": decision, "user_prompt": user_prompt.strip() if user_prompt else None}
+        build_workflow = parsed.get("build_workflow")
+        blueprint = parsed.get("blueprint")
+        permission_plan = parsed.get("permission_plan")
+
+        if decision in {"ask_user_for_input", "stop_inplausible"}:
+            if not isinstance(user_prompt, str) or not user_prompt.strip():
+                raise ProductManagerContractError(
+                    "ProductManager clarification or rejection must include a user-facing prompt"
+                )
+            if any(value is not None for value in (build_workflow, blueprint, permission_plan)):
+                raise ProductManagerContractError(
+                    "ProductManager clarification or rejection cannot include planning artifacts"
+                )
+            normalized_prompt = user_prompt.strip()
+            if decision == "ask_user_for_input" and (
+                not normalized_prompt.endswith("?") or normalized_prompt.count("?") != 1
+            ):
+                raise ProductManagerContractError(
+                    "ProductManager clarification must contain exactly one question"
+                )
+            if decision == "stop_inplausible" and not re.search(
+                r"\b(instead|alternative)\b",
+                normalized_prompt,
+                flags=re.IGNORECASE,
+            ):
+                raise ProductManagerContractError(
+                    "ProductManager rejection must include a safe alternative"
+                )
+            return {
+                "decision": decision,
+                "user_prompt": normalized_prompt,
+                "build_workflow": None,
+                "blueprint": None,
+                "permission_plan": None,
+            }
+
+        if decision != "proceed_to_approval":
+            raise ProductManagerContractError("ProductManager returned an unknown planning decision")
+        if user_prompt is not None:
+            raise ProductManagerContractError("A completed ProductManager plan cannot include a user prompt")
+        if build_workflow not in {"single_codex", "task_dag"}:
+            raise ProductManagerContractError("A completed ProductManager plan requires a valid build workflow")
+        if not isinstance(blueprint, dict) or not isinstance(permission_plan, dict):
+            raise ProductManagerContractError("A completed ProductManager plan requires blueprint and permissions")
+
+        runtime = blueprint.get("runtime")
+        if runtime == "function":
+            for field_name in ("input_schema", "output_schema"):
+                callable_schema = blueprint.get(field_name)
+                if not isinstance(callable_schema, dict) or callable_schema.get("type") != "object":
+                    raise ProductManagerContractError(
+                        f"A function blueprint requires a complete object-shaped {field_name}"
+                    )
+                try:
+                    Draft202012Validator.check_schema(callable_schema)
+                except SchemaError as exc:
+                    raise ProductManagerContractError(
+                        f"A function blueprint contains an invalid {field_name}"
+                    ) from exc
+        elif runtime == "web_app":
+            if blueprint.get("input_schema") is not None or blueprint.get("output_schema") is not None:
+                raise ProductManagerContractError(
+                    "A web app blueprint must set input_schema and output_schema to null"
+                )
+            if blueprint.get("schedule") is not None:
+                raise ProductManagerContractError("A web app blueprint cannot include a schedule")
+
+        sanitized_blueprint = self.sanitize_blueprint(blueprint, blueprint)
+        sanitized_blueprint.pop("permission_plan", None)
+        sanitized_permissions = self.sanitize_permission_plan(permission_plan, fallback_plan)
+        return {
+            "decision": decision,
+            "user_prompt": None,
+            "build_workflow": build_workflow,
+            "blueprint": sanitized_blueprint,
+            "permission_plan": sanitized_permissions,
+        }
 
     def sanitize_task_dag(
         self,

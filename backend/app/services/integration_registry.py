@@ -33,7 +33,7 @@ class IntegrationOperation:
     side_effect: Literal["none", "write"]
     risk: Literal["low", "medium"]
     resource_scope: ScopeBehavior
-    method: Literal["GET", "POST"]
+    method: Literal["GET", "POST", "PATCH"]
     endpoint_template: str
     timeout_seconds: float
     allow_redirects: bool
@@ -532,8 +532,8 @@ _ATLAS_OPERATIONS = (
             {"relationships": {"type": "array", "maxItems": 100, "items": {"type": "object"}}},
             ["relationships"],
         ),
-        read_only=True, side_effect="none", risk="low", resource_scope="none", method="POST",
-        endpoint_template="/api/agent/list_relationships", timeout_seconds=10, allow_redirects=False,
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="GET",
+        endpoint_template="/api/records?category=relationship", timeout_seconds=10, allow_redirects=False,
         max_pages=1, max_results=100, max_provider_response_bytes=3_000_000,
         normalized_errors=_ATLAS_ERRORS, audit_resource_fields=(), fake_behavior="atlas_relationships",
         usage_example={"operation": "atlas.relationship.list", "input": {"kind": "friend", "importance": "high"}},
@@ -558,8 +558,8 @@ _ATLAS_OPERATIONS = (
             },
             ["nodes", "next_cursor"],
         ),
-        read_only=True, side_effect="none", risk="low", resource_scope="none", method="POST",
-        endpoint_template="/api/agent/list_frontier_nodes", timeout_seconds=10, allow_redirects=False,
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="GET",
+        endpoint_template="/api/knowledge/nodes", timeout_seconds=10, allow_redirects=False,
         max_pages=1, max_results=100, max_provider_response_bytes=2_000_000,
         normalized_errors=_ATLAS_ERRORS, audit_resource_fields=(), fake_behavior="atlas_knowledge_frontier",
         usage_example={"operation": "atlas.knowledge.frontier.list", "input": {"limit": 50}},
@@ -581,8 +581,8 @@ _ATLAS_OPERATIONS = (
         output_schema=_object_schema(
             {"nodes": {"type": "array", "maxItems": 25, "items": _KNOWLEDGE_SUMMARY}}, ["nodes"]
         ),
-        read_only=True, side_effect="none", risk="low", resource_scope="none", method="POST",
-        endpoint_template="/api/agent/search_knowledge", timeout_seconds=10, allow_redirects=False,
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="GET",
+        endpoint_template="/api/knowledge/nodes", timeout_seconds=10, allow_redirects=False,
         max_pages=1, max_results=25, max_provider_response_bytes=1_000_000,
         normalized_errors=_ATLAS_ERRORS, audit_resource_fields=(), fake_behavior="atlas_knowledge_search",
         usage_example={"operation": "atlas.knowledge.search", "input": {"keywords": "distributed systems"}},
@@ -594,8 +594,8 @@ _ATLAS_OPERATIONS = (
         provider="atlas",
         input_schema=_object_schema({"node_id": {"type": "integer", "minimum": 1}}, ["node_id"]),
         output_schema=_object_schema({"node": {"type": "object"}}, ["node"]),
-        read_only=True, side_effect="none", risk="low", resource_scope="none", method="POST",
-        endpoint_template="/api/agent/get_knowledge_node", timeout_seconds=10, allow_redirects=False,
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="GET",
+        endpoint_template="/api/knowledge/nodes", timeout_seconds=10, allow_redirects=False,
         max_pages=1, max_results=1, max_provider_response_bytes=1_000_000,
         normalized_errors=_ATLAS_ERRORS, audit_resource_fields=("node_id",), fake_behavior="atlas_knowledge_node",
         usage_example={"operation": "atlas.knowledge.node.get", "input": {"node_id": 42}},
@@ -604,8 +604,9 @@ _ATLAS_OPERATIONS = (
         operation_id="atlas.knowledge.node.know",
         title="Know Knowledge node",
         description=(
-            "Use one internet-enabled Codex call to establish the selected node as known and optionally create "
-            "immediate name-only unassessed children. It cannot rename, move, delete, merge, or recursively expand nodes."
+            "Use one internet-enabled Codex call, then primitive Atlas writes, to mark the selected node known and "
+            "optionally create immediate name-only unassessed children. It cannot rename, move, delete, merge, or "
+            "recursively expand nodes."
         ),
         provider="atlas",
         input_schema=_object_schema(
@@ -623,11 +624,12 @@ _ATLAS_OPERATIONS = (
             },
             ["node", "created_children", "existing_children"],
         ),
-        read_only=False, side_effect="write", risk="medium", resource_scope="none", method="POST",
-        endpoint_template="/api/agent/establish_known_node", timeout_seconds=180, allow_redirects=False,
+        read_only=False, side_effect="write", risk="medium", resource_scope="none", method="PATCH",
+        endpoint_template="/api/knowledge/nodes/{node_id}", timeout_seconds=180, allow_redirects=False,
         max_pages=1, max_results=21, max_provider_response_bytes=2_000_000,
         normalized_errors=_ATLAS_ERRORS, audit_resource_fields=("node_id",), fake_behavior="atlas_knowledge_know",
         usage_example={"operation": "atlas.knowledge.node.know", "input": {"node_id": 42}},
+        contract_version=2,
     ),
 )
 

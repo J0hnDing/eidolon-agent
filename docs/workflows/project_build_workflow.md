@@ -1,6 +1,6 @@
 # Project Build Workflow
 
-New skill builds share one general starting sequence and then dispatch to a backend-managed build workflow. ProductManager intent refinement, plausibility review, blueprint creation, permission planning, and deterministic build-time approval happen before workflow dispatch. The supported build workflows are `single_codex` and `task_dag`.
+New skill builds share one general starting sequence and then dispatch to a backend-managed build workflow. One-time ProductManager intent refinement is followed by the resumable `pm_plan_build` session, which combines clarification, rejection, blueprinting, permission planning, and workflow selection before deterministic build-time approval. The supported build workflows are `single_codex` and `task_dag`.
 
 ## Build Artifacts
 
@@ -27,29 +27,23 @@ runtime/agent_runs/run_<id>/
 ## ProductManager Actions
 
 Every ProductManager action is a distinct backend-invoked step with a structured output.
-The actuall input to Codex_cli also includes corresponding instructions.
-Output for PM does NOT mean agent writes files directly, instead backend receives the response in json and writes it.
+The actual Codex input also includes the corresponding instructions.
+ProductManager does not write these files directly; the backend validates its JSON response and writes the artifacts.
 
 1. `pm_refine_intent`
-   - Inputs: latest Project-mode user message, prior clarification turns for the same generation request, and explicit user memory facts, this is currently default to none until memory system implemented.
+   - Inputs: the initial Project-mode user message and explicit user memory facts (currently defaulting to none until the memory system is implemented).
    - Output: `intent_prompt.json`.
    - Purpose: rewrite the request into a clearer build prompt for downstream PM actions.
-   - ProductManager refinement runs after every Project-mode user input, including a first-turn request with no clarification history or selected memory facts.
-   - Only `schema_version` and `refined_prompt` continue to plausibility and blueprint prompts. Selected memory facts remain in the stored intent artifact for audit and are not repeated downstream.
+   - ProductManager refinement runs once when the generation request is created. Clarification replies do not rerun refinement.
+   - Only `schema_version` and `refined_prompt` continue to the planning session. Selected memory facts remain in the stored intent artifact for audit.
    - Must not create a blueprint, permissions, task graph, or generated skill files.
 
-2. `pm_review_plausibility`
-   - Inputs: the refined intent and only the `blocked` section loaded from `backend/app/static/default_permissions.json`.
-   - Output: `decision.json`.
-   - Decisions:
-     - `stop_inplausible`: the request is infeasible, unsafe, unsupported, or not a reusable local skill. The output includes the user-facing chat response and the workflow stops before artifact creation.
-     - `ask_user_for_input`: the request needs clarification. The output includes one user-facing clarification question. The next Project-mode reply is appended to the same generation request and the backend repeats `pm_refine_intent` and `pm_review_plausibility`.
-     - `proceed_to_blueprint`: the request is plausible and clear enough to continue.
-   - Must not create blueprint, permission, or DAG artifacts.
-
-3. `pm_write_blueprint_and_permissions`
-   - Inputs: `intent_prompt.json`, the backend-supplied available function-catalog index, and config-derived `permission_policy` containing `default_allowed`, `requires_approval`, and `blocked`.
-   - Output: one structured response containing top-level `build_workflow`, `blueprint`, and `permission_plan` fields. The backend writes only the latter two as `blueprint.json` and `permissions.json`.
+2. `pm_plan_build`
+   - First-turn inputs: `intent_prompt.json`, the available function-catalog index, and complete config-derived `permission_policy` containing `default_allowed`, `requires_approval`, and `blocked`.
+   - Clarification-turn input: only the latest user answer; the same persistent Codex App Server thread is resumed.
+   - Response: `decision`, `user_prompt`, `build_workflow`, `blueprint`, and `permission_plan` on every turn. The backend writes the validated decision and prompt to `decision.json` after every turn.
+   - Decisions are `ask_user_for_input`, `stop_inplausible`, or `proceed_to_approval`. Clarification and rejection contain no planning fields; approval handoff requires a complete workflow, blueprint, and permission plan.
+   - No blueprint, permission, DAG, or generated skill artifacts are created until `proceed_to_approval`.
    - Purpose: choose `single_codex` or `task_dag`; name the skill; select the `function` or `web_app` execution protocol; define the complete function input/output schemas; describe the skill goal, expected user behavior, function-only schedule intent, high-level acceptance criteria, selected catalog functions, and any required integration resource scope; draft both build-time needs and expected runtime permissions/dependencies.
    - ProductManager receives only available catalog ids, titles, descriptions, categories, and risks, never detailed schemas, endpoints, credential management, or secret-store details.
    - `build_workflow` is backend routing state stored on the agent run. It must not appear inside `blueprint` or in `blueprint.json` because downstream DAG, Builder, and Tester inputs do not need it.
@@ -61,25 +55,25 @@ Output for PM does NOT mean agent writes files directly, instead backend receive
 
 The Codex Settings page can persist a backend-owned workflow override. `Automatic` keeps the ProductManager choice. `Simple` forces `single_codex`, and `Task DAG` forces `task_dag` for every new Project build, regardless of the top-level value returned by ProductManager. The agent run stores the effective workflow and the ProductManager step records whether selection came from ProductManager or the settings override.
 
-4. Backend deterministic permission review
+3. Backend deterministic permission review
    - Inputs: `blueprint.json`, `permissions.json`.
    - Output: if approval required, build-time approval request in chat, otherwise proceed automatically.
    - Purpose: Manage permissions safely.
    - Approval lets the backend provision the listed Python dependencies and lets Codex generate proposed files. It does not install or run the skill, schedule it, or approve runtime permissions.
 
-5. Backend dependency provisioning
+4. Backend dependency provisioning
    - Inputs: the approved dependency allowlist and effective `permissions.json`.
    - Output: a clean controlled skill workspace with runtime dependencies in `.deps` and any missing build-only dependencies in `.build-deps`.
    - Purpose: install and verify approved packages before any post-approval ProductManager, Builder, or Tester invocation starts.
    - The backend interpreter, Codex subprocess environment, and authoritative test runner share these dependency paths. Platform test tooling such as `pytest` is verified as backend infrastructure and is provisioned into `.build-deps` only when missing.
    - Installation failure, unavailable packages, approval mismatch, or distribution verification failure stops the workflow before Codex starts. Repeated validation verifies and reuses the provisioned environment; it does not run `pip` again.
 
-6. Backend workflow dispatch
+5. Backend workflow dispatch
    - Inputs: the agent run's backend-only `build_workflow`, approved `blueprint.json`, and effective `permissions.json`.
    - Output: execution by the registered `single_codex` or `task_dag` workflow module.
    - The registry rejects unknown workflow names. Workflow selection and execution are not hard-coded into the common pre-approval sequence.
 
-7. `pm_write_task_dag` (`task_dag` only)
+6. `pm_write_task_dag` (`task_dag` only)
    - Inputs: `blueprint.json`, compact backend-approved `permission_bounds`, and the concise index of functions selected in the blueprint.
    - Output: `task_dag.json`.
    - Purpose: split the project into explicit task nodes with an `id`, direct `task_prompt`, dependencies, difficulty, test requirement, parallel-safety flag, required `write_paths`, acceptance criteria, test expectations, and selected function ids.
@@ -355,7 +349,7 @@ Repair uses the same task-node contracts:
 ## Schema Changes From Linear Milestones
 
 - `milestones/*.json` is replaced by `task_dag.json` and `tasks/<task_id>.json`.
-- `build_next_milestone` is replaced by `proceed_to_blueprint` because the plausibility step no longer selects a linear next milestone.
+- `build_next_milestone` is replaced by `proceed_to_approval`; the combined planning session returns the validated workflow, blueprint, and permission plan together.
 - Per-node `requires_tests` controls whether Tester runs immediately after Builder.
 - Per-node `write_paths` provides required-output validation and non-overlapping ownership for safe parallel Builder/Tester execution.
 - Builder must write a skill-local `interface_artifact.json` for every node; the backend validates and moves it into the node's run-artifact folder so child nodes have explicit contracts without granting Builder write access to `runtime`.

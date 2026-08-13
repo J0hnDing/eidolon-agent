@@ -342,7 +342,6 @@ export interface CodexRoutingSettingsPayload {
   product_manager: {
     default: CodexInvocationChoice;
     refine_intent: CodexInvocationChoice;
-    plausibility_review: CodexInvocationChoice;
     blueprint_and_permissions: CodexInvocationChoice;
     task_dag: CodexInvocationChoice;
     repair: CodexInvocationChoice;

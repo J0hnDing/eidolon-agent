@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 from app.services.atlas_knowledge_service import AtlasKnowledgeError, AtlasKnowledgeService
-from app.services.atlas_provider import FakeAtlasProviderAdapter
+from app.services.atlas_provider import FakeAtlasProviderAdapter, UrllibAtlasProviderAdapter
+from app.services.integration_registry import OPERATIONS
 
 
 class CapturingCodex:
@@ -82,3 +83,114 @@ def test_codex_failure_or_invalid_output_does_not_mutate(tmp_path: Path, codex: 
 
     assert exc.value.error_type == "codex_failed"
     assert provider.calls == []
+
+
+def test_provider_derives_knowledge_functions_from_flat_primitive_nodes() -> None:
+    adapter = UrllibAtlasProviderAdapter()
+    nodes = {
+        "nodes": [
+            {
+                "id": 1,
+                "name": "Computer Science",
+                "branch": "subjects",
+                "parentId": None,
+                "status": "known",
+                "revision": 2,
+                "understanding": "The study of computation.",
+                "terms": [],
+            },
+            {
+                "id": 2,
+                "name": "Distributed Systems",
+                "branch": "subjects",
+                "parentId": 1,
+                "status": "unassessed",
+                "revision": 1,
+                "understanding": None,
+                "terms": [],
+            },
+        ]
+    }
+
+    search = adapter._normalize(  # noqa: SLF001 - focused adapter contract test
+        "atlas.knowledge.search", nodes, {"keywords": "distributed"}
+    )
+    frontier = adapter._normalize(  # noqa: SLF001 - focused adapter contract test
+        "atlas.knowledge.frontier.list", nodes, {}
+    )
+    inspected = adapter._normalize(  # noqa: SLF001 - focused adapter contract test
+        "atlas.knowledge.node.get", nodes, {"node_id": 2}
+    )
+
+    assert search["nodes"][0]["node_id"] == 2
+    assert frontier["nodes"][0]["path"] == ["Subjects", "Computer Science", "Distributed Systems"]
+    assert inspected["node"]["parent"]["name"] == "Computer Science"
+
+
+def test_provider_know_uses_only_primitive_patch_and_create_calls() -> None:
+    adapter = UrllibAtlasProviderAdapter()
+    nodes = [
+        {
+            "id": 1,
+            "name": "Computer Science",
+            "branch": "subjects",
+            "parentId": None,
+            "status": "known",
+            "revision": 2,
+            "understanding": "Computation.",
+            "terms": [],
+        },
+        {
+            "id": 2,
+            "name": "Distributed Systems",
+            "branch": "subjects",
+            "parentId": 1,
+            "status": "unknown",
+            "revision": 1,
+            "understanding": None,
+            "terms": [],
+        },
+    ]
+    calls: list[tuple[str, str]] = []
+
+    def request(path, payload, _credential, *, timeout, max_bytes, method):  # noqa: ANN001
+        del timeout, max_bytes
+        calls.append((method, path))
+        if method == "GET":
+            return {"nodes": [dict(node) for node in nodes]}
+        if method == "PATCH":
+            nodes[1].update(status="known", revision=2, understanding=payload["understanding"], terms=payload["terms"])
+            return {"node": dict(nodes[1])}
+        child = {
+            "id": 3,
+            "name": payload["name"],
+            "branch": payload["branch"],
+            "parentId": payload["parentId"],
+            "status": "unassessed",
+            "revision": 1,
+            "understanding": None,
+            "terms": [],
+        }
+        nodes.append(child)
+        return {"node": child}
+
+    adapter._request = request  # type: ignore[method-assign]  # noqa: SLF001
+    result = adapter.establish(
+        {
+            "node_id": 2,
+            "expected_revision": 1,
+            "explanation": "Independent computers coordinate.",
+            "terms": [],
+            "children": ["Consensus"],
+        },
+        "key",
+    )
+
+    assert result["created_children"] == ["Consensus"]
+    assert calls == [
+        ("GET", "/api/knowledge/nodes"),
+        ("PATCH", "/api/knowledge/nodes/2"),
+        ("POST", "/api/knowledge/nodes"),
+        ("GET", "/api/knowledge/nodes"),
+    ]
+    assert OPERATIONS["atlas.knowledge.node.know"].endpoint_template == "/api/knowledge/nodes/{node_id}"

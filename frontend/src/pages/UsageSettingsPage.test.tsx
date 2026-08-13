@@ -57,7 +57,6 @@ describe("GitHub Settings connection", () => {
       product_manager: {
         default: choice,
         refine_intent: choice,
-        plausibility_review: choice,
         blueprint_and_permissions: choice,
         task_dag: choice,
         repair: choice,
@@ -175,7 +174,6 @@ describe("Codex model routing", () => {
       product_manager: {
         default: choice,
         refine_intent: choice,
-        plausibility_review: choice,
         blueprint_and_permissions: choice,
         task_dag: choice,
         repair: choice,
@@ -217,6 +215,8 @@ describe("Codex model routing", () => {
     }));
 
     render(<UsageSettingsPage />);
+    expect(await screen.findByLabelText("Project planning and clarification model")).toBeTruthy();
+    expect(screen.queryByText("Plausibility review")).toBeNull();
     fireEvent.change(await screen.findByLabelText("Single Codex model"), {
       target: { value: "gpt-smart" },
     });
@@ -276,7 +276,6 @@ describe("Atlas Settings", () => {
       product_manager: {
         default: choice,
         refine_intent: choice,
-        plausibility_review: choice,
         blueprint_and_permissions: choice,
         task_dag: choice,
         repair: choice,

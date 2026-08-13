@@ -47,6 +47,15 @@ def test_local_schema_migrates_legacy_statuses_task_columns_and_retired_skill_fi
         )
         connection.execute(text("CREATE TABLE skill_schedules (id INTEGER PRIMARY KEY, status VARCHAR(32))"))
         connection.execute(text("INSERT INTO skill_schedules (id, status) VALUES (1, 'deleted')"))
+        connection.execute(text("CREATE TABLE codex_routing_settings (id INTEGER PRIMARY KEY, settings_json JSON)"))
+        connection.execute(
+            text(
+                "INSERT INTO codex_routing_settings (id, settings_json) VALUES "
+                "(1, '{\"product_manager\": {\"default\": {}, "
+                "\"plausibility_review\": {\"model\": \"legacy\"}, "
+                "\"blueprint_and_permissions\": {\"model\": \"current\"}}}')"
+            )
+        )
         connection.execute(text("CREATE TABLE web_app_instances (id VARCHAR(64) PRIMARY KEY)"))
         connection.execute(
             text(
@@ -102,6 +111,15 @@ def test_local_schema_migrates_legacy_statuses_task_columns_and_retired_skill_fi
             "function",
         )
         assert connection.execute(text("SELECT COUNT(*) FROM skill_schedules")).scalar_one() == 0
+        routing_json = connection.execute(
+            text("SELECT settings_json FROM codex_routing_settings WHERE id = 1")
+        ).scalar_one()
+        assert json.loads(routing_json) == {
+            "product_manager": {
+                "default": {},
+                "blueprint_and_permissions": {"model": "current"},
+            }
+        }
         assert connection.execute(text("SELECT current_task_id FROM agent_runs WHERE id = 1")).scalar_one() == "legacy_task"
         assert connection.execute(text("SELECT task_node_id FROM agent_run_steps WHERE id = 1")).scalar_one() == "legacy_task"
         plan_json = connection.execute(

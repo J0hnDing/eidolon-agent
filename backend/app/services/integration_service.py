@@ -236,7 +236,8 @@ class IntegrationService:
             action_description = "read-only access" if read_only else "read and bounded write access"
             mutation_detail = (
                 " The Knowledge write uses one internet-enabled Codex call, writes one selected node, and may create "
-                "immediate unassessed children; it cannot rename, move, delete, merge, or recursively expand nodes."
+                "immediate unassessed children through primitive Atlas operations; it cannot rename, move, delete, "
+                "merge, or recursively expand nodes. The node update and each child creation are separately atomic."
                 if any(operation.operation_id == "atlas.knowledge.node.know" for operation in operations)
                 else ""
             )

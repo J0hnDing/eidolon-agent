@@ -133,12 +133,10 @@ class ChatOrchestrator:
             for item in conversation
             if isinstance(item, dict)
         )
-        plan = {
-            "project_conversation": conversation,
-            "original_user_message": existing_plan.get("original_user_message") or generation_request.user_message,
-        }
-        if existing_plan.get("frontend_conversation_id"):
-            plan["frontend_conversation_id"] = existing_plan["frontend_conversation_id"]
+        plan = dict(existing_plan)
+        plan["project_conversation"] = conversation
+        plan["original_user_message"] = existing_plan.get("original_user_message") or generation_request.user_message
+        plan.pop("pending_user_prompt", None)
         generation_request.user_message = combined_message
         generation_request.plan_json = plan
         generation_request.status = "planned"

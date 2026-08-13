@@ -77,9 +77,9 @@ def test_permission_config_drives_agent_policy_and_output_schema() -> None:
         "requires_approval": approval_required_permissions(),
         "blocked": blocked_permissions(),
     }
-    permission_schema = output_schema_for_action("product_manager_write_blueprint_and_permissions")["properties"][
+    permission_schema = output_schema_for_action("product_manager_plan_build")["properties"][
         "permission_plan"
-    ]
+    ]["anyOf"][1]
     assert set(permission_schema["properties"]) == set(approval_required_permissions())
     assert set(permission_schema["properties"]["runtime"]["properties"]) == set(
         approval_required_permissions()["runtime"]
@@ -121,20 +121,21 @@ def test_product_manager_schemas_rederive_permission_shape_and_return_independen
     }
     monkeypatch.setattr(codex_output_schema, "approval_required_permissions", lambda: template)
 
-    build_schema = codex_output_schema.output_schema_for_action(
-        "product_manager_write_blueprint_and_permissions"
-    )
+    build_schema = codex_output_schema.output_schema_for_action("product_manager_plan_build")
     update_schema = codex_output_schema.output_schema_for_action("product_manager_update_review")
-    assert build_schema["properties"]["permission_plan"] == codex_output_schema.permission_plan_output_schema()
+    assert build_schema["properties"]["permission_plan"]["anyOf"][1] == (
+        codex_output_schema.permission_plan_output_schema()
+    )
     assert update_schema["properties"]["blueprint"]["properties"]["permission_plan"] == (
         codex_output_schema.permission_plan_output_schema()
     )
 
-    build_schema["properties"]["permission_plan"]["properties"].clear()
-    fresh_schema = codex_output_schema.output_schema_for_action(
-        "product_manager_write_blueprint_and_permissions"
-    )
-    assert set(fresh_schema["properties"]["permission_plan"]["properties"]) == {"build", "runtime"}
+    build_schema["properties"]["permission_plan"]["anyOf"][1]["properties"].clear()
+    fresh_schema = codex_output_schema.output_schema_for_action("product_manager_plan_build")
+    assert set(fresh_schema["properties"]["permission_plan"]["anyOf"][1]["properties"]) == {
+        "build",
+        "runtime",
+    }
 
 
 def test_permission_policy_values_are_not_duplicated_in_agent_instructions() -> None:
@@ -157,8 +158,7 @@ def test_permission_policy_values_are_not_duplicated_in_agent_instructions() -> 
 def test_schema_backed_instructions_do_not_duplicate_output_syntax() -> None:
     instruction_paths = [
         Path("app/workflows/common/instructions/refine_intent.md"),
-        Path("app/workflows/common/instructions/plausibility_review.md"),
-        Path("app/workflows/common/instructions/blueprint_and_permissions.md"),
+        Path("app/workflows/common/instructions/plan_build.md"),
         Path("app/workflows/task_dag/instructions/product_manager.md"),
         Path("app/agent_instructions/product_manager/repair.md"),
         Path("app/agent_instructions/product_manager/update.md"),

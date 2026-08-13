@@ -42,6 +42,8 @@ class CodexInvocationRecorder:
             "cli_path": getattr(result, "codex_cli_path", None),
             "cli_version": getattr(result, "codex_cli_version", None),
             "cli_source": getattr(result, "codex_cli_source", None),
+            "thread_id": getattr(result, "codex_thread_id", None),
+            "turn_id": getattr(result, "codex_turn_id", None),
             **usage,
         }
 

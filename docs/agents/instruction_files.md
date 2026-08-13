@@ -10,8 +10,7 @@ backend/app/workflows/
     prompts.py
     instructions/
       refine_intent.md
-      plausibility_review.md
-      blueprint_and_permissions.md
+      plan_build.md
   task_dag/
     workflow.py
     prompts.py
@@ -42,7 +41,7 @@ backend/app/agent_instructions/
     update.md
 ```
 
-The shared project-build preflight uses `workflows/common`. It owns ProductManager intent refinement, plausibility review, and blueprint/permission/workflow selection before post-approval dispatch.
+The shared project-build preflight uses `workflows/common`. It owns one-time ProductManager intent refinement and the resumable `pm_plan_build` clarification, rejection, and blueprint/permission/workflow decision before post-approval dispatch.
 
 The DAG build workflow uses the instructions under `workflows/task_dag`:
 
@@ -58,11 +57,9 @@ Each project-build package loads its own instruction files and composes its own 
 
 Instruction files define role behavior and how to consume supplied permission context. Permission classifications must not be copied into them: `backend/app/static/default_permissions.json` is the source of truth for `default_allowed`, `requires_approval`, and `blocked`. Backend code loads that policy, coordinates state, validates outputs, and enforces safety.
 
-`workflows/common/instructions/refine_intent.md` is used for `pm_refine_intent` and returns only `intent_prompt.json`. It must not make plausibility decisions, ask clarification questions, or return blueprint, permission, or task DAG artifacts.
+`workflows/common/instructions/refine_intent.md` is used once for `pm_refine_intent` and returns only `intent_prompt.json`. It must not make planning decisions, ask clarification questions, or return blueprint, permission, or task DAG artifacts.
 
-`workflows/common/instructions/plausibility_review.md` is the single project-build plausibility prompt. It returns only an intent/plausibility decision and receives the config-derived `blocked` field, not default or approval-required policy. It must not receive blueprint instructions or return blueprint, permission, or task DAG artifacts.
-
-`workflows/common/instructions/blueprint_and_permissions.md` is used for `pm_write_blueprint_and_permissions`. It receives the full config-derived `permission_policy`; the backend parses the response into backend-only workflow selection plus separate blueprint and permission-plan artifacts.
+`workflows/common/instructions/plan_build.md` is the combined planning prompt for `pm_plan_build`. Its first turn receives the available function catalog and complete config-derived permission policy; resumed turns receive the latest user clarification and reuse the same Codex App Server thread. It returns the decision contract and, only for `proceed_to_approval`, the complete blueprint and permission plan.
 
 `workflows/task_dag/instructions/product_manager.md` is used only after build-time approval for `pm_write_task_dag`.
 

@@ -421,6 +421,7 @@ class SkillGenerationRequest(Base):
         nullable=False,
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    product_manager_thread_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
 
     proposed_skill: Mapped["Skill"] = relationship(back_populates="generation_requests")
     approval_requests: Mapped[list["ApprovalRequest"]] = relationship(back_populates="generation_request")

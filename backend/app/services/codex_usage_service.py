@@ -1,44 +1,37 @@
 from __future__ import annotations
 
-import json
-import subprocess
-import threading
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from app.services.codex_cli_service import codex_cli_service
+from app.services.codex_app_server import (
+    CodexAppServerClient,
+    CodexAppServerError,
+    codex_app_server_client,
+)
 
 
 class CodexUsageService:
     """Persistent, local Codex App Server client for account allowance data."""
 
-    def __init__(self, command: str | None = None) -> None:
-        self.command = command
-        self._process: subprocess.Popen[str] | None = None
-        self._lock = threading.Lock()
-        self._request_id = 0
+    def __init__(
+        self,
+        command: str | None = None,
+        *,
+        client: CodexAppServerClient | None = None,
+    ) -> None:
+        self.client = client or CodexAppServerClient(command)
         self._last_error: str | None = None
         self._model_catalog: dict[str, Any] | None = None
         self._model_catalog_expires_at: datetime | None = None
 
     def start(self) -> None:
-        with self._lock:
-            try:
-                self._start_locked()
-            except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as exc:
-                self._last_error = str(exc)
-                self._process = None
+        try:
+            self.client.start()
+        except (OSError, RuntimeError, CodexAppServerError, ValueError) as exc:
+            self._last_error = str(exc)
 
     def stop(self) -> None:
-        with self._lock:
-            process, self._process = self._process, None
-            if process is None:
-                return
-            process.terminate()
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
+        self.client.stop()
 
     def read_account_usage(self) -> dict[str, Any]:
         try:
@@ -54,7 +47,7 @@ class CodexUsageService:
                 "five_hour": self._window(snapshot.get("primary"), "5-hour"),
                 "weekly": self._window(snapshot.get("secondary"), "weekly"),
             }
-        except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as exc:
+        except (OSError, RuntimeError, CodexAppServerError, ValueError) as exc:
             self._last_error = str(exc)
             return {
                 "available": False,
@@ -112,7 +105,7 @@ class CodexUsageService:
             self._model_catalog = catalog
             self._model_catalog_expires_at = now + timedelta(minutes=5)
             return catalog
-        except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as exc:
+        except (OSError, RuntimeError, CodexAppServerError, ValueError) as exc:
             return {
                 "available": False,
                 "fetched_at": now.isoformat(),
@@ -120,64 +113,8 @@ class CodexUsageService:
                 "models": [],
             }
 
-    def _start_locked(self) -> None:
-        if self._process is not None and self._process.poll() is None:
-            return
-        command = self.command or codex_cli_service.command()
-        self._process = subprocess.Popen(
-            [command, "app-server", "--stdio"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            shell=False,
-        )
-        response = self._send_locked(
-            "initialize",
-            {
-                "clientInfo": {"name": "eidolon", "title": "Eidolon", "version": "0.1.0"},
-                "capabilities": {"experimentalApi": True},
-            },
-        )
-        if "error" in response:
-            raise RuntimeError(str(response["error"]))
-        self._write_locked({"method": "initialized"})
-
     def _request(self, method: str, params: Any) -> dict[str, Any]:
-        with self._lock:
-            self._start_locked()
-            response = self._send_locked(method, params)
-            if "error" in response:
-                raise RuntimeError(str(response["error"]))
-            result = response.get("result")
-            if not isinstance(result, dict):
-                raise RuntimeError("Codex App Server returned an invalid response")
-            return result
-
-    def _send_locked(self, method: str, params: Any) -> dict[str, Any]:
-        self._request_id += 1
-        request_id = self._request_id
-        self._write_locked({"id": request_id, "method": method, "params": params})
-        process = self._process
-        if process is None or process.stdout is None:
-            raise RuntimeError("Codex App Server is not running")
-        while True:
-            line = process.stdout.readline()
-            if not line:
-                raise RuntimeError("Codex App Server closed its output")
-            message = json.loads(line)
-            if message.get("id") == request_id:
-                return message
-
-    def _write_locked(self, message: dict[str, Any]) -> None:
-        process = self._process
-        if process is None or process.stdin is None:
-            raise RuntimeError("Codex App Server is not running")
-        process.stdin.write(json.dumps(message) + "\n")
-        process.stdin.flush()
+        return self.client.request(method, params)
 
     @staticmethod
     def _select_codex_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
@@ -225,4 +162,4 @@ class CodexUsageService:
         }
 
 
-codex_usage_service = CodexUsageService()
+codex_usage_service = CodexUsageService(client=codex_app_server_client)

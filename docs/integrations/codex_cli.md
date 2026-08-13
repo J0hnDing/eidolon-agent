@@ -1,6 +1,6 @@
 # Codex CLI Integration
 
-The backend can use the local Codex CLI for direct chat, Project-mode plausibility review, skill planning, Builder edits, Tester test writing, repairs, updates, and ProductManager summaries.
+The backend can use the local Codex CLI for direct chat, one-time intent refinement, the resumable Project-mode planning session, Builder edits, Tester test writing, repairs, updates, and ProductManager summaries.
 
 The backend also starts one persistent local `codex app-server --stdio` child process for account allowance reads. It uses `account/rateLimits/read` to expose the current 5-hour and weekly windows. App Server availability failures are reported by the usage API and do not block normal chat or skill runtime.
 
@@ -24,7 +24,7 @@ PERSONAL_AGENT_CODEX_ENABLE_SEARCH=auto
 
 ## Executable Resolution and Compatibility
 
-Every backend Codex path, including Chat, ProductManager, Builder, Tester, planning, plausibility review, skill runtime calls, and the persistent App Server, uses one central CLI resolver.
+Every backend Codex path, including Chat, ProductManager, Builder, Tester, planning, skill runtime calls, and the persistent App Server, uses one central CLI resolver.
 
 When `PERSONAL_AGENT_CODEX_COMMAND` is set, that executable is an explicit override and no automatic fallback replaces it. Without an override, the backend checks the Codex Desktop installation and every `codex` executable visible on `PATH`, runs `<candidate> --version`, and selects the newest valid semantic version. Codex Desktop wins a version tie. This prevents an older PATH installation from silently taking precedence over a newer Desktop-bundled CLI.
 
@@ -41,7 +41,7 @@ The backend reads the account-aware model picker through App Server `model/list`
 Routing settings cover:
 
 - normal Chat independently;
-- ProductManager refine-intent, plausibility, blueprint/permissions, task-DAG, repair, and update actions;
+- ProductManager refine-intent, plan-build, task-DAG, repair, and update actions;
 - Builder single-Codex builds, `easy`, `medium`, and `hard` DAG nodes, plus repair and update actions;
 - Tester task, final end-to-end, and update actions.
 
@@ -90,21 +90,20 @@ single-Codex workflow uses one larger limit for its combined planning, implement
 
 | Codex action | Hard timeout |
 | --- | ---: |
-| ProductManager intent refinement and plausibility review | 120 seconds |
-| ProductManager blueprint/permissions, task-DAG planning, repair planning, and update review | 180 seconds |
+| ProductManager intent refinement | 120 seconds |
+| ProductManager planning/clarification, task-DAG planning, repair planning, and update review | 180 seconds |
 | Builder task, update, and repair | 600 seconds |
 | Tester task, final E2E authoring, and update testing | 300 seconds |
 | Single-Codex combined build | 900 seconds |
 | Installed-skill bounded Codex call | 45 seconds |
 
-Unknown legacy actions use a 300-second compatibility fallback. Direct chat, standalone plausibility review, and
-standalone skill planning retain their separate service-specific 120-second limits. Progress-aware idle timeouts,
+Unknown legacy actions use a 300-second compatibility fallback. Direct chat retains its service-specific 120-second limit. Progress-aware idle timeouts,
 whole-workflow budgets, and partial recovery are not part of these hard limits and remain tracked in `TODO-012`.
 
 ## Sandbox Modes
 
 - Chat: read-only project root.
-- Plausibility: read-only project root with a final-response JSON Schema for the machine-consumed decision.
+- ProductManager planning: a persistent App Server thread with a final-response JSON Schema for the combined decision/blueprint/permission contract.
 - ProductManager workflow actions: read-only `runtime/product_manager` workspace. ProductManager returns CLI-schema-constrained JSON on stdout; the backend parses and sanitizes it, then writes workflow artifacts such as `blueprint.json`, `permissions.json`, and `task_dag.json`.
 - Builder/Tester skill generation, build, repair, and update: `workspace-write` scoped to the controlled skill or draft-version directory passed with `-C`.
 - Backend-mediated skill Codex calls: read-only runtime workspace with a final-response JSON Schema for the bounded response envelope.

@@ -153,7 +153,6 @@ def test_removed_product_manager_actions_use_only_the_default_route(
         {
             "product_manager": {
                 "default": {"model": "gpt-fast", "reasoning_effort": "low"},
-                "plausibility_review": {"model": "gpt-smart", "reasoning_effort": "high"},
                 "blueprint_and_permissions": {
                     "model": "gpt-smart",
                     "reasoning_effort": "high",
@@ -169,6 +168,28 @@ def test_removed_product_manager_actions_use_only_the_default_route(
     assert resolved.effective_model == "gpt-fast"
     assert resolved.effective_reasoning_effort == "low"
     assert resolved.route_source == "product_manager.default"
+
+
+def test_product_manager_plan_build_uses_blueprint_and_permissions_route(db_session: Session) -> None:
+    payload = CodexRoutingSettingsPayload.model_validate(
+        {
+            "product_manager": {
+                "default": {"model": "gpt-fast", "reasoning_effort": "low"},
+                "blueprint_and_permissions": {
+                    "model": "gpt-smart",
+                    "reasoning_effort": "high",
+                },
+            }
+        }
+    )
+    service = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
+    service.update_settings(payload)
+
+    resolved = service.resolve(role="product_manager", action="product_manager_plan_build")
+
+    assert resolved.effective_model == "gpt-smart"
+    assert resolved.effective_reasoning_effort == "high"
+    assert resolved.route_source == "product_manager.blueprint_and_permissions"
 
 
 def test_settings_reject_effort_not_advertised_by_selected_model(db_session: Session) -> None:

@@ -22,8 +22,7 @@ class CodexRoutingError(ValueError):
 
 _PM_ACTIONS = {
     "product_manager_refine_intent": "refine_intent",
-    "product_manager_build_review": "plausibility_review",
-    "product_manager_write_blueprint_and_permissions": "blueprint_and_permissions",
+    "product_manager_plan_build": "blueprint_and_permissions",
     "product_manager_write_task_dag": "task_dag",
     "product_manager_repair_blueprint": "repair",
     "product_manager_update_review": "update",

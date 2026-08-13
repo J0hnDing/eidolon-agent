@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+import app.services.agent_workflow_service as workflow_module
 from app.db import Base
 from app.models import AgentRun, AgentRunStep, CodexRoutingSettings, MemoryFact, Skill, SkillGenerationRequest, SkillRun
 from app.routers.agent_runs import delete_agent_run
@@ -17,6 +18,7 @@ from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.codex_service import CodexService, FakeCodexAdapter
 from app.services.default_permissions import blocked_permissions, planning_permission_policy
 from app.services.permission_service import PermissionService
+from app.services.product_manager_contract_service import ProductManagerContractError
 
 
 @pytest.fixture
@@ -47,24 +49,23 @@ def test_product_manager_creates_blueprint_and_permissions_before_task_dag(tmp_p
     assert "milestones" not in agent_run.blueprint_json
     assert "build_workflow" not in agent_run.blueprint_json
     steps = sorted(agent_run.steps, key=lambda step: step.id)
-    assert [step.step_name for step in steps] == ["product_manager"] * 3 + ["backend"]
+    assert [step.step_name for step in steps] == ["product_manager"] * 2 + ["backend"]
     assert [step.action for step in steps] == [
         "product_manager_refine_intent",
-        "product_manager_build_review",
-        "product_manager_write_blueprint_and_permissions",
+        "product_manager_plan_build",
         "backend_build_time_permission_review",
     ]
     assert steps[0].output_json["intent_prompt_path"].endswith("intent_prompt.json")
-    assert steps[1].output_json["decision_json"]["decision"] == "proceed_to_blueprint"
-    assert steps[2].output_json["blueprint_json"]["skill_name"] == building_skill.name
-    assert steps[2].output_json["permission_path"].endswith("permissions.json")
-    assert steps[3].input_json is None
-    assert steps[3].output_json is None
-    assert steps[3].approval_request_id is not None
-    assert all(step.agent_input_text for step in steps[:3])
-    assert all(step.agent_output_text is not None for step in steps[:3])
-    assert steps[3].agent_input_text is None
-    assert steps[3].agent_output_text is None
+    assert steps[1].output_json["decision_json"]["decision"] == "proceed_to_approval"
+    assert steps[1].output_json["blueprint_json"]["skill_name"] == building_skill.name
+    assert steps[1].output_json["permission_path"].endswith("permissions.json")
+    assert steps[2].input_json is None
+    assert steps[2].output_json is None
+    assert steps[2].approval_request_id is not None
+    assert all(step.agent_input_text for step in steps[:2])
+    assert all(step.agent_output_text is not None for step in steps[:2])
+    assert steps[2].agent_input_text is None
+    assert steps[2].agent_output_text is None
     assert (run_dir / "intent_prompt.json").is_file()
     assert (run_dir / "decision.json").is_file()
     assert (run_dir / "blueprint.json").is_file()
@@ -85,10 +86,8 @@ def test_product_manager_creates_blueprint_and_permissions_before_task_dag(tmp_p
     stored_blueprint = json.loads((run_dir / "blueprint.json").read_text(encoding="utf-8"))
     assert "expected_files" not in stored_blueprint
     assert "build_workflow" not in stored_blueprint
-    assert set(steps[1].input_json) == {"action", "intent_prompt", "blocked"}
-    assert steps[1].input_json["blocked"] == blocked_permissions()
-    assert set(steps[2].input_json) == {"action", "intent_prompt", "permission_policy"}
-    assert steps[2].input_json["permission_policy"] == planning_permission_policy()
+    assert set(steps[1].input_json) == {"action", "intent_prompt", "user_reply", "permission_policy"}
+    assert steps[1].input_json["permission_policy"] == planning_permission_policy()
 
 
 def test_settings_workflow_override_wins_over_product_manager_choice(tmp_path: Path, db_session: Session) -> None:
@@ -103,7 +102,7 @@ def test_settings_workflow_override_wins_over_product_manager_choice(tmp_path: P
 
     agent_run = AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
 
-    blueprint_step = sorted(agent_run.steps, key=lambda step: step.id)[2]
+    blueprint_step = sorted(agent_run.steps, key=lambda step: step.id)[1]
     assert agent_run.build_workflow == "single_codex"
     assert blueprint_step.output_json["product_manager_build_workflow"] == "task_dag"
     assert blueprint_step.output_json["build_workflow"] == "single_codex"
@@ -194,23 +193,15 @@ def test_product_manager_uses_codex_adapter_for_blueprint_and_permissions(tmp_pa
         project_root=tmp_path,
     ).create_build_run(generation_request)
 
-    assert "product_manager_build_review" in adapter.tasks
     assert "product_manager_refine_intent" in adapter.tasks
-    assert "product_manager_write_blueprint_and_permissions" in adapter.tasks
+    assert "product_manager_plan_build" in adapter.tasks
     assert "product_manager_write_permissions" not in adapter.tasks
     assert "product_manager_summary" not in adapter.tasks
     refine_plan = next(plan for plan in adapter.plans if plan.get("codex_task") == "product_manager_refine_intent")
-    review_plan = next(plan for plan in adapter.plans if plan.get("codex_task") == "product_manager_build_review")
+    review_plan = next(plan for plan in adapter.plans if plan.get("codex_task") == "product_manager_plan_build")
     assert review_plan["intent_prompt"]["refined_prompt"]
-    assert review_plan["blocked"] == blocked_permissions()
-    assert "permission_policy" not in review_plan
-    review_prompt = adapter.prompts["product_manager_build_review"]
-    assert '"intent_prompt"' in review_prompt
-    assert '"user_message"' not in review_prompt
-    assert '"project_conversation"' not in review_prompt
-    assert '"blocked"' in review_prompt
-    assert '"requires_approval"' not in review_prompt
-    blueprint_prompt = adapter.prompts["product_manager_write_blueprint_and_permissions"]
+    assert review_plan["permission_policy"] == planning_permission_policy()
+    blueprint_prompt = adapter.prompts["product_manager_plan_build"]
     assert '"intent_prompt"' in blueprint_prompt
     assert '"generation_plan"' not in blueprint_prompt
     assert '"user_message"' not in blueprint_prompt
@@ -378,7 +369,7 @@ def test_single_codex_workflow_runs_one_build_invocation_end_to_end(tmp_path: Pa
             task = str(plan.get("codex_task") or "")
             self.tasks.append(task)
             result = super().generate(prompt, output_dir, plan)
-            if task == "product_manager_write_blueprint_and_permissions":
+            if task == "product_manager_plan_build":
                 payload = json.loads(result.stdout)
                 payload["build_workflow"] = "single_codex"
                 return subprocess.CompletedProcess(args=result.args, returncode=0, stdout=json.dumps(payload), stderr="")
@@ -460,10 +451,12 @@ def test_single_codex_workflow_builds_and_validates_web_app_protocol(
     class WebAppWorkflowAdapter(FakeCodexAdapter):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             result = super().generate(prompt, output_dir, plan)
-            if plan.get("codex_task") == "product_manager_write_blueprint_and_permissions":
+            if plan.get("codex_task") == "product_manager_plan_build":
                 payload = json.loads(result.stdout)
                 payload["build_workflow"] = "single_codex"
                 payload["blueprint"]["runtime"] = "web_app"
+                payload["blueprint"]["input_schema"] = None
+                payload["blueprint"]["output_schema"] = None
                 payload["blueprint"]["schedule"] = None
                 return subprocess.CompletedProcess(args=result.args, returncode=0, stdout=json.dumps(payload), stderr="")
             return result
@@ -504,7 +497,7 @@ def test_single_codex_static_scan_blocks_runtime_review_without_calling_more_age
             task = str(plan.get("codex_task") or "")
             self.tasks.append(task)
             result = super().generate(prompt, output_dir, plan)
-            if task == "product_manager_write_blueprint_and_permissions":
+            if task == "product_manager_plan_build":
                 payload = json.loads(result.stdout)
                 payload["build_workflow"] = "single_codex"
                 return subprocess.CompletedProcess(args=result.args, returncode=0, stdout=json.dumps(payload), stderr="")
@@ -575,7 +568,7 @@ def test_final_capability_scan_uses_actual_manifest_permissions(
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             task = str(plan.get("codex_task") or "")
             result = super().generate(prompt, output_dir, plan)
-            if task == "product_manager_write_blueprint_and_permissions":
+            if task == "product_manager_plan_build":
                 payload = json.loads(result.stdout)
                 payload["build_workflow"] = "single_codex"
                 payload["permission_plan"]["runtime"]["network"] = ["example.com"]
@@ -787,7 +780,7 @@ def test_builder_receives_function_context_for_task_node(tmp_path: Path, db_sess
     class ApiTaskAdapter(FakeCodexAdapter):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             result = super().generate(prompt, output_dir, plan)
-            if plan.get("codex_task") == "product_manager_write_blueprint_and_permissions":
+            if plan.get("codex_task") == "product_manager_plan_build":
                 payload = json.loads(result.stdout)
                 payload["blueprint"]["functions"] = ["backend.codex.call"]
                 return subprocess.CompletedProcess(args=result.args, returncode=0, stdout=json.dumps(payload), stderr="")
@@ -1417,22 +1410,79 @@ def test_blueprint_sanitizer_removes_expected_files(db_session: Session) -> None
     assert "arbitrary" not in sanitized
 
 
-def test_plausibility_sanitizer_keeps_only_required_contract_fields(db_session: Session) -> None:
-    sanitized = CodexService(db_session).product_manager_contracts.sanitize_build_review(
+def test_plan_build_sanitizer_enforces_terminal_contract_fields(db_session: Session) -> None:
+    sanitized = CodexService(db_session).product_manager_contracts.sanitize_plan_build(
         {
             "decision": "stop_inplausible",
             "user_prompt": "This requires blocked deletion. Try a non-destructive report instead.",
-            "summary": "discard me",
-            "reason": "discard me too",
-            "optional_projects": ["discard me"],
+            "build_workflow": None,
+            "blueprint": None,
+            "permission_plan": None,
         },
-        {"decision": "proceed_to_blueprint", "user_prompt": None},
+        {},
     )
 
     assert sanitized == {
         "decision": "stop_inplausible",
         "user_prompt": "This requires blocked deletion. Try a non-destructive report instead.",
+        "build_workflow": None,
+        "blueprint": None,
+        "permission_plan": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("response", "error"),
+    [
+        (
+            {
+                "decision": "ask_user_for_input",
+                "user_prompt": "Tell me the recurring source",
+                "build_workflow": None,
+                "blueprint": None,
+                "permission_plan": None,
+            },
+            "exactly one question",
+        ),
+        (
+            {
+                "decision": "ask_user_for_input",
+                "user_prompt": "Which source should be used?",
+                "build_workflow": "single_codex",
+                "blueprint": None,
+                "permission_plan": None,
+            },
+            "cannot include planning artifacts",
+        ),
+        (
+            {
+                "decision": "stop_inplausible",
+                "user_prompt": "Automatic deletion is blocked.",
+                "build_workflow": None,
+                "blueprint": None,
+                "permission_plan": None,
+            },
+            "safe alternative",
+        ),
+        (
+            {
+                "decision": "proceed_to_approval",
+                "user_prompt": None,
+                "build_workflow": "single_codex",
+                "blueprint": None,
+                "permission_plan": None,
+            },
+            "requires blueprint and permissions",
+        ),
+    ],
+)
+def test_plan_build_sanitizer_fails_closed_on_invalid_branches(
+    db_session: Session,
+    response: dict[str, object],
+    error: str,
+) -> None:
+    with pytest.raises(ProductManagerContractError, match=error):
+        CodexService(db_session).product_manager_contracts.sanitize_plan_build(response, {})
 
 
 def test_permission_review_records_permission_expansion(tmp_path: Path, db_session: Session) -> None:
@@ -1490,6 +1540,76 @@ def test_cancelled_agent_run_blocks_further_steps(tmp_path: Path, db_session: Se
 
     with pytest.raises(AgentWorkflowError, match="cancelled"):
         service.continue_build_after_approval(generation_request)
+
+
+def test_cancelling_while_waiting_for_clarification_archives_session(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ClarifyingAdapter(FakeCodexAdapter):
+        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+            if plan.get("codex_task") == "product_manager_plan_build":
+                return subprocess.CompletedProcess(
+                    args=["fake"],
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "decision": "ask_user_for_input",
+                            "user_prompt": "Which recurring source should the skill process?",
+                            "build_workflow": None,
+                            "blueprint": None,
+                            "permission_plan": None,
+                        }
+                    ),
+                    stderr="",
+                )
+            return super().generate(prompt, output_dir, plan)
+
+    generation_request = create_generation_request(db_session)
+    codex_service = CodexService(
+        db_session,
+        adapter=ClarifyingAdapter(),
+        project_root=tmp_path,
+    )
+    archived: list[int] = []
+    monkeypatch.setattr(
+        codex_service,
+        "archive_product_manager_thread",
+        lambda request: archived.append(request.id),
+    )
+    service = AgentWorkflowService(
+        db_session,
+        codex_service=codex_service,
+        project_root=tmp_path,
+    )
+    agent_run = service.create_build_run(generation_request)
+
+    assert agent_run.status == "blocked"
+    assert generation_request.status == "needs_input"
+    service.cancel_run(agent_run)
+
+    assert agent_run.status == "cancelled"
+    assert generation_request.status == "cancelled"
+    assert archived == [generation_request.id]
+
+
+def test_generation_planning_lock_rejects_overlapping_clarification_turns(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    generation_request = create_generation_request(db_session)
+    lock = workflow_module.threading.Lock()
+    lock.acquire()
+    with workflow_module._GENERATION_PLANNING_LOCKS_GUARD:
+        workflow_module._GENERATION_PLANNING_LOCKS[generation_request.id] = lock
+    try:
+        with pytest.raises(AgentWorkflowError, match="already processing"):
+            AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
+    finally:
+        lock.release()
+        with workflow_module._GENERATION_PLANNING_LOCKS_GUARD:
+            workflow_module._GENERATION_PLANNING_LOCKS.pop(generation_request.id, None)
 
 
 def test_delete_agent_run_removes_steps(db_session: Session) -> None:

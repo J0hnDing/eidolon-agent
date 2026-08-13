@@ -1,5 +1,6 @@
 import json
 import shutil
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,7 +20,6 @@ from app.services.codex_service import CodexGenerationError, CodexService
 from app.services.codex_usage_service import codex_usage_service
 from app.services.default_permissions import (
     agent_permission_bounds,
-    blocked_permissions,
     default_build_time_dependencies,
     effective_permission_plan,
     planning_permission_policy,
@@ -45,6 +45,8 @@ AgentWorkflowError = ProjectBuildWorkflowError
 
 DEFAULT_TASK_ID = "core_skill"
 CODEX_USAGE_RESERVE_PERCENT = 5
+_GENERATION_PLANNING_LOCKS: dict[int, threading.Lock] = {}
+_GENERATION_PLANNING_LOCKS_GUARD = threading.Lock()
 
 
 def utc_now() -> datetime:
@@ -68,6 +70,16 @@ class AgentWorkflowService:
             self.codex_service = CodexService(self.db, project_root=self.project_root)
 
     def create_build_run(self, generation_request: SkillGenerationRequest) -> AgentRun:
+        with _GENERATION_PLANNING_LOCKS_GUARD:
+            planning_lock = _GENERATION_PLANNING_LOCKS.setdefault(generation_request.id, threading.Lock())
+        if not planning_lock.acquire(blocking=False):
+            raise AgentWorkflowError("ProductManager is already processing this generation request")
+        try:
+            return self._create_build_run_locked(generation_request)
+        finally:
+            planning_lock.release()
+
+    def _create_build_run_locked(self, generation_request: SkillGenerationRequest) -> AgentRun:
         existing = self.latest_run_for_generation(generation_request.id)
         if existing and existing.status in {"pending", "running", "waiting_for_approval", "paused", "succeeded"}:
             return existing
@@ -76,7 +88,7 @@ class AgentWorkflowService:
             and existing.status == "blocked"
             and (existing.final_summary_json or {}).get("decision_json", {}).get("decision") == "ask_user_for_input"
         ):
-            return self._review_build_intent(generation_request, existing)
+            return self._plan_build(generation_request, existing, initial=False)
 
         agent_run = AgentRun(
             run_type="build_skill",
@@ -91,58 +103,80 @@ class AgentWorkflowService:
         self.db.commit()
         self.db.refresh(agent_run)
         self.artifacts.initialize(agent_run)
-        return self._review_build_intent(generation_request, agent_run)
+        return self._plan_build(generation_request, agent_run, initial=True)
 
-    def _review_build_intent(self, generation_request: SkillGenerationRequest, agent_run: AgentRun) -> AgentRun:
+    def _plan_build(
+        self,
+        generation_request: SkillGenerationRequest,
+        agent_run: AgentRun,
+        *,
+        initial: bool,
+    ) -> AgentRun:
         agent_run.status = "running"
         agent_run.completed_at = None
         agent_run.error_message = None
         agent_run.user_request = generation_request.user_message
         self.db.commit()
 
-        selected_memory_facts = self._selected_memory_facts()
-        intent_prompt = self.codex_service.product_manager_refine_intent(generation_request, selected_memory_facts)
-        intent_path = self.artifacts.write_json(agent_run, "intent_prompt.json", intent_prompt)
-        intent_step = self._start_step(
+        if initial:
+            selected_memory_facts = self._selected_memory_facts()
+            intent_prompt = self.codex_service.product_manager_refine_intent(
+                generation_request, selected_memory_facts
+            )
+            intent_path = self.artifacts.write_json(agent_run, "intent_prompt.json", intent_prompt)
+            intent_step = self._start_step(
+                agent_run,
+                "product_manager",
+                input_json={
+                    "action": "pm_refine_intent",
+                    "user_request": generation_request.user_message,
+                    "project_conversation": generation_request.plan_json.get("project_conversation", []),
+                    "selected_memory_facts": selected_memory_facts,
+                },
+                logs="ProductManager refined the initial Project-mode request before planning.",
+            )
+            self._finish_step(
+                agent_run,
+                intent_step,
+                "succeeded",
+                output_json={"intent_prompt": intent_prompt, "intent_prompt_path": intent_path},
+                logs="ProductManager wrote intent_prompt.json once for this generation request.",
+            )
+        else:
+            intent_prompt = self.artifacts.read_json(agent_run, "intent_prompt.json")
+            if not intent_prompt:
+                raise AgentWorkflowError("The stored ProductManager intent prompt is missing")
+
+        downstream_intent = self._downstream_intent_prompt(intent_prompt)
+        step = self._start_step(
             agent_run,
             "product_manager",
             input_json={
-                "action": "pm_refine_intent",
-                "user_request": generation_request.user_message,
-                "project_conversation": generation_request.plan_json.get("project_conversation", []),
-                "selected_memory_facts": selected_memory_facts,
+                "action": "pm_plan_build",
+                "intent_prompt": downstream_intent if initial else None,
+                "user_reply": None if initial else self.codex_service._latest_project_user_reply(generation_request),
+                "permission_policy": planning_permission_policy() if initial else None,
             },
-            logs="ProductManager refined the Project-mode request before plausibility review.",
+            logs="ProductManager is clarifying, rejecting, or creating the complete build plan.",
         )
-        self._finish_step(
-            agent_run,
-            intent_step,
-            "succeeded",
-            output_json={"intent_prompt": intent_prompt, "intent_prompt_path": intent_path},
-            logs="ProductManager wrote intent_prompt.json.",
-        )
-
-        downstream_intent = self._downstream_intent_prompt(intent_prompt)
-        review = self.codex_service.product_manager_build_review(generation_request, downstream_intent)
+        try:
+            review = self.codex_service.product_manager_plan_build(generation_request, downstream_intent)
+        except CodexGenerationError as exc:
+            self._finish_step(agent_run, step, "failed", error_message=str(exc), logs=str(exc))
+            self._fail_run(agent_run, str(exc))
+            generation_request.status = "failed"
+            generation_request.error_message = str(exc)
+            self.db.commit()
+            return agent_run
         decision = str(review["decision"])
         user_prompt = review.get("user_prompt")
         summary = (
             str(user_prompt)
             if user_prompt
-            else "ProductManager confirmed that the request is ready for blueprinting."
+            else "ProductManager created a complete build plan for approval."
         )
         decision_json = {"decision": decision, "user_prompt": user_prompt}
         decision_path = self.artifacts.write_json(agent_run, "decision.json", decision_json)
-        step = self._start_step(
-            agent_run,
-            "product_manager",
-            input_json={
-                "action": "pm_review_plausibility",
-                "intent_prompt": downstream_intent,
-                "blocked": blocked_permissions(),
-            },
-            logs="ProductManager reviewed clarity, plausibility, and MVP support before blueprint creation.",
-        )
 
         if decision == "ask_user_for_input":
             prompt = str(user_prompt)
@@ -176,6 +210,7 @@ class AgentWorkflowService:
             return agent_run
 
         if decision == "stop_inplausible":
+            archive_warning = self.codex_service.archive_product_manager_thread(generation_request)
             self._finish_step(
                 agent_run,
                 step,
@@ -184,6 +219,7 @@ class AgentWorkflowService:
                     "decision_json": {"decision": "stop_inplausible"},
                     "decision_path": decision_path,
                     "user_summary": summary,
+                    "thread_archive_warning": archive_warning,
                 },
                 logs=summary,
             )
@@ -197,37 +233,37 @@ class AgentWorkflowService:
                 "decision_json": {"decision": "stop_inplausible"},
                 "decision_path": decision_path,
                 "user_summary": summary,
+                "thread_archive_warning": archive_warning,
             }
             agent_run.completed_at = utc_now()
             self.db.commit()
             self.db.refresh(agent_run)
             return agent_run
 
-        self._finish_step(
+        return self._create_build_artifacts_after_plan(
+            generation_request,
             agent_run,
             step,
-            "succeeded",
-            output_json={
-                "decision_json": {"decision": "proceed_to_blueprint"},
-                "decision_path": decision_path,
-                "user_summary": summary,
-            },
-            logs=summary,
+            downstream_intent,
+            review,
+            decision_path,
         )
-        return self._create_build_artifacts_after_review(generation_request, agent_run, downstream_intent)
 
-    def _create_build_artifacts_after_review(
+    def _create_build_artifacts_after_plan(
         self,
         generation_request: SkillGenerationRequest,
         agent_run: AgentRun,
+        step: AgentRunStep,
         intent_prompt: dict[str, Any],
+        planned: dict[str, object],
+        decision_path: str,
     ) -> AgentRun:
-        blueprint, raw_permission_plan, product_manager_build_workflow = (
-            self.codex_service.product_manager_write_blueprint_and_permissions(
-                generation_request,
-                intent_prompt,
-            )
-        )
+        blueprint = planned.get("blueprint")
+        raw_permission_plan = planned.get("permission_plan")
+        product_manager_build_workflow = planned.get("build_workflow")
+        if not isinstance(blueprint, dict) or not isinstance(raw_permission_plan, dict):
+            raise AgentWorkflowError("ProductManager proceeded without complete planning artifacts")
+        product_manager_build_workflow = str(product_manager_build_workflow)
         workflow_override = CodexRoutingService(self.db).project_build_workflow_override()
         build_workflow = workflow_override or product_manager_build_workflow
         get_project_build_workflow(build_workflow)
@@ -237,20 +273,14 @@ class AgentWorkflowService:
             {**blueprint, "permission_plan": raw_permission_plan},
         )
         permission_path = self.artifacts.write_json(agent_run, "permissions.json", permission_plan)
+        archive_warning = self.codex_service.archive_product_manager_thread(generation_request)
         self._finish_step(
             agent_run,
-            self._start_step(
-                agent_run,
-                "product_manager",
-                input_json={
-                    "action": "pm_write_blueprint_and_permissions",
-                    "intent_prompt": intent_prompt,
-                    "permission_policy": planning_permission_policy(),
-                },
-                logs="ProductManager wrote the skill blueprint and permission plan.",
-            ),
+            step,
             "succeeded",
             output_json={
+                "decision_json": {"decision": "proceed_to_approval"},
+                "decision_path": decision_path,
                 "blueprint_json": blueprint,
                 "permission_plan": permission_plan,
                 "build_workflow": build_workflow,
@@ -258,6 +288,7 @@ class AgentWorkflowService:
                 "build_workflow_source": "settings_override" if workflow_override else "product_manager",
                 "blueprint_path": blueprint_path,
                 "permission_path": permission_path,
+                "thread_archive_warning": archive_warning,
             },
             logs="ProductManager wrote blueprint.json and permissions.json without task nodes or tests. Permissions were not approved.",
         )
@@ -773,11 +804,28 @@ class AgentWorkflowService:
         return self.retry_current_task(agent_run)
 
     def cancel_run(self, agent_run: AgentRun) -> AgentRun:
-        if agent_run.status in {"succeeded", "failed", "cancelled", "blocked"}:
+        clarification_wait = (
+            agent_run.status == "blocked"
+            and (agent_run.final_summary_json or {}).get("decision_json", {}).get("decision")
+            == "ask_user_for_input"
+        )
+        if agent_run.status in {"succeeded", "failed", "cancelled"} or (
+            agent_run.status == "blocked" and not clarification_wait
+        ):
             return agent_run
         agent_run.status = "cancelled"
         agent_run.completed_at = utc_now()
         agent_run.error_message = "Cancelled by local user."
+        if agent_run.generation_request_id:
+            generation_request = self.db.get(SkillGenerationRequest, agent_run.generation_request_id)
+            if generation_request is not None:
+                archive_warning = self.codex_service.archive_product_manager_thread(generation_request)
+                generation_request.status = "cancelled"
+                generation_request.error_message = "Cancelled by local user."
+                if archive_warning:
+                    final_summary = dict(agent_run.final_summary_json or {})
+                    final_summary["thread_archive_warning"] = archive_warning
+                    agent_run.final_summary_json = final_summary
         for step in agent_run.steps:
             if step.status in {"pending", "running", "waiting_for_approval"}:
                 step.status = "cancelled"

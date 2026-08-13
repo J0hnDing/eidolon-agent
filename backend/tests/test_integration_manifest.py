@@ -71,7 +71,7 @@ def test_registry_is_authoritative_and_context_is_selected_only() -> None:
 
 def test_product_manager_and_single_codex_context_are_minimized(tmp_path) -> None:
     product_manager_prompt = build_product_manager_prompt(
-        "write_blueprint_and_permissions",
+        "plan_build",
         {
             "intent_prompt": {"refined_prompt": "Build a GitHub repository reader."},
             "permission_policy": planning_permission_policy(),
