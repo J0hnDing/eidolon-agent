@@ -25,6 +25,7 @@ from app.services.default_permissions import (
     planning_permission_policy,
 )
 from app.services.function_catalog_service import FunctionCatalogService
+from app.services.integration_registry import OPERATIONS
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
@@ -1706,14 +1707,21 @@ class AgentWorkflowService:
             else {}
         )
         integration_requirements = []
-        if integration_operations:
-            github_scope = integration_scopes.get("github")
-            github_scope = github_scope if isinstance(github_scope, dict) else {"repositories": []}
+        operations_by_provider: dict[str, list[str]] = {}
+        for operation_id in integration_operations:
+            provider = OPERATIONS[operation_id].provider
+            operations_by_provider.setdefault(provider, []).append(operation_id)
+        for provider, provider_operations in sorted(operations_by_provider.items()):
+            selected_scope = integration_scopes.get(provider)
+            if provider == "github":
+                resource_scope = selected_scope if isinstance(selected_scope, dict) else {"repositories": []}
+            else:
+                resource_scope = {}
             integration_requirements.append(
                 {
-                    "provider": "github",
-                    "operations": integration_operations,
-                    "resource_scope": github_scope,
+                    "provider": provider,
+                    "operations": provider_operations,
+                    "resource_scope": resource_scope,
                 }
             )
         skill_runtime = str(blueprint.get("runtime") or "function")

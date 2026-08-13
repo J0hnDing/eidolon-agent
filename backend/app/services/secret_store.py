@@ -14,11 +14,11 @@ class SecretStoreError(RuntimeError):
 class SecretStore(Protocol):
     implementation_id: str
 
-    def put(self, secret: str) -> str: ...
+    def put(self, secret: str, *, namespace: str = "github") -> str: ...
 
-    def get(self, reference: str) -> str: ...
+    def get(self, reference: str, *, namespace: str = "github") -> str: ...
 
-    def delete(self, reference: str) -> None: ...
+    def delete(self, reference: str, *, namespace: str = "github") -> None: ...
 
 
 class _Credential(ctypes.Structure):
@@ -42,7 +42,11 @@ class WindowsCredentialSecretStore:
     """Narrow Windows Credential Manager wrapper with no application-owned fallback."""
 
     implementation_id = "windows_credential_manager"
-    _prefix = "Eidolon/GitHub/"
+    _prefix_by_namespace = {
+        "github": "Eidolon/GitHub/",  # Preserve existing credential targets.
+        "atlas_api_key": "Eidolon/Atlas/APIKey/",
+        "atlas_passphrase": "Eidolon/Atlas/Passphrase/",
+    }
 
     def __init__(self) -> None:
         if sys.platform != "win32":
@@ -65,11 +69,11 @@ class WindowsCredentialSecretStore:
         self._advapi.CredFree.argtypes = [ctypes.c_void_p]
         self._advapi.CredFree.restype = None
 
-    def put(self, secret: str) -> str:
+    def put(self, secret: str, *, namespace: str = "github") -> str:
         if not secret:
             raise SecretStoreError("Credential cannot be empty")
         reference = uuid4().hex
-        target = f"{self._prefix}{reference}"
+        target = f"{self._prefix(namespace)}{reference}"
         blob = secret.encode("utf-8")
         blob_buffer = (ctypes.c_ubyte * len(blob)).from_buffer_copy(blob)
         credential = _Credential(
@@ -84,14 +88,14 @@ class WindowsCredentialSecretStore:
             AttributeCount=0,
             Attributes=None,
             TargetAlias=None,
-            UserName="github",
+            UserName=namespace,
         )
         if not self._advapi.CredWriteW(ctypes.byref(credential), 0):
             raise SecretStoreError("Operating-system secret storage rejected the credential")
         return reference
 
-    def get(self, reference: str) -> str:
-        target = self._target(reference)
+    def get(self, reference: str, *, namespace: str = "github") -> str:
+        target = self._target(reference, namespace)
         pointer = ctypes.POINTER(_Credential)()
         if not self._advapi.CredReadW(target, 1, 0, ctypes.byref(pointer)):
             raise SecretStoreError("Stored credential is unavailable")
@@ -104,17 +108,23 @@ class WindowsCredentialSecretStore:
         finally:
             self._advapi.CredFree(pointer)
 
-    def delete(self, reference: str) -> None:
-        target = self._target(reference)
+    def delete(self, reference: str, *, namespace: str = "github") -> None:
+        target = self._target(reference, namespace)
         if not self._advapi.CredDeleteW(target, 1, 0):
             error = ctypes.get_last_error()
             if error != 1168:  # ERROR_NOT_FOUND: deletion is idempotent.
                 raise SecretStoreError("Operating-system secret storage could not remove the credential")
 
-    def _target(self, reference: str) -> str:
+    def _target(self, reference: str, namespace: str) -> str:
         if len(reference) != 32 or any(character not in "0123456789abcdef" for character in reference):
             raise SecretStoreError("Stored credential reference is invalid")
-        return f"{self._prefix}{reference}"
+        return f"{self._prefix(namespace)}{reference}"
+
+    def _prefix(self, namespace: str) -> str:
+        try:
+            return self._prefix_by_namespace[namespace]
+        except KeyError as exc:
+            raise SecretStoreError("Credential namespace is invalid") from exc
 
 
 @dataclass
@@ -126,26 +136,33 @@ class FakeSecretStore:
     fail_delete: bool = False
     _counter: int = 0
 
-    def put(self, secret: str) -> str:
+    namespaces: dict[str, str] = field(default_factory=dict)
+
+    def put(self, secret: str, *, namespace: str = "github") -> str:
         if self.fail_put:
             raise SecretStoreError("Fake secret store put failure")
         self._counter += 1
         reference = f"fake-{self._counter:04d}"
         self.values[reference] = secret
+        self.namespaces[reference] = namespace
         return reference
 
-    def get(self, reference: str) -> str:
+    def get(self, reference: str, *, namespace: str = "github") -> str:
         if self.fail_get:
             raise SecretStoreError("Fake secret store get failure")
         try:
+            if self.namespaces.get(reference, "github") != namespace:
+                raise KeyError(reference)
             return self.values[reference]
         except KeyError as exc:
             raise SecretStoreError("Fake secret is unavailable") from exc
 
-    def delete(self, reference: str) -> None:
+    def delete(self, reference: str, *, namespace: str = "github") -> None:
         if self.fail_delete:
             raise SecretStoreError("Fake secret store delete failure")
-        self.values.pop(reference, None)
+        if self.namespaces.get(reference, "github") == namespace:
+            self.values.pop(reference, None)
+            self.namespaces.pop(reference, None)
 
 
 def default_secret_store() -> SecretStore:

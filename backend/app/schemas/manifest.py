@@ -143,7 +143,7 @@ class ManifestIntegrationResourceScope(BaseModel):
 class ManifestIntegrationRequirement(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["github"]
+    provider: Literal["github", "atlas"]
     operations: list[str] = Field(min_length=1, max_length=20)
     resource_scope: ManifestIntegrationResourceScope = Field(default_factory=ManifestIntegrationResourceScope)
 

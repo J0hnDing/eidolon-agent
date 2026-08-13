@@ -175,7 +175,8 @@ def test_unified_catalog_persists_categories_states_and_user_lifecycle(
     monkeypatch.setattr(
         "app.services.function_catalog_service.build_default_integration_service",
         lambda _db: SimpleNamespace(
-            connection_status=lambda: SimpleNamespace(connected=connection_state["connected"])
+            connection_status=lambda: SimpleNamespace(connected=connection_state["connected"]),
+            provider_connected=lambda provider: connection_state["connected"] if provider == "github" else False,
         ),
     )
     target = make_function(db_session, tmp_path, "normalize_text")

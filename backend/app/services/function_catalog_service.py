@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Skill
+from app.services.atlas_knowledge_service import codex_available
 from app.services.integration_registry import OPERATIONS
 from app.services.integration_service import build_default_integration_service
 
@@ -137,9 +138,22 @@ class FunctionCatalogService:
             for entry in seed.get("functions", [])
             if isinstance(entry, dict)
         ]
-        github_connected = build_default_integration_service(self.db).connection_status().connected
+        integrations = build_default_integration_service(self.db)
+        provider_state = {
+            provider: integrations.provider_connected(provider)
+            for provider in {operation.provider for operation in OPERATIONS.values()}
+        }
+        atlas_codex_available = codex_available()
         for operation in OPERATIONS.values():
-            reasons = [] if github_connected else ["GitHub connection is not configured"]
+            connected = provider_state[operation.provider]
+            reasons = [] if connected else [
+                "GitHub connection is not configured"
+                if operation.provider == "github"
+                else "Atlas is not running, unlocked, and connected"
+            ]
+            if operation.operation_id == "atlas.knowledge.node.know" and not atlas_codex_available:
+                reasons.append("A compatible Codex CLI is unavailable")
+            available = connected and not reasons
             entries.append(
                 self._with_availability(
                     {
@@ -153,7 +167,7 @@ class FunctionCatalogService:
                         "provider": operation.provider,
                         "invocation": operation.agent_context(),
                     },
-                    github_connected,
+                    available,
                     reasons,
                 )
             )

@@ -199,6 +199,8 @@ class IntegrationConnection(Base):
     provider: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
     secret_store_id: Mapped[str] = mapped_column(String(64), nullable=False)
     secret_reference: Mapped[str] = mapped_column(String(256), nullable=False)
+    passphrase_secret_store_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    passphrase_secret_reference: Mapped[str | None] = mapped_column(String(256), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     account_login: Mapped[str] = mapped_column(String(128), nullable=False)
     account_id: Mapped[str] = mapped_column(String(128), nullable=False)

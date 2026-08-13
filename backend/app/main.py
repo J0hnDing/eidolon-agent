@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.db import SessionLocal, create_db_and_tables
 from app.routers import (
     agent_runs,
+    atlas_settings,
     chat,
     codex_settings,
     functions,
@@ -20,6 +21,8 @@ from app.routers import (
     usage,
     web_apps,
 )
+from app.services.atlas_lifecycle_service import atlas_lifecycle_service
+from app.services.atlas_settings_service import build_default_atlas_settings_service
 from app.services.codex_usage_service import codex_usage_service
 from app.services.scheduler_service import SchedulerService
 from app.services.web_app_runtime_service import WebAppRuntimeConfig, WebAppRuntimeService
@@ -42,6 +45,16 @@ async def web_app_runtime_maintenance(config: WebAppRuntimeConfig) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     create_db_and_tables()
+    atlas_db = SessionLocal()
+    try:
+        build_default_atlas_settings_service(atlas_db).startup()
+    except Exception:
+        # Atlas is optional. Its bounded, sanitized lifecycle error is exposed
+        # through Settings and must never prevent Eidolon startup.
+        atlas_db.rollback()
+    finally:
+        atlas_db.close()
+    app.state.atlas_lifecycle_service = atlas_lifecycle_service
     scheduler_db = SessionLocal()
     scheduler_service = SchedulerService(scheduler_db)
     scheduler_service.start()
@@ -65,6 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         codex_usage_service.stop()
         scheduler_service.shutdown()
         scheduler_db.close()
+        atlas_lifecycle_service.stop()
 
 
 app = FastAPI(
@@ -103,6 +117,7 @@ async def enforce_web_app_gateway_origin(request: Request, call_next):
 app.include_router(memory_facts.router)
 app.include_router(functions.router)
 app.include_router(integrations.router)
+app.include_router(atlas_settings.router)
 app.include_router(skills.router)
 app.include_router(agent_runs.router)
 app.include_router(chat.router)

@@ -20,6 +20,8 @@ from app.models import (
 )
 from app.schemas.integration import GitHubConnectionStatus
 from app.schemas.manifest import ManifestIntegrationRequirement, SkillManifest
+from app.services.atlas_knowledge_service import AtlasKnowledgeError, AtlasKnowledgeService
+from app.services.atlas_provider import AtlasProviderAdapter, UrllibAtlasProviderAdapter
 from app.services.github_provider import (
     GitHubProviderAdapter,
     IntegrationProviderError,
@@ -47,7 +49,29 @@ PROVIDER_ERROR_MESSAGES = {
     "unsupported_file_type": "The requested GitHub file is not supported text",
     "provider_unavailable": "GitHub is unavailable",
     "internal_failure": "GitHub integration failed safely",
+    "atlas_locked": "Atlas is locked",
+    "node_already_known": "The selected Knowledge node is already known",
+    "stale_revision": "The Knowledge node changed before it could be updated",
+    "codex_unavailable": "A compatible Codex CLI is unavailable",
+    "codex_failed": "Codex could not expand the Knowledge node",
 }
+
+ATLAS_PROVIDER_ERROR_MESSAGES = {
+    **PROVIDER_ERROR_MESSAGES,
+    "invalid_credential": "The Atlas API key is invalid",
+    "not_found": "The requested Atlas item was not found",
+    "provider_forbidden": "Atlas denied the requested operation",
+    "provider_timeout": "Atlas did not respond before the timeout",
+    "response_too_large": "Atlas response exceeded the operation limit",
+    "provider_unavailable": "Atlas is unavailable",
+    "internal_failure": "Atlas integration failed safely",
+}
+PROVIDER_DISPLAY_NAMES = {"github": "GitHub", "atlas": "Atlas"}
+
+
+def provider_error_message(provider: str, error_type: str) -> str:
+    messages = ATLAS_PROVIDER_ERROR_MESSAGES if provider == "atlas" else PROVIDER_ERROR_MESSAGES
+    return messages.get(error_type, messages["internal_failure"])
 
 
 def utc_now() -> datetime:
@@ -69,12 +93,16 @@ class IntegrationService:
     project_root: Path | None = None
     secret_store: SecretStore | None = None
     github: GitHubProviderAdapter | None = None
+    atlas: AtlasProviderAdapter | None = None
+    codex_adapter: Any | None = None
 
     def __post_init__(self) -> None:
         self.proposed_service = ProposedSkillService(self.db, project_root=self.project_root)
         self.project_root = self.proposed_service.project_root
         if self.github is None:
             self.github = UrllibGitHubProviderAdapter()
+        if self.atlas is None:
+            self.atlas = UrllibAtlasProviderAdapter()
 
     def connection_status(self) -> GitHubConnectionStatus:
         connection = self._connection()
@@ -200,22 +228,31 @@ class IntegrationService:
                     authorizations.append(current)
                     continue
                 self._invalidate_authorization(current, "A new decision was requested for this integration contract")
-            connection_available = self.connection_status().connected
+            connection_available = self.provider_connected(requirement.provider)
             operations = [OPERATIONS[operation_id] for operation_id in requirement.operations]
             repositories = list(requirement.resource_scope.repositories)
+            read_only = all(operation.read_only for operation in operations)
+            provider_name = PROVIDER_DISPLAY_NAMES.get(requirement.provider, requirement.provider.title())
+            action_description = "read-only access" if read_only else "read and bounded write access"
+            mutation_detail = (
+                " The Knowledge write uses one internet-enabled Codex call, writes one selected node, and may create "
+                "immediate unassessed children; it cannot rename, move, delete, merge, or recursively expand nodes."
+                if any(operation.operation_id == "atlas.knowledge.node.know" for operation in operations)
+                else ""
+            )
             explanation = (
-                f"Skill {skill.name} requests read-only GitHub integration access for "
+                f"Skill {skill.name} requests {action_description} to {provider_name} for "
                 f"{', '.join(requirement.operations)}. "
-                f"Repository scope: {', '.join(repositories) if repositories else 'not repository-scoped'}. "
-                f"GitHub connection currently available: {'yes' if connection_available else 'no'}. "
+                f"Resource scope: {', '.join(repositories) if repositories else 'provider-local only'}. "
+                f"{provider_name} connection currently available: {'yes' if connection_available else 'no'}. "
                 "Approval authorizes only this skill and unchanged integration contract. It does not reveal the "
-                "credential, grant direct network access, enable the skill, install it, or authorize future expansion."
+                f"credential, grant direct network access, enable the skill, install it, or authorize future expansion.{mutation_detail}"
             )
             request = ApprovalRequest(
                 skill_id=skill.id,
                 request_scope="runtime",
                 request_type="integration_access",
-                risk_level="low",
+                risk_level="medium" if any(operation.risk == "medium" for operation in operations) else "low",
                 requested_permissions_json={
                     "provider": requirement.provider,
                     "operations": list(requirement.operations),
@@ -228,15 +265,15 @@ class IntegrationService:
                 reason_json={
                     "provider": requirement.provider,
                     "operations": list(requirement.operations),
-                    "read_only": True,
+                    "read_only": read_only,
                     "resource_scope": {"repositories": repositories},
                     "connection_available": connection_available,
                     "contract_fingerprint": fingerprint,
                     "version_id": version_id,
-                    "approval_means": "This skill may call only these backend-controlled read-only operations.",
+                    "approval_means": "This skill may call only these backend-controlled selected operations.",
                     "approval_does_not_mean": [
-                        "the GitHub credential is shared with the skill",
-                        "direct GitHub or general network access is allowed",
+                        f"the {provider_name} credential is shared with the skill",
+                        f"direct {provider_name} or general network access is allowed",
                         "new operations or repositories are approved",
                         "the skill is installed, enabled, scheduled, or run",
                     ],
@@ -271,14 +308,13 @@ class IntegrationService:
         return "stale" if status in {"expired", "superseded"} else status
 
     def integration_review(self, skill: Skill, manifest: SkillManifest) -> list[dict[str, Any]]:
-        connected = self.connection_status().connected
         return [
             {
                 "provider": requirement.provider,
                 "operations": list(requirement.operations),
-                "read_only": True,
+                "read_only": all(OPERATIONS[operation_id].read_only for operation_id in requirement.operations),
                 "resource_scope": requirement.resource_scope.model_dump(mode="json"),
-                "connection_available": connected,
+                "connection_available": self.provider_connected(requirement.provider),
                 "authorization_state": self.authorization_state(skill, requirement),
             }
             for requirement in manifest.integration_requirements
@@ -325,7 +361,7 @@ class IntegrationService:
             audit.error_type = "internal_failure"
             audit.completed_at = utc_now()
             self._commit_audit()
-            raise IntegrationError("internal_failure", "GitHub integration failed safely") from None
+            raise IntegrationError("internal_failure", "Integration failed safely") from None
 
     def _invoke_checked(
         self,
@@ -361,15 +397,21 @@ class IntegrationService:
             raise IntegrationError("operation_undeclared", "Integration operation is not declared by the active manifest")
         if self.authorization_state(skill, requirement) != "approved":
             raise IntegrationError("authorization_missing_or_stale", "Integration authorization is missing or stale")
-        connection = self._connection()
-        if connection is None or connection.status != "connected":
-            raise IntegrationError("connection_unavailable", "GitHub connection is unavailable")
         operation = OPERATIONS.get(operation_id)
         if operation is None:
             raise IntegrationError("operation_undeclared", "Integration operation does not exist")
-        resource = self._resource(operation.resource_scope, input_json)
+        connection = self._connection(operation.provider)
+        if connection is None or connection.status != "connected":
+            provider_name = PROVIDER_DISPLAY_NAMES.get(operation.provider, operation.provider.title())
+            raise IntegrationError("connection_unavailable", f"{provider_name} connection is unavailable")
+        scoped_resource = self._resource(operation.resource_scope, input_json)
+        resource = scoped_resource
+        if resource is None and "node_id" in operation.audit_resource_fields:
+            node_id = input_json.get("node_id")
+            if isinstance(node_id, int) and not isinstance(node_id, bool):
+                resource = f"node:{node_id}"
         audit.resource = resource
-        if resource is not None and resource not in requirement.resource_scope.repositories:
+        if scoped_resource is not None and scoped_resource not in requirement.resource_scope.repositories:
             raise IntegrationError("repository_outside_scope", "GitHub repository is outside the approved scope")
         try:
             Draft202012Validator(operation.input_schema).validate(input_json)
@@ -383,26 +425,43 @@ class IntegrationService:
         ):
             raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
         try:
-            credential = self.secret_store.get(connection.secret_reference)
-        except SecretStoreError:
-            raise IntegrationError("connection_unavailable", "Stored GitHub credential is unavailable") from None
+            if operation.provider == "atlas":
+                from app.services.atlas_settings_service import AtlasSettingsService
+
+                credential = AtlasSettingsService(self.db, secret_store=self.secret_store).api_key()
+            else:
+                credential = self.secret_store.get(connection.secret_reference)
+        except (SecretStoreError, RuntimeError):
+            raise IntegrationError("connection_unavailable", "Stored integration credential is unavailable") from None
         try:
             try:
-                output = self.github.execute(operation, input_json, credential)
+                if operation.operation_id == "atlas.knowledge.node.know":
+                    inspected = self.atlas.execute(OPERATIONS["atlas.knowledge.node.get"], {"node_id": input_json["node_id"]}, credential)
+                    output = AtlasKnowledgeService(
+                        self.atlas,
+                        adapter=self.codex_adapter,
+                        project_root=self.project_root,
+                    ).know(inspected["node"], input_json.get("explanation"), credential)
+                elif operation.provider == "atlas":
+                    output = self.atlas.execute(operation, input_json, credential)
+                else:
+                    output = self.github.execute(operation, input_json, credential)
             except IntegrationProviderError as exc:
                 if exc.error_type == "invalid_credential":
                     connection.status = "invalid"
                     connection.error_type = "invalid_credential"
                 raise IntegrationError(
                     exc.error_type,
-                    PROVIDER_ERROR_MESSAGES.get(exc.error_type, PROVIDER_ERROR_MESSAGES["internal_failure"]),
+                    provider_error_message(operation.provider, exc.error_type),
                 ) from None
+            except AtlasKnowledgeError as exc:
+                raise IntegrationError(exc.error_type, str(exc)) from None
         finally:
             credential = ""
         try:
             Draft202012Validator(operation.output_schema).validate(output)
         except ValidationError:
-            raise IntegrationError("internal_failure", "GitHub integration returned an invalid normalized result") from None
+            raise IntegrationError("internal_failure", "Integration returned an invalid normalized result") from None
         return output
 
     def _commit_audit(self) -> None:
@@ -433,10 +492,26 @@ class IntegrationService:
         for authorization in authorizations:
             self._invalidate_authorization(authorization, reason, commit=False)
 
-    def _connection(self) -> IntegrationConnection | None:
+    def _connection(self, provider: str = "github") -> IntegrationConnection | None:
         return self.db.scalar(
-            select(IntegrationConnection).where(IntegrationConnection.provider == "github")
+            select(IntegrationConnection).where(IntegrationConnection.provider == provider)
         )
+
+    def provider_connected(self, provider: str) -> bool:
+        connection = self._connection(provider)
+        if connection is None or connection.status != "connected":
+            return False
+        if self.secret_store is None or self.secret_store.implementation_id != connection.secret_store_id:
+            return False
+        if provider == "atlas":
+            try:
+                from app.services.atlas_settings_service import AtlasSettingsService
+
+                status = AtlasSettingsService(self.db, secret_store=self.secret_store).status()
+                return bool(status.running and status.locked is False and status.api_key_status == "connected")
+            except (AttributeError, ImportError, RuntimeError):
+                return False
+        return True
 
     def _authorization_for_fingerprint(
         self,

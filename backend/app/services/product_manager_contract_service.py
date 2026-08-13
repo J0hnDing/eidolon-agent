@@ -106,6 +106,8 @@ class ProductManagerContractService:
                 ).model_dump(mode="json")
             except ValueError:
                 pass
+        if isinstance(raw_scopes, dict) and isinstance(raw_scopes.get("atlas"), dict):
+            scopes["atlas"] = {}
         blueprint["integration_scopes"] = scopes
         blueprint["permission_plan"] = self.sanitize_permission_plan(blueprint.get("permission_plan"), fallback)
         return blueprint

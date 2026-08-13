@@ -20,7 +20,7 @@ Discovery is not authorization. ProductManager selects catalog ids in `blueprint
 
 For Task DAG builds, ProductManager assigns approved catalog ids to nodes through `function_ids`; the backend gives each Builder full context only for that node. Single-Codex receives full context for every selected function. Function code uses the trusted `function_runtime_capabilities.call_function` helper. Web-application server code uses `web_runtime_capabilities.call_function`. Browser code never receives either capability token.
 
-GitHub integration calls use the parallel stable helper `integration_runtime_capabilities.call`. The operation must be literal, declared by the active manifest, approved for the caller's current integration fingerprint, and within exact repository scope. The helper carries no credential; the backend retrieves it only after all invocation checks and performs the provider request. See [GitHub integration capability](../integrations/github.md).
+GitHub and Atlas integration calls use the parallel stable helper `integration_runtime_capabilities.call`. The operation must be literal, declared by the active manifest, and approved for the caller's current provider fingerprint; GitHub repository operations must also remain within exact scope. The helper carries no credential. The backend retrieves the relevant secret only after invocation checks and performs the fixed provider request. See [GitHub integration](../integrations/github.md) and [Atlas integration](../integrations/atlas.md).
 
 For concise extension blueprints covering user, integration, and backend-core functions, see [Extending the function catalog](function_extension_guide.md).
 
@@ -44,7 +44,7 @@ Direct user runs, backend actions, and approved schedules keep their existing au
 
 The target still runs through the disposable function runner and creates its normal `skill_runs` record. Runs record target version, invocation source, caller skill/version when applicable, schedule id or web-app instance when applicable, and a bounded initiating-action label. Runtime Codex usage remains attached to that target run and separate from Project build totals.
 
-No-internet Docker callers receive backend Function and integration capability access through a transient allowlisted relay on an internal Docker network. The caller cannot use those exact paths for general backend access or internet egress. Functions with approved runtime network domains continue to use the existing bridge behavior, but direct GitHub access is still prohibited; domain-level egress filtering remains separately disclosed.
+No-internet Docker callers receive backend Function and integration capability access through a transient allowlisted relay on an internal Docker network. The caller cannot use those exact paths for general backend access or internet egress. Functions with approved runtime network domains continue to use the existing bridge behavior, but direct GitHub and Atlas access is still prohibited; domain-level egress filtering remains separately disclosed.
 
 Input mismatch blocks before entrypoint execution and is audited as a blocked target run. Output mismatch changes the completed target run to failed while preserving its output and process diagnostics.
 

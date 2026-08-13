@@ -26,14 +26,14 @@ class IntegrationOperation:
     operation_id: str
     title: str
     description: str
-    provider: Literal["github"]
+    provider: Literal["github", "atlas"]
     input_schema: dict[str, Any]
     output_schema: dict[str, Any]
     read_only: bool
-    side_effect: Literal["none"]
-    risk: Literal["low"]
+    side_effect: Literal["none", "write"]
+    risk: Literal["low", "medium"]
     resource_scope: ScopeBehavior
-    method: Literal["GET"]
+    method: Literal["GET", "POST"]
     endpoint_template: str
     timeout_seconds: float
     allow_redirects: bool
@@ -388,7 +388,250 @@ _OPERATIONS = (
     ),
 )
 
-OPERATIONS = MappingProxyType({operation.operation_id: operation for operation in _OPERATIONS})
+_ATLAS_ERRORS = (
+    "connection_unavailable",
+    "invalid_credential",
+    "atlas_locked",
+    "operation_undeclared",
+    "authorization_missing_or_stale",
+    "invalid_input",
+    "not_found",
+    "node_already_known",
+    "stale_revision",
+    "codex_unavailable",
+    "codex_failed",
+    "provider_timeout",
+    "response_too_large",
+    "provider_unavailable",
+    "internal_failure",
+)
+
+_LIMIT = {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}
+_KEYWORDS = {"type": "string", "minLength": 1, "maxLength": 200}
+_NULLABLE_TEXT = {"type": ["string", "null"]}
+_KNOWLEDGE_STATUS = {"enum": ["unassessed", "unknown", "known"]}
+_KNOWLEDGE_BRANCH = {"enum": ["subjects", "ideologies"]}
+
+_KNOWLEDGE_SUMMARY = _object_schema(
+    {
+        "node_id": {"type": "integer", "minimum": 1},
+        "name": {"type": "string"},
+        "path": {"type": "array", "items": {"type": "string"}},
+        "status": _KNOWLEDGE_STATUS,
+    },
+    ["node_id", "name", "path", "status"],
+)
+
+_ATLAS_OPERATIONS = (
+    IntegrationOperation(
+        operation_id="atlas.person.get",
+        title="Get Atlas person",
+        description="Read the non-sensitive built-in Person profile from the unlocked local Atlas.",
+        provider="atlas",
+        input_schema=_object_schema({}, []),
+        output_schema=_object_schema({"personal_info": {"type": ["object", "null"]}}, ["personal_info"]),
+        read_only=True,
+        side_effect="none",
+        risk="low",
+        resource_scope="none",
+        method="POST",
+        endpoint_template="/api/agent/get_personal_info",
+        timeout_seconds=10,
+        allow_redirects=False,
+        max_pages=1,
+        max_results=1,
+        max_provider_response_bytes=1_000_000,
+        normalized_errors=_ATLAS_ERRORS,
+        audit_resource_fields=(),
+        fake_behavior="atlas_person",
+        usage_example={"operation": "atlas.person.get", "input": {}},
+    ),
+    IntegrationOperation(
+        operation_id="atlas.experience.list",
+        title="List Atlas experiences",
+        description="List recent experiences, optionally filtered by keywords and ongoing state.",
+        provider="atlas",
+        input_schema=_object_schema(
+            {"keywords": _KEYWORDS, "ongoing": {"type": "boolean"}, "limit": _LIMIT}, []
+        ),
+        output_schema=_object_schema(
+            {"experiences": {"type": "array", "maxItems": 100, "items": {"type": "object"}}},
+            ["experiences"],
+        ),
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="POST",
+        endpoint_template="/api/agent/list_experiences", timeout_seconds=10, allow_redirects=False,
+        max_pages=1, max_results=100, max_provider_response_bytes=2_000_000,
+        normalized_errors=_ATLAS_ERRORS, audit_resource_fields=(), fake_behavior="atlas_experiences",
+        usage_example={"operation": "atlas.experience.list", "input": {"keywords": "research", "limit": 10}},
+    ),
+    IntegrationOperation(
+        operation_id="atlas.goal.list",
+        title="List Atlas goals",
+        description="List matching top-level goals while retaining each complete subgoal tree and progression edges.",
+        provider="atlas",
+        input_schema=_object_schema(
+            {
+                "importance": {"enum": ["low", "medium", "high"]},
+                "horizon": {"enum": ["short", "middle", "long"]},
+                "limit": _LIMIT,
+            },
+            [],
+        ),
+        output_schema=_object_schema(
+            {
+                "goals": {"type": "array", "maxItems": 100, "items": {"type": "object"}},
+                "progressions": {"type": "array", "items": {"type": "object"}},
+            },
+            ["goals", "progressions"],
+        ),
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="POST",
+        endpoint_template="/api/agent/get_goals", timeout_seconds=10, allow_redirects=False,
+        max_pages=1, max_results=100, max_provider_response_bytes=3_000_000,
+        normalized_errors=_ATLAS_ERRORS, audit_resource_fields=(), fake_behavior="atlas_goals",
+        usage_example={"operation": "atlas.goal.list", "input": {"importance": "high", "horizon": "long"}},
+    ),
+    IntegrationOperation(
+        operation_id="atlas.project.list",
+        title="List Atlas projects",
+        description="List projects with title, description, status, and GitHub link using minimal optional filters.",
+        provider="atlas",
+        input_schema=_object_schema(
+            {
+                "keywords": _KEYWORDS,
+                "status": {"enum": ["planned", "active", "paused", "completed", "abandoned"]},
+                "has_github_link": {"type": "boolean"},
+                "limit": _LIMIT,
+            },
+            [],
+        ),
+        output_schema=_object_schema(
+            {"projects": {"type": "array", "maxItems": 100, "items": {"type": "object"}}}, ["projects"]
+        ),
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="POST",
+        endpoint_template="/api/agent/list_projects", timeout_seconds=10, allow_redirects=False,
+        max_pages=1, max_results=100, max_provider_response_bytes=2_000_000,
+        normalized_errors=_ATLAS_ERRORS, audit_resource_fields=(), fake_behavior="atlas_projects",
+        usage_example={"operation": "atlas.project.list", "input": {"status": "active", "has_github_link": True}},
+    ),
+    IntegrationOperation(
+        operation_id="atlas.relationship.list",
+        title="List Atlas relationships",
+        description="List important built-in relationship fields using optional keyword, type, status, and importance filters.",
+        provider="atlas",
+        input_schema=_object_schema(
+            {
+                "keywords": _KEYWORDS,
+                "kind": {"enum": ["family", "partner", "friend", "acquaintance", "coworker", "mentor", "org"]},
+                "status": {"enum": ["active", "dormant", "past"]},
+                "importance": {"enum": ["low", "medium", "high"]},
+                "limit": _LIMIT,
+            },
+            [],
+        ),
+        output_schema=_object_schema(
+            {"relationships": {"type": "array", "maxItems": 100, "items": {"type": "object"}}},
+            ["relationships"],
+        ),
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="POST",
+        endpoint_template="/api/agent/list_relationships", timeout_seconds=10, allow_redirects=False,
+        max_pages=1, max_results=100, max_provider_response_bytes=3_000_000,
+        normalized_errors=_ATLAS_ERRORS, audit_resource_fields=(), fake_behavior="atlas_relationships",
+        usage_example={"operation": "atlas.relationship.list", "input": {"kind": "friend", "importance": "high"}},
+    ),
+    IntegrationOperation(
+        operation_id="atlas.knowledge.frontier.list",
+        title="Get Knowledge frontier",
+        description="List bounded Subject nodes ready for assessment: unknown or unassessed nodes with a known immediate parent.",
+        provider="atlas",
+        input_schema=_object_schema(
+            {
+                "root_node_id": {"type": "integer", "minimum": 1},
+                "cursor": {"type": "string", "minLength": 1, "maxLength": 512},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+            },
+            [],
+        ),
+        output_schema=_object_schema(
+            {
+                "nodes": {"type": "array", "maxItems": 100, "items": _KNOWLEDGE_SUMMARY},
+                "next_cursor": {"type": ["string", "null"], "maxLength": 512},
+            },
+            ["nodes", "next_cursor"],
+        ),
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="POST",
+        endpoint_template="/api/agent/list_frontier_nodes", timeout_seconds=10, allow_redirects=False,
+        max_pages=1, max_results=100, max_provider_response_bytes=2_000_000,
+        normalized_errors=_ATLAS_ERRORS, audit_resource_fields=(), fake_behavior="atlas_knowledge_frontier",
+        usage_example={"operation": "atlas.knowledge.frontier.list", "input": {"limit": 50}},
+    ),
+    IntegrationOperation(
+        operation_id="atlas.knowledge.search",
+        title="Search Knowledge nodes",
+        description="Search Knowledge names, then known explanations and terms, and return compact ranked candidates.",
+        provider="atlas",
+        input_schema=_object_schema(
+            {
+                "keywords": _KEYWORDS,
+                "root_node_id": {"type": "integer", "minimum": 1},
+                "branch": _KNOWLEDGE_BRANCH,
+                "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 5},
+            },
+            ["keywords"],
+        ),
+        output_schema=_object_schema(
+            {"nodes": {"type": "array", "maxItems": 25, "items": _KNOWLEDGE_SUMMARY}}, ["nodes"]
+        ),
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="POST",
+        endpoint_template="/api/agent/search_knowledge", timeout_seconds=10, allow_redirects=False,
+        max_pages=1, max_results=25, max_provider_response_bytes=1_000_000,
+        normalized_errors=_ATLAS_ERRORS, audit_resource_fields=(), fake_behavior="atlas_knowledge_search",
+        usage_example={"operation": "atlas.knowledge.search", "input": {"keywords": "distributed systems"}},
+    ),
+    IntegrationOperation(
+        operation_id="atlas.knowledge.node.get",
+        title="Get Knowledge node",
+        description="Inspect one Knowledge node with only its path, parent, immediate children, explanation, terms, status, and revision.",
+        provider="atlas",
+        input_schema=_object_schema({"node_id": {"type": "integer", "minimum": 1}}, ["node_id"]),
+        output_schema=_object_schema({"node": {"type": "object"}}, ["node"]),
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="POST",
+        endpoint_template="/api/agent/get_knowledge_node", timeout_seconds=10, allow_redirects=False,
+        max_pages=1, max_results=1, max_provider_response_bytes=1_000_000,
+        normalized_errors=_ATLAS_ERRORS, audit_resource_fields=("node_id",), fake_behavior="atlas_knowledge_node",
+        usage_example={"operation": "atlas.knowledge.node.get", "input": {"node_id": 42}},
+    ),
+    IntegrationOperation(
+        operation_id="atlas.knowledge.node.know",
+        title="Know Knowledge node",
+        description=(
+            "Use one internet-enabled Codex call to establish the selected node as known and optionally create "
+            "immediate name-only unassessed children. It cannot rename, move, delete, merge, or recursively expand nodes."
+        ),
+        provider="atlas",
+        input_schema=_object_schema(
+            {
+                "node_id": {"type": "integer", "minimum": 1},
+                "explanation": {"type": "string", "minLength": 1, "maxLength": 2000},
+            },
+            ["node_id"],
+        ),
+        output_schema=_object_schema(
+            {
+                "node": {"type": "object"},
+                "created_children": {"type": "array", "items": {"type": "string"}},
+                "existing_children": {"type": "array", "items": {"type": "string"}},
+            },
+            ["node", "created_children", "existing_children"],
+        ),
+        read_only=False, side_effect="write", risk="medium", resource_scope="none", method="POST",
+        endpoint_template="/api/agent/establish_known_node", timeout_seconds=180, allow_redirects=False,
+        max_pages=1, max_results=21, max_provider_response_bytes=2_000_000,
+        normalized_errors=_ATLAS_ERRORS, audit_resource_fields=("node_id",), fake_behavior="atlas_knowledge_know",
+        usage_example={"operation": "atlas.knowledge.node.know", "input": {"node_id": 42}},
+    ),
+)
+
+OPERATIONS = MappingProxyType({operation.operation_id: operation for operation in (*_OPERATIONS, *_ATLAS_OPERATIONS)})
 
 
 def registry_contract_identity(operation_ids: list[str]) -> dict[str, int]:

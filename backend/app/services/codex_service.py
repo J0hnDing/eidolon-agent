@@ -119,6 +119,8 @@ CODEX_ACTION_TIMEOUT_SECONDS = {
     "skill_update": 600,
     "tester_write_tests": 300,
     "skill_runtime_codex": 45,
+    "atlas_knowledge_expand": 180,
+    "atlas_knowledge_explain_expand": 180,
 }
 
 
@@ -430,6 +432,25 @@ class FakeCodexAdapter:
                 args=["fake-codex-skill-runtime"],
                 returncode=0,
                 stdout=json.dumps({"response": "Fake Codex response.", "notes": []}),
+                stderr="",
+            )
+        if task in {"atlas_knowledge_expand", "atlas_knowledge_explain_expand"}:
+            payload = {
+                "terms": [
+                    {
+                        "id": "core-concept",
+                        "label": "Core concept",
+                        "definition": "A deterministic fake term for local Atlas integration tests.",
+                    }
+                ],
+                "children": ["Immediate subtopic"],
+            }
+            if task == "atlas_knowledge_explain_expand":
+                payload["explanation"] = "A deterministic fake explanation for local Atlas integration tests."
+            return subprocess.CompletedProcess(
+                args=["fake-codex-atlas-knowledge"],
+                returncode=0,
+                stdout=json.dumps(payload),
                 stderr="",
             )
         permissions = plan["requested_permissions"]

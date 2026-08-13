@@ -42,6 +42,7 @@ The product and repository are named **Eidolon**. Existing environment variables
 ## Integrations, Roadmap, and History
 
 - [GitHub integration capability](integrations/github.md)
+- [Eidolon-Atlas integration](integrations/atlas.md)
 - [Codex CLI integration](integrations/codex_cli.md)
 - [Working history file](working_history.md)
 - [TODO](todo.md)

@@ -89,7 +89,11 @@ The page lets the user keep automatic Project build workflow selection or force 
 
 The same trusted Settings page includes the single GitHub connection. It shows connected/disconnected/unavailable state, validated account identity, last validation time, and sanitized errors, with add, replace, and remove actions. The token input is password-style, is cleared after submission, and is never returned or redisplayed.
 
+Settings also includes local Eidolon-Atlas lifecycle and credential controls. It shows the selected directory, owned/external process state, initialized/locked state, API-key state, automatic-unlock state, and bounded errors. Directory save restarts immediately; separate write-only controls manage the key and passphrase, and **Unlock now** is explicit. The UI discloses that storing the passphrase shifts practical at-rest protection to the Windows account. Submitted secrets are cleared and never redisplayed.
+
 Runtime approval uses the existing `PermissionRequestModal`. GitHub `integration_access` reviews show provider, operation ids, read-only status, normalized repositories, and current connection availability. Connection state alone never marks a skill approved.
+
+Atlas reviews use the same modal with empty resource scope. Reads are low risk; `atlas.knowledge.node.know` is medium risk and describes its internet-enabled Codex call and bounded Knowledge write.
 
 ## Targeted Polling
 

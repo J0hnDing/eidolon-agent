@@ -1,4 +1,6 @@
 import json
+import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -16,11 +18,13 @@ from app.models import (
     SkillVersion,
 )
 from app.schemas.manifest import SkillManifest
+from app.services.atlas_provider import FakeAtlasProviderAdapter
 from app.services.github_provider import FakeGitHubProviderAdapter
 from app.services.integration_service import IntegrationCaller, IntegrationError, IntegrationService
 from app.services.secret_store import FakeSecretStore
 
 SENTINEL = "EIDOLON_GITHUB_SENTINEL_7e9525f4"
+ATLAS_SENTINEL = "ATLAS_KEY_SENTINEL_4221"
 
 
 @pytest.fixture
@@ -505,3 +509,68 @@ def test_disabled_and_stale_version_are_rejected_before_provider_call(
         )
     assert stale.value.error_type == "authorization_missing_or_stale"
     assert provider.calls == []
+
+
+def test_atlas_know_uses_bounded_codex_and_audits_only_node_id(db: Session, tmp_path: Path) -> None:
+    requirement = {
+        "provider": "atlas",
+        "operations": ["atlas.knowledge.node.know"],
+        "resource_scope": {},
+    }
+    skill, manifest = create_installed_skill(db, tmp_path, requirement=requirement)
+    store = FakeSecretStore()
+    reference = store.put(ATLAS_SENTINEL, namespace="atlas_api_key")
+    db.add(
+        IntegrationConnection(
+            provider="atlas",
+            secret_store_id=store.implementation_id,
+            secret_reference=reference,
+            status="connected",
+            account_login="Local Atlas",
+            account_id="local-atlas",
+            last_validated_at=datetime.now(UTC),
+        )
+    )
+
+    class Codex:
+        prompts: list[str] = []
+
+        def generate(self, prompt, output_dir, plan):
+            self.prompts.append(prompt)
+            return subprocess.CompletedProcess(
+                [],
+                0,
+                json.dumps(
+                    {
+                        "explanation": "A bounded explanation.",
+                        "terms": [{"id": "term", "label": "Term", "definition": "Definition."}],
+                        "children": ["Immediate child"],
+                    }
+                ),
+                "",
+            )
+
+    codex = Codex()
+    atlas = FakeAtlasProviderAdapter()
+    service = IntegrationService(
+        db,
+        project_root=tmp_path,
+        secret_store=store,
+        atlas=atlas,
+        codex_adapter=codex,
+    )
+    service.provider_connected = lambda provider: provider == "atlas"  # type: ignore[method-assign]
+    authorize(service, skill, manifest)
+
+    result = service.invoke(
+        IntegrationCaller(skill_id=skill.id, version_id=skill.active_version_id, runtime="function"),
+        "atlas.knowledge.node.know",
+        {"node_id": 42},
+    )
+
+    assert result["node"]["status"] == "known"
+    assert ATLAS_SENTINEL not in codex.prompts[0]
+    audit = db.scalar(select(IntegrationAuditRecord))
+    assert audit.resource == "node:42"
+    assert audit.operation_id == "atlas.knowledge.node.know"
+    assert "A bounded explanation" not in repr(audit)

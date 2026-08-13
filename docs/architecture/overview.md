@@ -74,7 +74,7 @@ The backend is the control plane for both protocols. One persistent catalog desc
 
 ## Trusted Integrations
 
-GitHub is the first secrets-backed integration. Trusted Settings manages one operating-system-stored credential, while skills declare and separately receive approval for registry-defined read-only operations and exact repository scope. Function and web-application containers call one scoped relay helper; the backend performs authenticated provider traffic and returns normalized data. See [GitHub integration capability](../integrations/github.md).
+GitHub and local Eidolon-Atlas are trusted secrets-backed providers. Skills declare exact registry operations and receive provider-specific approval; GitHub retains exact repository scope while Atlas has no caller-selected resource scope. Function and web-application containers call one scoped relay helper, and the backend performs authenticated provider traffic and returns normalized data. Eidolon also owns optional Atlas process startup and automatic unlock without exposing either stored secret. See [GitHub integration capability](../integrations/github.md) and [Eidolon-Atlas integration](../integrations/atlas.md).
 
 ## Current Constraints
 

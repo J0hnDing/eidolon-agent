@@ -44,13 +44,24 @@ def github_requirement(**overrides) -> dict:
 
 
 def test_registry_is_authoritative_and_context_is_selected_only() -> None:
-    assert set(OPERATIONS) == {
+    assert {operation_id for operation_id in OPERATIONS if operation_id.startswith("github.")} == {
         "github.repository.get",
         "github.repository.tree.list",
         "github.repository.file.read",
         "github.issue.list",
         "github.pull_request.list",
         "github.repository.trending.list",
+    }
+    assert {operation_id for operation_id in OPERATIONS if operation_id.startswith("atlas.")} == {
+        "atlas.person.get",
+        "atlas.experience.list",
+        "atlas.goal.list",
+        "atlas.project.list",
+        "atlas.relationship.list",
+        "atlas.knowledge.frontier.list",
+        "atlas.knowledge.search",
+        "atlas.knowledge.node.get",
+        "atlas.knowledge.node.know",
     }
     context = OPERATIONS["github.repository.file.read"].agent_context()
     assert context["operation"] == "github.repository.file.read"
@@ -116,6 +127,21 @@ def test_manifest_normalizes_exact_repository_scope() -> None:
 def test_manifest_rejects_invalid_integration_contract(overrides: dict, expected: str) -> None:
     with pytest.raises(ManifestValidationError, match=expected):
         validate_manifest(manifest_with(github_requirement(**overrides)))
+
+
+def test_manifest_accepts_separate_github_and_atlas_requirements() -> None:
+    manifest = manifest_with(github_requirement())
+    manifest["integration_requirements"].append(
+        {
+            "provider": "atlas",
+            "operations": ["atlas.project.list", "atlas.knowledge.search"],
+            "resource_scope": {},
+        }
+    )
+
+    parsed = validate_manifest(manifest)
+
+    assert [item.provider for item in parsed.integration_requirements] == ["github", "atlas"]
 
 
 def test_trending_uses_registry_defined_non_repository_scope() -> None:

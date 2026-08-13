@@ -409,6 +409,30 @@ export interface GitHubConnectionStatus {
   error_type: string | null;
 }
 
+export interface AtlasIntegrationStatus {
+  provider: "atlas";
+  directory: string | null;
+  selected_directory?: string | null;
+  resolved_directory?: string | null;
+  process_owned?: boolean;
+  process_running?: boolean;
+  owned?: boolean;
+  running?: boolean;
+  process_ownership?: "owned" | "external" | "none" | string;
+  initialized: boolean | null;
+  locked: boolean | null;
+  key_connected?: boolean;
+  api_key_connected?: boolean;
+  key_status?: "connected" | "disconnected" | "unavailable" | "invalid" | string;
+  api_key_status?: "connected" | "disconnected" | "unavailable" | "invalid" | string;
+  auto_unlock_configured?: boolean;
+  passphrase_configured?: boolean;
+  error?: string | null;
+  error_message?: string | null;
+  startup_error?: string | null;
+  error_type?: string | null;
+}
+
 export interface AgentRunDetail extends AgentRun {
   steps: AgentRunStep[];
 }
@@ -708,6 +732,30 @@ export const api = {
     }),
   removeGitHubConnection: () =>
     request<void>("/settings/integrations/github", { method: "DELETE" }),
+  getAtlasStatus: () => request<AtlasIntegrationStatus>("/settings/integrations/atlas"),
+  updateAtlasDirectory: (directory: string) =>
+    request<AtlasIntegrationStatus>("/settings/integrations/atlas/directory", {
+      method: "PUT",
+      body: JSON.stringify({ directory }),
+    }),
+  putAtlasApiKey: (apiKey: string) =>
+    request<AtlasIntegrationStatus>("/settings/integrations/atlas/api-key", {
+      method: "PUT",
+      body: JSON.stringify({ api_key: apiKey }),
+    }),
+  removeAtlasApiKey: () =>
+    request<void>("/settings/integrations/atlas/api-key", { method: "DELETE" }),
+  putAtlasPassphrase: (passphrase: string) =>
+    request<AtlasIntegrationStatus>("/settings/integrations/atlas/passphrase", {
+      method: "PUT",
+      body: JSON.stringify({ passphrase }),
+    }),
+  removeAtlasPassphrase: () =>
+    request<void>("/settings/integrations/atlas/passphrase", { method: "DELETE" }),
+  unlockAtlas: () =>
+    request<AtlasIntegrationStatus>("/settings/integrations/atlas/unlock", { method: "POST" }),
+  restartAtlas: () =>
+    request<AtlasIntegrationStatus>("/settings/integrations/atlas/restart", { method: "POST" }),
   listAgentRuns: () => request<AgentRun[]>("/agent-runs"),
   getAgentRun: (id: number) => request<AgentRunDetail>(`/agent-runs/${id}`),
   cancelAgentRun: (id: number) =>

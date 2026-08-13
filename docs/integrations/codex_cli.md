@@ -30,6 +30,8 @@ When `PERSONAL_AGENT_CODEX_COMMAND` is set, that executable is an explicit overr
 
 The Settings page displays the effective executable, version, source, and compatibility status. `GET /usage/codex/cli` exposes the same adapter-neutral status contract for future model and reasoning-effort capability checks.
 
+The Atlas `atlas.knowledge.node.know` integration is an additional backend-owned Codex CLI consumer. It uses strict `--output-schema`, enables live `--search`, runs in an ephemeral read-only workspace, and receives only the bounded selected-node context described in [Eidolon-Atlas integration](atlas.md). A supplied user explanation is not searched or rewritten.
+
 Callers may also supply an operation-specific minimum version when requesting the resolved command. This is unused by current model selection, but gives a future model/effort capability policy a preflight hook without moving executable discovery into that policy.
 
 ## Model and Reasoning-Effort Routing

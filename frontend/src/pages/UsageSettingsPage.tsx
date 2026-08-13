@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import {
+  AtlasIntegrationStatus,
   CodexAccountUsage,
   CodexCliStatus,
   CodexInvocationChoice,
@@ -21,6 +22,10 @@ export default function UsageSettingsPage() {
   const [permissionPolicy, setPermissionPolicy] = useState<PermissionPolicy | null>(null);
   const [github, setGitHub] = useState<GitHubConnectionStatus | null>(null);
   const [githubToken, setGitHubToken] = useState("");
+  const [atlas, setAtlas] = useState<AtlasIntegrationStatus | null>(null);
+  const [atlasDirectory, setAtlasDirectory] = useState("");
+  const [atlasApiKey, setAtlasApiKey] = useState("");
+  const [atlasPassphrase, setAtlasPassphrase] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -28,20 +33,26 @@ export default function UsageSettingsPage() {
   async function loadUsage(refresh = false) {
     setError(null);
     try {
-      const [nextUsage, nextCliStatus, nextCatalog, nextRouting, nextGitHub, nextPermissionPolicy] = await Promise.all([
-        api.getCodexUsage(),
-        api.getCodexCliStatus(refresh),
-        api.getCodexModels(refresh),
-        api.getCodexRoutingSettings(),
-        api.getGitHubConnection(),
-        api.getPermissionPolicy(),
+      const [coreSettings, nextAtlas] = await Promise.all([
+        Promise.all([
+          api.getCodexUsage(),
+          api.getCodexCliStatus(refresh),
+          api.getCodexModels(refresh),
+          api.getCodexRoutingSettings(),
+          api.getGitHubConnection(),
+          api.getPermissionPolicy(),
+        ]),
+        api.getAtlasStatus().catch((err) => atlasUnavailableStatus(err)),
       ]);
+      const [nextUsage, nextCliStatus, nextCatalog, nextRouting, nextGitHub, nextPermissionPolicy] = coreSettings;
       setUsage(nextUsage);
       setCliStatus(nextCliStatus);
       setCatalog(nextCatalog);
       setRouting(nextRouting);
       setGitHub(nextGitHub);
       setPermissionPolicy(nextPermissionPolicy);
+      setAtlas(nextAtlas);
+      setAtlasDirectory(atlasDirectoryForStatus(nextAtlas));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load Codex usage");
     } finally {
@@ -113,6 +124,124 @@ export default function UsageSettingsPage() {
       setSaved("GitHub connection removed.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not remove GitHub connection");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveAtlasDirectory() {
+    if (!atlasDirectory.trim()) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const next = await api.updateAtlasDirectory(atlasDirectory.trim());
+      setAtlas(next);
+      setAtlasDirectory(atlasDirectoryForStatus(next));
+      setSaved("Atlas directory saved and Atlas restarted.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the Atlas directory");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function restartAtlas() {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const next = await api.restartAtlas();
+      setAtlas(next);
+      setAtlasDirectory(atlasDirectoryForStatus(next));
+      setSaved("Atlas restarted.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not restart Atlas");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveAtlasApiKey() {
+    if (!atlasApiKey.trim()) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const next = await api.putAtlasApiKey(atlasApiKey);
+      setAtlas(next);
+      setAtlasApiKey("");
+      setSaved("Atlas API key validated and saved.");
+    } catch (err) {
+      setAtlasApiKey("");
+      setError(err instanceof Error ? err.message : "Could not save the Atlas API key");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function removeAtlasApiKey() {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      await api.removeAtlasApiKey();
+      const next = await api.getAtlasStatus();
+      setAtlas(next);
+      setAtlasApiKey("");
+      setSaved("Atlas API key removed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove the Atlas API key");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveAtlasPassphrase() {
+    if (!atlasPassphrase) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const next = await api.putAtlasPassphrase(atlasPassphrase);
+      setAtlas(next);
+      setAtlasPassphrase("");
+      setSaved("Atlas passphrase verified and automatic unlock is configured.");
+    } catch (err) {
+      setAtlasPassphrase("");
+      setError(err instanceof Error ? err.message : "Could not save the Atlas passphrase");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function removeAtlasPassphrase() {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      await api.removeAtlasPassphrase();
+      const next = await api.getAtlasStatus();
+      setAtlas(next);
+      setAtlasPassphrase("");
+      setSaved("Atlas automatic unlock passphrase removed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove the Atlas passphrase");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function unlockAtlas() {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const next = await api.unlockAtlas();
+      setAtlas(next);
+      setSaved("Atlas unlock requested.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not unlock Atlas");
     } finally {
       setLoading(false);
     }
@@ -196,6 +325,90 @@ export default function UsageSettingsPage() {
                 Remove connection
               </button>
             )}
+          </div>
+        </section>
+      )}
+      {atlas && (
+        <section className="detail-panel stack">
+          <div>
+            <h2>Eidolon-Atlas</h2>
+            <p className="muted">
+              Atlas is a local encrypted personal-data service. Eidolon starts the selected instance and keeps its API key and optional passphrase in Windows Credential Manager; neither secret is shown again or shared with skills.
+            </p>
+            <p className="muted">
+              Storing the passphrase shifts practical at-rest protection to your Windows account. There is no plaintext, environment-variable, configuration-file, SQLite-secret, or application-encrypted fallback.
+            </p>
+          </div>
+          <dl className="detail-grid">
+            <div><dt>Selected directory</dt><dd><code>{atlasDirectoryForStatus(atlas) || "Not configured"}</code></dd></div>
+            <div><dt>Process</dt><dd>{atlasProcessLabel(atlas)}</dd></div>
+            <div><dt>Atlas state</dt><dd>{atlasStateLabel(atlas)}</dd></div>
+            <div><dt>API key</dt><dd>{atlasKeyLabel(atlas)}</dd></div>
+            <div><dt>Automatic unlock</dt><dd>{atlasAutoUnlock(atlas) ? "Configured" : "Not configured"}</dd></div>
+          </dl>
+          {atlasError(atlas) && <p className="error-text">Atlas status: {atlasError(atlas)}</p>}
+
+          <label>
+            Atlas directory (absolute path)
+            <input
+              type="text"
+              value={atlasDirectory}
+              onChange={(event) => setAtlasDirectory(event.target.value)}
+              placeholder="C:\\Users\\you\\Projects\\Eidolon-Atlas"
+            />
+          </label>
+          <div className="button-row">
+            <button type="button" onClick={() => void saveAtlasDirectory()} disabled={loading || !atlasDirectory.trim()}>
+              Save and restart Atlas
+            </button>
+            <button type="button" className="secondary" onClick={() => void restartAtlas()} disabled={loading}>
+              Restart Atlas
+            </button>
+          </div>
+
+          <label>
+            {atlasKeyConnected(atlas) ? "Replacement Atlas API key" : "Atlas API key"}
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={atlasApiKey}
+              onChange={(event) => setAtlasApiKey(event.target.value)}
+              placeholder="Key is never displayed after submission"
+            />
+          </label>
+          <div className="button-row">
+            <button type="button" onClick={() => void saveAtlasApiKey()} disabled={loading || !atlasApiKey.trim()}>
+              {atlasKeyConnected(atlas) ? "Replace API key" : "Add API key"}
+            </button>
+            {atlasKeyConnected(atlas) && (
+              <button type="button" className="secondary" onClick={() => void removeAtlasApiKey()} disabled={loading}>
+                Remove API key
+              </button>
+            )}
+          </div>
+
+          <label>
+            {atlasAutoUnlock(atlas) ? "Replacement Atlas passphrase" : "Atlas passphrase"}
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={atlasPassphrase}
+              onChange={(event) => setAtlasPassphrase(event.target.value)}
+              placeholder="Passphrase is never displayed after submission"
+            />
+          </label>
+          <div className="button-row">
+            <button type="button" onClick={() => void saveAtlasPassphrase()} disabled={loading || !atlasPassphrase || !atlasKeyConnected(atlas)}>
+              {atlasAutoUnlock(atlas) ? "Replace passphrase" : "Store passphrase"}
+            </button>
+            {atlasAutoUnlock(atlas) && (
+              <button type="button" className="secondary" onClick={() => void removeAtlasPassphrase()} disabled={loading}>
+                Remove passphrase
+              </button>
+            )}
+            <button type="button" className="secondary" onClick={() => void unlockAtlas()} disabled={loading || !atlasAutoUnlock(atlas)}>
+              Unlock now
+            </button>
           </div>
         </section>
       )}
@@ -321,6 +534,70 @@ export default function UsageSettingsPage() {
       <p className="muted">Skill runtime calls are intentionally excluded from build token accounting.</p>
     </section>
   );
+}
+
+function atlasUnavailableStatus(err: unknown): AtlasIntegrationStatus {
+  return {
+    provider: "atlas",
+    directory: null,
+    process_owned: false,
+    process_running: false,
+    process_ownership: "none",
+    running: false,
+    initialized: null,
+    locked: null,
+    key_connected: false,
+    key_status: "unavailable",
+    api_key_status: "unavailable",
+    auto_unlock_configured: false,
+    startup_error: err instanceof Error ? err.message : "Atlas status is unavailable",
+  };
+}
+
+function atlasDirectoryForStatus(status: AtlasIntegrationStatus): string {
+  return status.directory ?? status.selected_directory ?? status.resolved_directory ?? "";
+}
+
+function atlasOwned(status: AtlasIntegrationStatus): boolean {
+  if (status.process_owned !== undefined) return status.process_owned;
+  if (status.owned !== undefined) return status.owned;
+  return status.process_ownership === "owned";
+}
+
+function atlasRunning(status: AtlasIntegrationStatus): boolean {
+  return status.process_running ?? status.running ?? false;
+}
+
+function atlasKeyConnected(status: AtlasIntegrationStatus): boolean {
+  return status.key_connected === true
+    || status.api_key_connected === true
+    || status.key_status === "connected"
+    || status.api_key_status === "connected";
+}
+
+function atlasAutoUnlock(status: AtlasIntegrationStatus): boolean {
+  return status.auto_unlock_configured ?? status.passphrase_configured ?? false;
+}
+
+function atlasError(status: AtlasIntegrationStatus): string | null {
+  return status.error ?? status.error_message ?? status.startup_error ?? status.error_type ?? null;
+}
+
+function atlasProcessLabel(status: AtlasIntegrationStatus): string {
+  if (!atlasRunning(status)) return "Not running";
+  return atlasOwned(status) ? "Running (Eidolon-owned)" : "Running (external process)";
+}
+
+function atlasStateLabel(status: AtlasIntegrationStatus): string {
+  if (status.initialized === null || status.locked === null) return "Unavailable";
+  if (!status.initialized) return "Not initialized";
+  return status.locked ? "Locked" : "Unlocked";
+}
+
+function atlasKeyLabel(status: AtlasIntegrationStatus): string {
+  if (atlasKeyConnected(status)) return "Connected";
+  const keyStatus = status.key_status ?? status.api_key_status ?? "disconnected";
+  return keyStatus.replace(/_/g, " ");
 }
 
 function RoutingRow({

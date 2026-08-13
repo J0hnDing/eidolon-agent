@@ -83,25 +83,21 @@ _MILESTONE_SCHEMA = _object_schema(
 )
 
 _INTEGRATION_SCOPES_SCHEMA = _described(
-    {
-        "anyOf": [
-            _object_schema({}, []),
-            _object_schema(
+    _object_schema(
+        {
+            "github": _object_schema(
                 {
-                    "github": _object_schema(
-                        {
-                            "repositories": _described(
-                                _string_array_schema(min_items=1, unique=True),
-                                "GitHub repositories in owner/repository form.",
-                            ),
-                        },
-                        ["repositories"],
-                    )
+                    "repositories": _described(
+                        _string_array_schema(unique=True),
+                        "GitHub repositories in owner/repository form.",
+                    ),
                 },
-                ["github"],
+                ["repositories"],
             ),
-        ]
-    },
+            "atlas": _object_schema({}, []),
+        },
+        [],
+    ),
     "Exact provider resource scopes required by selected integration functions.",
 )
 
@@ -312,6 +308,51 @@ _UPDATE_BLUEPRINT_SCHEMA = _object_schema(
 )
 
 _OUTPUT_SCHEMAS: dict[str, dict[str, object]] = {
+    "atlas_knowledge_expand": _object_schema(
+        {
+            "terms": {
+                "type": "array",
+                "maxItems": 20,
+                "items": _object_schema(
+                    {
+                        "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+                        "label": {"type": "string", "minLength": 1, "maxLength": 80},
+                        "definition": {"type": "string", "minLength": 1, "maxLength": 500},
+                    },
+                    ["id", "label", "definition"],
+                ),
+            },
+            "children": {
+                "type": "array",
+                "maxItems": 30,
+                "items": {"type": "string", "minLength": 1, "maxLength": 120},
+            },
+        },
+        ["terms", "children"],
+    ),
+    "atlas_knowledge_explain_expand": _object_schema(
+        {
+            "explanation": {"type": "string", "minLength": 1, "maxLength": 2000},
+            "terms": {
+                "type": "array",
+                "maxItems": 20,
+                "items": _object_schema(
+                    {
+                        "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+                        "label": {"type": "string", "minLength": 1, "maxLength": 80},
+                        "definition": {"type": "string", "minLength": 1, "maxLength": 500},
+                    },
+                    ["id", "label", "definition"],
+                ),
+            },
+            "children": {
+                "type": "array",
+                "maxItems": 30,
+                "items": {"type": "string", "minLength": 1, "maxLength": 120},
+            },
+        },
+        ["explanation", "terms", "children"],
+    ),
     "product_manager_refine_intent": _object_schema(
         {
             "intent_prompt": _described(

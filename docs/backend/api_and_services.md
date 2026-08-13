@@ -11,6 +11,7 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 - `/functions`: installed user-function discovery and ephemeral run-capability-authenticated invocation.
 - `/web-apps`: lazy application sessions, instance diagnostics, bounded audit records, explicit stop, and instance-capability-authenticated Codex calls. The host-routed proxy is internal and omitted from OpenAPI.
 - `/settings/integrations/github`: trusted add/replace/status/remove management for the single write-only GitHub credential.
+- `/settings/integrations/atlas`: sanitized Atlas lifecycle, directory, key, automatic-unlock passphrase, restart, and unlock controls.
 - hidden integration capability routes: exact function-run and web-app-instance relay endpoints; no operation-specific public proxy or discovery route.
 - `/schedules`: schedule list/detail/approve/deny/pause/resume/delete/run-now.
 - `/permission-requests`: permission request list/detail/approve/deny. Approving a build-time generation request continues its linked pending agent run automatically.
@@ -72,9 +73,9 @@ Deterministically reviews permissions, dependencies, and declared function relat
 
 Owns dynamic function discovery, caller requirement review, caller-target approval fingerprints, ephemeral run-capability resolution, JSON Schema input/output validation, availability checks, and invocation attribution. Manual runs, schedules, function callers, backend callers, and web applications converge on this service before the existing bounded runner. It trusts neither caller-supplied ids nor target paths/commands/permissions/risk. The public registry contract omits internal paths, commands, credentials, and container details. Nested function calls are rejected and deferred to `TODO-013`.
 
-### IntegrationService and GitHub Provider
+### IntegrationService and Provider Adapters
 
-`IntegrationService` owns trusted GitHub connection lifecycle, skill-contract fingerprints, separate integration approvals, caller/version/manifest/scope/schema enforcement, secret retrieval timing, and sanitized audits. `integration_registry.py` is the single typed operation authority. `UrllibGitHubProviderAdapter` alone constructs authenticated GitHub requests and projects provider responses into normalized schemas. `SecretStore` uses Windows Credential Manager in production and a deterministic fake in tests; there is no unsafe fallback. Full behavior is in [GitHub integration capability](../integrations/github.md).
+`IntegrationService` owns provider-specific skill-contract fingerprints, separate integration approvals, caller/version/manifest/scope/schema enforcement, last-moment secret retrieval, and sanitized audits. `integration_registry.py` is the single typed operation authority. Separate GitHub and Atlas adapters construct fixed authenticated requests and normalize responses. The Atlas lifecycle/settings services own safe startup, attachment, directory changes, key management, and opt-in automatic unlock. `Know_node` adds one bounded internal Codex expansion before Atlas's atomic mutation. `SecretStore` uses distinct Windows Credential Manager namespaces with no unsafe fallback. See [GitHub integration](../integrations/github.md) and [Atlas integration](../integrations/atlas.md).
 
 ### StaticCapabilityScanner
 

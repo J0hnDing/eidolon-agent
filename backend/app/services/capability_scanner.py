@@ -32,12 +32,22 @@ PROCESS_CALLS = {
 NETWORK_CALL_PREFIXES = ("aiohttp.", "httpx.", "requests.", "urllib.request.", "urllib3.")
 DESTRUCTIVE_METHODS = {"rmdir", "rmtree", "unlink"}
 DESTRUCTIVE_CALLS = {"os.remove", "os.removedirs", "os.rmdir", "os.unlink", "shutil.rmtree"}
-SENSITIVE_NAME_PARTS = {"api_key", "credential", "password", "secret", "token"}
+SENSITIVE_NAME_PARTS = {"api_key", "capability", "credential", "passphrase", "password", "secret", "token"}
 EXCLUDED_PARTS = {".build-deps", ".deps", ".git", ".pytest_cache", "__pycache__", "cache", "tests"}
 MAX_SOURCE_BYTES = 1_000_000
 WEB_ASSET_SUFFIXES = {".css", ".html", ".htm", ".js", ".mjs"}
 ABSOLUTE_BROWSER_URL = re.compile(r"https?://[^\s\"'<>)}]+", re.IGNORECASE)
 GITHUB_HOSTS = {"api.github.com", "github.com"}
+ATLAS_HOSTS = {"127.0.0.1", "localhost", "::1"}
+ATLAS_MARKERS = (
+    "127.0.0.1:4817",
+    "localhost:4817",
+    "/api/agent-key",
+    "/api/unlock",
+    "/api/settings/",
+    "/api/knowledge/",
+    "/api/agent/",
+)
 INTEGRATION_HELPERS = {
     "integration_runtime_capabilities.call",
     "web_runtime_capabilities.call_integration",
@@ -198,6 +208,7 @@ class StaticCapabilityScanner:
                 "/integrations/capabilities",
                 "/capabilities/integrations",
                 "PERSONAL_AGENT_",
+                *ATLAS_MARKERS,
             ):
                 if marker in source:
                     findings.append(
@@ -288,6 +299,17 @@ class StaticCapabilityScanner:
                             line=getattr(node, "lineno", 1),
                             evidence="contains a direct GitHub host",
                             message="Direct GitHub access is blocked; use the trusted integration helper.",
+                        )
+                    )
+                if any(marker in lowered for marker in ATLAS_MARKERS):
+                    findings.append(
+                        CapabilityFinding(
+                            capability="direct_atlas_access",
+                            status="blocked",
+                            path=relative_path,
+                            line=getattr(node, "lineno", 1),
+                            evidence="contains a direct Atlas route or loopback address",
+                            message="Direct Atlas access is blocked; use the trusted integration helper.",
                         )
                     )
                 if lowered == "authorization" or lowered.startswith("bearer "):
@@ -412,6 +434,22 @@ class StaticCapabilityScanner:
         import_aliases: dict[str, str],
     ) -> CapabilityFinding | None:
         call_name = self._resolve_import_alias(self._call_name(node.func), import_aliases)
+        if call_name == "os.environ.copy" or (
+            call_name in {"dict", "json.dump", "json.dumps", "print", "repr", "str"}
+            and any(
+                self._resolve_import_alias(self._call_name(child), import_aliases) == "os.environ"
+                for argument in node.args
+                for child in ast.walk(argument)
+            )
+        ):
+            return CapabilityFinding(
+                capability="integration_capability_material",
+                status="blocked",
+                path=relative_path,
+                line=node.lineno,
+                evidence="serializes the process environment containing runtime capability material",
+                message="Generated code cannot serialize integration runtime capability material.",
+            )
         if (
             call_name in {"ctypes.WinDLL", "ctypes.windll.LoadLibrary"}
             or "advapi32.Cred" in call_name
@@ -437,6 +475,15 @@ class StaticCapabilityScanner:
                         line=node.lineno,
                         evidence=f"calls {call_name} with GitHub domain {domain}",
                         message="Direct GitHub access is blocked; use the trusted integration helper.",
+                    )
+                if domain in ATLAS_HOSTS:
+                    return CapabilityFinding(
+                        capability="direct_atlas_access",
+                        status="blocked",
+                        path=relative_path,
+                        line=node.lineno,
+                        evidence=f"calls {call_name} with loopback domain {domain}",
+                        message="Direct Atlas access is blocked; use the trusted integration helper.",
                     )
                 return self._network_finding(
                     relative_path,
@@ -592,7 +639,10 @@ class StaticCapabilityScanner:
         approved_secrets: set[str],
     ) -> CapabilityFinding:
         allowed = secret_name.lower() in approved_secrets
-        if any(part in secret_name.lower() for part in ("github", "token", "credential", "secret")):
+        if any(
+            part in secret_name.lower()
+            for part in ("github", "atlas", "capability", "token", "credential", "secret", "passphrase")
+        ):
             allowed = False
         return CapabilityFinding(
             capability="secrets",

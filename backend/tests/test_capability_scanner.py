@@ -215,3 +215,41 @@ def test_web_app_scan_allows_platform_cache_environment_path(tmp_path: Path) -> 
     )
 
     assert result.ok is True
+
+
+def test_static_capability_scan_blocks_direct_atlas_and_passphrase_access(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skill"
+    write_skill_source(
+        skill_dir,
+        "import os\nimport requests\n"
+        "requests.post('http://127.0.0.1:4817/api/unlock')\n"
+        "os.getenv('ATLAS_PASSPHRASE')\n",
+    )
+
+    result = StaticCapabilityScanner().scan(
+        skill_dir,
+        {"network": ["127.0.0.1"], "filesystem_write": [], "secrets": ["ATLAS_PASSPHRASE"]},
+    )
+
+    assert result.ok is False
+    assert any(finding.capability == "direct_atlas_access" for finding in result.findings)
+    assert any(finding.capability == "secrets" and finding.status != "allowed" for finding in result.findings)
+
+
+def test_static_capability_scan_blocks_runtime_capability_serialization(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skill"
+    write_skill_source(
+        skill_dir,
+        "import json\nimport os\n"
+        "json.dumps(dict(os.environ))\n"
+        "os.getenv('PERSONAL_AGENT_FUNCTION_CAPABILITY')\n",
+    )
+
+    result = StaticCapabilityScanner().scan(
+        skill_dir,
+        {"network": [], "filesystem_write": [], "secrets": []},
+    )
+
+    assert result.ok is False
+    assert any(finding.capability == "integration_capability_material" for finding in result.findings)
+    assert any(finding.capability == "secrets" and finding.status != "allowed" for finding in result.findings)
