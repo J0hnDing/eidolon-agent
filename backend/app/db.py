@@ -48,6 +48,10 @@ def ensure_local_schema() -> None:
                 connection.execute(text("ALTER TABLE approval_requests ADD COLUMN schedule_id INTEGER"))
         if "integration_connections" in table_names:
             columns = {column["name"] for column in inspector.get_columns("integration_connections")}
+            if "credential_kind" not in columns:
+                connection.execute(
+                    text("ALTER TABLE integration_connections ADD COLUMN credential_kind VARCHAR(32) NOT NULL DEFAULT 'token'")
+                )
             if "passphrase_secret_store_id" not in columns:
                 connection.execute(
                     text("ALTER TABLE integration_connections ADD COLUMN passphrase_secret_store_id VARCHAR(64)")

@@ -390,7 +390,6 @@ _OPERATIONS = (
 
 _ATLAS_ERRORS = (
     "connection_unavailable",
-    "invalid_credential",
     "atlas_locked",
     "operation_undeclared",
     "authorization_missing_or_stale",
@@ -434,8 +433,8 @@ _ATLAS_OPERATIONS = (
         side_effect="none",
         risk="low",
         resource_scope="none",
-        method="POST",
-        endpoint_template="/api/agent/get_personal_info",
+        method="GET",
+        endpoint_template="/api/records?category=person",
         timeout_seconds=10,
         allow_redirects=False,
         max_pages=1,
@@ -445,6 +444,7 @@ _ATLAS_OPERATIONS = (
         audit_resource_fields=(),
         fake_behavior="atlas_person",
         usage_example={"operation": "atlas.person.get", "input": {}},
+        contract_version=2,
     ),
     IntegrationOperation(
         operation_id="atlas.experience.list",
@@ -458,11 +458,12 @@ _ATLAS_OPERATIONS = (
             {"experiences": {"type": "array", "maxItems": 100, "items": {"type": "object"}}},
             ["experiences"],
         ),
-        read_only=True, side_effect="none", risk="low", resource_scope="none", method="POST",
-        endpoint_template="/api/agent/list_experiences", timeout_seconds=10, allow_redirects=False,
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="GET",
+        endpoint_template="/api/records?category=experience", timeout_seconds=10, allow_redirects=False,
         max_pages=1, max_results=100, max_provider_response_bytes=2_000_000,
         normalized_errors=_ATLAS_ERRORS, audit_resource_fields=(), fake_behavior="atlas_experiences",
         usage_example={"operation": "atlas.experience.list", "input": {"keywords": "research", "limit": 10}},
+        contract_version=2,
     ),
     IntegrationOperation(
         operation_id="atlas.goal.list",
@@ -484,11 +485,12 @@ _ATLAS_OPERATIONS = (
             },
             ["goals", "progressions"],
         ),
-        read_only=True, side_effect="none", risk="low", resource_scope="none", method="POST",
-        endpoint_template="/api/agent/get_goals", timeout_seconds=10, allow_redirects=False,
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="GET",
+        endpoint_template="/api/records?category=goal", timeout_seconds=10, allow_redirects=False,
         max_pages=1, max_results=100, max_provider_response_bytes=3_000_000,
         normalized_errors=_ATLAS_ERRORS, audit_resource_fields=(), fake_behavior="atlas_goals",
         usage_example={"operation": "atlas.goal.list", "input": {"importance": "high", "horizon": "long"}},
+        contract_version=2,
     ),
     IntegrationOperation(
         operation_id="atlas.project.list",
@@ -507,11 +509,12 @@ _ATLAS_OPERATIONS = (
         output_schema=_object_schema(
             {"projects": {"type": "array", "maxItems": 100, "items": {"type": "object"}}}, ["projects"]
         ),
-        read_only=True, side_effect="none", risk="low", resource_scope="none", method="POST",
-        endpoint_template="/api/agent/list_projects", timeout_seconds=10, allow_redirects=False,
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="GET",
+        endpoint_template="/api/records?category=project", timeout_seconds=10, allow_redirects=False,
         max_pages=1, max_results=100, max_provider_response_bytes=2_000_000,
         normalized_errors=_ATLAS_ERRORS, audit_resource_fields=(), fake_behavior="atlas_projects",
         usage_example={"operation": "atlas.project.list", "input": {"status": "active", "has_github_link": True}},
+        contract_version=2,
     ),
     IntegrationOperation(
         operation_id="atlas.relationship.list",

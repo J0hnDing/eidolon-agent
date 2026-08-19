@@ -341,7 +341,6 @@ export interface CodexRoutingSettingsPayload {
   chat: CodexInvocationChoice;
   product_manager: {
     default: CodexInvocationChoice;
-    refine_intent: CodexInvocationChoice;
     blueprint_and_permissions: CodexInvocationChoice;
     task_dag: CodexInvocationChoice;
     repair: CodexInvocationChoice;
@@ -410,24 +409,12 @@ export interface GitHubConnectionStatus {
 
 export interface AtlasIntegrationStatus {
   provider: "atlas";
-  directory: string | null;
-  selected_directory?: string | null;
-  resolved_directory?: string | null;
-  process_owned?: boolean;
-  process_running?: boolean;
-  owned?: boolean;
-  running?: boolean;
-  process_ownership?: "owned" | "external" | "none" | string;
+  directory: string;
+  running: boolean;
+  process_ownership: "owned" | "external" | "none";
   initialized: boolean | null;
   locked: boolean | null;
-  key_connected?: boolean;
-  api_key_connected?: boolean;
-  key_status?: "connected" | "disconnected" | "unavailable" | "invalid" | string;
-  api_key_status?: "connected" | "disconnected" | "unavailable" | "invalid" | string;
-  auto_unlock_configured?: boolean;
-  passphrase_configured?: boolean;
-  error?: string | null;
-  error_message?: string | null;
+  passphrase_configured: boolean;
   startup_error?: string | null;
   error_type?: string | null;
 }
@@ -737,13 +724,6 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ directory }),
     }),
-  putAtlasApiKey: (apiKey: string) =>
-    request<AtlasIntegrationStatus>("/settings/integrations/atlas/api-key", {
-      method: "PUT",
-      body: JSON.stringify({ api_key: apiKey }),
-    }),
-  removeAtlasApiKey: () =>
-    request<void>("/settings/integrations/atlas/api-key", { method: "DELETE" }),
   putAtlasPassphrase: (passphrase: string) =>
     request<AtlasIntegrationStatus>("/settings/integrations/atlas/passphrase", {
       method: "PUT",

@@ -16,8 +16,7 @@ class FakeSettings:
             process_ownership="owned",
             initialized=True,
             locked=False,
-            api_key_status="missing",
-            auto_unlock_configured=False,
+            passphrase_configured=False,
         )
 
 
@@ -28,3 +27,8 @@ def test_restart_route_accepts_only_empty_object_and_returns_sanitized_status(mo
 
     assert response.process_ownership == "owned"
     assert fake.restarts == 1
+
+
+def test_api_key_routes_are_absent() -> None:
+    paths = {route.path for route in atlas_settings.router.routes}
+    assert "/settings/integrations/atlas/api-key" not in paths

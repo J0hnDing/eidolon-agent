@@ -108,7 +108,6 @@ class CodexAdapter(Protocol):
 DEFAULT_CODEX_ACTION_TIMEOUT_SECONDS = 300
 
 CODEX_ACTION_TIMEOUT_SECONDS = {
-    "product_manager_refine_intent": 120,
     "product_manager_plan_build": 180,
     "product_manager_write_task_dag": 180,
     "product_manager_repair_blueprint": 180,
@@ -305,21 +304,6 @@ class FakeCodexAdapter:
     def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
         output_dir.mkdir(parents=True, exist_ok=True)
         task = plan.get("codex_task")
-        if task == "product_manager_refine_intent":
-            return subprocess.CompletedProcess(
-                args=["fake-codex-product-manager-intent"],
-                returncode=0,
-                stdout=json.dumps(
-                    {
-                        "intent_prompt": {
-                            "schema_version": 1,
-                            "refined_prompt": plan.get("user_message", ""),
-                            "selected_memory_facts": plan.get("selected_memory_facts", []),
-                        }
-                    }
-                ),
-                stderr="",
-            )
         if task == "product_manager_plan_build":
             blueprint = self._build_blueprint_from_request(plan, str(plan.get("user_message", "")))
             permission_plan = self._permission_plan_from_generation_plan(plan.get("generation_plan", {}))
@@ -451,7 +435,7 @@ class FakeCodexAdapter:
         manifest = {
             "manifest_version": 1,
             "name": plan["skill_name"],
-            "description": plan["goal"],
+            "description": plan.get("description") or plan.get("goal") or plan["skill_name"],
             "runtime": runtime,
             "entrypoint": entrypoint,
             "instructions_path": self._instructions_path_for_plan(plan),
@@ -464,7 +448,11 @@ class FakeCodexAdapter:
             "schedule": plan.get("schedule"),
         }
         (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        (output_dir / "README.md").write_text(f"# {plan['display_name']}\n\n{plan['goal']}\n", encoding="utf-8")
+        description = plan.get("description") or plan.get("goal") or plan["skill_name"]
+        (output_dir / "README.md").write_text(
+            f"# {plan['display_name']}\n\n{description}\n",
+            encoding="utf-8",
+        )
         if manifest["instructions_path"]:
             (output_dir / "SKILL.md").write_text(
                 "# Instructions\n\nUse this reusable capability with care. Do not perform unsafe actions.\n",
@@ -636,28 +624,15 @@ class FakeCodexAdapter:
         if "github" in user_message.lower() and "trending" in user_message.lower():
             if "github.repository.trending.list" in available_ids:
                 functions.append("github.repository.trending.list")
-        acceptance_criteria = [
-            "manifest.json is valid",
-            "required skill files exist",
-            "skill tests pass",
-            (
-                "web application exposes its self-rendered ASGI interface"
-                if runtime == "web_app"
-                else "function skill uses JSON stdin/stdout"
-            ),
-        ]
         return {
-            "goal": user_message,
-            "skill_name": identity["skill_name"],
-            "display_name": identity["display_name"],
+            "name": identity["skill_name"],
+            "description": user_message,
             "runtime": runtime,
             "input_schema": {"type": "object", "additionalProperties": True} if runtime == "function" else None,
             "output_schema": {"type": "object", "additionalProperties": True} if runtime == "function" else None,
             "expected_behavior": ["Implement the requested reusable capability."],
             "functions": functions,
-            "integration_scopes": {"github": {"repositories": []}} if functions else {},
             "schedule": _fallback_schedule(user_message) if runtime == "function" else None,
-            "acceptance_criteria": acceptance_criteria,
         }
 
     def _build_task_dag_from_plan(self, blueprint: dict, plan: dict) -> dict:
@@ -673,7 +648,7 @@ class FakeCodexAdapter:
             "parallel_safe": True,
             "write_paths": [path for path in expected_files if path != "manifest.json"],
             "acceptance_criteria": list(
-                blueprint.get("acceptance_criteria")
+                blueprint.get("expected_behavior")
                 or [
                     "manifest.json is valid",
                     "required skill files exist",
@@ -1111,48 +1086,6 @@ class CodexService:
             )
         return resolved
 
-    def product_manager_refine_intent(
-        self,
-        generation_request: SkillGenerationRequest,
-        selected_memory_facts: list[dict[str, object]] | None = None,
-    ) -> dict[str, object]:
-        conversation = generation_request.plan_json.get("project_conversation", [])
-        if not isinstance(conversation, list) or not conversation:
-            conversation = [{"role": "user", "content": generation_request.user_message}]
-        payload = {
-            "codex_task": "product_manager_refine_intent",
-            "user_message": generation_request.user_message,
-            "project_conversation": conversation,
-            "selected_memory_facts": selected_memory_facts or [],
-        }
-        fallback = {
-            "schema_version": 1,
-            "refined_prompt": generation_request.user_message,
-            "selected_memory_facts": selected_memory_facts or [],
-        }
-        result = self._generate_product_manager(
-            self.build_product_manager_prompt(
-                "refine_intent",
-                {
-                    "project_conversation": conversation,
-                    "selected_memory_facts": selected_memory_facts or [],
-                },
-            ),
-            payload,
-        )
-        parsed = self._parse_product_manager_json(result, fallback={"intent_prompt": fallback})
-        intent_prompt = parsed.get("intent_prompt")
-        refined_prompt = (
-            str(intent_prompt.get("refined_prompt") or generation_request.user_message)
-            if isinstance(intent_prompt, dict)
-            else generation_request.user_message
-        )
-        return {
-            "schema_version": 1,
-            "refined_prompt": refined_prompt,
-            "selected_memory_facts": selected_memory_facts or [],
-        }
-
     def product_manager_plan_build(
         self,
         generation_request: SkillGenerationRequest,
@@ -1233,9 +1166,10 @@ class CodexService:
         thread_id = generation_request.product_manager_thread_id
         latest_reply = self._latest_project_user_reply(generation_request)
         session_schema_note = (
-            "\n\nStructured-output transport note: when decision is proceed_to_approval, "
-            "encode the complete blueprint object as a compact JSON string in the blueprint field. "
-            "Use null for blueprint on all other decisions."
+            "\n\nStructured-output transport note: keep blueprint as the structured object defined "
+            "by the output schema. For a function blueprint, encode input_schema and output_schema "
+            "as compact JSON strings. For a web_app blueprint, use null for both. When schedule is "
+            "not null, encode only schedule.input as a compact JSON string."
         )
         turn_input = initial_prompt + session_schema_note
         try:
@@ -1332,34 +1266,82 @@ class CodexService:
 
     @staticmethod
     def _product_manager_session_output_schema() -> dict[str, object] | None:
-        """Return an App Server strict schema without unconstrained nested JSON objects."""
+        """Return an App Server schema with only free-form JSON leaves string-encoded."""
         schema = output_schema_for_action("product_manager_plan_build")
         if schema is None:
             return None
         strict_schema = deepcopy(schema)
         properties = strict_schema.get("properties")
         if isinstance(properties, dict):
-            properties["blueprint"] = {
-                "type": ["string", "null"],
-                "description": (
-                    "Complete blueprint encoded as compact JSON when proceeding; null otherwise."
-                ),
-            }
+            blueprint_wrapper = properties.get("blueprint")
+            if isinstance(blueprint_wrapper, dict):
+                blueprint_variants = blueprint_wrapper.get("anyOf")
+                if isinstance(blueprint_variants, list) and len(blueprint_variants) == 2:
+                    blueprint_schema = blueprint_variants[1]
+                    if isinstance(blueprint_schema, dict):
+                        blueprint_properties = blueprint_schema.get("properties")
+                        if isinstance(blueprint_properties, dict):
+                            for field_name in ("input_schema", "output_schema"):
+                                blueprint_properties[field_name] = {
+                                    "type": ["string", "null"],
+                                    "description": (
+                                        f"{field_name} encoded as compact JSON for a function; "
+                                        "null for a web app."
+                                    ),
+                                }
+                            schedule = blueprint_properties.get("schedule")
+                            if isinstance(schedule, dict):
+                                for variant in schedule.get("anyOf", []):
+                                    if not isinstance(variant, dict):
+                                        continue
+                                    schedule_properties = variant.get("properties")
+                                    if isinstance(schedule_properties, dict) and "input" in schedule_properties:
+                                        schedule_properties["input"] = {
+                                            "type": "string",
+                                            "description": "Schedule input encoded as compact JSON.",
+                                        }
+        CodexService._remove_unsupported_transport_keywords(strict_schema)
         return strict_schema
 
     @staticmethod
     def _decode_product_manager_session_blueprint(parsed: dict[str, object]) -> dict[str, object]:
         blueprint = parsed.get("blueprint")
-        if not isinstance(blueprint, str):
+        if not isinstance(blueprint, dict):
             return parsed
-        try:
-            decoded = json.loads(blueprint)
-        except json.JSONDecodeError as exc:
-            raise CodexGenerationError("ProductManager blueprint was not valid JSON") from exc
-        if not isinstance(decoded, dict):
-            raise CodexGenerationError("ProductManager blueprint must decode to an object")
-        parsed["blueprint"] = decoded
+        for field_name in ("input_schema", "output_schema"):
+            encoded = blueprint.get(field_name)
+            if isinstance(encoded, str):
+                blueprint[field_name] = CodexService._decode_json_object(
+                    encoded,
+                    f"ProductManager blueprint {field_name}",
+                )
+        schedule = blueprint.get("schedule")
+        if isinstance(schedule, dict) and isinstance(schedule.get("input"), str):
+            schedule["input"] = CodexService._decode_json_object(
+                schedule["input"],
+                "ProductManager blueprint schedule.input",
+            )
         return parsed
+
+    @staticmethod
+    def _decode_json_object(value: str, label: str) -> dict[str, object]:
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise CodexGenerationError(f"{label} was not valid JSON") from exc
+        if not isinstance(decoded, dict):
+            raise CodexGenerationError(f"{label} must decode to an object")
+        return decoded
+
+    @staticmethod
+    def _remove_unsupported_transport_keywords(value: object) -> None:
+        if isinstance(value, dict):
+            value.pop("uniqueItems", None)
+            for child in value.values():
+                CodexService._remove_unsupported_transport_keywords(child)
+        elif isinstance(value, list):
+            for child in value:
+                CodexService._remove_unsupported_transport_keywords(child)
 
     @staticmethod
     def _latest_project_user_reply(generation_request: SkillGenerationRequest) -> str:
@@ -1922,7 +1904,7 @@ class CodexService:
     def create_or_update_skill_record(self, plan: dict, proposed_dir: Path, *, status: str = "proposed") -> Skill:
         skill = self.db.scalar(select(Skill).where(Skill.name == plan["skill_name"]))
         values = {
-            "description": plan["goal"],
+            "description": plan.get("description") or plan.get("goal") or plan["skill_name"],
             "runtime": plan.get("runtime", "function"),
             "status": status,
             "risk_level": plan["risk_level"],
@@ -2013,9 +1995,14 @@ class CodexService:
         )
         manifest = {
             "manifest_version": 1,
-            "name": str(blueprint.get("skill_name") or plan.get("skill_name")),
+            "name": str(blueprint.get("name") or plan.get("skill_name")),
             "display_name": plan.get("display_name"),
-            "description": str(blueprint.get("goal") or plan.get("goal") or plan.get("skill_name")),
+            "description": str(
+                blueprint.get("description")
+                or plan.get("description")
+                or plan.get("goal")
+                or plan.get("skill_name")
+            ),
             "runtime": runtime,
             "entrypoint": "app:app" if runtime == "web_app" else "skill.py",
             "instructions_path": self._planned_instructions_path(plan),
@@ -2099,8 +2086,8 @@ class CodexService:
         if task_context and isinstance(task_context.get("blueprint_json"), dict):
             return dict(task_context["blueprint_json"])  # type: ignore[arg-type]
         return {
-            "goal": plan.get("goal"),
-            "skill_name": plan.get("skill_name"),
+            "description": plan.get("description") or plan.get("goal"),
+            "name": plan.get("skill_name"),
             "runtime": plan.get("runtime", "function"),
         }
 
@@ -2189,7 +2176,7 @@ Current draft files:
 """.strip()
 
     def build_product_manager_prompt(self, task: str, payload: dict[str, object]) -> str:
-        if task in {"refine_intent", "plan_build"}:
+        if task == "plan_build":
             return build_common_product_manager_prompt(task, payload)
         instruction_by_task = {
             "repair_blueprint": "product_manager/repair.md",
@@ -2252,44 +2239,15 @@ Payload:
     def _fallback_build_blueprint(self, generation_request: SkillGenerationRequest) -> dict[str, object]:
         identity = _fallback_skill_identity(generation_request.user_message)
         runtime = _fallback_runtime(generation_request.user_message)
-        acceptance_criteria = [
-            "manifest.json is valid",
-            "required skill files exist",
-            "skill tests pass",
-            (
-                "web application exposes its self-rendered ASGI interface"
-                if runtime == "web_app"
-                else "function skill uses JSON stdin/stdout"
-            ),
-        ]
-        permission_plan = {
-            "build_time": {
-                "internet_research": False,
-                "dependencies": [],
-            },
-            "runtime": {
-                "network": [],
-                "filesystem_read": [],
-                "filesystem_write": [],
-                "secrets": [],
-                "shell": False,
-                "codex": {"call_response": True, "internet_access": False},
-                "dependencies": [],
-            },
-        }
         return {
-            "goal": generation_request.user_message,
-            "skill_name": identity["skill_name"],
-            "display_name": identity["display_name"],
+            "name": identity["skill_name"],
+            "description": generation_request.user_message,
             "runtime": runtime,
             "input_schema": {"type": "object", "additionalProperties": True} if runtime == "function" else None,
             "output_schema": {"type": "object", "additionalProperties": True} if runtime == "function" else None,
             "expected_behavior": ["Implement the requested reusable capability."],
             "functions": [],
-            "integration_scopes": {},
-            "permission_plan": permission_plan,
             "schedule": _fallback_schedule(generation_request.user_message) if runtime == "function" else None,
-            "acceptance_criteria": acceptance_criteria,
         }
 
     def _fallback_task_dag(
@@ -2310,7 +2268,7 @@ Payload:
             "parallel_safe": True,
             "write_paths": [path for path in expected_files if path != "manifest.json"],
             "acceptance_criteria": list(
-                blueprint.get("acceptance_criteria")
+                blueprint.get("expected_behavior")
                 or [
                     "manifest.json is valid",
                     "required skill files exist",

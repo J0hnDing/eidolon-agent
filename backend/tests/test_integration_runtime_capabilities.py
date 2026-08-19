@@ -106,6 +106,7 @@ def test_no_network_function_relay_exposes_only_existing_scoped_capabilities() -
         if "POST" in getattr(route, "methods", set())
     }
     assert post_routes == {
+        "/functions/capabilities/codex",
         "/functions/{function_name}/invoke",
         "/integrations/capabilities/invoke",
     }

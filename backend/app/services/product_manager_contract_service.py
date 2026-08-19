@@ -303,8 +303,7 @@ class ProductManagerContractService:
             if blueprint.get("schedule") is not None:
                 raise ProductManagerContractError("A web app blueprint cannot include a schedule")
 
-        sanitized_blueprint = self.sanitize_blueprint(blueprint, blueprint)
-        sanitized_blueprint.pop("permission_plan", None)
+        sanitized_blueprint = self._sanitize_build_blueprint(blueprint)
         sanitized_permissions = self.sanitize_permission_plan(permission_plan, fallback_plan)
         return {
             "decision": decision,
@@ -312,6 +311,19 @@ class ProductManagerContractService:
             "build_workflow": build_workflow,
             "blueprint": sanitized_blueprint,
             "permission_plan": sanitized_permissions,
+        }
+
+    def _sanitize_build_blueprint(self, blueprint: dict[str, object]) -> dict[str, object]:
+        """Normalize the current build-only blueprint after strict schema validation."""
+        return {
+            "name": str(blueprint["name"]).strip(),
+            "description": str(blueprint["description"]).strip(),
+            "runtime": blueprint["runtime"],
+            "input_schema": blueprint["input_schema"],
+            "output_schema": blueprint["output_schema"],
+            "expected_behavior": self._unique_strings(blueprint["expected_behavior"]),
+            "functions": self._unique_strings(blueprint["functions"]),
+            "schedule": blueprint["schedule"],
         }
 
     def sanitize_task_dag(

@@ -149,7 +149,7 @@ class FunctionCatalogService:
             reasons = [] if connected else [
                 "GitHub connection is not configured"
                 if operation.provider == "github"
-                else "Atlas is not running, unlocked, and connected"
+                else "Atlas is not running and unlocked"
             ]
             if operation.operation_id == "atlas.knowledge.node.know" and not atlas_codex_available:
                 reasons.append("A compatible Codex CLI is unavailable")

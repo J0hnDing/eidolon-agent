@@ -11,7 +11,7 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 - `/functions`: installed user-function discovery and ephemeral run-capability-authenticated invocation.
 - `/web-apps`: lazy application sessions, instance diagnostics, bounded audit records, explicit stop, and instance-capability-authenticated Codex calls. The host-routed proxy is internal and omitted from OpenAPI.
 - `/settings/integrations/github`: trusted add/replace/status/remove management for the single write-only GitHub credential.
-- `/settings/integrations/atlas`: sanitized Atlas lifecycle, directory, key, automatic-unlock passphrase, restart, and unlock controls.
+- `/settings/integrations/atlas`: sanitized Atlas lifecycle, directory, optional owned-process automatic-unlock passphrase, restart, and unlock controls.
 - hidden integration capability routes: exact function-run and web-app-instance relay endpoints; no operation-specific public proxy or discovery route.
 - `/schedules`: schedule list/detail/approve/deny/pause/resume/delete/run-now.
 - `/permission-requests`: permission request list/detail/approve/deny. Approving a build-time generation request continues its linked pending agent run automatically.
@@ -27,21 +27,21 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 
 ### ChatOrchestrator
 
-Coordinates chat requests. Chat mode returns direct answers. Project mode creates generation requests, sends them through ProductManager intent refinement and plausibility review, and starts build-time approval planning only after ProductManager decides the request is ready to blueprint. If ProductManager asks for clarification, the next Project-mode chat reply is appended to the same generation request. Backend keyword heuristics must not silently create or block skills.
+Coordinates chat requests. Chat mode returns direct answers. Project mode creates generation requests, writes the initial message unchanged through the intent placeholder, and starts build-time approval planning only after ProductManager decides the request is ready to blueprint. If ProductManager asks for clarification, the next Project-mode chat reply is appended to the same generation request. Backend keyword heuristics must not silently create or block skills.
 
 ### ProductManager planning
 
-There is no pre-ProductManager skill-plan service. Project mode creates a minimal pending generation request, then ProductManager refines intent, performs plausibility review, and writes the blueprint and permission plan. Plausibility receives only the `blocked` section of `backend/app/static/default_permissions.json`; blueprint and update planning receive its complete `default_allowed`/`requires_approval`/`blocked` policy. The blueprint owns the safe skill identity, runtime, complete function input/output JSON Schemas, selected function ids, integration resource scopes, schedule intent, and acceptance criteria. Fake Codex adapters support deterministic tests and local development.
+There is no pre-ProductManager skill-plan service. Project mode creates a minimal pending generation request, then ProductManager refines intent, performs plausibility review, and writes the blueprint and permission plan. Plausibility receives only the `blocked` section of `backend/app/static/default_permissions.json`; blueprint and update planning receive its complete `default_allowed`/`requires_approval`/`blocked` policy. The build blueprint owns one safe name, one description, runtime, complete function input/output JSON Schemas, expected user-visible behavior, selected function ids, and schedule intent. The backend derives integration providers and operations from function ids; provider-specific resource authorization comes from the generated manifest. Fake Codex adapters support deterministic tests and local development.
 
 ### AgentWorkflowService
 
-Coordinates the common bounded lifecycle for build, repair, and update. For new builds, it owns ProductManager intent refinement, plausibility review, blueprint and permission decisions, deterministic build-time approval, immediate backend dependency provisioning, and the workflow-neutral agent-free final validator. It stores the effective top-level `build_workflow` string separately from `blueprint.json`, then dispatches post-approval execution through the project-build workflow registry. When a single-user workflow override is configured, it replaces ProductManager's choice before validation and persistence.
+Coordinates the common bounded lifecycle for build, repair, and update. For new builds, it owns the deterministic intent passthrough placeholder, ProductManager plausibility review, blueprint and permission decisions, deterministic build-time approval, immediate backend dependency provisioning, and the workflow-neutral agent-free final validator. It stores the effective top-level `build_workflow` string separately from `blueprint.json`, then dispatches post-approval execution through the project-build workflow registry. When a single-user workflow override is configured, it replaces ProductManager's choice before validation and persistence.
 
 Workflow persistence and DAG reasoning are separate collaborators. `AgentRunArtifactStore` owns the controlled `runtime/agent_runs/run_<id>` tree, JSON/text artifact I/O, task status files, and validated interface-artifact movement. `TaskDagService` owns node normalization, structural and file-claim validation, topological ordering, dependency-path checks, and ready-batch calculation. The orchestrator and workflow executors call those narrow interfaces directly; there is no compatibility forwarding layer on `AgentWorkflowService`.
 
 ### Project Build Workflows
 
-Trusted workflow modules live under `backend/app/workflows/`. Each package owns its executor, Markdown instructions, and prompt composition. `common` owns intent refinement, plausibility review, blueprint generation, permission planning, and workflow selection before dispatch. `task_dag` owns task-DAG planning prompts, Builder/Tester/repair prompts, execution, final end-to-end test authoring, and DAG resume/retry behavior while delegating structural validation and ready-batch calculation to `TaskDagService`. `single_codex` owns the prompt and executor for one Codex planning, build, and test-authoring invocation; any invocation or validation error is terminal for that run, and its resume/retry endpoints cannot invoke Builder again. A separate new single-Codex build atomically stages an obsolete proposed folder before creating a clean workspace, so sandbox-owned cache ACLs do not block replacement. Both workflows use the same deterministic backend scan/manifest/package/test validator. Unknown workflow names are rejected by the registry.
+Trusted workflow modules live under `backend/app/workflows/`. Each package owns its executor, Markdown instructions, and prompt composition. The common preflight uses a backend intent passthrough placeholder, while `common` owns ProductManager plausibility review, blueprint generation, permission planning, and workflow selection before dispatch. `task_dag` owns task-DAG planning prompts, Builder/Tester/repair prompts, execution, final end-to-end test authoring, and DAG resume/retry behavior while delegating structural validation and ready-batch calculation to `TaskDagService`. `single_codex` owns the prompt and executor for one Codex planning, build, and test-authoring invocation; any invocation or validation error is terminal for that run, and its resume/retry endpoints cannot invoke Builder again. A separate new single-Codex build atomically stages an obsolete proposed folder before creating a clean workspace, so sandbox-owned cache ACLs do not block replacement. Both workflows use the same deterministic backend scan/manifest/package/test validator. Unknown workflow names are rejected by the registry.
 
 `FunctionCatalogService` persists one catalog at `runtime/function_catalog.json`, seeded with checked-in backend-core definitions and refreshed from the typed integration registry plus installed user-function contracts. ProductManager receives only currently available entries as id/category/title/description/risk. The blueprint selects function ids. A Task DAG assigns those approved ids to nodes through `function_ids`; the backend resolves full schemas and invocation guidance into that node's `function_context`. The single-Codex workflow receives full context for every blueprint-selected function. Disabled user skills, invalid or stale function contracts, missing runtime approval, and disconnected integrations remain visible in the UI but are not offered to ProductManager.
 
@@ -75,7 +75,7 @@ Owns dynamic function discovery, caller requirement review, caller-target approv
 
 ### IntegrationService and Provider Adapters
 
-`IntegrationService` owns provider-specific skill-contract fingerprints, separate integration approvals, caller/version/manifest/scope/schema enforcement, last-moment secret retrieval, and sanitized audits. `integration_registry.py` is the single typed operation authority. Separate GitHub and Atlas adapters construct fixed requests and normalize responses. The Atlas adapter derives agent filters and Knowledge navigation from Atlas's primitive APIs; `Know_node` performs one bounded internal Codex expansion followed by a primitive target patch and zero or more primitive child creates. The Atlas lifecycle/settings services own safe startup, attachment, directory changes, key management, and opt-in automatic unlock. `SecretStore` uses distinct Windows Credential Manager namespaces with no unsafe fallback. See [GitHub integration](../integrations/github.md) and [Atlas integration](../integrations/atlas.md).
+`IntegrationService` owns provider-specific skill-contract fingerprints, separate integration approvals, caller/version/manifest/scope/schema enforcement, GitHub's last-moment secret retrieval, and sanitized audits. `integration_registry.py` is the single typed operation authority. Separate GitHub and Atlas adapters construct fixed requests and normalize responses. The Atlas adapter derives bounded projections, Goal progression, filters, and Knowledge navigation from Atlas's native APIs without authorization headers; `Know_node` performs one bounded internal Codex expansion followed by a primitive target patch and zero or more primitive child creates. The Atlas lifecycle/settings services own safe startup, attachment, directory changes, legacy credential cleanup, and opt-in owned-process automatic unlock. `SecretStore` has no unsafe fallback. See [GitHub integration](../integrations/github.md) and [Atlas integration](../integrations/atlas.md).
 
 ### StaticCapabilityScanner
 
@@ -89,7 +89,7 @@ Performs the deterministic first stage of shared final validation for both Proje
 
 ### SkillRunner
 
-Selects Docker or local/dev runner for bounded `function` skills only. Runners validate manifests, enforce supported permissions, run tests, execute entrypoints with JSON input, require JSON stdout, capture logs, and store `skill_runs`. Both runners defensively reject `web_app`. Common nonzero exit codes produce specific error summaries for command failures, interruption, termination, forced kills, and segmentation faults while raw process diagnostics remain in stderr. A valid JSON process exit is not automatically treated as success: top-level `status: "partial"` and `status: "failed"` outputs become matching backend run statuses with a concise failure summary, and any recorded failed runtime Codex call prevents a succeeded run status. Runtime Codex usage is associated with the currently running row under the existing per-skill operation lock. Runners provide `PERSONAL_AGENT_SKILL_ID` and `PERSONAL_AGENT_BACKEND_URL`; authorized direct/backend/scheduled callers also receive one ephemeral Function capability for their entrypoint only. Tests never receive that token. No-internet Docker callers use a transient internal-network relay that forwards only Function registry discovery/invocation and integration invocation paths.
+Selects Docker or local/dev runner for bounded `function` skills only. Runners validate manifests, enforce supported permissions, run tests, execute entrypoints with JSON input, require JSON stdout, capture logs, and store `skill_runs`. Both runners defensively reject `web_app`. Common nonzero exit codes produce specific error summaries for command failures, interruption, termination, forced kills, and segmentation faults while raw process diagnostics remain in stderr. A valid JSON process exit is not automatically treated as success: top-level `status: "partial"` and `status: "failed"` outputs become matching backend run statuses with a concise failure summary, and any recorded failed runtime Codex call prevents a succeeded run status. Runtime Codex usage is associated with the currently running row under the existing per-skill operation lock. Runners provide `PERSONAL_AGENT_SKILL_ID` and `PERSONAL_AGENT_BACKEND_URL`; authorized direct/backend/scheduled callers also receive one ephemeral Function capability for their entrypoint only. Tests never receive that token. No-internet Docker callers use a transient internal-network relay that forwards only Function registry discovery/invocation, the function Codex capability, and integration invocation paths.
 
 ### WebAppRuntimeService
 
@@ -97,10 +97,11 @@ Owns persistent `web_app` preconditions, version-pinned instance startup/reuse, 
 
 ## Skill Codex API
 
-Installed enabled function skills may call:
+Sandboxed installed function skills use:
 
 ```text
-POST /skills/{skill_id}/codex
+function_runtime_capabilities.call_codex(...)
+  -> POST /functions/capabilities/codex
 ```
 
 Request body:
@@ -117,7 +118,7 @@ Request body:
 }
 ```
 
-Backend checks installed/enabled status, `runtime = function`, runtime approval, manifest validity, `permissions.codex.call_response`, `permissions.codex.internet_access`, and whether requested Codex internet access is backed by approved runtime `network` entries. Web applications cannot use this skill-id route; they use the instance-scoped trusted helper and `/web-apps/capabilities/codex`. Shell access remains prohibited; skills must not call the Codex CLI directly.
+The hidden route requires the current function run's ephemeral bearer token. The backend derives the caller skill and version from that token, then checks installed/enabled status, `runtime = function`, runtime approval, manifest validity, `permissions.codex.call_response`, `permissions.codex.internet_access`, and whether requested Codex internet access is backed by approved runtime `network` entries. Trusted local compatibility callers may still use `POST /skills/{skill_id}/codex`; sandboxed code must not use that caller-supplied skill-id route. Web applications use the instance-scoped trusted helper and `/web-apps/capabilities/codex`. Shell access remains prohibited; skills must not call the Codex CLI directly.
 
 Current backend-core function catalog entries:
 

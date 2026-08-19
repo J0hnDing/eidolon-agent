@@ -13,6 +13,38 @@ class FunctionRuntimeCapabilityError(RuntimeError):
     pass
 
 
+def call_codex(
+    prompt: str,
+    *,
+    context: dict[str, Any] | None = None,
+    model: str | None = None,
+    internet_access: bool = False,
+    timeout_seconds: float = 120,
+) -> dict[str, Any]:
+    """Call Codex through the current function run's scoped capability."""
+    if not prompt.strip():
+        raise FunctionRuntimeCapabilityError("Codex prompt cannot be empty")
+    payload: dict[str, Any] = {
+        "prompt": prompt,
+        "context": context or {},
+        "codex_permissions": {
+            "call_response": True,
+            "internet_access": internet_access,
+        },
+    }
+    if model is not None:
+        payload["model"] = model
+    result = _request(
+        "/functions/capabilities/codex",
+        method="POST",
+        payload=payload,
+        timeout_seconds=timeout_seconds,
+    )
+    if not isinstance(result, dict) or not isinstance(result.get("response"), str):
+        raise FunctionRuntimeCapabilityError("Codex capability returned an invalid response contract")
+    return result
+
+
 def discover_functions(*, timeout_seconds: float = 10) -> list[dict[str, Any]]:
     """Discover installed functions without granting invocation authority."""
     result = _request("/functions", method="GET", payload=None, timeout_seconds=timeout_seconds)

@@ -11,7 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import AgentRun, MemoryFact, Message, Skill, SkillGenerationRequest
+from app.models import AgentRun, ApprovalRequest, MemoryFact, Message, Skill, SkillGenerationRequest
 from app.routers import chat as chat_router
 from app.schemas.codex_routing import ResolvedInvocationSettings
 from app.schemas.skill_generation import ChatRequest, ChatResponse
@@ -122,17 +122,14 @@ class FixedBlueprintAdapter(FakeCodexAdapter):
             },
         }
         blueprint = {
-            "goal": source["goal"],
-            "skill_name": source["skill_name"],
-            "display_name": source["display_name"],
+            "name": source["skill_name"],
+            "description": source["goal"],
             "runtime": source.get("runtime", "function"),
             "input_schema": source.get("input_schema"),
             "output_schema": source.get("output_schema"),
             "expected_behavior": ["Implement the requested capability."],
             "functions": [],
-            "integration_scopes": {},
             "schedule": source.get("schedule"),
-            "acceptance_criteria": ["manifest.json is valid", "tests pass"],
         }
         return subprocess.CompletedProcess(
             args=["fixed-blueprint"],
@@ -323,10 +320,8 @@ def test_project_mode_uses_one_product_manager_planning_action(db_session: Sessi
     )
 
     generation_request = response["generation_request"]
-    assert tasks[:2] == [
-        "product_manager_refine_intent",
-        "product_manager_plan_build",
-    ]
+    assert tasks[0] == "product_manager_plan_build"
+    assert "product_manager_refine_intent" not in tasks
     assert "deciding whether and how" in prompts["product_manager_plan_build"]
     assert "matching the supplied output schema" in prompts["product_manager_plan_build"]
     assert "Expected JSON syntax" not in prompts["product_manager_plan_build"]
@@ -352,7 +347,7 @@ def test_project_build_instructions_are_colocated_with_workflow_packages() -> No
     app_dir = Path(__file__).resolve().parents[1] / "app"
     workflow_root = app_dir / "workflows"
 
-    assert (workflow_root / "common" / "instructions" / "refine_intent.md").is_file()
+    assert not (workflow_root / "common" / "instructions" / "refine_intent.md").exists()
     assert (workflow_root / "common" / "instructions" / "plan_build.md").is_file()
     assert (workflow_root / "task_dag" / "instructions" / "product_manager.md").is_file()
     assert (workflow_root / "task_dag" / "instructions" / "builder.md").is_file()
@@ -405,11 +400,8 @@ def test_unclear_project_asks_for_input_then_same_chat_reply_builds_plan(
     class ClarifyingAdapter(FakeCodexAdapter):
         def __init__(self) -> None:
             self.plan_calls = 0
-            self.refine_calls = 0
 
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
-            if plan.get("codex_task") == "product_manager_refine_intent":
-                self.refine_calls += 1
             if plan.get("codex_task") == "product_manager_plan_build":
                 self.plan_calls += 1
                 if self.plan_calls <= 2:
@@ -459,7 +451,6 @@ def test_unclear_project_asks_for_input_then_same_chat_reply_builds_plan(
     assert third_response["type"] == "skill_generation_plan"
     db_session.refresh(generation_request)
     assert generation_request.status == "awaiting_approval"
-    assert codex_adapter.refine_calls == 1
     assert codex_adapter.plan_calls == 3
     assert "Markdown files selected by the user" in generation_request.user_message
     agent_run = db_session.query(AgentRun).filter_by(generation_request_id=generation_request.id).one()
@@ -553,21 +544,24 @@ def test_product_manager_unavailable_function_fails_without_build_artifacts(
                 stderr="",
             )
 
-    response = ChatOrchestrator(
+    orchestrator = ChatOrchestrator(
         db_session,
         codex_service=CodexService(
             db_session,
             adapter=UnknownFunctionAdapter(),
             project_root=tmp_path,
         ),
-    ).handle_message("Build a reusable local workflow skill.", mode="project")
+    )
+    with pytest.raises(AgentWorkflowError, match="Unknown function id: missing.function"):
+        orchestrator.handle_message("Build a reusable local workflow skill.", mode="project")
 
-    generation_request = response["generation_request"]
+    generation_request = db_session.query(SkillGenerationRequest).one()
     agent_run = db_session.query(AgentRun).filter_by(generation_request_id=generation_request.id).one()
     artifact_root = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}"
     assert generation_request.status == "failed"
     assert generation_request.error_message == "Unknown function id: missing.function"
     assert generation_request.proposed_skill_id is None
+    assert db_session.query(ApprovalRequest).count() == 0
     assert not (artifact_root / "blueprint.json").exists()
     assert not (artifact_root / "permissions.json").exists()
 
@@ -1064,7 +1058,6 @@ def test_real_codex_adapter_uses_restricted_exec_command(tmp_path: Path, monkeyp
 @pytest.mark.parametrize(
     "action",
     [
-        "product_manager_refine_intent",
         "product_manager_plan_build",
         "product_manager_write_task_dag",
         "product_manager_repair_blueprint",
@@ -1088,17 +1081,14 @@ def test_machine_consumed_codex_actions_have_valid_output_schemas(action: str) -
         (
             "product_manager_plan_build",
             {
-                "goal",
-                "skill_name",
-                "display_name",
+                "name",
+                "description",
                 "runtime",
                 "input_schema",
                 "output_schema",
                 "expected_behavior",
                 "functions",
-                "integration_scopes",
                 "schedule",
-                "acceptance_criteria",
             },
         ),
         (
@@ -1151,9 +1141,8 @@ def test_build_blueprint_schema_keeps_nested_callable_schemas_open() -> None:
     blueprint_schema = schema["properties"]["blueprint"]["anyOf"][1]
     validator = Draft202012Validator(blueprint_schema)
     blueprint = {
-        "goal": "Build a reusable formatter.",
-        "skill_name": "formatter",
-        "display_name": "Formatter",
+        "name": "formatter",
+        "description": "Build a reusable formatter.",
         "runtime": "function",
         "input_schema": {
             "type": "object",
@@ -1167,15 +1156,57 @@ def test_build_blueprint_schema_keeps_nested_callable_schemas_open() -> None:
         },
         "expected_behavior": ["Format the supplied value."],
         "functions": [],
-        "integration_scopes": {},
         "schedule": None,
-        "acceptance_criteria": ["Returns bounded JSON output."],
     }
 
     assert validator.is_valid(blueprint)
     assert validator.is_valid({**blueprint, "input_schema": None, "output_schema": None})
     assert validator.is_valid({**blueprint, "unexpected_field": True}) is False
-    assert validator.is_valid({key: value for key, value in blueprint.items() if key != "goal"}) is False
+    assert validator.is_valid({key: value for key, value in blueprint.items() if key != "description"}) is False
+
+
+def test_product_manager_session_schema_confines_blueprint_and_encodes_only_free_form_json() -> None:
+    schema = CodexService._product_manager_session_output_schema()
+
+    assert schema is not None
+    blueprint_schema = schema["properties"]["blueprint"]["anyOf"][1]
+    assert blueprint_schema["type"] == "object"
+    assert blueprint_schema["additionalProperties"] is False
+    properties = blueprint_schema["properties"]
+    assert properties["input_schema"]["type"] == ["string", "null"]
+    assert properties["output_schema"]["type"] == ["string", "null"]
+    for schedule_variant in properties["schedule"]["anyOf"][1:]:
+        assert schedule_variant["properties"]["type"]["type"] == "string"
+        assert schedule_variant["properties"]["input"]["type"] == "string"
+    assert "uniqueItems" not in json.dumps(schema)
+
+
+def test_product_manager_session_decodes_only_free_form_blueprint_fields() -> None:
+    parsed = {
+        "blueprint": {
+            "name": "scheduled_formatter",
+            "description": "Format a scheduled value.",
+            "runtime": "function",
+            "input_schema": json.dumps({"type": "object", "properties": {"value": {"type": "string"}}}),
+            "output_schema": json.dumps({"type": "object", "properties": {"result": {"type": "string"}}}),
+            "expected_behavior": ["Format the supplied value."],
+            "functions": [],
+            "schedule": {
+                "type": "daily",
+                "time": "09:00",
+                "timezone": "America/Toronto",
+                "input": json.dumps({"value": "daily"}),
+            },
+        }
+    }
+
+    decoded = CodexService._decode_product_manager_session_blueprint(parsed)
+
+    blueprint = decoded["blueprint"]
+    assert blueprint["name"] == "scheduled_formatter"
+    assert blueprint["input_schema"]["properties"]["value"]["type"] == "string"
+    assert blueprint["output_schema"]["properties"]["result"]["type"] == "string"
+    assert blueprint["schedule"]["input"] == {"value": "daily"}
 
 
 def test_task_dag_output_schema_uses_the_simplified_node_contract() -> None:
@@ -1217,7 +1248,7 @@ def test_real_codex_adapter_passes_and_removes_action_output_schema(
         return subprocess.CompletedProcess(
             args=command,
             returncode=0,
-            stdout='{"intent_prompt":{"schema_version":1,"refined_prompt":"Build it."}}',
+            stdout='{"explanation":"Expanded.","terms":[],"children":[]}',
             stderr="",
         )
 
@@ -1225,13 +1256,13 @@ def test_real_codex_adapter_passes_and_removes_action_output_schema(
 
     output_dir = tmp_path / "runtime" / "product_manager"
     RealCodexAdapter(command="codex", timeout_seconds=10, enable_search="false").generate(
-        "Return the refined intent.",
+        "Expand this knowledge node.",
         output_dir,
-        {"codex_task": "product_manager_refine_intent"},
+        {"codex_task": "atlas_knowledge_expand"},
     )
 
     assert "--output-schema" in captured["command"]
-    assert captured["schema"]["required"] == ["intent_prompt"]
+    assert captured["schema"]["required"] == ["terms", "children"]
     assert captured["schema_path"].exists() is False
 
 
@@ -1271,23 +1302,20 @@ def test_product_manager_session_reuses_thread_and_sends_only_latest_answer(
                 }
             else:
                 blueprint = {
-                    "goal": "Summarize selected Markdown meeting notes.",
-                    "skill_name": "meeting_notes_summary",
-                    "display_name": "Meeting Notes Summary",
+                    "name": "meeting_notes_summary",
+                    "description": "Summarize selected Markdown meeting notes.",
                     "runtime": "function",
-                    "input_schema": {"type": "object", "additionalProperties": True},
-                    "output_schema": {"type": "object", "additionalProperties": True},
+                    "input_schema": json.dumps({"type": "object", "additionalProperties": True}),
+                    "output_schema": json.dumps({"type": "object", "additionalProperties": True}),
                     "expected_behavior": ["Summarize the selected notes."],
                     "functions": [],
-                    "integration_scopes": {},
                     "schedule": None,
-                    "acceptance_criteria": ["Returns a bounded action-item summary."],
                 }
                 output = {
                     "decision": "proceed_to_approval",
                     "user_prompt": None,
                     "build_workflow": "single_codex",
-                    "blueprint": json.dumps(blueprint),
+                    "blueprint": blueprint,
                     "permission_plan": {
                         "build_time": {"internet_research": False, "dependencies": []},
                         "runtime": {
@@ -1368,7 +1396,6 @@ def test_product_manager_session_reuses_thread_and_sends_only_latest_answer(
 @pytest.mark.parametrize(
     ("action", "expected_timeout"),
     [
-        ("product_manager_refine_intent", 120),
         ("product_manager_plan_build", 180),
         ("product_manager_write_task_dag", 180),
         ("product_manager_repair_blueprint", 180),
@@ -1444,7 +1471,6 @@ def test_product_manager_codex_calls_force_read_only_sandbox(
         project_root=tmp_path,
     )
 
-    service.product_manager_refine_intent(generation_request)
     service.product_manager_write_task_dag(
         generation_request,
         {
@@ -1459,7 +1485,7 @@ def test_product_manager_codex_calls_force_read_only_sandbox(
     )
 
     invocation_commands = [command for command in captured_commands if "exec" in command]
-    assert len(invocation_commands) == 2
+    assert len(invocation_commands) == 1
     for command in invocation_commands:
         assert command[command.index("-C") + 1] == str(tmp_path / "runtime" / "product_manager")
         assert command[command.index("--sandbox") + 1] == "read-only"

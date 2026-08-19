@@ -25,12 +25,16 @@ from app.schemas.skill_version import (
     SkillVersionRead,
 )
 from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
-from app.services.codex_service import CodexGenerationError, CodexService
+from app.services.codex_service import CodexGenerationError
 from app.services.function_registry_service import FunctionRegistryService
-from app.services.manifest_validator import validate_manifest_file
 from app.services.permission_service import PermissionError, PermissionService
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
 from app.services.scheduler_service import SchedulerService
+from app.services.skill_codex_runtime_service import (
+    SkillCodexInvalidRequest,
+    SkillCodexRuntimeService,
+    SkillCodexUnavailable,
+)
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
 from app.services.skill_runner import get_runner_status
 from app.services.skill_version_service import SkillVersionError, SkillVersionService
@@ -108,50 +112,15 @@ def call_codex_for_skill(
     skill = db.get(Skill, skill_id)
     if skill is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
-    if skill.status != "installed":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only installed skills can call Codex")
-    if not skill.enabled:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Skill is disabled")
-
-    permission_decision = PermissionService(db).can_run(skill, include_integrations=False)
-    if not permission_decision.allowed:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=permission_decision.reason)
-
-    skill_dir = resolve_skill_dir(skill)
     try:
-        manifest = validate_manifest_file(skill_dir / "manifest.json")
-    except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    if manifest.runtime != "function":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="web_app skills must use a scoped instance capability for privileged backend calls",
-        )
-
-    if payload.codex_permissions.call_response is False:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Codex call_response permission is required")
-    if manifest.permissions.codex.call_response is False:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Skill manifest does not allow Codex call/response")
-
-    internet_requested = payload.codex_permissions.internet_access
-    internet_allowed = bool(manifest.permissions.network)
-    if internet_requested and not internet_allowed:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Codex internet access requires approved runtime network permission",
-        )
-    if internet_requested and not manifest.permissions.codex.internet_access:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Skill manifest does not allow Codex internet access",
-        )
-
-    try:
-        result = CodexService(db).skill_runtime_codex_call(
+        result = SkillCodexRuntimeService(db, project_root=PROJECT_ROOT).call(
             skill,
             payload,
-            internet_access=bool(internet_requested and internet_allowed),
         )
+    except SkillCodexInvalidRequest as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except SkillCodexUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except CodexGenerationError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     return SkillCodexResponse(**result)

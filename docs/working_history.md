@@ -517,3 +517,42 @@ Made ProductManager permission-plan output schemas regenerate from the canonical
 ### Limitations
 
 The policy remains checked-in and read-only in Settings; changing it still requires editing the canonical backend config and restarting/reloading the backend. Existing documented network-domain enforcement limitations remain unchanged.
+
+## 2026-08-12 17:19 — Eidolon-Atlas integration and automatic unlock
+
+- Category: feature
+- Area: integrations
+
+### Summary
+
+Added Atlas as a trusted integration provider with filtered record and Knowledge operations, bounded Codex-backed Know node expansion, provider-aware manifests and approvals, audit and scanner protections, Windows Credential Manager API-key and passphrase storage, automatic local process startup and optional unlock, Settings controls, documentation, and focused validation.
+
+### Limitations
+
+Live Windows Credential Manager access, a real Atlas process attachment/startup, real Codex calls, browser end-to-end behavior, and the composite GitHub/Atlas analysis skill were not executed.
+
+## 2026-08-18 00:29 — Made Codex model routing visibly saveable and verified invocation use
+
+- Category: bugfix
+- Area: frontend/settings
+
+### Summary
+
+Added an adjacent Save model routing action plus saved/unsaved status in Codex Settings. Strengthened regression coverage to prove a persisted single-Codex Builder route is reloaded and reaches the real Codex CLI model and reasoning-effort arguments.
+
+### Limitations
+
+In-app browser visual automation was unavailable in this run; DOM tests, the full frontend suite, production build, focused backend tests, Ruff, and diff checks passed.
+
+## 2026-08-18 00:03 — Confine and simplify ProductManager build blueprints
+
+- Category: bugfix
+- Area: ProductManager workflow
+
+### Summary
+
+Replaced the unconstrained whole-blueprint transport workaround with a confined ProductManager schema that encodes only free-form input_schema, output_schema, and schedule.input leaves as JSON strings. Simplified build blueprints to name, description, runtime, input_schema, output_schema, expected_behavior, functions, and schedule; propagated the contract through planning, approval, permissions, builder/tester context, documentation, and regression tests. Failed planning can no longer create or approve an orphaned build request.
+
+### Limitations
+
+The transport removes unsupported uniqueItems keywords only from the Codex-facing schema; canonical backend validation remains authoritative. Existing unrelated worktree changes were left untouched.

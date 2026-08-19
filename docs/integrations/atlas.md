@@ -1,14 +1,18 @@
 # Eidolon-Atlas Integration
 
-Eidolon treats a local Eidolon-Atlas instance as a trusted integration provider. Atlas remains the authority for encryption, unlock state, its read-only Bearer API, primitive record and Knowledge operations, and the invariants enforced by each primitive write. Eidolon owns agent-oriented filtering, Knowledge search/frontier derivation, bounded projections, and Codex orchestration. Generated skills never receive Atlas credentials or contact Atlas directly; they call selected registry operations through Eidolon's integration capability.
+Eidolon treats a local Eidolon-Atlas instance as a trusted integration provider. Atlas remains the authority for encryption, unlock state, its native loopback API, record and Knowledge operations, and the invariants enforced by each primitive write. Eidolon owns agent-oriented filtering, Knowledge search/frontier derivation, bounded projections, and Codex orchestration. Generated skills never contact Atlas directly; they call selected registry operations through Eidolon's integration capability.
 
 ## Lifecycle and Settings
 
 FastAPI startup attempts to attach to a compatible Atlas already listening on `127.0.0.1:4817`, or starts `node src/index.js` from the configured Atlas directory. The default is the sibling `Eidolon-Atlas` checkout. A custom directory must be absolute, contain `package.json` and `src/index.js`, and run with Node.js 24 or newer. Atlas startup failure never prevents Eidolon startup, and Eidolon stops only a process it owns.
 
-Settings exposes directory and process state, initialized/locked state, API-key state, automatic-unlock state, bounded errors, restart, key management, passphrase management, and explicit unlock. Changing directories immediately restarts Atlas, clears the old key and passphrase, and invalidates Atlas authorizations.
+Settings exposes directory and process state, initialized/locked state, optional automatic-unlock state, bounded errors, restart, passphrase management, and explicit unlock. Changing directories immediately restarts Atlas, clears its saved passphrase, and invalidates Atlas authorizations.
 
-The Atlas API key and optional passphrase are separate Windows Credential Manager entries. SQLite stores only opaque references and sanitized status metadata. Initial setup and one manual Atlas unlock are required before Eidolon can validate a key and store a passphrase. At later startups, Eidolon makes one automatic unlock attempt. Manual Atlas Lock remains effective until restart or explicit **Unlock now**.
+Atlas functions require no API key or stored connection. They are available whenever the selected Atlas instance is running and unlocked. An optional passphrase is stored as the Atlas connection's primary Windows Credential Manager credential; SQLite stores only its opaque reference and sanitized status metadata. Eidolon may save, replace, or send that passphrase only when it owns the Atlas process. At later owned-process startups, Eidolon makes one automatic unlock attempt. Manual Atlas Lock remains effective until restart or explicit **Unlock now**.
+
+An externally launched Atlas is usable without a saved passphrase when it is unlocked. When it is locked, it must be unlocked through Atlas itself; Eidolon never sends a stored or newly entered passphrase to an external process. Removing a saved passphrase disables automatic unlock without disabling an already-unlocked Atlas or invalidating function authorization.
+
+On upgrade, any legacy Atlas API-key connection and its associated passphrase are deleted and existing Atlas authorizations are invalidated. If Credential Manager is unavailable, Eidolon retains only the cleanup references, never reads or uses them, reports cleanup as pending, and retries before accepting a new passphrase.
 
 Storing the passphrase makes the Windows account the practical at-rest security boundary. There is no plaintext, environment-variable, config-file, SQLite-secret, application-encrypted, or backup fallback. Eidolon does not initialize Atlas, change or recover its passphrase, or use it for Atlas backups.
 
@@ -26,11 +30,11 @@ The provider exposes these fixed operations:
 - `atlas.knowledge.node.get`: one bounded node with path, parent, immediate children, explanation, terms, status, and revision.
 - `atlas.knowledge.node.know`: one explicit medium-risk Knowledge establishment.
 
-These are Eidolon function contracts, not one-for-one Atlas endpoints. Person, Experience, Goal, and Project use Atlas's four read-only Bearer projections. Relationships use the generic record list. Knowledge functions read the primitive flat node list and derive ranking, frontier membership, canonical paths, parents, and immediate children inside Eidolon. Atlas does not expose agent-specific Relationship, Knowledge search, frontier, inspection, or establishment routes.
+These are Eidolon function contracts, not one-for-one Atlas endpoints. Person, Experience, Goal, Project, and Relationship read native `/api/records` categories. Eidolon explicitly projects the existing bounded fields, excludes sensitive Person fields, preserves Experience and Project ordering, rebuilds Goal hierarchy, and fetches native Goal progression graphs for parent goals. Knowledge functions read the primitive flat node list and derive ranking, frontier membership, canonical paths, parents, and immediate children inside Eidolon. Atlas exposes no agent-specific endpoints.
 
 Reads are low risk. `atlas.knowledge.node.know` is medium risk because it makes one internet-enabled Codex call, writes the selected Knowledge node, and may add immediate name-only unassessed children. It cannot rename, move, delete, merge, or recursively expand nodes.
 
-Atlas functions are offered to ProductManager only when Atlas is running, unlocked, and the stored key validates. `Know_node` additionally requires a compatible Codex CLI. Atlas has an empty manifest resource scope; GitHub continues to use exact repository scopes.
+Atlas functions are offered to ProductManager whenever Atlas is running and unlocked. Secret-store availability and a saved passphrase do not gate them. `Know_node` additionally requires a compatible Codex CLI. Atlas has an empty manifest resource scope; GitHub continues to use exact repository scopes.
 
 ## `Know_node` Context Boundary
 

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 from collections.abc import Generator
@@ -10,8 +11,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import Skill, SkillRun
+from app.models import Skill, SkillRun, SkillVersion
+from app.routers import functions as functions_router
 from app.routers import skills as skills_router
+from app.routers.functions import call_codex_from_capability
 from app.routers.skills import call_codex_for_skill
 from app.schemas.skill_codex import SkillCodexRequest
 from app.services.codex_service import CodexGenerationError, CodexService
@@ -80,6 +83,28 @@ def approve_runtime(db: Session, skill: Skill, project_root: Path) -> None:
     permission_service.approve_request(request)
 
 
+def activate_skill(db: Session, skill: Skill, project_root: Path) -> SkillVersion:
+    skill_dir = project_root / skill.installed_path
+    manifest = json.loads((skill_dir / "manifest.json").read_text(encoding="utf-8"))
+    version = SkillVersion(
+        skill_id=skill.id,
+        version="v1",
+        status="active",
+        folder_path=skill.installed_path,
+        manifest_json=manifest,
+        code_snapshot_path=skill.installed_path,
+        permission_fingerprint="test",
+        test_status="passed",
+        validation_status="passed",
+    )
+    db.add(version)
+    db.flush()
+    skill.active_version_id = version.id
+    db.commit()
+    db.refresh(version)
+    return version
+
+
 def test_skill_codex_call_uses_backend_and_requires_runtime_approval(
     tmp_path: Path,
     db_session: Session,
@@ -123,6 +148,57 @@ def test_skill_codex_internet_requires_runtime_network(
 
     assert exc_info.value.status_code == 409
     assert exc_info.value.detail == "Codex internet access requires approved runtime network permission"
+
+
+def test_function_codex_capability_resolves_caller_from_ephemeral_token(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_installed_skill(tmp_path)
+    monkeypatch.setattr(functions_router, "PROJECT_ROOT", tmp_path)
+    skill = create_skill(db_session)
+    version = activate_skill(db_session, skill, tmp_path)
+    approve_runtime(db_session, skill, tmp_path)
+    token = "ephemeral-run-secret"
+    run = SkillRun(
+        skill_id=skill.id,
+        version_id=version.id,
+        status="running",
+        input_json={},
+        started_at=datetime.now(UTC),
+        invocation_source="direct_user",
+        function_capability_token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+    )
+    db_session.add(run)
+    db_session.commit()
+
+    response = call_codex_from_capability(
+        SkillCodexRequest(prompt="Summarize this.", context={"item": "demo"}),
+        f"Bearer {token}",
+        db_session,
+    )
+
+    assert response.response == "Fake Codex response."
+    assert response.internet_access is False
+
+
+def test_function_codex_capability_rejects_unknown_token(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(functions_router, "PROJECT_ROOT", tmp_path)
+
+    with pytest.raises(HTTPException) as exc_info:
+        call_codex_from_capability(
+            SkillCodexRequest(prompt="Summarize this."),
+            "Bearer forged-token",
+            db_session,
+        )
+
+    assert exc_info.value.status_code == 401
+    assert "invalid or expired" in str(exc_info.value.detail)
 
 
 class UsageCodexAdapter:

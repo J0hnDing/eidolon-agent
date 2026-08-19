@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AgentRun, AgentRunStep, ApprovalRequest, MemoryFact, Skill, SkillGenerationRequest
+from app.models import AgentRun, AgentRunStep, ApprovalRequest, Skill, SkillGenerationRequest
 from app.schemas.manifest import ManifestPermissions, classify_permission_risk
 from app.schemas.proposed_skill import ProposedSkillValidationRead
 from app.services.agent_run_artifact_store import AgentRunArtifactStore
@@ -119,10 +119,10 @@ class AgentWorkflowService:
         self.db.commit()
 
         if initial:
-            selected_memory_facts = self._selected_memory_facts()
-            intent_prompt = self.codex_service.product_manager_refine_intent(
-                generation_request, selected_memory_facts
-            )
+            intent_prompt = {
+                "schema_version": 1,
+                "refined_prompt": generation_request.user_message,
+            }
             intent_path = self.artifacts.write_json(agent_run, "intent_prompt.json", intent_prompt)
             intent_step = self._start_step(
                 agent_run,
@@ -130,17 +130,15 @@ class AgentWorkflowService:
                 input_json={
                     "action": "pm_refine_intent",
                     "user_request": generation_request.user_message,
-                    "project_conversation": generation_request.plan_json.get("project_conversation", []),
-                    "selected_memory_facts": selected_memory_facts,
                 },
-                logs="ProductManager refined the initial Project-mode request before planning.",
+                logs="Intent refinement placeholder copied the initial Project-mode request.",
             )
             self._finish_step(
                 agent_run,
                 intent_step,
                 "succeeded",
                 output_json={"intent_prompt": intent_prompt, "intent_prompt_path": intent_path},
-                logs="ProductManager wrote intent_prompt.json once for this generation request.",
+                logs="Intent refinement placeholder wrote intent_prompt.json without invoking Codex.",
             )
         else:
             intent_prompt = self.artifacts.read_json(agent_run, "intent_prompt.json")
@@ -1652,7 +1650,7 @@ class AgentWorkflowService:
         proposed_dir = self.proposed_service.proposed_dir(skill_name)
         skill = self.db.scalar(select(Skill).where(Skill.name == skill_name))
         values = {
-            "description": plan.get("goal") or generation_request.user_message,
+            "description": plan.get("description") or generation_request.user_message,
             "runtime": plan.get("runtime", "function"),
             "status": "building",
             "risk_level": plan["risk_level"],
@@ -1689,7 +1687,7 @@ class AgentWorkflowService:
 
     def _pm_build_time_summary(self, blueprint: dict[str, Any]) -> str:
         return (
-            f"Build the {blueprint.get('skill_name')} skill. "
+            f"Build the {blueprint.get('name')} skill. "
             "ProductManager will define Builder-owned package files in the task DAG only after approval. "
             "Approval lets the backend provision listed dependencies and lets Codex generate proposed files; "
             "it does not install or run the skill."
@@ -1749,35 +1747,25 @@ class AgentWorkflowService:
         selected_functions = function_catalog.validate_available_ids(blueprint.get("functions"))
         user_functions = function_catalog.user_function_names(selected_functions)
         integration_operations = function_catalog.integration_operation_ids(selected_functions)
-        integration_scopes = (
-            blueprint.get("integration_scopes")
-            if isinstance(blueprint.get("integration_scopes"), dict)
-            else {}
-        )
         integration_requirements = []
         operations_by_provider: dict[str, list[str]] = {}
         for operation_id in integration_operations:
             provider = OPERATIONS[operation_id].provider
             operations_by_provider.setdefault(provider, []).append(operation_id)
         for provider, provider_operations in sorted(operations_by_provider.items()):
-            selected_scope = integration_scopes.get(provider)
-            if provider == "github":
-                resource_scope = selected_scope if isinstance(selected_scope, dict) else {"repositories": []}
-            else:
-                resource_scope = {}
             integration_requirements.append(
                 {
                     "provider": provider,
                     "operations": provider_operations,
-                    "resource_scope": resource_scope,
+                    "resource_scope": {"repositories": []} if provider == "github" else {},
                 }
             )
         skill_runtime = str(blueprint.get("runtime") or "function")
-        skill_name = self.proposed_service.validate_skill_name(str(blueprint["skill_name"]))
-        display_name = str(blueprint.get("display_name") or skill_name.replace("_", " ").title())
+        skill_name = self.proposed_service.validate_skill_name(str(blueprint["name"]))
+        display_name = skill_name.replace("_", " ").replace("-", " ").title()
         plan.update(
             {
-                "goal": blueprint.get("goal") or generation_request.user_message,
+                "description": blueprint.get("description") or generation_request.user_message,
                 "skill_name": skill_name,
                 "display_name": display_name,
                 "runtime": skill_runtime,
@@ -1886,29 +1874,6 @@ class AgentWorkflowService:
         generation_request.plan_json = plan
         self.db.commit()
         self.db.refresh(generation_request)
-
-    def _selected_memory_facts(self) -> list[dict[str, Any]]:
-        now = utc_now()
-        facts = self.db.scalars(
-            select(MemoryFact)
-            .where(MemoryFact.user_editable.is_(True))
-            .order_by(MemoryFact.updated_at.desc(), MemoryFact.id.desc())
-            .limit(20)
-        ).all()
-        selected: list[dict[str, Any]] = []
-        for fact in facts:
-            if fact.expires_at is not None and fact.expires_at <= now:
-                continue
-            selected.append(
-                {
-                    "id": fact.id,
-                    "key": fact.key,
-                    "value": fact.value,
-                    "category": fact.category,
-                    "sensitivity": fact.sensitivity,
-                }
-            )
-        return selected
 
     def _permission_build_time_summary(self, plan: dict[str, Any], permission_request: Any) -> str:
         permissions = plan.get("requested_permissions", {})
@@ -2105,7 +2070,7 @@ class AgentWorkflowService:
 
     def _final_blueprint_contract(self, agent_run: AgentRun) -> dict[str, Any]:
         blueprint = self._agent_blueprint(agent_run)
-        fields = ("goal", "runtime", "expected_behavior", "schedule", "acceptance_criteria")
+        fields = ("description", "runtime", "expected_behavior", "schedule")
         return {field: blueprint[field] for field in fields if field in blueprint}
 
     def _approved_integration_operation_ids(self, agent_run: AgentRun) -> list[str]:
@@ -2160,9 +2125,6 @@ class AgentWorkflowService:
     def _final_acceptance_criteria(self, agent_run: AgentRun) -> list[str]:
         blueprint = self._agent_blueprint(agent_run)
         fallback: list[str] = []
-        acceptance_criteria = blueprint.get("acceptance_criteria", [])
-        if isinstance(acceptance_criteria, list):
-            fallback.extend(str(item) for item in acceptance_criteria if str(item).strip())
         expected_behavior = blueprint.get("expected_behavior")
         if isinstance(expected_behavior, list):
             fallback.extend(str(item) for item in expected_behavior if str(item).strip())

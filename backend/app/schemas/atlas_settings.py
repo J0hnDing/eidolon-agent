@@ -8,11 +8,6 @@ class AtlasDirectoryWrite(BaseModel):
     directory: str = Field(min_length=1, max_length=2048)
 
 
-class AtlasApiKeyWrite(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    api_key: SecretStr
-
-
 class AtlasPassphraseWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
     passphrase: SecretStr
@@ -25,7 +20,6 @@ class AtlasSettingsStatus(BaseModel):
     process_ownership: Literal["owned", "external", "none"]
     initialized: bool | None = None
     locked: bool | None = None
-    api_key_status: Literal["connected", "invalid", "missing", "unavailable"]
-    auto_unlock_configured: bool
+    passphrase_configured: bool
     startup_error: str | None = None
     error_type: str | None = None

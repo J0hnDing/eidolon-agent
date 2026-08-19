@@ -789,6 +789,49 @@ th {
   gap: 14px;
 }
 
+.run-output {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.run-output-header,
+.run-history-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.run-output-header > span:first-child {
+  color: #667085;
+  font-size: 0.88rem;
+}
+
+.run-history-list {
+  display: grid;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.run-history-entry {
+  border: 1px solid #e6eaf0;
+  border-radius: 6px;
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.run-history-header h3 {
+  margin: 0 0 3px;
+  font-size: 0.98rem;
+}
+
+.run-history-header div > span {
+  color: #667085;
+  font-size: 0.85rem;
+}
+
 .file-list {
   display: grid;
   gap: 16px;

@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import SkillGenerationRequest
-from app.services.agent_workflow_service import AgentWorkflowService
+from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
 from app.services.codex_service import CodexService
 from app.services.direct_chat_service import DirectChatService
 from app.services.permission_service import PermissionService
@@ -56,6 +56,12 @@ class ChatOrchestrator:
                     "message": "I would not turn that into a skill yet.",
                     "reason": str((agent_run.final_summary_json or {}).get("user_summary") or agent_run.summary or ""),
                 }
+            if agent_run.status == "failed" or generation_request.status == "failed":
+                raise AgentWorkflowError(
+                    generation_request.error_message
+                    or agent_run.error_message
+                    or "ProductManager planning failed"
+                )
             permission_request = PermissionService(self.db).create_build_time_request(generation_request)
             return {
                 "type": "skill_generation_plan",

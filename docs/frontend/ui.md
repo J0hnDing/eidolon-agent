@@ -28,7 +28,7 @@ Routes are defined in `frontend/src/App.tsx`:
 Chat supports explicit modes:
 
 - `chat`: direct conversation only.
-- `project`: starts one-time ProductManager intent refinement and a resumable `pm_plan_build` session for a reusable skill request. The session may ask a clarification question or reject the request before any blueprint, permission, or task DAG artifacts are created; the next reply in the same chat resumes the same generation request and Codex thread.
+- `project`: writes the initial message unchanged through the one-time intent placeholder, then starts a resumable `pm_plan_build` session for a reusable skill request. The placeholder does not call Codex. The session may ask a clarification question or reject the request before any blueprint, permission, or task DAG artifacts are created; the next reply in the same chat resumes the same generation request and Codex thread.
 
 Build-time and runtime approvals are rendered inline in the chat transcript. Approval messages must remain in chat history when the user navigates away and returns. Project chat synchronizes its conversation-scoped generation request, linked agent run, proposed skill, and latest build/runtime approvals from the backend, so a response lost after a committed request or a decision made on the global Approval Requests page is recovered inline without duplicating messages.
 
@@ -58,14 +58,13 @@ Shows:
 - validation;
 - runtime permissions;
 - runner/sandbox state;
-- run history;
+- function run input, output, and run history;
 - agent runs;
 - versions and comparisons;
 - update suggestion chat;
 - schedules.
 
-Installed function skills may be run manually only when backend checks pass. Web application details replace bounded-run input/history and schedule controls with an Open Application action while retaining files, validation, permission, version, update, and agent-run controls.
-Run history shows each run's separate runtime Codex token total, honest partial/failed status and error summary, and the latest-run detail includes its token breakdown, call count, and persisted Codex invocation diagnostics.
+Installed function skills show a bounded JSON run-input panel and may be run manually only when backend checks pass. The returned result appears in a separate Output panel. Run History has no separate latest-run view: every stored run displays its output, status, error summary, token breakdown, and Codex call count inline. Web application details replace bounded-run input, output, history, and schedule controls with an Open Application action while retaining files, validation, permission, version, update, and agent-run controls.
 
 `SkillDetailPage` retains route loading, polling, and mutation orchestration. Cohesive update-chat, version, comparison, schedule, validation, and run-detail presentation lives under `features/skill-detail/SkillDetailPanels.tsx`. Feature tests cover conversation state transitions, chat workspace interactions, schedule delegation, version empty state, and run-input validation; `npm test` is the frontend regression command and `npm run build` remains the production type/build check.
 
@@ -85,11 +84,11 @@ Agent Runs list and detail pages show run status, current task node or parallel 
 
 `/settings/usage` shows the resolved CLI and both the 5-hour and weekly Codex allowance windows. It also shows the read-only current permission policy loaded from `/settings/permission-policy`: default-allowed capabilities, the exact approval-required template, blocked capabilities, the web-application policy, and the checked-in source path. The frontend does not embed a second policy copy.
 
-The page labels the existing blueprint route **Project planning and clarification**. It lets the user keep automatic Project build workflow selection or force every new build through Simple (`single_codex`) or Task DAG (`task_dag`); forced selection overrides ProductManager output in the backend. It also loads the live App Server model catalog and lets the user choose model and reasoning effort independently for Chat, ProductManager actions, the single-Codex Builder, Builder difficulty tiers plus repair/update, and Tester task/final/update actions. Unsupported model/effort combinations are rejected by the backend. Refresh reads current local App Server state; it does not infer quota from project-build token totals.
+The page labels the existing blueprint route **Project planning and clarification**. It lets the user keep automatic Project build workflow selection or force every new build through Simple (`single_codex`) or Task DAG (`task_dag`); forced selection overrides ProductManager output in the backend. It also loads the live App Server model catalog and lets the user choose model and reasoning effort independently for Chat, ProductManager actions, the single-Codex Builder, Builder difficulty tiers plus repair/update, and Tester task/final/update actions. Model controls have an adjacent **Save model routing** action and show whether changes are unsaved or when the persisted routes were last saved. Unsupported model/effort combinations are rejected by the backend. Refresh reads current local App Server state; it does not infer quota from project-build token totals.
 
 The same trusted Settings page includes the single GitHub connection. It shows connected/disconnected/unavailable state, validated account identity, last validation time, and sanitized errors, with add, replace, and remove actions. The token input is password-style, is cleared after submission, and is never returned or redisplayed.
 
-Settings also includes local Eidolon-Atlas lifecycle and credential controls. It shows the selected directory, owned/external process state, initialized/locked state, API-key state, automatic-unlock state, and bounded errors. Directory save restarts immediately; separate write-only controls manage the key and passphrase, and **Unlock now** is explicit. The UI discloses that storing the passphrase shifts practical at-rest protection to the Windows account. Submitted secrets are cleared and never redisplayed.
+Settings also includes local Eidolon-Atlas lifecycle and passphrase controls. It shows the selected directory, owned/external process state, initialized/locked state, saved-passphrase state, and bounded errors. Directory save restarts immediately. The write-only passphrase and **Unlock now** controls are enabled only for an Eidolon-owned process; an external process is explicitly directed to unlock through Atlas itself. The UI discloses that storing the passphrase shifts practical at-rest protection to the Windows account. Submitted passphrases are cleared and never redisplayed.
 
 Runtime approval uses the existing `PermissionRequestModal`. GitHub `integration_access` reviews show provider, operation ids, read-only status, normalized repositories, and current connection availability. Connection state alone never marks a skill approved.
 

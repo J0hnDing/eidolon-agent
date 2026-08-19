@@ -3,15 +3,14 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import PermissionRequestModal from "../components/PermissionRequestModal";
 import {
-  RunDetail,
+  RunHistory,
+  RunOutput,
   ScheduleList,
   UpdateChatMessage,
   UpdateSuggestionChat,
   ValidationResult,
   VersionComparisonPanel,
   VersionList,
-  formatTimestamp,
-  formatTokens,
   isNonEmptyObject,
   parseRunInput,
   replaceUpdateMessage,
@@ -68,7 +67,7 @@ export default function SkillDetailPage() {
   const [isRunning, setIsRunning] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const latestRun = runs[0] ?? null;
+  const runOutput = runs[0] ?? null;
 
   useEffect(() => {
     loadSkillDetail();
@@ -739,11 +738,6 @@ export default function SkillDetailPage() {
           {!isFunction && isInstalled && skill.enabled && runtimeApproved && (
             <Link className="button-link" to={`/apps/${skill.id}`}>Open Application</Link>
           )}
-          {canRun && (
-            <button type="button" onClick={handleRun} disabled={isRunning}>
-              {isRunning ? "Running..." : "Run"}
-            </button>
-          )}
           {isInstalled && skill.enabled && !runtimeApproved && (
             <button type="button" onClick={() => handleReviewRuntimePermissions(true)} disabled={isWorking}>
               Review Before Run
@@ -943,39 +937,24 @@ export default function SkillDetailPage() {
             rows={8}
             aria-label="Run input JSON"
           />
+          <div className="button-row">
+            <button type="button" onClick={handleRun} disabled={!canRun || isRunning}>
+              {isRunning ? "Running..." : "Run Function"}
+            </button>
+          </div>
         </section>
       )}
 
       {isInstalled && isFunction && (
         <>
           <section className="detail-panel">
-            <h2>Latest Run</h2>
-            {latestRun ? (
-              <RunDetail run={latestRun} />
-            ) : (
-              <p className="muted">No runs recorded yet.</p>
-            )}
+            <h2>Output</h2>
+            <RunOutput run={runOutput} />
           </section>
 
           <section className="detail-panel">
             <h2>Run History</h2>
-            {runs.length > 0 ? (
-              <div className="run-list">
-                {runs.map((run) => (
-                  <article key={run.id} className="run-row">
-                    <div>
-                      <strong>Run #{run.id}</strong>
-                      <span>
-                        {formatTimestamp(run.started_at, "not started")} · {formatTokens(run.total_tokens)} runtime tokens
-                      </span>
-                    </div>
-                    <span className={`badge run-${run.status}`}>{run.status}</span>
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <p className="muted">No run history yet.</p>
-            )}
+            <RunHistory runs={runs} />
           </section>
         </>
       )}

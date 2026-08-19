@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.schemas.atlas_settings import (
-    AtlasApiKeyWrite,
     AtlasDirectoryWrite,
     AtlasPassphraseWrite,
     AtlasSettingsStatus,
@@ -37,23 +36,6 @@ def restart_atlas(db: Session = Depends(get_db)) -> AtlasSettingsStatus:
     return service.restart()
 
 
-@router.put("/api-key", response_model=AtlasSettingsStatus)
-def put_atlas_api_key(payload: AtlasApiKeyWrite, db: Session = Depends(get_db)) -> AtlasSettingsStatus:
-    try:
-        return build_default_atlas_settings_service(db).put_api_key(payload.api_key.get_secret_value())
-    except AtlasSettingsError as exc:
-        raise _http_error(exc) from None
-
-
-@router.delete("/api-key", status_code=status.HTTP_204_NO_CONTENT)
-def remove_atlas_connection(db: Session = Depends(get_db)) -> Response:
-    try:
-        build_default_atlas_settings_service(db).remove_connection()
-    except AtlasSettingsError as exc:
-        raise _http_error(exc) from None
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
 @router.put("/passphrase", response_model=AtlasSettingsStatus)
 def put_atlas_passphrase(payload: AtlasPassphraseWrite, db: Session = Depends(get_db)) -> AtlasSettingsStatus:
     try:
@@ -83,11 +65,10 @@ def _http_error(exc: AtlasSettingsError) -> HTTPException:
     status_code = {
         "invalid_input": status.HTTP_422_UNPROCESSABLE_CONTENT,
         "invalid_directory": status.HTTP_422_UNPROCESSABLE_CONTENT,
-        "invalid_api_key": status.HTTP_401_UNAUTHORIZED,
         "invalid_passphrase": status.HTTP_401_UNAUTHORIZED,
-        "api_key_missing": status.HTTP_409_CONFLICT,
         "passphrase_missing": status.HTTP_409_CONFLICT,
         "atlas_uninitialized": status.HTTP_409_CONFLICT,
-        "external_identity_unverified": status.HTTP_409_CONFLICT,
+        "external_unlock_forbidden": status.HTTP_409_CONFLICT,
+        "legacy_credentials_pending_cleanup": status.HTTP_409_CONFLICT,
     }.get(exc.error_type, status.HTTP_503_SERVICE_UNAVAILABLE)
     return HTTPException(status_code=status_code, detail={"type": exc.error_type, "message": str(exc)})

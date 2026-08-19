@@ -24,10 +24,10 @@ export default function UsageSettingsPage() {
   const [githubToken, setGitHubToken] = useState("");
   const [atlas, setAtlas] = useState<AtlasIntegrationStatus | null>(null);
   const [atlasDirectory, setAtlasDirectory] = useState("");
-  const [atlasApiKey, setAtlasApiKey] = useState("");
   const [atlasPassphrase, setAtlasPassphrase] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  const [routingDirty, setRoutingDirty] = useState(false);
   const [loading, setLoading] = useState(true);
 
   async function loadUsage(refresh = false) {
@@ -49,6 +49,7 @@ export default function UsageSettingsPage() {
       setCliStatus(nextCliStatus);
       setCatalog(nextCatalog);
       setRouting(nextRouting);
+      setRoutingDirty(false);
       setGitHub(nextGitHub);
       setPermissionPolicy(nextPermissionPolicy);
       setAtlas(nextAtlas);
@@ -70,6 +71,7 @@ export default function UsageSettingsPage() {
     choice: CodexInvocationChoice,
   ) {
     setSaved(null);
+    setRoutingDirty(true);
     setRouting((current) => {
       if (!current) return current;
       if (group === "chat") return { ...current, chat: choice };
@@ -87,6 +89,7 @@ export default function UsageSettingsPage() {
       const { updated_at: _updatedAt, ...payload } = routing;
       const next = await api.updateCodexRoutingSettings(payload as CodexRoutingSettingsPayload);
       setRouting(next);
+      setRoutingDirty(false);
       setSaved("Codex settings saved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save Codex settings");
@@ -157,41 +160,6 @@ export default function UsageSettingsPage() {
       setSaved("Atlas restarted.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not restart Atlas");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function saveAtlasApiKey() {
-    if (!atlasApiKey.trim()) return;
-    setError(null);
-    setSaved(null);
-    setLoading(true);
-    try {
-      const next = await api.putAtlasApiKey(atlasApiKey);
-      setAtlas(next);
-      setAtlasApiKey("");
-      setSaved("Atlas API key validated and saved.");
-    } catch (err) {
-      setAtlasApiKey("");
-      setError(err instanceof Error ? err.message : "Could not save the Atlas API key");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function removeAtlasApiKey() {
-    setError(null);
-    setSaved(null);
-    setLoading(true);
-    try {
-      await api.removeAtlasApiKey();
-      const next = await api.getAtlasStatus();
-      setAtlas(next);
-      setAtlasApiKey("");
-      setSaved("Atlas API key removed.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not remove the Atlas API key");
     } finally {
       setLoading(false);
     }
@@ -333,7 +301,7 @@ export default function UsageSettingsPage() {
           <div>
             <h2>Eidolon-Atlas</h2>
             <p className="muted">
-              Atlas is a local encrypted personal-data service. Eidolon starts the selected instance and keeps its API key and optional passphrase in Windows Credential Manager; neither secret is shown again or shared with skills.
+              Atlas is a local encrypted personal-data service. Functions use its native unlocked loopback API and require no API key. An optional passphrase can unlock an Atlas process started by Eidolon.
             </p>
             <p className="muted">
               Storing the passphrase shifts practical at-rest protection to your Windows account. There is no plaintext, environment-variable, configuration-file, SQLite-secret, or application-encrypted fallback.
@@ -343,8 +311,7 @@ export default function UsageSettingsPage() {
             <div><dt>Selected directory</dt><dd><code>{atlasDirectoryForStatus(atlas) || "Not configured"}</code></dd></div>
             <div><dt>Process</dt><dd>{atlasProcessLabel(atlas)}</dd></div>
             <div><dt>Atlas state</dt><dd>{atlasStateLabel(atlas)}</dd></div>
-            <div><dt>API key</dt><dd>{atlasKeyLabel(atlas)}</dd></div>
-            <div><dt>Automatic unlock</dt><dd>{atlasAutoUnlock(atlas) ? "Configured" : "Not configured"}</dd></div>
+            <div><dt>Saved passphrase</dt><dd>{atlas.passphrase_configured ? "Configured" : "Not configured"}</dd></div>
           </dl>
           {atlasError(atlas) && <p className="error-text">Atlas status: {atlasError(atlas)}</p>}
 
@@ -366,29 +333,13 @@ export default function UsageSettingsPage() {
             </button>
           </div>
 
+          {!atlasOwned(atlas) && atlasRunning(atlas) && (
+            <p className="muted">
+              This Atlas process was launched externally. Unlock it through Atlas itself; Eidolon will never send a passphrase to it.
+            </p>
+          )}
           <label>
-            {atlasKeyConnected(atlas) ? "Replacement Atlas API key" : "Atlas API key"}
-            <input
-              type="password"
-              autoComplete="new-password"
-              value={atlasApiKey}
-              onChange={(event) => setAtlasApiKey(event.target.value)}
-              placeholder="Key is never displayed after submission"
-            />
-          </label>
-          <div className="button-row">
-            <button type="button" onClick={() => void saveAtlasApiKey()} disabled={loading || !atlasApiKey.trim()}>
-              {atlasKeyConnected(atlas) ? "Replace API key" : "Add API key"}
-            </button>
-            {atlasKeyConnected(atlas) && (
-              <button type="button" className="secondary" onClick={() => void removeAtlasApiKey()} disabled={loading}>
-                Remove API key
-              </button>
-            )}
-          </div>
-
-          <label>
-            {atlasAutoUnlock(atlas) ? "Replacement Atlas passphrase" : "Atlas passphrase"}
+            {atlas.passphrase_configured ? "Replacement Atlas passphrase" : "Atlas passphrase"}
             <input
               type="password"
               autoComplete="new-password"
@@ -398,15 +349,15 @@ export default function UsageSettingsPage() {
             />
           </label>
           <div className="button-row">
-            <button type="button" onClick={() => void saveAtlasPassphrase()} disabled={loading || !atlasPassphrase || !atlasKeyConnected(atlas)}>
-              {atlasAutoUnlock(atlas) ? "Replace passphrase" : "Store passphrase"}
+            <button type="button" onClick={() => void saveAtlasPassphrase()} disabled={loading || !atlasPassphrase || !atlasOwned(atlas)}>
+              {atlas.passphrase_configured ? "Replace passphrase" : "Store passphrase"}
             </button>
-            {atlasAutoUnlock(atlas) && (
+            {atlas.passphrase_configured && (
               <button type="button" className="secondary" onClick={() => void removeAtlasPassphrase()} disabled={loading}>
                 Remove passphrase
               </button>
             )}
-            <button type="button" className="secondary" onClick={() => void unlockAtlas()} disabled={loading || !atlasAutoUnlock(atlas)}>
+            <button type="button" className="secondary" onClick={() => void unlockAtlas()} disabled={loading || !atlas.passphrase_configured || !atlasOwned(atlas)}>
               Unlock now
             </button>
           </div>
@@ -427,6 +378,7 @@ export default function UsageSettingsPage() {
               value={routing.project_build_workflow_override ?? ""}
               onChange={(event) => {
                 setSaved(null);
+                setRoutingDirty(true);
                 setRouting({
                   ...routing,
                   project_build_workflow_override:
@@ -445,6 +397,7 @@ export default function UsageSettingsPage() {
           <div className="button-row">
             <button type="button" onClick={() => void saveRouting()} disabled={loading}>Save Codex settings</button>
           </div>
+          <RoutingSaveStatus routing={routing} dirty={routingDirty} />
         </section>
       )}
       {routing && catalog?.available && (
@@ -468,7 +421,6 @@ export default function UsageSettingsPage() {
               <p className="muted">Action settings inherit any model or effort left blank from the ProductManager default.</p>
             </div>
             <RoutingRow label="Default" choice={routing.product_manager.default} models={catalog.models} onChange={(choice) => updateChoice("product_manager", "default", choice)} />
-            <RoutingRow label="Refine intent" choice={routing.product_manager.refine_intent} fallback={routing.product_manager.default} models={catalog.models} onChange={(choice) => updateChoice("product_manager", "refine_intent", choice)} />
             <RoutingRow label="Project planning and clarification" choice={routing.product_manager.blueprint_and_permissions} fallback={routing.product_manager.default} models={catalog.models} onChange={(choice) => updateChoice("product_manager", "blueprint_and_permissions", choice)} />
             <RoutingRow label="Task DAG" choice={routing.product_manager.task_dag} fallback={routing.product_manager.default} models={catalog.models} onChange={(choice) => updateChoice("product_manager", "task_dag", choice)} />
             <RoutingRow label="Repair planning" choice={routing.product_manager.repair} fallback={routing.product_manager.default} models={catalog.models} onChange={(choice) => updateChoice("product_manager", "repair", choice)} />
@@ -498,6 +450,10 @@ export default function UsageSettingsPage() {
             <RoutingRow label="Task tests" choice={routing.tester.task} fallback={routing.tester.default} models={catalog.models} onChange={(choice) => updateChoice("tester", "task", choice)} />
             <RoutingRow label="Final end-to-end" choice={routing.tester.final_e2e} fallback={routing.tester.default} models={catalog.models} onChange={(choice) => updateChoice("tester", "final_e2e", choice)} />
             <RoutingRow label="Update tests" choice={routing.tester.update} fallback={routing.tester.default} models={catalog.models} onChange={(choice) => updateChoice("tester", "update", choice)} />
+            <div className="button-row">
+              <button type="button" onClick={() => void saveRouting()} disabled={loading}>Save model routing</button>
+            </div>
+            <RoutingSaveStatus routing={routing} dirty={routingDirty} />
           </section>
         </>
       )}
@@ -538,48 +494,30 @@ export default function UsageSettingsPage() {
 function atlasUnavailableStatus(err: unknown): AtlasIntegrationStatus {
   return {
     provider: "atlas",
-    directory: null,
-    process_owned: false,
-    process_running: false,
+    directory: "",
     process_ownership: "none",
     running: false,
     initialized: null,
     locked: null,
-    key_connected: false,
-    key_status: "unavailable",
-    api_key_status: "unavailable",
-    auto_unlock_configured: false,
+    passphrase_configured: false,
     startup_error: err instanceof Error ? err.message : "Atlas status is unavailable",
   };
 }
 
 function atlasDirectoryForStatus(status: AtlasIntegrationStatus): string {
-  return status.directory ?? status.selected_directory ?? status.resolved_directory ?? "";
+  return status.directory;
 }
 
 function atlasOwned(status: AtlasIntegrationStatus): boolean {
-  if (status.process_owned !== undefined) return status.process_owned;
-  if (status.owned !== undefined) return status.owned;
   return status.process_ownership === "owned";
 }
 
 function atlasRunning(status: AtlasIntegrationStatus): boolean {
-  return status.process_running ?? status.running ?? false;
-}
-
-function atlasKeyConnected(status: AtlasIntegrationStatus): boolean {
-  return status.key_connected === true
-    || status.api_key_connected === true
-    || status.key_status === "connected"
-    || status.api_key_status === "connected";
-}
-
-function atlasAutoUnlock(status: AtlasIntegrationStatus): boolean {
-  return status.auto_unlock_configured ?? status.passphrase_configured ?? false;
+  return status.running;
 }
 
 function atlasError(status: AtlasIntegrationStatus): string | null {
-  return status.error ?? status.error_message ?? status.startup_error ?? status.error_type ?? null;
+  return status.startup_error ?? status.error_type ?? null;
 }
 
 function atlasProcessLabel(status: AtlasIntegrationStatus): string {
@@ -591,12 +529,6 @@ function atlasStateLabel(status: AtlasIntegrationStatus): string {
   if (status.initialized === null || status.locked === null) return "Unavailable";
   if (!status.initialized) return "Not initialized";
   return status.locked ? "Locked" : "Unlocked";
-}
-
-function atlasKeyLabel(status: AtlasIntegrationStatus): string {
-  if (atlasKeyConnected(status)) return "Connected";
-  const keyStatus = status.key_status ?? status.api_key_status ?? "disconnected";
-  return keyStatus.replace(/_/g, " ");
 }
 
 function RoutingRow({
@@ -642,6 +574,14 @@ function RoutingRow({
       </label>
     </div>
   );
+}
+
+function RoutingSaveStatus({ routing, dirty }: { routing: CodexRoutingSettings; dirty: boolean }) {
+  if (dirty) return <p className="muted" aria-live="polite">Unsaved Codex routing changes.</p>;
+  if (routing.updated_at) {
+    return <p className="muted" aria-live="polite">Saved {formatDate(routing.updated_at)}. Future invocations use these routes.</p>;
+  }
+  return <p className="muted" aria-live="polite">Using Codex defaults. No routing override has been saved yet.</p>;
 }
 
 function formatCliSource(source: string | null): string {

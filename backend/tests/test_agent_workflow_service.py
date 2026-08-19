@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import app.services.agent_workflow_service as workflow_module
 from app.db import Base
-from app.models import AgentRun, AgentRunStep, CodexRoutingSettings, MemoryFact, Skill, SkillGenerationRequest, SkillRun
+from app.models import AgentRun, AgentRunStep, CodexRoutingSettings, Skill, SkillGenerationRequest, SkillRun
 from app.routers.agent_runs import delete_agent_run
 from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
 from app.services.chat_orchestrator import ChatOrchestrator
@@ -51,19 +51,22 @@ def test_product_manager_creates_blueprint_and_permissions_before_task_dag(tmp_p
     steps = sorted(agent_run.steps, key=lambda step: step.id)
     assert [step.step_name for step in steps] == ["product_manager"] * 2 + ["backend"]
     assert [step.action for step in steps] == [
-        "product_manager_refine_intent",
+        "pm_refine_intent",
         "product_manager_plan_build",
         "backend_build_time_permission_review",
     ]
     assert steps[0].output_json["intent_prompt_path"].endswith("intent_prompt.json")
     assert steps[1].output_json["decision_json"]["decision"] == "proceed_to_approval"
-    assert steps[1].output_json["blueprint_json"]["skill_name"] == building_skill.name
+    assert steps[1].output_json["blueprint_json"]["name"] == building_skill.name
     assert steps[1].output_json["permission_path"].endswith("permissions.json")
     assert steps[2].input_json is None
     assert steps[2].output_json is None
     assert steps[2].approval_request_id is not None
-    assert all(step.agent_input_text for step in steps[:2])
-    assert all(step.agent_output_text is not None for step in steps[:2])
+    assert steps[0].agent_input_text is None
+    assert steps[0].agent_output_text is None
+    assert steps[0].codex_invocations_json == []
+    assert steps[1].agent_input_text
+    assert steps[1].agent_output_text is not None
     assert steps[2].agent_input_text is None
     assert steps[2].agent_output_text is None
     assert (run_dir / "intent_prompt.json").is_file()
@@ -109,7 +112,10 @@ def test_settings_workflow_override_wins_over_product_manager_choice(tmp_path: P
     assert blueprint_step.output_json["build_workflow_source"] == "settings_override"
 
 
-def test_single_turn_project_request_always_runs_intent_refinement(tmp_path: Path, db_session: Session) -> None:
+def test_single_turn_project_request_uses_passthrough_intent_without_codex(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
     generation_request = create_generation_request(db_session)
 
     class RecordingAdapter(FakeCodexAdapter):
@@ -121,13 +127,22 @@ def test_single_turn_project_request_always_runs_intent_refinement(tmp_path: Pat
             return super().generate(prompt, output_dir, plan)
 
     adapter = RecordingAdapter()
-    AgentWorkflowService(
+    agent_run = AgentWorkflowService(
         db_session,
         codex_service=CodexService(db_session, adapter=adapter, project_root=tmp_path),
         project_root=tmp_path,
     ).create_build_run(generation_request)
 
-    assert adapter.tasks.count("product_manager_refine_intent") == 1
+    assert "product_manager_refine_intent" not in adapter.tasks
+    intent_prompt = json.loads(
+        (tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "intent_prompt.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert intent_prompt == {
+        "schema_version": 1,
+        "refined_prompt": generation_request.user_message,
+    }
 
 
 def test_new_agent_run_archives_stale_artifact_directory(tmp_path: Path, db_session: Session) -> None:
@@ -168,24 +183,6 @@ def test_product_manager_uses_codex_adapter_for_blueprint_and_permissions(tmp_pa
             self.plans.append(dict(plan))
             return super().generate(prompt, output_dir, plan)
 
-    selected_fact = MemoryFact(
-        key="preferred_output_style",
-        value="Keep generated skills local-first.",
-        category="preference",
-        sensitivity="normal",
-    )
-    db_session.add(selected_fact)
-    db_session.add(
-        MemoryFact(
-            key="private_fact",
-            value="Do not include this.",
-            category="preference",
-            sensitivity="normal",
-            user_editable=False,
-        )
-    )
-    db_session.commit()
-
     adapter = RecordingAdapter()
     AgentWorkflowService(
         db_session,
@@ -193,13 +190,12 @@ def test_product_manager_uses_codex_adapter_for_blueprint_and_permissions(tmp_pa
         project_root=tmp_path,
     ).create_build_run(generation_request)
 
-    assert "product_manager_refine_intent" in adapter.tasks
+    assert "product_manager_refine_intent" not in adapter.tasks
     assert "product_manager_plan_build" in adapter.tasks
     assert "product_manager_write_permissions" not in adapter.tasks
     assert "product_manager_summary" not in adapter.tasks
-    refine_plan = next(plan for plan in adapter.plans if plan.get("codex_task") == "product_manager_refine_intent")
     review_plan = next(plan for plan in adapter.plans if plan.get("codex_task") == "product_manager_plan_build")
-    assert review_plan["intent_prompt"]["refined_prompt"]
+    assert review_plan["intent_prompt"]["refined_prompt"] == generation_request.user_message
     assert review_plan["permission_policy"] == planning_permission_policy()
     blueprint_prompt = adapter.prompts["product_manager_plan_build"]
     assert '"intent_prompt"' in blueprint_prompt
@@ -209,15 +205,6 @@ def test_product_manager_uses_codex_adapter_for_blueprint_and_permissions(tmp_pa
     assert '"default_allowed"' in blueprint_prompt
     assert '"requires_approval"' in blueprint_prompt
     assert '"blocked"' in blueprint_prompt
-    assert refine_plan["selected_memory_facts"] == [
-        {
-            "id": selected_fact.id,
-            "key": "preferred_output_style",
-            "value": "Keep generated skills local-first.",
-            "category": "preference",
-            "sensitivity": "normal",
-        }
-    ]
 
 
 def test_approval_updates_waiting_product_manager_permission_step(db_session: Session) -> None:
@@ -805,7 +792,7 @@ def test_builder_receives_function_context_for_task_node(tmp_path: Path, db_sess
     assert "function_ids" not in builder_step.input_json["task_node"]
     function_context = builder_step.input_json["function_context"]
     assert function_context[0]["title"] == "Skill Codex Call"
-    assert "POST /skills/{skill_id}/codex" in function_context[0]["invocation"]["function_helper"]
+    assert "function_runtime_capabilities.call_codex" in function_context[0]["invocation"]["function_helper"]
     assert "input_schema" in function_context[0]
     assert "output_schema" in function_context[0]
 
@@ -1007,12 +994,12 @@ def test_builder_and_tester_agents_receive_trimmed_task_context(tmp_path: Path, 
     assert any("You are TesterAgent" in prompt for prompt in adapter.prompts)
     assert tester_plan["task_node"] == {
         "task_prompt": "Create the core proposed skill package.",
-        "acceptance_criteria": agent_run.blueprint_json["acceptance_criteria"],
+        "acceptance_criteria": agent_run.blueprint_json["expected_behavior"],
         "test_expectations": ["validate manifest and generated skill behavior"],
     }
     assert tester_plan["test_file"] == "tests/test_core_skill.py"
     assert tester_plans[-1]["test_file"] == "tests/test_final_e2e.py"
-    assert tester_plans[-1]["blueprint_contract"]["goal"]
+    assert tester_plans[-1]["blueprint_contract"]["description"]
     assert "skill_name" not in tester_plans[-1]["blueprint_contract"]
     assert "permission_plan" not in tester_plans[-1]
     assert tester_plans[-1]["permission_bounds"]["blocked"] == blocked_permissions()
@@ -1036,7 +1023,9 @@ def test_builder_and_tester_agents_receive_trimmed_task_context(tmp_path: Path, 
     assert permission_bounds["blocked"] == blocked_permissions()
     assert "task_dag_json" not in tester_plans[0]
     assert "final_e2e_expectations" not in tester_plans[-1]
-    assert set(agent_run.blueprint_json["acceptance_criteria"]).issubset(tester_plans[-1]["acceptance_criteria"])
+    assert set(agent_run.blueprint_json["expected_behavior"]).issubset(
+        tester_plans[-1]["acceptance_criteria"]
+    )
     task_dag_prompt = next(
         prompt
         for prompt, plan in zip(adapter.prompts, adapter.plans, strict=True)

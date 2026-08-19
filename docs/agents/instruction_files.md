@@ -9,7 +9,6 @@ backend/app/workflows/
   common/
     prompts.py
     instructions/
-      refine_intent.md
       plan_build.md
   task_dag/
     workflow.py
@@ -41,7 +40,7 @@ backend/app/agent_instructions/
     update.md
 ```
 
-The shared project-build preflight uses `workflows/common`. It owns one-time ProductManager intent refinement and the resumable `pm_plan_build` clarification, rejection, and blueprint/permission/workflow decision before post-approval dispatch.
+The shared project-build preflight uses `workflows/common`. The backend first writes the initial user message unchanged to `intent_prompt.json` without loading instructions or invoking Codex. The package then owns the resumable `pm_plan_build` clarification, rejection, and blueprint/permission/workflow decision before post-approval dispatch.
 
 The DAG build workflow uses the instructions under `workflows/task_dag`:
 
@@ -56,8 +55,6 @@ The single-Codex workflow uses `workflows/single_codex/instructions/run.md` for 
 Each project-build package loads its own instruction files and composes its own prompts. `CodexService` supplies shared Codex invocation, parsing, routing, usage, workspace, and safety primitives. Update and standalone repair prompts continue to use role-relative files under `backend/app/agent_instructions/`.
 
 Instruction files define role behavior and how to consume supplied permission context. Permission classifications must not be copied into them: `backend/app/static/default_permissions.json` is the source of truth for `default_allowed`, `requires_approval`, and `blocked`. Backend code loads that policy, coordinates state, validates outputs, and enforces safety.
-
-`workflows/common/instructions/refine_intent.md` is used once for `pm_refine_intent` and returns only `intent_prompt.json`. It must not make planning decisions, ask clarification questions, or return blueprint, permission, or task DAG artifacts.
 
 `workflows/common/instructions/plan_build.md` is the combined planning prompt for `pm_plan_build`. Its first turn receives the available function catalog and complete config-derived permission policy; resumed turns receive the latest user clarification and reuse the same Codex App Server thread. It returns the decision contract and, only for `proceed_to_approval`, the complete blueprint and permission plan.
 

@@ -30,6 +30,14 @@ def test_function_helper_discovers_and_invokes_with_ephemeral_bearer(
         captured.append((request, timeout))
         if request.method == "GET":
             return FakeResponse([{"name": "normalize_text", "availability": "available"}])
+        if request.full_url.endswith("/functions/capabilities/codex"):
+            return FakeResponse(
+                {
+                    "response": "Bounded analysis.",
+                    "model": "gpt-test",
+                    "internet_access": False,
+                }
+            )
         return FakeResponse(
             {
                 "run": {"id": 9, "status": "succeeded"},
@@ -44,12 +52,31 @@ def test_function_helper_discovers_and_invokes_with_ephemeral_bearer(
 
     discovered = capabilities.discover_functions(timeout_seconds=4)
     output = capabilities.call_function("normalize_text", {"value": "Hello"}, timeout_seconds=7)
+    codex_output = capabilities.call_codex(
+        "Analyze this.",
+        context={"item": "demo"},
+        model="gpt-test",
+        timeout_seconds=9,
+    )
 
     assert discovered[0]["name"] == "normalize_text"
     assert output == {"result": "normalized"}
+    assert codex_output["response"] == "Bounded analysis."
     assert captured[0][0].headers["Authorization"] == "Bearer run-secret"
     assert captured[0][0].full_url.endswith("/functions")
     assert captured[1][0].full_url.endswith("/functions/normalize_text/invoke")
+    assert captured[2][0].full_url.endswith("/functions/capabilities/codex")
+    assert captured[2][0].headers["Authorization"] == "Bearer run-secret"
+    assert json.loads(captured[2][0].data) == {
+        "prompt": "Analyze this.",
+        "context": {"item": "demo"},
+        "model": "gpt-test",
+        "codex_permissions": {
+            "call_response": True,
+            "internet_access": False,
+        },
+    }
+    assert captured[2][1] == 9
     assert "run-secret" not in captured[1][0].data.decode("utf-8")
 
 
@@ -65,3 +92,8 @@ def test_function_helper_reports_blocked_call(monkeypatch: pytest.MonkeyPatch) -
 
     with pytest.raises(capabilities.FunctionRuntimeCapabilityError, match="rejected"):
         capabilities.call_function("undeclared", {})
+
+
+def test_function_codex_helper_rejects_empty_prompt() -> None:
+    with pytest.raises(capabilities.FunctionRuntimeCapabilityError, match="cannot be empty"):
+        capabilities.call_codex("   ")

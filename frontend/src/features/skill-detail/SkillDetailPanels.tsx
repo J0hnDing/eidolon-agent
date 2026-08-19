@@ -323,6 +323,49 @@ export function RunDetail({ run }: { run: SkillRun }) {
   );
 }
 
+export function RunOutput({ run }: { run: SkillRun | null }) {
+  if (!run) return <p className="muted">Run the function to see its output.</p>;
+
+  return (
+    <div className="run-output">
+      <div className="run-output-header">
+        <span>Run #{run.id}</span>
+        <span className={`badge run-${run.status}`}>{run.status}</span>
+      </div>
+      {run.output_json ? (
+        <pre aria-label={`Output for run ${run.id}`}>{JSON.stringify(run.output_json, null, 2)}</pre>
+      ) : run.stdout ? (
+        <pre aria-label={`Output for run ${run.id}`}>{run.stdout}</pre>
+      ) : run.error_message ? (
+        <pre aria-label={`Error for run ${run.id}`}>{run.error_message}</pre>
+      ) : (
+        <p className="muted">This run did not produce output.</p>
+      )}
+    </div>
+  );
+}
+
+export function RunHistory({ runs }: { runs: SkillRun[] }) {
+  if (runs.length === 0) return <p className="muted">No run history yet.</p>;
+
+  return (
+    <div className="run-history-list">
+      {runs.map((run) => (
+        <article key={run.id} className="run-history-entry">
+          <header className="run-history-header">
+            <div>
+              <h3>Run #{run.id}</h3>
+              <span>{formatTimestamp(run.started_at, "not started")}</span>
+            </div>
+            <span className={`badge run-${run.status}`}>{run.status}</span>
+          </header>
+          <RunDetail run={run} />
+        </article>
+      ))}
+    </div>
+  );
+}
+
 export function formatTokens(value: number): string {
   return new Intl.NumberFormat().format(value);
 }

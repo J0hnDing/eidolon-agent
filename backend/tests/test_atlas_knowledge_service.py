@@ -30,7 +30,7 @@ def test_know_generates_only_from_bounded_context_and_enables_search(tmp_path: P
     provider = FakeAtlasProviderAdapter()
     codex = CapturingCodex()
     result = AtlasKnowledgeService(provider, adapter=codex, project_root=tmp_path).know(
-        provider.node, None, "ATLAS_KEY_SENTINEL"
+        provider.node, None
     )
 
     assert result["node"]["status"] == "known"
@@ -50,7 +50,7 @@ def test_supplied_explanation_is_preserved_and_not_requested_from_codex(tmp_path
     provider = FakeAtlasProviderAdapter()
 
     AtlasKnowledgeService(provider, adapter=codex, project_root=tmp_path).know(
-        provider.node, explanation, "key"
+        provider.node, explanation
     )
 
     assert provider.calls[-1][1]["explanation"] == "My authoritative explanation."
@@ -64,7 +64,7 @@ def test_already_known_rejected_before_codex(tmp_path: Path) -> None:
     codex = CapturingCodex()
 
     with pytest.raises(AtlasKnowledgeError, match="already known") as exc:
-        AtlasKnowledgeService(provider, adapter=codex, project_root=tmp_path).know(provider.node, None, "key")
+        AtlasKnowledgeService(provider, adapter=codex, project_root=tmp_path).know(provider.node, None)
 
     assert exc.value.error_type == "node_already_known"
     assert codex.prompts == []
@@ -79,7 +79,7 @@ def test_codex_failure_or_invalid_output_does_not_mutate(tmp_path: Path, codex: 
     provider = FakeAtlasProviderAdapter()
 
     with pytest.raises(AtlasKnowledgeError) as exc:
-        AtlasKnowledgeService(provider, adapter=codex, project_root=tmp_path).know(provider.node, None, "key")
+        AtlasKnowledgeService(provider, adapter=codex, project_root=tmp_path).know(provider.node, None)
 
     assert exc.value.error_type == "codex_failed"
     assert provider.calls == []
@@ -153,7 +153,7 @@ def test_provider_know_uses_only_primitive_patch_and_create_calls() -> None:
     ]
     calls: list[tuple[str, str]] = []
 
-    def request(path, payload, _credential, *, timeout, max_bytes, method):  # noqa: ANN001
+    def request(path, payload, *, timeout, max_bytes, method):  # noqa: ANN001
         del timeout, max_bytes
         calls.append((method, path))
         if method == "GET":
@@ -183,7 +183,6 @@ def test_provider_know_uses_only_primitive_patch_and_create_calls() -> None:
             "terms": [],
             "children": ["Consensus"],
         },
-        "key",
     )
 
     assert result["created_children"] == ["Consensus"]

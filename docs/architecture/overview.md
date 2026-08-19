@@ -74,7 +74,7 @@ The backend is the control plane for both protocols. One persistent catalog desc
 
 ## Trusted Integrations
 
-GitHub and local Eidolon-Atlas are trusted secrets-backed providers. Skills declare exact registry operations and receive provider-specific approval; GitHub retains exact repository scope while Atlas has no caller-selected resource scope. Function and web-application containers call one scoped relay helper, and the backend performs provider traffic and returns normalized data. Eidolon derives Atlas filtering and Knowledge navigation from Atlas's primitive APIs instead of requiring agent-specific Atlas endpoints. Eidolon also owns optional Atlas process startup and automatic unlock without exposing either stored secret. See [GitHub integration capability](../integrations/github.md) and [Eidolon-Atlas integration](../integrations/atlas.md).
+GitHub and local Eidolon-Atlas are trusted providers. GitHub is token-backed; Atlas uses its native API whenever it is running and unlocked, with an optional stored passphrase only for Eidolon-owned process unlock. Skills declare exact registry operations and receive provider-specific approval; GitHub retains exact repository scope while Atlas has no caller-selected resource scope. Function and web-application containers call one scoped relay helper, and the backend performs provider traffic and returns normalized data. Eidolon derives Atlas filtering and Knowledge navigation from Atlas's primitive APIs instead of requiring agent-specific Atlas endpoints. See [GitHub integration capability](../integrations/github.md) and [Eidolon-Atlas integration](../integrations/atlas.md).
 
 ## Current Constraints
 

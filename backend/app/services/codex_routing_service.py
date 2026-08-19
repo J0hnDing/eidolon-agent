@@ -21,7 +21,6 @@ class CodexRoutingError(ValueError):
 
 
 _PM_ACTIONS = {
-    "product_manager_refine_intent": "refine_intent",
     "product_manager_plan_build": "blueprint_and_permissions",
     "product_manager_write_task_dag": "task_dag",
     "product_manager_repair_blueprint": "repair",
@@ -165,7 +164,12 @@ class CodexRoutingService:
 
     @staticmethod
     def _payload(value: dict[str, Any]) -> CodexRoutingSettingsPayload:
-        return CodexRoutingSettingsPayload.model_validate(value or {})
+        normalized = dict(value or {})
+        product_manager = normalized.get("product_manager")
+        if isinstance(product_manager, dict) and "refine_intent" in product_manager:
+            normalized["product_manager"] = dict(product_manager)
+            normalized["product_manager"].pop("refine_intent", None)
+        return CodexRoutingSettingsPayload.model_validate(normalized)
 
     @staticmethod
     def _route_choices(

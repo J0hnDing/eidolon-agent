@@ -17,7 +17,6 @@ class ProductManagerRouting(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     default: InvocationChoice = Field(default_factory=InvocationChoice)
-    refine_intent: InvocationChoice = Field(default_factory=InvocationChoice)
     blueprint_and_permissions: InvocationChoice = Field(default_factory=InvocationChoice)
     task_dag: InvocationChoice = Field(default_factory=InvocationChoice)
     repair: InvocationChoice = Field(default_factory=InvocationChoice)

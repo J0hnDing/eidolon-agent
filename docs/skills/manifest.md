@@ -98,7 +98,7 @@ Network domains, third-party dependencies, Codex internet access, and non-cache 
 
 Codex permissions:
 
-- `call_response` defaults to `true`. Function skills use `POST /skills/{skill_id}/codex` through the existing bounded runtime integration. Web applications must instead use the trusted server-side `web_runtime_capabilities.call_codex` helper, which authenticates `POST /web-apps/capabilities/codex` with an instance-scoped capability rather than a caller-supplied skill id.
+- `call_response` defaults to `true`. Function skills use the trusted `function_runtime_capabilities.call_codex` helper, which authenticates `POST /functions/capabilities/codex` with the ephemeral function-run capability. Web applications use the parallel trusted server-side `web_runtime_capabilities.call_codex` helper, which authenticates `POST /web-apps/capabilities/codex` with an instance-scoped capability. Neither sandbox transport trusts a caller-supplied skill id.
 - `internet_access` may be `true` only when the skill also has approved runtime network domains. Runtime network access and Codex internet access are treated as equivalent for approval.
 - Any other Codex permission field is blocked in this milestone.
 

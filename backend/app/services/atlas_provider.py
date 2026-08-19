@@ -4,6 +4,7 @@ import base64
 import json
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from app.services.github_provider import IntegrationProviderError
@@ -13,16 +14,13 @@ ATLAS_BASE_URL = "http://127.0.0.1:4817"
 
 
 class AtlasProviderAdapter(Protocol):
-    def validate_credential(self, credential: str) -> dict[str, str]: ...
-
     def execute(
         self,
         operation: IntegrationOperation,
         input_json: dict[str, Any],
-        credential: str,
     ) -> dict[str, Any]: ...
 
-    def establish(self, payload: dict[str, Any], credential: str) -> dict[str, Any]: ...
+    def establish(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -31,51 +29,38 @@ class _NoRedirect(HTTPRedirectHandler):
 
 
 class UrllibAtlasProviderAdapter:
-    """Fixed-route loopback adapter. Secrets exist only while a request is built."""
+    """Fixed-route adapter for Atlas's trusted unlocked loopback API."""
 
-    _routes = {
-        "atlas.person.get": "/api/agent/get_personal_info",
-        "atlas.experience.list": "/api/agent/list_experiences",
-        "atlas.goal.list": "/api/agent/get_goals",
-        "atlas.project.list": "/api/agent/list_projects",
+    _record_routes = {
+        "atlas.person.get": "/api/records?category=person",
+        "atlas.experience.list": "/api/records?category=experience",
+        "atlas.goal.list": "/api/records?category=goal",
+        "atlas.project.list": "/api/records?category=project",
+        "atlas.relationship.list": "/api/records?category=relationship",
     }
-
-    def validate_credential(self, credential: str) -> dict[str, str]:
-        payload = self._request("/api/agent/tools", None, credential, timeout=10, max_bytes=1_000_000, method="GET")
-        if not isinstance(payload, dict) or not isinstance(payload.get("tools"), list):
-            raise IntegrationProviderError("provider_unavailable", "Atlas returned invalid discovery data")
-        return {"login": "Local Atlas", "id": "local-atlas"}
 
     def execute(
         self,
         operation: IntegrationOperation,
         input_json: dict[str, Any],
-        credential: str,
     ) -> dict[str, Any]:
-        route = self._routes.get(operation.operation_id)
+        route = self._record_routes.get(operation.operation_id)
         if route is not None:
             payload = self._request(
                 route,
-                {},
-                credential,
-                timeout=operation.timeout_seconds,
-                max_bytes=operation.max_provider_response_bytes,
-                method="POST",
-            )
-        elif operation.operation_id == "atlas.relationship.list":
-            payload = self._request(
-                "/api/records?category=relationship",
                 None,
-                credential,
                 timeout=operation.timeout_seconds,
                 max_bytes=operation.max_provider_response_bytes,
                 method="GET",
             )
+            if operation.operation_id == "atlas.goal.list":
+                records = self._record_list(payload, "goal")
+                progressions = self._goal_progressions(records, operation)
+                payload = {"records": records, "progressions": progressions}
         elif operation.operation_id.startswith("atlas.knowledge."):
             payload = self._request(
                 "/api/knowledge/nodes",
                 None,
-                credential,
                 timeout=operation.timeout_seconds,
                 max_bytes=operation.max_provider_response_bytes,
                 method="GET",
@@ -84,10 +69,10 @@ class UrllibAtlasProviderAdapter:
             raise IntegrationProviderError("internal_failure", "Atlas operation is unsupported")
         return self._normalize(operation.operation_id, payload, input_json)
 
-    def establish(self, payload: dict[str, Any], credential: str) -> dict[str, Any]:
+    def establish(self, payload: dict[str, Any]) -> dict[str, Any]:
         nodes = self._knowledge_nodes(
             self._request(
-                "/api/knowledge/nodes", None, credential, timeout=10, max_bytes=2_000_000, method="GET"
+                "/api/knowledge/nodes", None, timeout=10, max_bytes=2_000_000, method="GET"
             )
         )
         by_id = self._knowledge_by_id(nodes)
@@ -106,7 +91,6 @@ class UrllibAtlasProviderAdapter:
         updated = self._request(
             f"/api/knowledge/nodes/{target['id']}",
             {"status": "known", "understanding": payload["explanation"], "terms": payload["terms"]},
-            credential,
             timeout=20,
             max_bytes=2_000_000,
             method="PATCH",
@@ -128,7 +112,6 @@ class UrllibAtlasProviderAdapter:
                     "parentId": target["id"],
                     "status": "unassessed",
                 },
-                credential,
                 timeout=20,
                 max_bytes=2_000_000,
                 method="POST",
@@ -137,7 +120,7 @@ class UrllibAtlasProviderAdapter:
             created_children.append(child_name)
         refreshed = self._knowledge_nodes(
             self._request(
-                "/api/knowledge/nodes", None, credential, timeout=10, max_bytes=2_000_000, method="GET"
+                "/api/knowledge/nodes", None, timeout=10, max_bytes=2_000_000, method="GET"
             )
         )
         final_node = self._bounded_knowledge_node(int(target["id"]), refreshed)
@@ -170,12 +153,50 @@ class UrllibAtlasProviderAdapter:
                 return self._knowledge_search(nodes, requested)
             if operation_id == "atlas.knowledge.node.get":
                 return {"node": self._bounded_knowledge_node(int(requested["node_id"]), nodes)}
-        if not isinstance(payload, dict):
-            raise IntegrationProviderError("provider_unavailable", "Atlas returned an invalid response")
         if operation_id == "atlas.person.get":
-            return {"personal_info": payload.get("personal_info")}
+            records = self._record_list(payload, "person")
+            if not records:
+                return {"personal_info": None}
+            record = records[0]
+            data = record["data"]
+            return {
+                "personal_info": {
+                    "name": record["title"],
+                    "preferred_name": data.get("preferredName"),
+                    "gender": data.get("gender"),
+                    "birth_date": data.get("birthDate"),
+                    "birth_place": data.get("birthPlace"),
+                    "nationalities": data.get("nationalities") if isinstance(data.get("nationalities"), list) else [],
+                    "languages": data.get("languages") if isinstance(data.get("languages"), list) else [],
+                    "marital_status": data.get("maritalStatus"),
+                    "emails": data.get("emails") if isinstance(data.get("emails"), list) else [],
+                    "phone_numbers": data.get("phoneNumbers") if isinstance(data.get("phoneNumbers"), list) else [],
+                    "address": data.get("address"),
+                    "summary": data.get("summary"),
+                    "notes": data.get("notes"),
+                }
+            }
         if operation_id == "atlas.experience.list":
-            items = self._items(payload, "experiences")
+            records = self._record_list(payload, "experience")
+            records.sort(
+                key=lambda record: (
+                    str(record["data"].get("startDate") or ""),
+                    str(record.get("createdAt") or ""),
+                ),
+                reverse=True,
+            )
+            items = [
+                {
+                    "title": record["title"],
+                    "time": {
+                        "start_date": record["data"].get("startDate"),
+                        "end_date": record["data"].get("endDate") or None,
+                        "ongoing": record["data"].get("ongoing"),
+                    },
+                    "description": record["data"].get("narrative"),
+                }
+                for record in records
+            ]
             keywords = self._keywords(requested)
             ongoing = requested.get("ongoing")
             if keywords:
@@ -184,7 +205,34 @@ class UrllibAtlasProviderAdapter:
                 items = [item for item in items if (item.get("time") or {}).get("ongoing") is ongoing]
             return {"experiences": items[: self._limit(requested)]}
         if operation_id == "atlas.goal.list":
-            goals = self._items(payload, "goals")
+            if not isinstance(payload, dict):
+                raise IntegrationProviderError("provider_unavailable", "Atlas returned invalid Goal data")
+            records = self._record_list(payload.get("records"), "goal")
+            by_parent: dict[str | None, list[dict[str, Any]]] = {}
+            for record in records:
+                parent_id = record.get("parentId")
+                if parent_id is not None and not isinstance(parent_id, str):
+                    raise IntegrationProviderError("provider_unavailable", "Atlas returned invalid Goal data")
+                by_parent.setdefault(parent_id, []).append(record)
+            for children in by_parent.values():
+                children.sort(key=lambda item: item.get("position") if isinstance(item.get("position"), int) else 0)
+
+            def build_goal(record: dict[str, Any], ancestors: set[str]) -> dict[str, Any]:
+                goal_id = record["id"]
+                if goal_id in ancestors:
+                    raise IntegrationProviderError("provider_unavailable", "Atlas returned invalid Goal hierarchy")
+                data = record["data"]
+                return {
+                    "id": goal_id,
+                    "title": record["title"],
+                    "description": data.get("description"),
+                    "importance": data.get("importance") or "medium",
+                    "horizon": data.get("horizon"),
+                    "target_date": data.get("targetDate") or None,
+                    "subgoals": [build_goal(child, {*ancestors, goal_id}) for child in by_parent.get(goal_id, [])],
+                }
+
+            goals = [build_goal(record, set()) for record in by_parent.get(None, [])]
             importance = requested.get("importance")
             horizon = requested.get("horizon")
             if importance:
@@ -200,7 +248,16 @@ class UrllibAtlasProviderAdapter:
             ]
             return {"goals": goals, "progressions": progressions}
         if operation_id == "atlas.project.list":
-            items = self._items(payload, "projects")
+            items = [
+                {
+                    "title": record["title"],
+                    "description": record["data"].get("context"),
+                    "status": record["data"].get("status"),
+                    "github_link": record["data"].get("githubLink") or None,
+                }
+                for record in self._record_list(payload, "project")
+            ]
+            items.sort(key=lambda item: str(item["title"]).casefold())
             items = self._filter_keyword_status(items, requested, ("title", "description"))
             has_link = requested.get("has_github_link")
             if isinstance(has_link, bool):
@@ -212,22 +269,20 @@ class UrllibAtlasProviderAdapter:
         self,
         path: str,
         payload: dict[str, Any] | None,
-        credential: str,
         *,
         timeout: float,
         max_bytes: int,
         method: str,
     ) -> Any:
         raw_input = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        headers = {"Accept": "application/json"}
+        if raw_input is not None:
+            headers["Content-Type"] = "application/json"
         request = Request(
             f"{ATLAS_BASE_URL}{path}",
             data=raw_input,
             method=method,
-            headers={
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {credential}",
-            },
+            headers=headers,
         )
         try:
             response = build_opener(_NoRedirect()).open(request, timeout=timeout)
@@ -236,8 +291,8 @@ class UrllibAtlasProviderAdapter:
             code = self._error_code(raw_error)
             if 300 <= exc.code < 400:
                 error_type = "provider_unavailable"
-            elif exc.code == 401:
-                error_type = "invalid_credential"
+            elif exc.code in {401, 403}:
+                error_type = "provider_forbidden"
             elif exc.code == 423:
                 error_type = "atlas_locked"
             elif exc.code == 404:
@@ -283,6 +338,66 @@ class UrllibAtlasProviderAdapter:
         return [dict(item) for item in value]
 
     @staticmethod
+    def _record_list(payload: Any, category: str) -> list[dict[str, Any]]:
+        if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
+            raise IntegrationProviderError("provider_unavailable", f"Atlas returned invalid {category.title()} data")
+        records: list[dict[str, Any]] = []
+        for item in payload:
+            if (
+                item.get("category") != category
+                or not isinstance(item.get("id"), str)
+                or not isinstance(item.get("title"), str)
+                or not isinstance(item.get("data"), dict)
+            ):
+                raise IntegrationProviderError("provider_unavailable", f"Atlas returned invalid {category.title()} data")
+            records.append({**item, "data": dict(item["data"])})
+        return records
+
+    def _goal_progressions(
+        self, records: list[dict[str, Any]], operation: IntegrationOperation
+    ) -> list[dict[str, Any]]:
+        by_parent: dict[str | None, list[dict[str, Any]]] = {}
+        for record in records:
+            parent_id = record.get("parentId")
+            if parent_id is not None and not isinstance(parent_id, str):
+                raise IntegrationProviderError("provider_unavailable", "Atlas returned invalid Goal data")
+            by_parent.setdefault(parent_id, []).append(record)
+        for children in by_parent.values():
+            children.sort(key=lambda item: item.get("position") if isinstance(item.get("position"), int) else 0)
+        progressions: list[dict[str, Any]] = []
+        for parent in records:
+            children = by_parent.get(parent["id"], [])
+            if not children:
+                continue
+            graph = self._request(
+                f"/api/goals/{quote(parent['id'], safe='')}/progression",
+                None,
+                timeout=operation.timeout_seconds,
+                max_bytes=operation.max_provider_response_bytes,
+                method="GET",
+            )
+            dependencies = graph.get("dependencies") if isinstance(graph, dict) else None
+            if not isinstance(dependencies, list) or any(not isinstance(edge, dict) for edge in dependencies):
+                raise IntegrationProviderError("provider_unavailable", "Atlas returned invalid Goal progression data")
+            child_ids = {child["id"] for child in children}
+            edges = []
+            for edge in dependencies:
+                goal_id = edge.get("goalId")
+                prerequisite_id = edge.get("prerequisiteId")
+                if not isinstance(goal_id, str) or not isinstance(prerequisite_id, str):
+                    raise IntegrationProviderError("provider_unavailable", "Atlas returned invalid Goal progression data")
+                if goal_id in child_ids and prerequisite_id in child_ids:
+                    edges.append({"prerequisite_goal_id": prerequisite_id, "dependent_goal_id": goal_id})
+            progressions.append(
+                {
+                    "parent_goal_id": parent["id"],
+                    "subgoal_ids": [child["id"] for child in children],
+                    "edges": edges,
+                }
+            )
+        return progressions
+
+    @staticmethod
     def _keywords(value: dict[str, Any]) -> str:
         return str(value.get("keywords") or "").strip().casefold()
 
@@ -320,11 +435,9 @@ class UrllibAtlasProviderAdapter:
 
     @classmethod
     def _relationship_records(cls, payload: Any) -> list[dict[str, Any]]:
-        if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
-            raise IntegrationProviderError("provider_unavailable", "Atlas returned invalid Relationship data")
         relationships = []
-        for record in payload:
-            data = record.get("data") if isinstance(record.get("data"), dict) else {}
+        for record in cls._record_list(payload, "relationship"):
+            data = record["data"]
             relationships.append(
                 {
                     "name": str(record.get("title") or ""),
@@ -551,13 +664,7 @@ class FakeAtlasProviderAdapter:
             "children": [],
         }
 
-    def validate_credential(self, credential: str) -> dict[str, str]:
-        if self.error_type or credential.startswith("invalid"):
-            raise IntegrationProviderError(self.error_type or "invalid_credential", "Fake Atlas validation failed")
-        return {"login": "Local Atlas", "id": "local-atlas"}
-
-    def execute(self, operation: IntegrationOperation, input_json: dict[str, Any], credential: str) -> dict[str, Any]:
-        del credential
+    def execute(self, operation: IntegrationOperation, input_json: dict[str, Any]) -> dict[str, Any]:
         self.calls.append((operation.operation_id, dict(input_json)))
         if self.error_type:
             raise IntegrationProviderError(self.error_type, "Fake Atlas operation failed")
@@ -573,8 +680,7 @@ class FakeAtlasProviderAdapter:
             "atlas.knowledge.search": {"nodes": []},
         }[operation.operation_id]
 
-    def establish(self, payload: dict[str, Any], credential: str) -> dict[str, Any]:
-        del credential
+    def establish(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.calls.append(("atlas.knowledge.node.know", dict(payload)))
         if self.error_type:
             raise IntegrationProviderError(self.error_type, "Fake Atlas establishment failed")

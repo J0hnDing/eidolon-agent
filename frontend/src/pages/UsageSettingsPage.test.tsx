@@ -56,7 +56,6 @@ describe("GitHub Settings connection", () => {
       chat: choice,
       product_manager: {
         default: choice,
-        refine_intent: choice,
         blueprint_and_permissions: choice,
         task_dag: choice,
         repair: choice,
@@ -173,7 +172,6 @@ describe("Codex model routing", () => {
       chat: choice,
       product_manager: {
         default: choice,
-        refine_intent: choice,
         blueprint_and_permissions: choice,
         task_dag: choice,
         repair: choice,
@@ -223,7 +221,8 @@ describe("Codex model routing", () => {
     fireEvent.change(screen.getByLabelText("Single Codex effort"), {
       target: { value: "xhigh" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save Codex settings" }));
+    expect(screen.getAllByText("Unsaved Codex routing changes.").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Save model routing" }));
 
     await waitFor(() =>
       expect(update).toHaveBeenCalledWith(
@@ -234,12 +233,12 @@ describe("Codex model routing", () => {
         }),
       ),
     );
+    await waitFor(() => expect(screen.getAllByText(/Future invocations use these routes/).length).toBeGreaterThan(0));
   });
 });
 
 describe("Atlas Settings", () => {
-  it("keeps Atlas secrets write-only and exposes lifecycle actions", async () => {
-    const keySentinel = "EIDOLON_ATLAS_KEY_UI_SENTINEL_5a3d";
+  it("uses passphrase-only owned-process controls and no API-key UI", async () => {
     const passphraseSentinel = "EIDOLON_ATLAS_PASSPHRASE_UI_SENTINEL_8b2e";
     const choice = { model: null, reasoning_effort: null };
     vi.spyOn(api, "getCodexUsage").mockResolvedValue({
@@ -275,7 +274,6 @@ describe("Atlas Settings", () => {
       chat: choice,
       product_manager: {
         default: choice,
-        refine_intent: choice,
         blueprint_and_permissions: choice,
         task_dag: choice,
         repair: choice,
@@ -313,33 +311,31 @@ describe("Atlas Settings", () => {
     const initialAtlas = {
       provider: "atlas" as const,
       directory: "C:\\Users\\John\\Projects\\Eidolon-Atlas",
-      process_owned: true,
-      process_running: true,
+      process_ownership: "owned" as const,
+      running: true,
       initialized: true,
       locked: true,
-      key_connected: false,
-      key_status: "disconnected",
-      auto_unlock_configured: false,
-      error: null,
+      passphrase_configured: false,
+      startup_error: null,
+      error_type: null,
     };
-    const connectedAtlas = { ...initialAtlas, key_connected: true, key_status: "connected" };
-    const configuredAtlas = { ...connectedAtlas, auto_unlock_configured: true, locked: false };
+    const configuredAtlas = { ...initialAtlas, passphrase_configured: true, locked: false };
+    const externalAtlas = {
+      ...configuredAtlas,
+      process_ownership: "external" as const,
+      locked: true,
+    };
     vi.spyOn(api, "getAtlasStatus").mockResolvedValue(initialAtlas);
-    const putKey = vi.spyOn(api, "putAtlasApiKey").mockResolvedValue(connectedAtlas);
     const putPassphrase = vi.spyOn(api, "putAtlasPassphrase").mockResolvedValue(configuredAtlas);
     const unlock = vi.spyOn(api, "unlockAtlas").mockResolvedValue(configuredAtlas);
+    vi.spyOn(api, "restartAtlas").mockResolvedValue(externalAtlas);
 
     render(<UsageSettingsPage />);
     expect(await screen.findByText("Running (Eidolon-owned)")).toBeTruthy();
     expect(screen.getByText(/Storing the passphrase shifts practical at-rest protection to your Windows account/)).toBeTruthy();
 
-    const keyInput = screen.getByLabelText("Atlas API key");
-    fireEvent.change(keyInput, { target: { value: keySentinel } });
-    fireEvent.click(screen.getByRole("button", { name: "Add API key" }));
-    await waitFor(() => expect(putKey).toHaveBeenCalledWith(keySentinel));
-    await waitFor(() => expect(screen.getByLabelText("Replacement Atlas API key")).toBeTruthy());
-    expect((screen.getByLabelText("Replacement Atlas API key") as HTMLInputElement).value).toBe("");
-    expect(document.body.textContent).not.toContain(keySentinel);
+    expect(screen.queryByLabelText(/API key/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /API key/i })).toBeNull();
 
     const passphraseInput = screen.getByLabelText("Atlas passphrase");
     fireEvent.change(passphraseInput, { target: { value: passphraseSentinel } });
@@ -351,5 +347,10 @@ describe("Atlas Settings", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Unlock now" }));
     await waitFor(() => expect(unlock).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Restart Atlas" }));
+    expect(await screen.findByText(/Unlock it through Atlas itself/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Unlock now" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Replace passphrase" }).hasAttribute("disabled")).toBe(true);
   });
 });

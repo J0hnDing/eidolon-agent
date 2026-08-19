@@ -40,7 +40,6 @@ class AtlasHttpClient:
         path: str,
         *,
         body: dict[str, Any] | None = None,
-        api_key: str | None = None,
     ) -> AtlasHttpResult:
         if not path.startswith("/api/") or "://" in path:
             raise AtlasLifecycleError("invalid_request", "Atlas route is invalid")
@@ -48,8 +47,6 @@ class AtlasHttpClient:
         headers = {"Accept": "application/json", "Host": "127.0.0.1:4817"}
         if data is not None:
             headers["Content-Type"] = "application/json"
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
         request = urllib.request.Request(f"{self.base_url}{path}", data=data, headers=headers, method=method)
         try:
             response = urllib.request.build_opener(_NoRedirect).open(request, timeout=self.timeout_seconds)
@@ -192,16 +189,6 @@ class AtlasLifecycleService:
         if result.status != 200 or not self._valid_status(result.body):
             return {"running": False, "initialized": None, "locked": None}
         return {"running": True, "initialized": result.body["initialized"], "locked": result.body["locked"]}
-
-    def validate_api_key(self, api_key: str) -> str:
-        result = self.client.request("GET", "/api/agent/tools", api_key=api_key)
-        if result.status == 200 and result.body.get("project") == "Eidolon-Atlas":
-            return "connected"
-        if result.status == 423:
-            return "locked_recognized"
-        if result.status == 401:
-            raise AtlasLifecycleError("invalid_api_key", "Atlas API key is invalid")
-        raise AtlasLifecycleError("atlas_unavailable", "Atlas API key could not be validated")
 
     def unlock(self, passphrase: str) -> None:
         result = self.client.request("POST", "/api/unlock", body={"passphrase": passphrase})

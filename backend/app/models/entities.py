@@ -195,10 +195,11 @@ class FunctionAccessApproval(Base):
 class IntegrationConnection(Base):
     __tablename__ = "integration_connections"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
     provider: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
     secret_store_id: Mapped[str] = mapped_column(String(64), nullable=False)
     secret_reference: Mapped[str] = mapped_column(String(256), nullable=False)
+    credential_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="token")
     passphrase_secret_store_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     passphrase_secret_reference: Mapped[str | None] = mapped_column(String(256), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)

@@ -96,10 +96,15 @@ def approve_generation_request(
     generation_request = db.get(SkillGenerationRequest, request_id)
     if generation_request is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generation request not found")
-    if generation_request.status in {"planned", "needs_input"}:
+    if generation_request.status != "awaiting_approval":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="ProductManager has not finished the build blueprint and permission plan yet.",
+            detail="Only a completed build plan awaiting approval can be approved.",
+        )
+    if generation_request.proposed_skill_id is None or generation_request.proposed_skill is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The build plan has no controlled skill record to approve.",
         )
     permission_service = PermissionService(db)
     permission_request = permission_service.create_build_time_request(generation_request)

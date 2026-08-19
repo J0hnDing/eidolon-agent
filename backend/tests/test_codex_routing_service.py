@@ -8,9 +8,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
+from app.models import CodexRoutingSettings
 from app.schemas.codex_routing import CodexRoutingSettingsPayload, ResolvedInvocationSettings
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
-from app.services.codex_service import RealCodexAdapter
+from app.services.codex_service import CodexService, RealCodexAdapter
 
 CATALOG = {
     "available": True,
@@ -91,11 +92,63 @@ def test_single_codex_builder_has_independent_route(db_session: Session) -> None
     service = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
     service.update_settings(payload)
 
-    resolved = service.resolve(role="builder", action="single_codex_build")
+    persisted_service = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
+    saved = persisted_service.read_settings()
+    resolved = persisted_service.resolve(role="builder", action="single_codex_build")
 
+    assert saved.builder.single_codex.model == "gpt-smart"
+    assert saved.builder.single_codex.reasoning_effort == "xhigh"
     assert resolved.effective_model == "gpt-smart"
     assert resolved.effective_reasoning_effort == "xhigh"
     assert resolved.route_source == "builder.single_codex"
+
+
+def test_saved_single_codex_route_reaches_real_cli_command(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[str] = []
+
+    def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        captured.extend(command)
+        stdout = json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {"input_tokens": 4, "output_tokens": 2, "total_tokens": 6},
+            }
+        )
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("app.services.codex_service.subprocess.run", fake_run)
+    routing = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
+    routing.update_settings(
+        CodexRoutingSettingsPayload.model_validate(
+            {
+                "builder": {
+                    "single_codex": {"model": "gpt-smart", "reasoning_effort": "xhigh"},
+                }
+            }
+        )
+    )
+    output_dir = tmp_path / "skills" / "proposed" / "routing_probe"
+    output_dir.mkdir(parents=True)
+    service = CodexService(
+        db_session,
+        adapter=RealCodexAdapter(command="codex", enable_search="false"),
+        project_root=tmp_path,
+    )
+    service.routing_service = routing
+
+    result = service._generate_writable_skill(
+        "Build the proposed skill.",
+        output_dir,
+        {"codex_task": "single_codex_build"},
+    )
+
+    assert captured[captured.index("--model") + 1] == "gpt-smart"
+    assert 'model_reasoning_effort="xhigh"' in captured
+    assert result.codex_route_source == "builder.single_codex"
 
 
 def test_settings_validate_single_codex_builder_choice(db_session: Session) -> None:
@@ -123,6 +176,27 @@ def test_project_build_workflow_override_round_trips_and_defaults_to_automatic(d
 
     assert saved.project_build_workflow_override == "single_codex"
     assert service.project_build_workflow_override() == "single_codex"
+
+
+def test_legacy_refine_intent_route_is_ignored_when_reading_settings(db_session: Session) -> None:
+    db_session.add(
+        CodexRoutingSettings(
+            id=1,
+            settings_json={
+                "product_manager": {
+                    "default": {},
+                    "refine_intent": {"model": "removed-route"},
+                    "blueprint_and_permissions": {"model": "gpt-fast"},
+                }
+            },
+        )
+    )
+    db_session.commit()
+
+    settings = CodexRoutingService(db_session, catalog_service=FakeCatalogService()).read_settings()
+
+    assert "refine_intent" not in settings.product_manager.model_dump()
+    assert settings.product_manager.blueprint_and_permissions.model == "gpt-fast"
 
 
 def test_product_manager_action_override_is_independent(db_session: Session) -> None:

@@ -1,6 +1,5 @@
 import json
 import subprocess
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -518,20 +517,6 @@ def test_atlas_know_uses_bounded_codex_and_audits_only_node_id(db: Session, tmp_
         "resource_scope": {},
     }
     skill, manifest = create_installed_skill(db, tmp_path, requirement=requirement)
-    store = FakeSecretStore()
-    reference = store.put(ATLAS_SENTINEL, namespace="atlas_api_key")
-    db.add(
-        IntegrationConnection(
-            provider="atlas",
-            secret_store_id=store.implementation_id,
-            secret_reference=reference,
-            status="connected",
-            account_login="Local Atlas",
-            account_id="local-atlas",
-            last_validated_at=datetime.now(UTC),
-        )
-    )
-
     class Codex:
         prompts: list[str] = []
 
@@ -555,7 +540,7 @@ def test_atlas_know_uses_bounded_codex_and_audits_only_node_id(db: Session, tmp_
     service = IntegrationService(
         db,
         project_root=tmp_path,
-        secret_store=store,
+        secret_store=None,
         atlas=atlas,
         codex_adapter=codex,
     )

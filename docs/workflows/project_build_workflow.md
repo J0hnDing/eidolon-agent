@@ -1,6 +1,6 @@
 # Project Build Workflow
 
-New skill builds share one general starting sequence and then dispatch to a backend-managed build workflow. One-time ProductManager intent refinement is followed by the resumable `pm_plan_build` session, which combines clarification, rejection, blueprinting, permission planning, and workflow selection before deterministic build-time approval. The supported build workflows are `single_codex` and `task_dag`.
+New skill builds share one general starting sequence and then dispatch to a backend-managed build workflow. A one-time intent placeholder is followed by the resumable `pm_plan_build` session, which combines clarification, rejection, blueprinting, permission planning, and workflow selection before deterministic build-time approval. The supported build workflows are `single_codex` and `task_dag`.
 
 ## Build Artifacts
 
@@ -31,27 +31,29 @@ The actual Codex input also includes the corresponding instructions.
 ProductManager does not write these files directly; the backend validates its JSON response and writes the artifacts.
 
 1. `pm_refine_intent`
-   - Inputs: the initial Project-mode user message and explicit user memory facts (currently defaulting to none until the memory system is implemented).
+   - Input: the initial Project-mode user message.
    - Output: `intent_prompt.json`.
-   - Purpose: rewrite the request into a clearer build prompt for downstream PM actions.
-   - ProductManager refinement runs once when the generation request is created. Clarification replies do not rerun refinement.
-   - Only `schema_version` and `refined_prompt` continue to the planning session. Selected memory facts remain in the stored intent artifact for audit.
-   - Must not create a blueprint, permissions, task graph, or generated skill files.
+   - Current placeholder behavior: copy the initial user message exactly into `refined_prompt` with `schema_version = 1`.
+   - This step runs once when the generation request is created. It performs no memory lookup or extraction and does not compose a prompt, route a model, or invoke Codex. Clarification replies do not rerun it.
+   - Only `schema_version` and `refined_prompt` continue to the planning session.
+   - It must not create a blueprint, permissions, task graph, or generated skill files.
 
 2. `pm_plan_build`
    - First-turn inputs: `intent_prompt.json`, the available function-catalog index, and complete config-derived `permission_policy` containing `default_allowed`, `requires_approval`, and `blocked`.
    - Clarification-turn input: only the latest user answer; the same persistent Codex App Server thread is resumed.
    - Response: `decision`, `user_prompt`, `build_workflow`, `blueprint`, and `permission_plan` on every turn. The backend writes the validated decision and prompt to `decision.json` after every turn.
+   - Codex App Server receives the complete structured blueprint object in its output schema. Only free-form nested JSON values (`input_schema`, `output_schema`, and scheduled input) are transported as JSON strings, decoded to objects, and then checked against the canonical backend schema.
    - Decisions are `ask_user_for_input`, `stop_inplausible`, or `proceed_to_approval`. Clarification and rejection contain no planning fields; approval handoff requires a complete workflow, blueprint, and permission plan.
    - No blueprint, permission, DAG, or generated skill artifacts are created until `proceed_to_approval`.
-   - Purpose: choose `single_codex` or `task_dag`; name the skill; select the `function` or `web_app` execution protocol; define the complete function input/output schemas; describe the skill goal, expected user behavior, function-only schedule intent, high-level acceptance criteria, selected catalog functions, and any required integration resource scope; draft both build-time needs and expected runtime permissions/dependencies.
+   - Purpose: choose `single_codex` or `task_dag`; provide one safe skill `name` and concise `description`; select the `function` or `web_app` execution protocol; define the complete function input/output schemas; describe expected user behavior and function-only schedule intent; select catalog functions; and draft both build-time needs and expected runtime permissions/dependencies.
    - ProductManager receives only available catalog ids, titles, descriptions, categories, and risks, never detailed schemas, endpoints, credential management, or secret-store details.
    - `build_workflow` is backend routing state stored on the agent run. It must not appear inside `blueprint` or in `blueprint.json` because downstream DAG, Builder, and Tester inputs do not need it.
    - Must not enumerate generated package files. Required Builder-owned paths are defined later by each task node's `write_paths` in `task_dag.json`.
    - Must not include task nodes, dependencies between tasks, or test files.
    - Must not approve permissions.
    - Must omit default-allowed values, return only the exact `requires_approval` shape, and never request a blocked capability. The structured output schema and backend sanitizer derive this contract from the config rather than instruction prose.
-   - ProductManager owns `skill_name` in the blueprint. The backend validates it before creating the controlled database record and package folder.
+   - ProductManager owns the single `name` in the blueprint. The backend validates it before creating the controlled database record and package folder, then derives any presentation label needed by the UI.
+   - Integration providers and operations are derived from selected function ids. Provider-specific resource authorization is validated from the generated manifest during runtime permission review, not carried as free-form ProductManager scope data.
 
 The Codex Settings page can persist a backend-owned workflow override. `Automatic` keeps the ProductManager choice. `Simple` forces `single_codex`, and `Task DAG` forces `task_dag` for every new Project build, regardless of the top-level value returned by ProductManager. The agent run stores the effective workflow and the ProductManager step records whether selection came from ProductManager or the settings override.
 
@@ -99,7 +101,7 @@ Both project-build workflows use one deterministic final package validator after
 6. A `single_codex` failure blocks the run. A `task_dag` failure may enter the DAG-owned bounded Builder repair loop; every repaired result is scanned and validated again.
 7. Runtime permission review is not created until the scan, manifest/package validation, and tests pass.
 
-In `task_dag`, Tester writes `tests/test_final_e2e.py` before this validator runs, using the approved blueprint acceptance criteria and validated node interface artifacts. There is no separate final-expectations field in `task_dag.json`. In `single_codex`, the one writable invocation is responsible for writing its tests from the approved blueprint.
+In `task_dag`, Tester writes `tests/test_final_e2e.py` before this validator runs, using the approved blueprint expected behavior and validated node interface artifacts. There is no separate final-expectations field in `task_dag.json`. In `single_codex`, the one writable invocation is responsible for writing its tests from the approved blueprint.
 
 The capability scan is deliberately small and evidence-based. It blocks selected recognized calls, provably unsafe literal paths or domains, unscannable source, and literal browser-asset URLs. Imports without recognized calls, dynamic paths, and runtime-constructed domains do not block when the scanner cannot prove a violation. The runtime sandbox remains authoritative; the scan cannot prove the absence of dynamic, transitive, encoded, dependency-internal, Python-embedded browser, or runtime-constructed behavior.
 
@@ -252,7 +254,7 @@ Inputs:
 
 - compact final blueprint contract;
 - effective `permission_bounds`;
-- approved blueprint acceptance criteria;
+- approved blueprint expected behavior;
 - compact interface contracts without file-claim bookkeeping;
 - one normalized final failure object;
 - generated skill package paths without embedded contents.
@@ -297,8 +299,8 @@ Runs after every task node is `done`.
 
 Inputs:
 
-- compact blueprint goal, expected behavior, schedule, and acceptance criteria;
-- approved blueprint acceptance criteria;
+- compact blueprint description, expected behavior, and schedule;
+- approved blueprint expected behavior;
 - compact interface contracts;
 - safe package `workspace_paths`, excluding `.git`, `.agents`, caches, bytecode, and Codex bookkeeping files.
 - detailed integration context only for operations selected across the approved build, plus the deterministic fake adapter marker.
@@ -306,7 +308,7 @@ Inputs:
 Behavior:
 
 - write one final end-to-end test file, for example `tests/test_final_e2e.py`;
-- write coverage for the whole proposed skill against the blueprint acceptance criteria;
+- write coverage for the whole proposed skill against the blueprint expected behavior;
 - run at most its focused self-check; the backend separately owns authoritative package validation and test execution;
 - leave `final_e2e_test_result.json` to the backend validator;
 - never approve the result or trigger repair itself. The DAG workflow evaluates backend validation and may invoke `builder_fix_final_e2e`.

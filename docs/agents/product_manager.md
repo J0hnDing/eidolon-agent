@@ -1,21 +1,21 @@
 # ProductManagerAgent
 
-ProductManagerAgent owns project judgment, intent refinement, build-workflow selection, blueprinting, permission-file drafting, conditional DAG task planning, and user-facing blocked/clarification responses.
+ProductManagerAgent owns project judgment, build-workflow selection, blueprinting, permission-file drafting, conditional DAG task planning, and user-facing blocked/clarification responses. The preceding intent step is currently a backend passthrough placeholder, not a ProductManagerAgent invocation.
 
 ## Responsibilities
 
 - Understand the user's request.
-- Read backend-selected explicit user memory facts when they are relevant to the Project-mode request.
-- Rewrite the request into a clearer build prompt before planning. Refinement runs once when a generation request is created.
 - In the resumable `pm_plan_build` session, decide whether the refined request needs clarification, is unsupported, or can proceed to approval.
 - On the first planning turn, use the available function catalog and complete canonical permission policy supplied by the backend.
 - If the request is unclear, ask one user-facing clarification question and wait for the next Project-mode chat reply on the same generation request.
 - If the request is infeasible or unsupported, explain why and stop without creating blueprint, permission, or task DAG artifacts.
 - Write a concise blueprint without tasks or milestones.
+- Use one filesystem-safe `name` and one concise `description`; the backend derives presentation labels.
 - Select `runtime = function` for bounded JSON stdin/stdout execution or `runtime = web_app` for a self-rendered interactive ASGI application.
 - For function skills, define the complete object-shaped input and output JSON Schemas in the blueprint.
 - Select every needed backend-core, user, or integration function by exact id from the backend-provided available catalog. Function selection has no reason field.
-- Provide exact integration resource scope separately when selected integration functions require it.
+- Describe concrete user-visible requirements in `expected_behavior`. Blueprint-level acceptance criteria are not part of the contract; task-specific criteria are created later for Task DAG nodes.
+- Do not return integration scope objects. The backend derives providers and operations from selected function ids, while generated-manifest runtime approval owns provider-specific resource authorization.
 - Include intended recurring schedule metadata only for function skills. Web applications use `schedule = null` because their service lifetime is not a scheduled bounded run.
 - Draft build-time and expected runtime permission intent in a separate permission file.
 - During blueprint or update planning, use the complete config-derived `permission_policy`: omit `default_allowed`, return the exact `requires_approval` shape, and reject needs listed in `blocked`.
@@ -52,8 +52,8 @@ task_dag.json  # task_dag workflow only
 
 Backend state enforces this split:
 
-- ProductManager refinement runs once for the initial Project-mode request and writes `intent_prompt.json`; clarification replies resume the same planning session without rerunning refinement.
-- Memory facts used during refinement remain auditable in `intent_prompt.json`, while downstream PM prompts receive only the refined prompt text.
+- The deterministic `pm_refine_intent` placeholder runs once for the initial Project-mode request and writes that message unchanged to `intent_prompt.json`; it does not invoke ProductManagerAgent or Codex. Clarification replies resume the same planning session without rerunning the placeholder.
+- Downstream PM prompts receive only the passthrough prompt text.
 
 - Before `proceed_to_approval`, `AgentWorkflowService` does not create a building skill and does not write `blueprint.json`, `permissions.json`, or `task_dag.json`; it writes `decision.json` after each planning turn.
 - `pm_plan_build` always returns `decision`, `user_prompt`, `build_workflow`, `blueprint`, and `permission_plan`. Clarification and rejection responses contain no planning artifacts; `proceed_to_approval` contains the complete workflow, blueprint, and permission plan, which the backend then writes.

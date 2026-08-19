@@ -1,0 +1,153 @@
+{
+  "manifest_version": 1,
+  "name": "github_atlas_project_scout",
+  "display_name": "Github Atlas Project Scout",
+  "description": "Compare trending GitHub repositories with Atlas projects and produce a Codex-generated learning report.",
+  "runtime": "function",
+  "entrypoint": "skill.py",
+  "instructions_path": null,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "default": 10,
+        "description": "Maximum number of trending repositories to compare."
+      },
+      "language": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Optional programming-language filter."
+      },
+      "atlas_keywords": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        },
+        "maxItems": 20,
+        "default": [],
+        "description": "Optional keywords used to narrow Atlas projects."
+      },
+      "analysis_focus": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000,
+        "description": "Optional guidance for the comparison and recommendations."
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "report": {
+        "type": "string",
+        "description": "Codex-generated comparison and analysis."
+      },
+      "interesting_repositories": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "full_name": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "why_interesting": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "full_name",
+            "url",
+            "summary",
+            "why_interesting"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "learning_matches": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "atlas_project": {
+              "type": "string"
+            },
+            "github_repository": {
+              "type": "string"
+            },
+            "relevance": {
+              "type": "string"
+            },
+            "realistic_lessons": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "atlas_project",
+            "github_repository",
+            "relevance",
+            "realistic_lessons"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "limitations": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "required": [
+      "report",
+      "interesting_repositories",
+      "learning_matches",
+      "limitations"
+    ],
+    "additionalProperties": false
+  },
+  "function_requirements": [],
+  "integration_requirements": [
+    {
+      "provider": "atlas",
+      "operations": [
+        "atlas.project.list"
+      ],
+      "resource_scope": {}
+    },
+    {
+      "provider": "github",
+      "operations": [
+        "github.repository.trending.list"
+      ],
+      "resource_scope": {
+        "repositories": []
+      }
+    }
+  ],
+  "dependencies": [],
+  "permissions": {
+    "network": [],
+    "filesystem_read": [],
+    "filesystem_write": [],
+    "secrets": [],
+    "shell": false,
+    "codex": {
+      "internet_access": false
+    }
+  },
+  "schedule": null
+}

@@ -1,6 +1,5 @@
 ## TODO-002: Local Non-Agentic Model Adapter
 
-- Status: planned
 - Priority: medium
 - Category: feature
 - Area: backend-model-adapters
@@ -12,7 +11,6 @@ A backend adapter reads only the selected path and relevant context, invokes the
 
 ## TODO-005: First-Class Schedule Approval Scope
 
-- Status: planned
 - Priority: medium
 - Category: refactor
 - Area: backend-approval-contracts
@@ -24,7 +22,6 @@ Schedule approvals use one canonical scope contract; existing local rows are mig
 
 ## TODO-006: Resolve Backend Message Storage Boundary
 
-- Status: planned
 - Priority: low
 - Category: research
 - Area: backend-and-frontend-chat-persistence
@@ -36,7 +33,6 @@ Decide whether chat history is backend-persisted or frontend-local; migrate or r
 
 ## TODO-007: Transactional Filesystem and Database Operations
 
-- Status: planned
 - Priority: low
 - Category: refactor
 - Area: backend-lifecycle-reliability
@@ -48,7 +44,6 @@ Destructive lifecycle operations use staging plus deterministic commit/rollback 
 
 ## TODO-008: Real Parallel DAG Execution
 
-- Status: planned
 - Priority: low
 - Category: feature
 - Area: backend-project-build-execution
@@ -73,7 +68,6 @@ Suggested design:
 
 ## TODO-010: Domain-Level Runtime Egress Enforcement
 
-- Status: planned
 - Priority: high
 - Category: feature
 - Area: backend-sandbox-networking
@@ -85,7 +79,6 @@ Docker runtime egress is restricted to the approved manifest domains for both bo
 
 ## TODO-012: Progress-Aware Workflow Budgets And Partial Recovery
 
-- Status: planned
 - Priority: medium
 - Category: feature
 - Area: backend-codex-workflow-reliability
@@ -97,7 +90,6 @@ Codex JSONL and relevant tool/file activity are streamed and persisted as invoca
 
 ## TODO-013: Nested Function Invocation Policy
 
-- Status: planned
 - Priority: medium
 - Category: research
 - Area: backend-function-composition
@@ -109,7 +101,6 @@ Define and enforce a bounded maximum depth; reject cycles deterministically; eva
 
 ## TODO-014: Memory Context And Long-Term Adaptation
 
-- Status: planned
 - Priority: medium
 - Category: feature
 - Area: memory-adaptation
@@ -118,3 +109,30 @@ Define and enforce a bounded maximum depth; reject cycles deterministically; eva
 
 -Acceptance Criteria:
 Memory retrieval uses an inspectable backend-owned selection policy and includes only user-owned facts relevant to the current context; the UI shows which facts were used and allows exclusion, correction, and deletion; users can attach structured feedback and outcomes to skill runs; adaptation proposals cite the memory, feedback, and run evidence that caused them; proposed memory changes require explicit confirmation; proposed skill changes enter the existing versioned update, validation, comparison, permission, and activation workflow; no adaptation installs, enables, schedules, or activates itself; evaluation compares a proposal with its active predecessor against preserved acceptance criteria and regression tests; rejected adaptations remain auditable without repeatedly resurfacing; and all adaptation state remains local and deletable.
+
+## TODO-015: Implement intent refinement with memory retrieval and preference extraction
+
+- Priority: medium
+- Category: feature
+- Area: Project build workflow
+- Dependencies: none
+- Rationale: The current pm_refine_intent step is intentionally a no-Codex passthrough placeholder. Replace it with grounded intent refinement that retrieves relevant explicit memory, fills missing request context without inventing requirements, and extracts applicable user preferences.
+
+-Acceptance Criteria:
+- Retrieve only relevant explicit user memory using a RAG-like selection approach.
+- Fill downstream request context from grounded user messages and selected memory while preserving unresolved ambiguity.
+- Extract applicable user preferences separately from factual context and retain source traceability.
+- Keep irrelevant, expired, non-user-editable, and disallowed sensitive memory out of the refined intent.
+- Persist an auditable intent artifact and pass a bounded refinement contract to pm_plan_build.
+- Add focused tests for relevance selection, context filling, preference extraction, ambiguity preservation, and privacy boundaries.
+
+## TODO-016: Add bounded symbolic resolution to the capability scanner
+
+- Priority: low
+- Category: refactor
+- Area: Backend capability validation
+- Dependencies: none
+- Rationale: The intentionally small scanner now treats non-literal integration operation expressions as ambiguous so valid generated skills are not blocked. A future bounded analysis may recover high-confidence findings from simple aliases without making the scanner fail closed or replacing runtime authorization.
+
+-Acceptance Criteria:
+Resolve only explicitly bounded, high-confidence cases such as single-assignment literal aliases; retain passive behavior for ambiguous data flow; continue checking resolved literal operations against the actual manifest and approved build context; document limitations; and add positive and negative regression tests proving valid generated code is not blocked.

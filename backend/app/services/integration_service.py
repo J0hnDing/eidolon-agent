@@ -57,8 +57,7 @@ PROVIDER_ERROR_MESSAGES = {
 }
 
 ATLAS_PROVIDER_ERROR_MESSAGES = {
-    **PROVIDER_ERROR_MESSAGES,
-    "invalid_credential": "The Atlas API key is invalid",
+    **{key: value for key, value in PROVIDER_ERROR_MESSAGES.items() if key != "invalid_credential"},
     "not_found": "The requested Atlas item was not found",
     "provider_forbidden": "Atlas denied the requested operation",
     "provider_timeout": "Atlas did not respond before the timeout",
@@ -372,7 +371,7 @@ class IntegrationService:
         input_json: dict[str, Any],
         audit: IntegrationAuditRecord,
     ) -> dict[str, Any]:
-        # The order is deliberate: the credential is retrieved only after every
+        # The order is deliberate: GitHub credentials are retrieved only after every
         # caller, manifest, approval, connection, scope, and schema check passes.
         if skill.status != "installed" or not skill.enabled:
             raise IntegrationError("authorization_missing_or_stale", "Integration caller is not installed and enabled")
@@ -402,7 +401,15 @@ class IntegrationService:
         if operation is None:
             raise IntegrationError("operation_undeclared", "Integration operation does not exist")
         connection = self._connection(operation.provider)
-        if connection is None or connection.status != "connected":
+        if operation.provider == "atlas":
+            if not self.provider_connected("atlas"):
+                from app.services.atlas_settings_service import AtlasSettingsService
+
+                status = AtlasSettingsService(self.db, secret_store=self.secret_store).status()
+                if status.running and status.locked:
+                    raise IntegrationError("atlas_locked", "Atlas is locked")
+                raise IntegrationError("connection_unavailable", "Atlas is unavailable")
+        elif connection is None or connection.status != "connected":
             provider_name = PROVIDER_DISPLAY_NAMES.get(operation.provider, operation.provider.title())
             raise IntegrationError("connection_unavailable", f"{provider_name} connection is unavailable")
         scoped_resource = self._resource(operation.resource_scope, input_json)
@@ -420,35 +427,37 @@ class IntegrationService:
             path = ".".join(str(item) for item in exc.absolute_path)
             location = f" at {path}" if path else ""
             raise IntegrationError("invalid_input", f"Integration input is invalid{location}") from None
-        if (
-            self.secret_store is None
-            or self.secret_store.implementation_id != connection.secret_store_id
-        ):
-            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
-        try:
-            if operation.provider == "atlas":
-                from app.services.atlas_settings_service import AtlasSettingsService
-
-                credential = AtlasSettingsService(self.db, secret_store=self.secret_store).api_key()
-            else:
+        credential = ""
+        if operation.provider != "atlas":
+            assert connection is not None
+            if (
+                self.secret_store is None
+                or self.secret_store.implementation_id != connection.secret_store_id
+            ):
+                raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+            try:
                 credential = self.secret_store.get(connection.secret_reference)
-        except (SecretStoreError, RuntimeError):
-            raise IntegrationError("connection_unavailable", "Stored integration credential is unavailable") from None
+            except (SecretStoreError, RuntimeError):
+                raise IntegrationError(
+                    "connection_unavailable", "Stored integration credential is unavailable"
+                ) from None
         try:
             try:
                 if operation.operation_id == "atlas.knowledge.node.know":
-                    inspected = self.atlas.execute(OPERATIONS["atlas.knowledge.node.get"], {"node_id": input_json["node_id"]}, credential)
+                    inspected = self.atlas.execute(
+                        OPERATIONS["atlas.knowledge.node.get"], {"node_id": input_json["node_id"]}
+                    )
                     output = AtlasKnowledgeService(
                         self.atlas,
                         adapter=self.codex_adapter,
                         project_root=self.project_root,
-                    ).know(inspected["node"], input_json.get("explanation"), credential)
+                    ).know(inspected["node"], input_json.get("explanation"))
                 elif operation.provider == "atlas":
-                    output = self.atlas.execute(operation, input_json, credential)
+                    output = self.atlas.execute(operation, input_json)
                 else:
                     output = self.github.execute(operation, input_json, credential)
             except IntegrationProviderError as exc:
-                if exc.error_type == "invalid_credential":
+                if operation.provider == "github" and exc.error_type == "invalid_credential" and connection is not None:
                     connection.status = "invalid"
                     connection.error_type = "invalid_credential"
                 raise IntegrationError(
@@ -499,19 +508,19 @@ class IntegrationService:
         )
 
     def provider_connected(self, provider: str) -> bool:
-        connection = self._connection(provider)
-        if connection is None or connection.status != "connected":
-            return False
-        if self.secret_store is None or self.secret_store.implementation_id != connection.secret_store_id:
-            return False
         if provider == "atlas":
             try:
                 from app.services.atlas_settings_service import AtlasSettingsService
 
                 status = AtlasSettingsService(self.db, secret_store=self.secret_store).status()
-                return bool(status.running and status.locked is False and status.api_key_status == "connected")
+                return bool(status.running and status.locked is False)
             except (AttributeError, ImportError, RuntimeError):
                 return False
+        connection = self._connection(provider)
+        if connection is None or connection.status != "connected":
+            return False
+        if self.secret_store is None or self.secret_store.implementation_id != connection.secret_store_id:
+            return False
         return True
 
     def _authorization_for_fingerprint(

@@ -42,11 +42,9 @@ ATLAS_HOSTS = {"127.0.0.1", "localhost", "::1"}
 ATLAS_MARKERS = (
     "127.0.0.1:4817",
     "localhost:4817",
-    "/api/agent-key",
     "/api/unlock",
     "/api/settings/",
     "/api/knowledge/",
-    "/api/agent/",
 )
 INTEGRATION_HELPERS = {
     "integration_runtime_capabilities.call",
@@ -556,14 +554,7 @@ class StaticCapabilityScanner:
         operation_node = next((keyword.value for keyword in node.keywords if keyword.arg == "operation"), None)
         operation_id = self._literal_string(operation_node) if operation_node is not None else None
         if operation_id is None:
-            return CapabilityFinding(
-                capability="integration_operation",
-                status="blocked",
-                path=relative_path,
-                line=node.lineno,
-                evidence="dynamically constructs integration operation identifier",
-                message="Integration operation identifiers must be literal and selected by the approved build context.",
-            )
+            return None
         if operation_id not in declared_operations:
             return CapabilityFinding(
                 capability="integration_operation",

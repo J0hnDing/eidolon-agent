@@ -34,17 +34,20 @@ def test_literal_declared_selected_helper_call_is_allowed(tmp_path: Path) -> Non
     assert result.ok
 
 
-def test_dynamic_undeclared_and_unselected_operations_are_rejected(tmp_path: Path) -> None:
-    dynamic = scan(
+def test_non_literal_operation_is_ambiguous_and_does_not_block(tmp_path: Path) -> None:
+    result = scan(
         tmp_path,
         "import integration_runtime_capabilities\n"
-        "operation = 'github.repository.get'\n"
-        "integration_runtime_capabilities.call(operation=operation, input={})\n",
+        "GITHUB_OPERATION = 'github.repository.get'\n"
+        "integration_runtime_capabilities.call(operation=GITHUB_OPERATION, input={})\n",
         declared={"github.repository.get"},
         selected={"github.repository.get"},
     )
-    assert any(finding.capability == "integration_operation" for finding in dynamic.findings)
+    assert result.ok
+    assert not any(finding.capability == "integration_operation" for finding in result.findings)
 
+
+def test_literal_undeclared_and_unselected_operations_are_rejected(tmp_path: Path) -> None:
     undeclared = scan(
         tmp_path,
         "import integration_runtime_capabilities\n"

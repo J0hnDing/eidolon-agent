@@ -33,7 +33,7 @@ class AtlasKnowledgeService:
 
             self.adapter = default_codex_adapter()
 
-    def know(self, node: dict[str, Any], explanation: str | None, credential: str) -> dict[str, Any]:
+    def know(self, node: dict[str, Any], explanation: str | None) -> dict[str, Any]:
         if node.get("status") == "known":
             raise AtlasKnowledgeError("node_already_known", "The selected Knowledge node is already known")
         supplied = explanation is not None
@@ -75,7 +75,7 @@ class AtlasKnowledgeService:
             "children": children,
         }
         try:
-            return self.provider.establish(payload, credential)
+            return self.provider.establish(payload)
         except IntegrationProviderError:
             raise
 

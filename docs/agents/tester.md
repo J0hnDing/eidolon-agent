@@ -12,7 +12,7 @@ Tester receives config-derived effective `permission_bounds` and must not design
 - Inspect Builder-created files directly from safe workspace paths rather than receiving embedded source snapshots.
 - Avoid backend-owned node fields and bookkeeping such as node id, function ids, dependencies, difficulty, write paths, test-admission and parallel-admission policy, task artifact paths, full task DAGs for node tests, task indexes, and task status. The backend supplies the exact test filename and resolved selected-function context separately.
 - Write rich but not overly complicated pytest tests for task nodes that require tests.
-- For DAG builds, write one final end-to-end pytest file after all task nodes are done, based on the approved blueprint acceptance criteria.
+- For DAG builds, write one final end-to-end pytest file after all task nodes are done, based on the approved blueprint expected behavior.
 - Validate manifest schema.
 - Run tests through the existing safe validation path.
 - Check the runtime protocol: JSON stdin/stdout for functions or in-process ASGI/UI-route behavior for web applications.

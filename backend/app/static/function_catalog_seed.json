@@ -69,7 +69,7 @@
         "additionalProperties": false
       },
       "invocation": {
-        "function_helper": "POST /skills/{skill_id}/codex using PERSONAL_AGENT_SKILL_ID and PERSONAL_AGENT_BACKEND_URL",
+        "function_helper": "function_runtime_capabilities.call_codex(prompt, context=..., model=..., internet_access=...)",
         "web_app_helper": "web_runtime_capabilities.call_codex(prompt=..., context=..., internet_access=...)",
         "test_guidance": "Mock the backend helper. Do not shell out to Codex.",
         "rules": [

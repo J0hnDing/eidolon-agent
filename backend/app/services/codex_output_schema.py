@@ -42,7 +42,7 @@ def _schema_from_policy_template(value: object) -> dict[str, object]:
         properties = {str(key): _schema_from_policy_template(item) for key, item in value.items()}
         return _object_schema(properties, list(properties))
     if isinstance(value, list):
-        return _string_array_schema(unique=True)
+        return _string_array_schema()
     if isinstance(value, bool):
         return {"type": "boolean"}
     raise ValueError(f"Unsupported permission policy template value: {type(value).__name__}")
@@ -82,32 +82,13 @@ _MILESTONE_SCHEMA = _object_schema(
     ["name", "summary", "acceptance_criteria"],
 )
 
-_INTEGRATION_SCOPES_SCHEMA = _described(
-    _object_schema(
-        {
-            "github": _object_schema(
-                {
-                    "repositories": _described(
-                        _string_array_schema(unique=True),
-                        "GitHub repositories in owner/repository form.",
-                    ),
-                },
-                ["repositories"],
-            ),
-            "atlas": _object_schema({}, []),
-        },
-        [],
-    ),
-    "Exact provider resource scopes required by selected integration functions.",
-)
-
 _SCHEDULE_SCHEMA = _described(
     {
         "anyOf": [
             {"type": "null"},
             _object_schema(
                 {
-                    "type": {"const": "daily"},
+                    "type": {"type": "string", "const": "daily"},
                     "time": {"type": "string", "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"},
                     "timezone": {"type": "string", "minLength": 1},
                     "input": _UNCONSTRAINED_OBJECT,
@@ -116,7 +97,7 @@ _SCHEDULE_SCHEMA = _described(
             ),
             _object_schema(
                 {
-                    "type": {"const": "weekly"},
+                    "type": {"type": "string", "const": "weekly"},
                     "day": {
                         "type": "string",
                         "enum": [
@@ -137,7 +118,7 @@ _SCHEDULE_SCHEMA = _described(
             ),
             _object_schema(
                 {
-                    "type": {"const": "interval"},
+                    "type": {"type": "string", "const": "interval"},
                     "every": {"type": "integer", "minimum": 1},
                     "unit": {"type": "string", "enum": ["minutes", "hours", "days"]},
                     "timezone": {"type": "string", "minLength": 1},
@@ -152,23 +133,17 @@ _SCHEDULE_SCHEMA = _described(
 
 _BUILD_BLUEPRINT_SCHEMA = _object_schema(
     {
-        "goal": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Concise statement of the skill's purpose.",
-        },
-        "skill_name": {
+        "name": {
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
             "pattern": "^[A-Za-z0-9_-]+$",
             "description": "Filesystem-safe skill identifier.",
         },
-        "display_name": {
+        "description": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 256,
-            "description": "Human-readable skill name.",
+            "description": "Concise description of the skill's purpose.",
         },
         "runtime": {
             "type": "string",
@@ -191,25 +166,17 @@ _BUILD_BLUEPRINT_SCHEMA = _object_schema(
             _string_array_schema(unique=True),
             "Exact selected function catalog identifiers.",
         ),
-        "integration_scopes": _INTEGRATION_SCOPES_SCHEMA,
         "schedule": _SCHEDULE_SCHEMA,
-        "acceptance_criteria": _described(
-            _string_array_schema(min_items=1),
-            "Technical conditions required for acceptance.",
-        ),
     },
     [
-        "goal",
-        "skill_name",
-        "display_name",
+        "name",
+        "description",
         "runtime",
         "input_schema",
         "output_schema",
         "expected_behavior",
         "functions",
-        "integration_scopes",
         "schedule",
-        "acceptance_criteria",
     ],
 )
 
@@ -352,28 +319,6 @@ _OUTPUT_SCHEMAS: dict[str, dict[str, object]] = {
             },
         },
         ["explanation", "terms", "children"],
-    ),
-    "product_manager_refine_intent": _object_schema(
-        {
-            "intent_prompt": _described(
-                _object_schema(
-                    {
-                        "schema_version": {
-                            "type": "integer",
-                            "const": 1,
-                            "description": "Intent contract version.",
-                        },
-                        "refined_prompt": {
-                            "type": "string",
-                            "description": "Clear downstream build request preserving user intent.",
-                        },
-                    },
-                    ["schema_version", "refined_prompt"],
-                ),
-                "Refined intent passed to later ProductManager actions.",
-            )
-        },
-        ["intent_prompt"],
     ),
     "product_manager_plan_build": _object_schema(
         {

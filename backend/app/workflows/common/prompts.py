@@ -6,7 +6,6 @@ from app.workflows.instructions import load_instruction
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _INSTRUCTION_BY_TASK = {
-    "refine_intent": "refine_intent.md",
     "plan_build": "plan_build.md",
 }
 

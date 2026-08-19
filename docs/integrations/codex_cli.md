@@ -1,6 +1,6 @@
 # Codex CLI Integration
 
-The backend can use the local Codex CLI for direct chat, one-time intent refinement, the resumable Project-mode planning session, Builder edits, Tester test writing, repairs, updates, and ProductManager summaries.
+The backend can use the local Codex CLI for direct chat, the resumable Project-mode planning session, Builder edits, Tester test writing, repairs, updates, and ProductManager summaries. The preceding intent placeholder copies the initial user message and does not invoke Codex.
 
 The backend also starts one persistent local `codex app-server --stdio` child process for account allowance reads. It uses `account/rateLimits/read` to expose the current 5-hour and weekly windows. App Server availability failures are reported by the usage API and do not block normal chat or skill runtime.
 
@@ -90,7 +90,6 @@ single-Codex workflow uses one larger limit for its combined planning, implement
 
 | Codex action | Hard timeout |
 | --- | ---: |
-| ProductManager intent refinement | 120 seconds |
 | ProductManager planning/clarification, task-DAG planning, repair planning, and update review | 180 seconds |
 | Builder task, update, and repair | 600 seconds |
 | Tester task, final E2E authoring, and update testing | 300 seconds |
@@ -112,13 +111,13 @@ Codex must not modify backend/frontend app source when generating application sk
 
 ## Skill Runtime Calls
 
-Skills must not shell out to the Codex CLI. Installed enabled function skills may call the backend Skill Codex Call API:
+Skills must not shell out to the Codex CLI. Installed enabled function skills use the scoped runtime helper:
 
 ```text
-POST /skills/{skill_id}/codex
+function_runtime_capabilities.call_codex(...)
 ```
 
-The runner sets `PERSONAL_AGENT_SKILL_ID` and `PERSONAL_AGENT_BACKEND_URL` for generated skill code. The backend validates runtime approval and manifest `permissions.codex` before invoking Codex. `codex_permissions.internet_access=true` is accepted only when runtime `network` entries were approved for the skill.
+The helper authenticates `POST /functions/capabilities/codex` with the ephemeral function-run token. The backend derives the caller skill and active version from that token, then validates runtime approval and manifest `permissions.codex` before invoking Codex. `codex_permissions.internet_access=true` is accepted only when runtime `network` entries were approved for the skill. The older `POST /skills/{skill_id}/codex` route remains a trusted local compatibility surface and is not the sandbox transport.
 
 Web applications do not use the caller-supplied skill-id route. Their server process uses `web_runtime_capabilities.call_codex`, which authenticates `/web-apps/capabilities/codex` with a scoped instance token and rechecks the enabled active version plus manifest declarations. Browser code never receives the token.
 
