@@ -4,9 +4,12 @@ from pathlib import Path
 
 import pytest
 
-BACKEND_DIR = Path(__file__).resolve().parents[4] / "backend"
 SKILL_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(BACKEND_DIR))
+for parent in Path(__file__).resolve().parents:
+    backend_dir = parent / "backend"
+    if (backend_dir / "function_runtime_capabilities.py").is_file():
+        sys.path.insert(0, str(backend_dir))
+        break
 sys.path.insert(0, str(SKILL_DIR))
 
 import skill  # noqa: E402
@@ -16,8 +19,8 @@ from integration_test_adapter import DeterministicFakeIntegrationAdapter  # noqa
 
 def _github_result(*, repositories=None, truncated=False):
     return {
-        "ranking": "stars_desc_forks_desc_full_name_asc",
-        "lookback_days": 30,
+        "ranking": "github_trending",
+        "period": "weekly",
         "language": "python",
         "repositories": repositories or [],
         "truncated": truncated,
@@ -30,15 +33,16 @@ def _codex_response(payload):
 
 def test_run_uses_selected_operations_and_one_bounded_codex_call(monkeypatch):
     repository = {
+        "rank": 1,
         "full_name": "example/new-tool",
         "description": "A useful new tool",
-        "private": False,
-        "default_branch": "main",
+        "language": "Python",
         "html_url": "https://github.com/example/new-tool",
         "stars": 120,
         "forks": 15,
-        "open_issues": 3,
-        "updated_at": "2026-08-18T00:00:00Z",
+        "stars_gained": 40,
+        "readme": "# New Tool\nA local project knowledge utility.",
+        "readme_truncated": False,
     }
     project = {
         "title": "Atlas Companion",
@@ -77,6 +81,7 @@ def test_run_uses_selected_operations_and_one_bounded_codex_call(monkeypatch):
     result = skill.run({
         "limit": 10,
         "language": "python",
+        "period": "weekly",
         "atlas_keywords": ["local", "knowledge"],
         "analysis_focus": "Prioritize onboarding lessons.",
     })
@@ -86,7 +91,7 @@ def test_run_uses_selected_operations_and_one_bounded_codex_call(monkeypatch):
         "github.repository.trending.list",
         "atlas.project.list",
     ]
-    assert adapter.calls[0]["input"] == {"lookback_days": 30, "limit": 10, "language": "python"}
+    assert adapter.calls[0]["input"] == {"period": "weekly", "limit": 10, "language": "python"}
     assert adapter.calls[1]["input"] == {"limit": 100, "keywords": "local knowledge"}
     assert len(codex_calls) == 1
     assert codex_calls[0]["internet_access"] is False
@@ -109,27 +114,28 @@ def test_run_caps_integration_limit_and_returns_valid_empty_result(monkeypatch):
 
     result = skill.run({"limit": 50, "atlas_keywords": []})
 
-    assert adapter.calls[0]["input"] == {"lookback_days": 30, "limit": 25}
+    assert adapter.calls[0]["input"] == {"period": "weekly", "limit": 25}
     assert result["report"] == "No comparable items were found."
     assert result["interesting_repositories"] == []
     assert result["learning_matches"] == []
     assert any("requested limit of 50 was capped" in item for item in result["limitations"])
     assert any("No matching Atlas projects" in item for item in result["limitations"])
-    assert any("No suitable recent GitHub repositories" in item for item in result["limitations"])
+    assert any("No GitHub Trending repositories" in item for item in result["limitations"])
 
 
 def test_invalid_codex_shape_falls_back_to_manifest_shaped_output(monkeypatch):
     adapter = DeterministicFakeIntegrationAdapter({
         skill.GITHUB_OPERATION: _github_result(repositories=[{
+            "rank": 1,
             "full_name": "example/repo",
             "description": None,
-            "private": False,
-            "default_branch": "main",
+            "language": None,
             "html_url": "https://github.com/example/repo",
             "stars": 1,
             "forks": 0,
-            "open_issues": 0,
-            "updated_at": "2026-08-18T00:00:00Z",
+            "stars_gained": 1,
+            "readme": None,
+            "readme_truncated": False,
         }]),
         skill.ATLAS_OPERATION: {"projects": [{"title": "Project"}]},
     })

@@ -1,4 +1,4 @@
-"""Compare recent GitHub repositories with local Atlas projects."""
+"""Compare GitHub Trending repositories and READMEs with local Atlas projects."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     """Run the bounded comparison workflow and return manifest-shaped output."""
     limit = payload.get("limit", 10)
     language = payload.get("language")
+    period = payload.get("period", "weekly")
     atlas_keywords = payload.get("atlas_keywords", [])
     analysis_focus = payload.get("analysis_focus")
 
@@ -30,7 +31,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             f"the requested limit of {limit} was capped."
         )
 
-    github_input: dict[str, Any] = {"lookback_days": 30, "limit": github_limit}
+    github_input: dict[str, Any] = {"period": period, "limit": github_limit}
     if language is not None:
         github_input["language"] = language
     github_result = integration_runtime_capabilities.call(
@@ -55,7 +56,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     projects = atlas_result.get("projects", [])
     context = {
         "ranking": github_result.get("ranking"),
-        "lookback_days": github_result.get("lookback_days"),
+        "period": github_result.get("period"),
         "language": github_result.get("language"),
         "github_results_truncated": github_result.get("truncated", False),
         "repositories": repositories,
@@ -81,7 +82,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     if not projects:
         limitations.append("No matching Atlas projects were available for project-specific comparison.")
     if not repositories:
-        limitations.append("No suitable recent GitHub repositories were returned by the selected ranking.")
+        limitations.append("No GitHub Trending repositories were returned for the selected period and language.")
     if github_result.get("truncated"):
         limitations.append("The GitHub integration reported that its ranked result was truncated.")
     analysis["limitations"] = _unique_strings([*analysis["limitations"], *limitations])
@@ -101,7 +102,8 @@ def _bounded_keywords(keywords: list[str]) -> tuple[str, bool]:
 def _analysis_prompt() -> str:
     return (
         "Compare the supplied ranked GitHub repositories with the supplied Atlas projects. "
-        "Use only the supplied metadata and analysis focus. Return only one JSON object with exactly "
+        "Use the supplied GitHub Trending rank, period star gain, description, and bounded README content, "
+        "plus the supplied Atlas metadata and analysis focus. Return only one JSON object with exactly "
         "these keys: report (concise string), interesting_repositories (array of objects with full_name, "
         "url, summary, why_interesting), learning_matches (array of objects with atlas_project, "
         "github_repository, relevance, realistic_lessons as an array of strings), and limitations "

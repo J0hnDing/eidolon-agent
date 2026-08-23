@@ -6,7 +6,6 @@ import {
   ApprovalRequest,
   ChatMode,
   ProposedSkillValidation,
-  SkillGenerationApprovalResponse,
 } from "../../api/client";
 import { ChatConversation, ChatMessage } from "../../lib/chatStore";
 
@@ -20,7 +19,6 @@ type ChatWorkspaceProps = {
   isSending: boolean;
   isGenerating: boolean;
   error: string | null;
-  approvalResult: SkillGenerationApprovalResponse | null;
   onNewChat: () => void;
   onSelectConversation: (conversationId: string) => void;
   onDeleteConversation: (conversationId: string) => void;
@@ -43,7 +41,6 @@ export function ChatWorkspace({
   isSending,
   isGenerating,
   error,
-  approvalResult,
   onNewChat,
   onSelectConversation,
   onDeleteConversation,
@@ -95,21 +92,6 @@ export function ChatWorkspace({
         </div>
       </div>
       {error && <p className="error-text">{error}</p>}
-      {approvalResult?.proposed_skill && (
-        <section className="detail-panel">
-          <h2>Generated Proposed Skill</h2>
-          <p>
-            <Link to={`/skills/${approvalResult.proposed_skill.id}`}>
-              Open {approvalResult.proposed_skill.name}
-            </Link>
-          </p>
-          {approvalResult.validation && (
-            <p className="muted">
-              Validation {approvalResult.validation.ok ? "passed" : "needs attention"}. The skill is still proposed.
-            </p>
-          )}
-        </section>
-      )}
     </section>
   );
 }

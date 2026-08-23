@@ -60,6 +60,14 @@ def ensure_local_schema() -> None:
                 connection.execute(
                     text("ALTER TABLE integration_connections ADD COLUMN passphrase_secret_reference VARCHAR(256)")
                 )
+            if "workspace_name" not in columns:
+                connection.execute(
+                    text("ALTER TABLE integration_connections ADD COLUMN workspace_name VARCHAR(256)")
+                )
+            if "configured_resource_id" not in columns:
+                connection.execute(
+                    text("ALTER TABLE integration_connections ADD COLUMN configured_resource_id VARCHAR(256)")
+                )
         if "skills" in table_names:
             columns = {column["name"] for column in inspector.get_columns("skills")}
             if "runtime" not in columns:

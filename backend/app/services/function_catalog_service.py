@@ -146,11 +146,12 @@ class FunctionCatalogService:
         atlas_codex_available = codex_available()
         for operation in OPERATIONS.values():
             connected = provider_state[operation.provider]
-            reasons = [] if connected else [
-                "GitHub connection is not configured"
-                if operation.provider == "github"
-                else "Atlas is not running and unlocked"
-            ]
+            unavailable_reason = {
+                "github": "GitHub connection is not configured",
+                "atlas": "Atlas is not running and unlocked",
+                "notion": "Notion connection is not configured",
+            }[operation.provider]
+            reasons = [] if connected else [unavailable_reason]
             if operation.operation_id == "atlas.knowledge.node.know" and not atlas_codex_available:
                 reasons.append("A compatible Codex CLI is unavailable")
             available = connected and not reasons

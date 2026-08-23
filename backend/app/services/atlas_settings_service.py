@@ -329,7 +329,3 @@ def build_default_atlas_settings_service(db: Session) -> AtlasSettingsService:
     except SecretStoreError:
         store = None
     return AtlasSettingsService(db, secret_store=store)
-
-
-def atlas_connection_status(db: Session) -> AtlasSettingsStatus:
-    return build_default_atlas_settings_service(db).status()

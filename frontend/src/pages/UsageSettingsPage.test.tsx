@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../api/client";
-import UsageSettingsPage from "./UsageSettingsPage";
+import UsageSettingsPage, { SettingsSection } from "./UsageSettingsPage";
 
 const permissionPolicy = {
   source: "backend/app/static/default_permissions.json",
@@ -17,6 +18,31 @@ const permissionPolicy = {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+});
+
+function renderSettings(section: SettingsSection) {
+  return render(
+    <MemoryRouter initialEntries={[`/settings/${section}`]}>
+      <UsageSettingsPage section={section} />
+    </MemoryRouter>,
+  );
+}
+
+describe("Settings subpages", () => {
+  it("shows focused navigation and loads only the selected section", async () => {
+    const usageRequest = vi.spyOn(api, "getCodexUsage");
+    vi.spyOn(api, "getPermissionPolicy").mockResolvedValue(permissionPolicy);
+
+    renderSettings("permissions");
+
+    expect(screen.getByRole("heading", { level: 1, name: "Permissions" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Permissions" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("link", { name: "Integrations" }).getAttribute("href")).toBe("/settings/integrations");
+    expect(await screen.findByRole("heading", { name: "Permission policy" })).toBeTruthy();
+    expect(screen.getByText("Shell, subprocess, and arbitrary command execution.")).toBeTruthy();
+    expect(document.body.textContent).toContain("python_standard_library");
+    expect(usageRequest).not.toHaveBeenCalled();
+  });
 });
 
 describe("GitHub Settings connection", () => {
@@ -102,11 +128,8 @@ describe("GitHub Settings connection", () => {
       error_type: null,
     });
 
-    render(<UsageSettingsPage />);
+    renderSettings("integrations");
     const input = await screen.findByLabelText("GitHub token");
-    expect(screen.getByRole("heading", { name: "Permission policy" })).toBeTruthy();
-    expect(screen.getByText("Shell, subprocess, and arbitrary command execution.")).toBeTruthy();
-    expect(document.body.textContent).toContain("python_standard_library");
     fireEvent.change(input, { target: { value: sentinel } });
     fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
 
@@ -114,6 +137,115 @@ describe("GitHub Settings connection", () => {
     await waitFor(() => expect(screen.getByText("octocat")).toBeTruthy());
     expect((input as HTMLInputElement).value).toBe("");
     expect(document.body.textContent).not.toContain(sentinel);
+  });
+});
+
+describe("Notion Settings connection", () => {
+  it("submits write-only connection data and renders no todo management UI", async () => {
+    const sentinel = "EIDOLON_NOTION_UI_SENTINEL_b411";
+    const choice = { model: null, reasoning_effort: null };
+    vi.spyOn(api, "getCodexUsage").mockResolvedValue({
+      available: false,
+      source: "test",
+      fetched_at: "2026-01-01T00:00:00Z",
+      plan_type: null,
+      limit_id: "test",
+      rate_limit_reached_type: null,
+      five_hour: null,
+      weekly: null,
+    });
+    vi.spyOn(api, "getCodexCliStatus").mockResolvedValue({
+      available: false,
+      compatible: false,
+      requested_command: null,
+      explicit_override: false,
+      resolved_path: null,
+      source: null,
+      version: null,
+      minimum_version: null,
+      error: null,
+      candidates: [],
+    });
+    vi.spyOn(api, "getCodexModels").mockResolvedValue({
+      available: false,
+      fetched_at: "2026-01-01T00:00:00Z",
+      error: null,
+      models: [],
+    });
+    vi.spyOn(api, "getCodexRoutingSettings").mockResolvedValue({
+      project_build_workflow_override: null,
+      chat: choice,
+      product_manager: {
+        default: choice,
+        blueprint_and_permissions: choice,
+        task_dag: choice,
+        repair: choice,
+        update: choice,
+      },
+      builder: {
+        default: choice,
+        single_codex: choice,
+        easy: choice,
+        medium: choice,
+        hard: choice,
+        repair: choice,
+        update: choice,
+      },
+      tester: { default: choice, task: choice, final_e2e: choice, update: choice },
+      updated_at: null,
+    });
+    vi.spyOn(api, "getPermissionPolicy").mockResolvedValue(permissionPolicy);
+    vi.spyOn(api, "getGitHubConnection").mockResolvedValue({
+      provider: "github",
+      connected: false,
+      status: "disconnected",
+      account_login: null,
+      account_id: null,
+      last_validated_at: null,
+      created_at: null,
+      updated_at: null,
+      error_type: null,
+    });
+    vi.spyOn(api, "getAtlasStatus").mockRejectedValue(new Error("not running"));
+    vi.spyOn(api, "getNotionConnection").mockResolvedValue({
+      provider: "notion",
+      connected: false,
+      status: "disconnected",
+      bot_name: null,
+      bot_id: null,
+      workspace_name: null,
+      data_source_id: null,
+      last_validated_at: null,
+      created_at: null,
+      updated_at: null,
+      error_type: null,
+    });
+    const put = vi.spyOn(api, "putNotionConnection").mockResolvedValue({
+      provider: "notion",
+      connected: true,
+      status: "connected",
+      bot_name: "Eidolon Todo",
+      bot_id: "bot-id",
+      workspace_name: "Private workspace",
+      data_source_id: "source-id",
+      last_validated_at: "2026-01-01T00:00:00Z",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      error_type: null,
+    });
+
+    renderSettings("integrations");
+    const token = await screen.findByLabelText("Notion token");
+    fireEvent.change(screen.getByLabelText("Notion data-source ID"), { target: { value: "source-id" } });
+    fireEvent.change(token, { target: { value: sentinel } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Notion connection" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith(sentinel, "source-id"));
+    await waitFor(() => expect(screen.getByText("Private workspace")).toBeTruthy());
+    expect((screen.getByLabelText("Replacement Notion token") as HTMLInputElement).value).toBe("");
+    expect(document.body.textContent).not.toContain(sentinel);
+    expect(screen.queryByRole("button", { name: /create todo/i })).toBeNull();
+    expect(screen.getByText(/Eidolon does not keep a todo copy/)).toBeTruthy();
   });
 });
 
@@ -212,7 +344,7 @@ describe("Codex model routing", () => {
       updated_at: "2026-01-01T00:00:00Z",
     }));
 
-    render(<UsageSettingsPage />);
+    renderSettings("models");
     expect(await screen.findByLabelText("Project planning and clarification model")).toBeTruthy();
     expect(screen.queryByText("Plausibility review")).toBeNull();
     fireEvent.change(await screen.findByLabelText("Single Codex model"), {
@@ -330,7 +462,7 @@ describe("Atlas Settings", () => {
     const unlock = vi.spyOn(api, "unlockAtlas").mockResolvedValue(configuredAtlas);
     vi.spyOn(api, "restartAtlas").mockResolvedValue(externalAtlas);
 
-    render(<UsageSettingsPage />);
+    renderSettings("integrations");
     expect(await screen.findByText("Running (Eidolon-owned)")).toBeTruthy();
     expect(screen.getByText(/Storing the passphrase shifts practical at-rest protection to your Windows account/)).toBeTruthy();
 

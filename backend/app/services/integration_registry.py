@@ -26,7 +26,7 @@ class IntegrationOperation:
     operation_id: str
     title: str
     description: str
-    provider: Literal["github", "atlas"]
+    provider: Literal["github", "atlas", "notion"]
     input_schema: dict[str, Any]
     output_schema: dict[str, Any]
     read_only: bool
@@ -55,6 +55,8 @@ class IntegrationOperation:
             "output_schema": self.output_schema,
             "resource_scope": self.resource_scope,
             "read_only": self.read_only,
+            "risk": self.risk,
+            "normalized_errors": list(self.normalized_errors),
             "usage_example": self.usage_example,
             "helper": (
                 "integration_runtime_capabilities.call(operation=..., input=...) for function code; "
@@ -62,7 +64,8 @@ class IntegrationOperation:
             ),
             "test_adapter": (
                 "In tests, use integration_test_adapter.DeterministicFakeIntegrationAdapter and monkeypatch the "
-                "runtime helper call; never use a real token or live GitHub request."
+                "runtime helper call; use registry-shaped deterministic responses and failures; never use a real "
+                "credential or live provider request."
             ),
         }
 
@@ -96,6 +99,33 @@ _REPOSITORY_OUTPUT = _object_schema(
         "updated_at": {"type": "string"},
     },
     ["full_name", "description", "private", "default_branch", "html_url", "stars", "forks", "open_issues", "updated_at"],
+)
+
+_TRENDING_REPOSITORY_OUTPUT = _object_schema(
+    {
+        "rank": {"type": "integer", "minimum": 1, "maximum": 25},
+        "full_name": {"type": "string"},
+        "description": {"type": ["string", "null"]},
+        "language": {"type": ["string", "null"]},
+        "html_url": {"type": "string"},
+        "stars": {"type": "integer", "minimum": 0},
+        "forks": {"type": "integer", "minimum": 0},
+        "stars_gained": {"type": "integer", "minimum": 0},
+        "readme": {"type": ["string", "null"]},
+        "readme_truncated": {"type": "boolean"},
+    },
+    [
+        "rank",
+        "full_name",
+        "description",
+        "language",
+        "html_url",
+        "stars",
+        "forks",
+        "stars_gained",
+        "readme",
+        "readme_truncated",
+    ],
 )
 
 _ISSUE_OUTPUT = _object_schema(
@@ -340,8 +370,8 @@ _OPERATIONS = (
         operation_id="github.repository.trending.list",
         title="List trending repositories",
         description=(
-            "Rank non-fork, non-archived public repositories created in the last 30 days by stars, then forks, "
-            "then full name."
+            "Read GitHub's actual daily, weekly, or monthly Trending repository order and enrich each selected "
+            "repository with a bounded README."
         ),
         provider="github",
         input_schema=_object_schema(
@@ -352,30 +382,27 @@ _OPERATIONS = (
                     "pattern": r"^[A-Za-z0-9+#._-]+$",
                     "default": None,
                 },
-                "lookback_days": {"type": "integer", "enum": [30], "default": 30},
+                "period": {"type": "string", "enum": ["daily", "weekly", "monthly"], "default": "weekly"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 10},
             },
             [],
         ),
         output_schema=_object_schema(
             {
-                "ranking": {"const": "stars_desc_forks_desc_full_name_asc"},
-                "lookback_days": {"const": 30},
+                "ranking": {"const": "github_trending"},
+                "period": {"enum": ["daily", "weekly", "monthly"]},
                 "language": {"type": ["string", "null"]},
-                "repositories": {"type": "array", "maxItems": 25, "items": _REPOSITORY_OUTPUT},
+                "repositories": {"type": "array", "maxItems": 25, "items": _TRENDING_REPOSITORY_OUTPUT},
                 "truncated": {"type": "boolean"},
             },
-            ["ranking", "lookback_days", "language", "repositories", "truncated"],
+            ["ranking", "period", "language", "repositories", "truncated"],
         ),
         read_only=True,
         side_effect="none",
         risk="low",
         resource_scope="none",
         method="GET",
-        endpoint_template=(
-            "/search/repositories?q=created:>={lookback_start}+is:public+fork:false+archived:false"
-            "[+language:{language}]&sort=stars&order=desc"
-        ),
+        endpoint_template="https://github.com/trending[/{language}]?since={period}; /repos/{owner}/{repository}/readme",
         timeout_seconds=15,
         allow_redirects=False,
         max_pages=1,
@@ -384,7 +411,11 @@ _OPERATIONS = (
         normalized_errors=_COMMON_ERRORS,
         audit_resource_fields=(),
         fake_behavior="trending_repositories",
-        usage_example={"operation": "github.repository.trending.list", "input": {"language": "python", "limit": 10}},
+        usage_example={
+            "operation": "github.repository.trending.list",
+            "input": {"period": "weekly", "language": "python", "limit": 10},
+        },
+        contract_version=2,
     ),
 )
 
@@ -636,7 +667,141 @@ _ATLAS_OPERATIONS = (
     ),
 )
 
-OPERATIONS = MappingProxyType({operation.operation_id: operation for operation in (*_OPERATIONS, *_ATLAS_OPERATIONS)})
+_NOTION_ERRORS = (
+    "connection_unavailable",
+    "invalid_credential",
+    "operation_undeclared",
+    "authorization_missing_or_stale",
+    "invalid_input",
+    "not_found",
+    "schema_mismatch",
+    "provider_forbidden",
+    "rate_limited",
+    "provider_timeout",
+    "response_too_large",
+    "provider_unavailable",
+    "internal_failure",
+)
+_TODO_DATE = {
+    "type": ["string", "null"],
+    "pattern": r"^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$",
+}
+_TODO_PRIORITY = {"type": ["string", "null"], "enum": ["low", "medium", "high", None]}
+_TODO_OPTIONAL_TEXT = {"type": ["string", "null"], "maxLength": 2000}
+_TODO_OUTPUT = _object_schema(
+    {
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "title": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "priority": _TODO_PRIORITY,
+        "start_at": _TODO_DATE,
+        "due_at": _TODO_DATE,
+        "estimated_minutes": {"type": ["integer", "null"], "minimum": 1},
+        "atlas_goal_id": _TODO_OPTIONAL_TEXT,
+        "notes": _TODO_OPTIONAL_TEXT,
+        "created_at": {"type": "string", "minLength": 1, "maxLength": 64},
+    },
+    [
+        "id", "title", "priority", "start_at", "due_at", "estimated_minutes",
+        "atlas_goal_id", "notes", "created_at",
+    ],
+)
+_TODO_MUTABLE_PROPERTIES = {
+    "title": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "priority": _TODO_PRIORITY,
+    "start_at": _TODO_DATE,
+    "due_at": _TODO_DATE,
+    "estimated_minutes": {"type": ["integer", "null"], "minimum": 1},
+    "atlas_goal_id": _TODO_OPTIONAL_TEXT,
+    "notes": _TODO_OPTIONAL_TEXT,
+}
+_TODO_UPDATE_INPUT = _object_schema(
+    {"id": {"type": "string", "minLength": 1, "maxLength": 128}, **_TODO_MUTABLE_PROPERTIES},
+    ["id"],
+)
+_TODO_UPDATE_INPUT["minProperties"] = 2
+
+_NOTION_OPERATIONS = (
+    IntegrationOperation(
+        operation_id="notion.todo.list",
+        title="List Notion todos",
+        description="List one bounded page of todos from the configured Notion data source, newest-created first.",
+        provider="notion",
+        input_schema=_object_schema(
+            {
+                "page_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
+                "start_cursor": {"type": "string", "minLength": 1, "maxLength": 2048},
+            },
+            [],
+        ),
+        output_schema=_object_schema(
+            {
+                "todos": {"type": "array", "maxItems": 100, "items": _TODO_OUTPUT},
+                "has_more": {"type": "boolean"},
+                "next_cursor": {"type": ["string", "null"], "maxLength": 2048},
+            },
+            ["todos", "has_more", "next_cursor"],
+        ),
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="POST",
+        endpoint_template="/v1/data_sources/{configured_data_source_id}/query",
+        timeout_seconds=15, allow_redirects=False, max_pages=1, max_results=100,
+        max_provider_response_bytes=2_000_000, normalized_errors=_NOTION_ERRORS,
+        audit_resource_fields=(), fake_behavior="notion_todo_list",
+        usage_example={"operation": "notion.todo.list", "input": {"page_size": 25}},
+    ),
+    IntegrationOperation(
+        operation_id="notion.todo.create",
+        title="Create Notion todo",
+        description="Create one todo in the configured Notion data source; only title is required.",
+        provider="notion",
+        input_schema=_object_schema(dict(_TODO_MUTABLE_PROPERTIES), ["title"]),
+        output_schema=_TODO_OUTPUT,
+        read_only=False, side_effect="write", risk="medium", resource_scope="none", method="POST",
+        endpoint_template="/v1/pages (fixed configured data-source parent)", timeout_seconds=15,
+        allow_redirects=False, max_pages=1, max_results=1, max_provider_response_bytes=2_000_000,
+        normalized_errors=_NOTION_ERRORS, audit_resource_fields=(), fake_behavior="notion_todo_create",
+        usage_example={"operation": "notion.todo.create", "input": {"title": "Buy groceries"}},
+    ),
+    IntegrationOperation(
+        operation_id="notion.todo.update",
+        title="Update Notion todo",
+        description="Partially update one contained Notion todo; explicit null clears an optional property.",
+        provider="notion",
+        input_schema=_TODO_UPDATE_INPUT,
+        output_schema=_TODO_OUTPUT,
+        read_only=False, side_effect="write", risk="medium", resource_scope="none", method="PATCH",
+        endpoint_template="/v1/pages/{id} after configured data-source containment check", timeout_seconds=15,
+        allow_redirects=False, max_pages=1, max_results=1, max_provider_response_bytes=2_000_000,
+        normalized_errors=_NOTION_ERRORS, audit_resource_fields=("id",), fake_behavior="notion_todo_update",
+        usage_example={"operation": "notion.todo.update", "input": {"id": "page-id", "priority": "high"}},
+    ),
+    IntegrationOperation(
+        operation_id="notion.todo.delete",
+        title="Delete Notion todo",
+        description="Move one contained Notion todo page to trash; Notion does not support permanent API deletion.",
+        provider="notion",
+        input_schema=_object_schema({"id": {"type": "string", "minLength": 1, "maxLength": 128}}, ["id"]),
+        output_schema=_object_schema(
+            {
+                "id": {"type": "string", "minLength": 1, "maxLength": 128},
+                "removed": {"type": "boolean", "const": True},
+            },
+            ["id", "removed"],
+        ),
+        read_only=False, side_effect="write", risk="medium", resource_scope="none", method="PATCH",
+        endpoint_template="/v1/pages/{id} with in_trash=true after configured data-source containment check",
+        timeout_seconds=15, allow_redirects=False, max_pages=1, max_results=1,
+        max_provider_response_bytes=2_000_000, normalized_errors=_NOTION_ERRORS,
+        audit_resource_fields=("id",), fake_behavior="notion_todo_delete",
+        usage_example={"operation": "notion.todo.delete", "input": {"id": "page-id"}},
+    ),
+)
+
+OPERATIONS = MappingProxyType(
+    {
+        operation.operation_id: operation
+        for operation in (*_OPERATIONS, *_ATLAS_OPERATIONS, *_NOTION_OPERATIONS)
+    }
+)
 
 
 def registry_contract_identity(operation_ids: list[str]) -> dict[str, int]:

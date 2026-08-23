@@ -29,9 +29,16 @@ class AtlasKnowledgeService:
     def __post_init__(self) -> None:
         self.project_root = (self.project_root or Path(__file__).resolve().parents[3]).resolve()
         if self.adapter is None:
-            from app.services.codex_service import default_codex_adapter
+            from app.services.codex_cli_service import CodexCliCompatibilityError
+            from app.services.codex_service import RealCodexAdapter
 
-            self.adapter = default_codex_adapter()
+            try:
+                self.adapter = RealCodexAdapter()
+            except CodexCliCompatibilityError:
+                raise AtlasKnowledgeError(
+                    "codex_unavailable",
+                    "A compatible Codex CLI is unavailable",
+                ) from None
 
     def know(self, node: dict[str, Any], explanation: str | None) -> dict[str, Any]:
         if node.get("status") == "known":
@@ -157,12 +164,9 @@ class AtlasKnowledgeService:
 
 
 def codex_available(adapter: Any | None = None) -> bool:
-    from app.services.codex_service import RealCodexAdapter, default_codex_adapter
-
-    if adapter is not None and not isinstance(adapter, RealCodexAdapter):
+    if adapter is not None:
         return True
-    try:
-        default_codex_adapter()
-    except Exception:
-        return False
-    return True
+    from app.services.codex_cli_service import codex_cli_service
+
+    status = codex_cli_service.resolve()
+    return bool(status.available and status.compatible)

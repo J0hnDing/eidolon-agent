@@ -457,6 +457,39 @@ def test_unclear_project_asks_for_input_then_same_chat_reply_builds_plan(
     assert (tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "blueprint.json").is_file()
 
 
+def test_project_clarification_fallback_matches_the_exact_conversation(db_session: Session) -> None:
+    orchestrator = ChatOrchestrator(db_session)
+    first = orchestrator.create_generation_request("First", conversation_id="chat-1")
+    second = orchestrator.create_generation_request("Second", conversation_id="chat-2")
+    first.status = "needs_input"
+    second.status = "needs_input"
+    db_session.commit()
+
+    resumed = orchestrator._project_generation_request_for_message(
+        "Reply to the older matching conversation",
+        generation_request_id=None,
+        conversation_id="chat-1",
+    )
+
+    assert resumed.id == first.id
+    assert "Reply to the older matching conversation" in resumed.user_message
+    assert "Reply to the older matching conversation" not in second.user_message
+
+
+def test_project_clarification_rejects_cross_conversation_request_id(db_session: Session) -> None:
+    orchestrator = ChatOrchestrator(db_session)
+    request = orchestrator.create_generation_request("First", conversation_id="chat-1")
+    request.status = "needs_input"
+    db_session.commit()
+
+    with pytest.raises(AgentWorkflowError, match="different conversation"):
+        orchestrator._project_generation_request_for_message(
+            "Wrong chat",
+            generation_request_id=request.id,
+            conversation_id="chat-2",
+        )
+
+
 def test_project_mode_does_not_use_backend_unsafe_keyword_heuristic(db_session: Session) -> None:
     response = ChatOrchestrator(db_session).handle_message(
         "Make a skill that deletes files automatically.",

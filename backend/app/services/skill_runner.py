@@ -598,6 +598,8 @@ class DockerSkillRunner:
             "api.github.com:127.0.0.1",
             "--add-host",
             "github.com:127.0.0.1",
+            "--add-host",
+            "api.notion.com:127.0.0.1",
             "--memory",
             self.config.memory_limit,
             "--cpus",
@@ -950,5 +952,4 @@ class DockerSkillRunner:
         self.db.commit()
 
 
-DevSkillRunner = LocalSkillRunner
 SkillRunner = LocalSkillRunner

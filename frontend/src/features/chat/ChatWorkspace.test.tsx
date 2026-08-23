@@ -33,7 +33,6 @@ describe("ChatWorkspace", () => {
           isSending={false}
           isGenerating={false}
           error={null}
-          approvalResult={null}
           onNewChat={onNewChat}
           onSelectConversation={vi.fn()}
           onDeleteConversation={vi.fn()}

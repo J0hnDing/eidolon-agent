@@ -205,6 +205,8 @@ class IntegrationConnection(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     account_login: Mapped[str] = mapped_column(String(128), nullable=False)
     account_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    workspace_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    configured_resource_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

@@ -143,7 +143,7 @@ class ManifestIntegrationResourceScope(BaseModel):
 class ManifestIntegrationRequirement(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["github", "atlas"]
+    provider: Literal["github", "atlas", "notion"]
     operations: list[str] = Field(min_length=1, max_length=20)
     resource_scope: ManifestIntegrationResourceScope = Field(default_factory=ManifestIntegrationResourceScope)
 
@@ -290,10 +290,6 @@ class SkillManifest(BaseModel):
             if self.schedule is not None:
                 raise ValueError("web_app skills cannot declare bounded-run schedules")
         return self
-
-
-def risk_rank(risk_level: RiskLevel) -> int:
-    return {"low": 0, "medium": 1, "high": 2}[risk_level]
 
 
 def classify_permission_risk(

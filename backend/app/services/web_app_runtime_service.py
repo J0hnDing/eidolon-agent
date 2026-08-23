@@ -236,6 +236,8 @@ class PersistentWebAppLauncher:
             "api.github.com:127.0.0.1",
             "--add-host",
             "github.com:127.0.0.1",
+            "--add-host",
+            "api.notion.com:127.0.0.1",
             *(["--dns", self.config.egress_dns] if has_network_egress else []),
             "-e",
             "PYTHONDONTWRITEBYTECODE=1",

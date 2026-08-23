@@ -136,3 +136,91 @@ Memory retrieval uses an inspectable backend-owned selection policy and includes
 
 -Acceptance Criteria:
 Resolve only explicitly bounded, high-confidence cases such as single-assignment literal aliases; retain passive behavior for ambiguous data flow; continue checking resolved literal operations against the actual manifest and approved build context; document limitations; and add positive and negative regression tests proving valid generated code is not blocked.
+
+## TODO-017: Fail closed when the real Codex CLI is unavailable
+
+- Priority: high
+- Category: bugfix
+- Area: Codex runtime
+- Dependencies: none
+- Rationale: Automatic mode currently selects the production FakeCodexAdapter when no compatible CLI is available, allowing synthetic chat and build results to appear real.
+
+-Acceptance Criteria:
+Normal runtime fails explicitly when the real CLI is unavailable or incompatible; FakeCodexAdapter requires an explicit test or development setting; adapter ownership is documented and covered by tests.
+
+## TODO-018: Consolidate Task DAG execution, resume, and retry ownership
+
+- Priority: high
+- Category: refactor
+- Area: Agent workflows
+- Dependencies: none
+- Rationale: TaskDagBuildWorkflow delegates through many private AgentWorkflowService methods and duplicates node state transitions across execute, resume, and retry paths.
+
+-Acceptance Criteria:
+One component owns the Task DAG node state machine; execute, resume, blocked-user-action, and retry share one node transition; retry resumes the intended node without restarting completed work; compatibility changes are explicit.
+
+## TODO-019: Separate function catalog reads from installed-skill reconciliation
+
+- Priority: high
+- Category: refactor
+- Area: Function catalog
+- Dependencies: none
+- Rationale: Catalog reads currently trigger filesystem scans, manifest validation, and possible database commits through sync_installed_from_filesystem.
+
+-Acceptance Criteria:
+Catalog listing is read-only; reconciliation runs only at a documented startup or explicit lifecycle boundary; reconciliation remains idempotent; UI polling causes no filesystem reconciliation or database writes.
+
+## TODO-020: Replace startup schema patching with versioned database migrations
+
+- Priority: medium
+- Category: refactor
+- Area: Database
+- Dependencies: none
+- Rationale: ensure_local_schema has become a large set of conditional compatibility rewrites without an ordered migration ledger.
+
+-Acceptance Criteria:
+A versioned mechanism records every applied transition; supported databases upgrade deterministically; new installations reach the current schema; startup no longer accumulates conditional DDL rewrites.
+
+## TODO-021: Upgrade React Router past the audited security advisories
+
+- Priority: high
+- Category: bugfix
+- Area: Frontend dependencies
+- Dependencies: none
+- Rationale: React Router 6.30.4 is affected by moderate open-redirect/XSS and SSR hydration advisories; the supported fix requires a v7 migration.
+
+-Acceptance Criteria:
+Router packages resolve to an unaffected release; navigation, splat routes, and embedded web-app flows are regression tested; v7 behavior changes are handled intentionally; tests and production build pass.
+
+## TODO-022: Add a reproducible Python dependency lock workflow
+
+- Priority: medium
+- Category: others
+- Area: Backend dependencies
+- Dependencies: none
+- Rationale: Backend dependencies use broad minimum versions without a committed resolver lock, making environments and audits non-reproducible.
+
+-Acceptance Criteria:
+One lock tool and update command are documented; runtime and development dependencies are pinned transitively; fresh installation from the lock is verified; audit and update responsibilities are documented.
+
+## TODO-023: Remove confirmed runner and API redundancies
+
+- Priority: low
+- Category: refactor
+- Area: Runtime and API
+- Dependencies: none
+- Rationale: Local and Docker runners duplicate manifest, entrypoint, and run-finalization helpers, while the proposed-skill listing client and overlapping route appear unused.
+
+-Acceptance Criteria:
+Shared runner lifecycle behavior has one implementation without a reuse-only inheritance hierarchy; unused proposed-skill surfaces are removed after compatibility verification; provider errors move to a neutral contract; focused tests pass.
+
+## TODO-024: Decompose oversized service and frontend orchestration modules
+
+- Priority: medium
+- Category: refactor
+- Area: Architecture
+- Dependencies: none
+- Rationale: CodexService, AgentWorkflowService, SkillDetailPage, and UsageSettingsPage combine multiple independently changing responsibilities and repeated coordination logic.
+
+-Acceptance Criteria:
+Each extraction has a named owner and narrow contract; Codex adapters are separated from workflow facades; UI resource state is split into focused hooks or panels; generic abstractions require concrete reuse; behavior remains tested.

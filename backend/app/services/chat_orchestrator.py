@@ -109,17 +109,30 @@ class ChatOrchestrator:
     ) -> SkillGenerationRequest:
         if generation_request_id is not None:
             generation_request = self.db.get(SkillGenerationRequest, generation_request_id)
-            if generation_request is not None and generation_request.status == "needs_input":
-                return self._append_project_reply(generation_request, message)
+            if generation_request is None:
+                raise AgentWorkflowError("Project clarification request no longer exists")
+            if generation_request.status != "needs_input":
+                raise AgentWorkflowError("Project clarification request is no longer waiting for input")
+            pending_conversation = (generation_request.plan_json or {}).get("frontend_conversation_id")
+            if conversation_id is not None and pending_conversation not in {None, conversation_id}:
+                raise AgentWorkflowError("Project clarification request belongs to a different conversation")
+            return self._append_project_reply(generation_request, message)
 
-        pending = self.db.scalar(
-            select(SkillGenerationRequest)
-            .where(SkillGenerationRequest.status == "needs_input")
-            .order_by(SkillGenerationRequest.updated_at.desc(), SkillGenerationRequest.id.desc())
-        )
-        if pending is not None:
-            pending_conversation = (pending.plan_json or {}).get("frontend_conversation_id")
-            if conversation_id is None or pending_conversation in {None, conversation_id}:
+        if conversation_id is not None:
+            pending_requests = self.db.scalars(
+                select(SkillGenerationRequest)
+                .where(SkillGenerationRequest.status == "needs_input")
+                .order_by(SkillGenerationRequest.updated_at.desc(), SkillGenerationRequest.id.desc())
+            ).all()
+            pending = next(
+                (
+                    request
+                    for request in pending_requests
+                    if (request.plan_json or {}).get("frontend_conversation_id") == conversation_id
+                ),
+                None,
+            )
+            if pending is not None:
                 return self._append_project_reply(pending, message)
 
         return self.create_generation_request(message, conversation_id=conversation_id)

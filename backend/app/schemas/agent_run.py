@@ -62,7 +62,3 @@ class AgentRunRead(BaseModel):
 
 class AgentRunDetailRead(AgentRunRead):
     steps: list[AgentRunStepRead] = Field(default_factory=list)
-
-
-class AgentRunCreateResponse(BaseModel):
-    agent_run: AgentRunRead

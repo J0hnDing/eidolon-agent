@@ -22,7 +22,7 @@ const navItems = [
   { to: "/schedules", label: "Schedules" },
   { to: "/agent-runs", label: "Agent Runs" },
   { to: "/approval-requests", label: "Approvals" },
-  { to: "/settings/usage", label: "Settings" },
+  { to: "/settings", label: "Settings" },
 ];
 
 export default function App() {
@@ -65,6 +65,10 @@ export default function App() {
           <Route path="/approval-requests" element={<ApprovalRequestsPage />} />
           <Route path="/settings" element={<Navigate to="/settings/usage" replace />} />
           <Route path="/settings/usage" element={<UsageSettingsPage />} />
+          <Route path="/settings/project" element={<UsageSettingsPage section="project" />} />
+          <Route path="/settings/models" element={<UsageSettingsPage section="models" />} />
+          <Route path="/settings/integrations" element={<UsageSettingsPage section="integrations" />} />
+          <Route path="/settings/permissions" element={<UsageSettingsPage section="permissions" />} />
         </Routes>
       </main>
     </div>

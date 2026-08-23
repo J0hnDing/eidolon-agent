@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "name": "github_atlas_project_scout",
   "display_name": "Github Atlas Project Scout",
-  "description": "Compare trending GitHub repositories with Atlas projects and produce a Codex-generated learning report.",
+  "description": "Enrich GitHub's actual trending repositories with concise Codex analysis grounded in their READMEs and local Atlas projects.",
   "runtime": "function",
   "entrypoint": "skill.py",
   "instructions_path": null,
@@ -12,7 +12,7 @@
       "limit": {
         "type": "integer",
         "minimum": 1,
-        "maximum": 50,
+        "maximum": 25,
         "default": 10,
         "description": "Maximum number of trending repositories to compare."
       },
@@ -20,6 +20,16 @@
         "type": "string",
         "minLength": 1,
         "description": "Optional programming-language filter."
+      },
+      "period": {
+        "type": "string",
+        "enum": [
+          "daily",
+          "weekly",
+          "monthly"
+        ],
+        "default": "weekly",
+        "description": "GitHub Trending period."
       },
       "atlas_keywords": {
         "type": "array",
@@ -43,79 +53,50 @@
   "output_schema": {
     "type": "object",
     "properties": {
-      "report": {
-        "type": "string",
-        "description": "Codex-generated comparison and analysis."
-      },
-      "interesting_repositories": {
+      "repositories": {
         "type": "array",
         "items": {
           "type": "object",
           "properties": {
-            "full_name": {
-              "type": "string"
+            "name": {
+              "type": "string",
+              "description": "GitHub repository full name from the integration result."
             },
             "url": {
-              "type": "string"
+              "type": "string",
+              "description": "GitHub repository URL from the integration result."
             },
-            "summary": {
-              "type": "string"
+            "stars": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "GitHub star count from the integration result."
             },
-            "why_interesting": {
-              "type": "string"
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Repository description from the GitHub integration result."
+            },
+            "analysis": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Concise Codex analysis of the project's principle, notable ideas, and realistic relevance or lessons."
             }
           },
           "required": [
-            "full_name",
+            "name",
             "url",
-            "summary",
-            "why_interesting"
+            "stars",
+            "description",
+            "analysis"
           ],
           "additionalProperties": false
-        }
-      },
-      "learning_matches": {
-        "type": "array",
-        "items": {
-          "type": "object",
-          "properties": {
-            "atlas_project": {
-              "type": "string"
-            },
-            "github_repository": {
-              "type": "string"
-            },
-            "relevance": {
-              "type": "string"
-            },
-            "realistic_lessons": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          },
-          "required": [
-            "atlas_project",
-            "github_repository",
-            "relevance",
-            "realistic_lessons"
-          ],
-          "additionalProperties": false
-        }
-      },
-      "limitations": {
-        "type": "array",
-        "items": {
-          "type": "string"
         }
       }
     },
     "required": [
-      "report",
-      "interesting_repositories",
-      "learning_matches",
-      "limitations"
+      "repositories"
     ],
     "additionalProperties": false
   },

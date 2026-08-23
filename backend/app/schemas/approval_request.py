@@ -26,10 +26,6 @@ class ApprovalRequestBase(BaseModel):
     decision_notes: str | None = None
 
 
-class ApprovalRequestCreate(ApprovalRequestBase):
-    pass
-
-
 class ApprovalRequestRead(ApprovalRequestBase):
     model_config = ConfigDict(from_attributes=True)
 

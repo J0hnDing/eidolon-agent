@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { NavLink } from "react-router-dom";
 
 import {
   AtlasIntegrationStatus,
@@ -10,11 +11,45 @@ import {
   CodexRoutingSettingsPayload,
   CodexUsageWindow,
   GitHubConnectionStatus,
+  NotionConnectionStatus,
   PermissionPolicy,
   api,
 } from "../api/client";
 
-export default function UsageSettingsPage() {
+export type SettingsSection = "usage" | "project" | "models" | "integrations" | "permissions";
+
+const settingsSections: Array<{ section: SettingsSection; label: string; to: string }> = [
+  { section: "usage", label: "Usage & CLI", to: "/settings/usage" },
+  { section: "project", label: "Project builds", to: "/settings/project" },
+  { section: "models", label: "Model routing", to: "/settings/models" },
+  { section: "integrations", label: "Integrations", to: "/settings/integrations" },
+  { section: "permissions", label: "Permissions", to: "/settings/permissions" },
+];
+
+const settingsPageCopy: Record<SettingsSection, { title: string; description: string }> = {
+  usage: {
+    title: "Usage & CLI",
+    description: "Review the local Codex CLI and current account allowance windows.",
+  },
+  project: {
+    title: "Project builds",
+    description: "Choose how new Project builds select their workflow.",
+  },
+  models: {
+    title: "Model routing",
+    description: "Set the model and reasoning effort used by each bounded Codex action.",
+  },
+  integrations: {
+    title: "Integrations",
+    description: "Manage trusted connections and local companion services.",
+  },
+  permissions: {
+    title: "Permissions",
+    description: "Inspect the backend-owned policy applied to generated skills.",
+  },
+};
+
+export default function UsageSettingsPage({ section = "usage" }: { section?: SettingsSection }) {
   const [usage, setUsage] = useState<CodexAccountUsage | null>(null);
   const [cliStatus, setCliStatus] = useState<CodexCliStatus | null>(null);
   const [catalog, setCatalog] = useState<CodexModelCatalog | null>(null);
@@ -22,6 +57,9 @@ export default function UsageSettingsPage() {
   const [permissionPolicy, setPermissionPolicy] = useState<PermissionPolicy | null>(null);
   const [github, setGitHub] = useState<GitHubConnectionStatus | null>(null);
   const [githubToken, setGitHubToken] = useState("");
+  const [notion, setNotion] = useState<NotionConnectionStatus | null>(null);
+  const [notionToken, setNotionToken] = useState("");
+  const [notionDataSourceId, setNotionDataSourceId] = useState("");
   const [atlas, setAtlas] = useState<AtlasIntegrationStatus | null>(null);
   const [atlasDirectory, setAtlasDirectory] = useState("");
   const [atlasPassphrase, setAtlasPassphrase] = useState("");
@@ -30,40 +68,53 @@ export default function UsageSettingsPage() {
   const [routingDirty, setRoutingDirty] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  async function loadUsage(refresh = false) {
+  async function loadSettings(refresh = false) {
     setError(null);
+    setSaved(null);
+    setLoading(true);
     try {
-      const [coreSettings, nextAtlas] = await Promise.all([
-        Promise.all([
+      if (section === "usage") {
+        const [nextUsage, nextCliStatus] = await Promise.all([
           api.getCodexUsage(),
           api.getCodexCliStatus(refresh),
+        ]);
+        setUsage(nextUsage);
+        setCliStatus(nextCliStatus);
+      } else if (section === "project") {
+        setRouting(await api.getCodexRoutingSettings());
+        setRoutingDirty(false);
+      } else if (section === "models") {
+        const [nextCatalog, nextRouting] = await Promise.all([
           api.getCodexModels(refresh),
           api.getCodexRoutingSettings(),
+        ]);
+        setCatalog(nextCatalog);
+        setRouting(nextRouting);
+        setRoutingDirty(false);
+      } else if (section === "integrations") {
+        const [nextGitHub, nextAtlas, nextNotion] = await Promise.all([
           api.getGitHubConnection(),
-          api.getPermissionPolicy(),
-        ]),
-        api.getAtlasStatus().catch((err) => atlasUnavailableStatus(err)),
-      ]);
-      const [nextUsage, nextCliStatus, nextCatalog, nextRouting, nextGitHub, nextPermissionPolicy] = coreSettings;
-      setUsage(nextUsage);
-      setCliStatus(nextCliStatus);
-      setCatalog(nextCatalog);
-      setRouting(nextRouting);
-      setRoutingDirty(false);
-      setGitHub(nextGitHub);
-      setPermissionPolicy(nextPermissionPolicy);
-      setAtlas(nextAtlas);
-      setAtlasDirectory(atlasDirectoryForStatus(nextAtlas));
+          api.getAtlasStatus().catch((err) => atlasUnavailableStatus(err)),
+          api.getNotionConnection().catch((err) => notionUnavailableStatus(err)),
+        ]);
+        setGitHub(nextGitHub);
+        setAtlas(nextAtlas);
+        setAtlasDirectory(atlasDirectoryForStatus(nextAtlas));
+        setNotion(nextNotion);
+        setNotionDataSourceId(nextNotion.data_source_id ?? "");
+      } else {
+        setPermissionPolicy(await api.getPermissionPolicy());
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load Codex usage");
+      setError(err instanceof Error ? err.message : `Could not load ${settingsPageCopy[section].title.toLowerCase()}`);
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    void loadUsage();
-  }, []);
+    void loadSettings();
+  }, [section]);
 
   function updateChoice(
     group: "chat" | "product_manager" | "builder" | "tester",
@@ -80,7 +131,7 @@ export default function UsageSettingsPage() {
     });
   }
 
-  async function saveRouting() {
+  async function saveRouting(successMessage: string) {
     if (!routing) return;
     setError(null);
     setSaved(null);
@@ -90,7 +141,7 @@ export default function UsageSettingsPage() {
       const next = await api.updateCodexRoutingSettings(payload as CodexRoutingSettingsPayload);
       setRouting(next);
       setRoutingDirty(false);
-      setSaved("Codex settings saved.");
+      setSaved(successMessage);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save Codex settings");
     } finally {
@@ -127,6 +178,43 @@ export default function UsageSettingsPage() {
       setSaved("GitHub connection removed.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not remove GitHub connection");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveNotionConnection() {
+    if (!notionToken || !notionDataSourceId.trim()) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const next = await api.putNotionConnection(notionToken, notionDataSourceId.trim());
+      setNotion(next);
+      setNotionToken("");
+      setNotionDataSourceId(next.data_source_id ?? "");
+      setSaved("Notion connection and todo data source validated and saved.");
+    } catch (err) {
+      setNotionToken("");
+      setError(err instanceof Error ? err.message : "Could not save Notion connection");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function removeNotionConnection() {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      await api.removeNotionConnection();
+      const next = await api.getNotionConnection();
+      setNotion(next);
+      setNotionToken("");
+      setNotionDataSourceId("");
+      setSaved("Notion connection removed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove Notion connection");
     } finally {
       setLoading(false);
     }
@@ -220,16 +308,28 @@ export default function UsageSettingsPage() {
       <header className="page-header">
         <div>
           <p className="eyebrow">Settings</p>
-          <h1>Codex Settings</h1>
-          <p className="muted">Live account allowance from the local Codex App Server. DAG builds pause before the next ready batch when either window has less than 5% remaining.</p>
+          <h1>{settingsPageCopy[section].title}</h1>
+          <p className="muted">{settingsPageCopy[section].description}</p>
         </div>
-        <button type="button" className="secondary" onClick={() => void loadUsage(true)} disabled={loading}>
+        <button type="button" className="secondary" onClick={() => void loadSettings(true)} disabled={loading}>
           Refresh
         </button>
       </header>
+      <nav className="settings-nav" aria-label="Settings sections">
+        {settingsSections.map((item) => (
+          <NavLink
+            key={item.section}
+            to={item.to}
+            className={({ isActive }) => (isActive ? "settings-nav-link active" : "settings-nav-link")}
+          >
+            {item.label}
+          </NavLink>
+        ))}
+      </nav>
       {error && <p className="error-text">{error}</p>}
       {saved && <p className="success-text">{saved}</p>}
-      {permissionPolicy && (
+      {loading && <p className="muted" role="status">Loading {settingsPageCopy[section].title.toLowerCase()}…</p>}
+      {section === "permissions" && permissionPolicy && (
         <section className="detail-panel stack">
           <div>
             <h2>Permission policy</h2>
@@ -259,7 +359,7 @@ export default function UsageSettingsPage() {
           </div>
         </section>
       )}
-      {github && (
+      {section === "integrations" && github && (
         <section className="detail-panel stack">
           <div>
             <h2>GitHub connection</h2>
@@ -296,7 +396,61 @@ export default function UsageSettingsPage() {
           </div>
         </section>
       )}
-      {atlas && (
+      {section === "integrations" && notion && (
+        <section className="detail-panel stack">
+          <div>
+            <h2>Notion todo connection</h2>
+            <p className="muted">
+              Eidolon validates one manually created Todo data source. The private connection token is stored only in Windows Credential Manager and is never shown to skills.
+            </p>
+            <p className="muted">
+              Todo management stays in Notion, including the Notion iOS app. Eidolon does not keep a todo copy, cache, sync process, or todo page.
+            </p>
+          </div>
+          <dl className="detail-grid">
+            <div><dt>Status</dt><dd>{notion.connected ? "Connected" : notion.status}</dd></div>
+            <div><dt>Workspace</dt><dd>{notion.workspace_name ?? "None"}</dd></div>
+            <div><dt>Connection bot</dt><dd>{notion.bot_name ?? "None"}</dd></div>
+            <div><dt>Data-source ID</dt><dd><code>{notion.data_source_id ?? "None"}</code></dd></div>
+            <div><dt>Last validated</dt><dd>{formatDate(notion.last_validated_at)}</dd></div>
+          </dl>
+          {notion.error_type && <p className="error-text">Connection status: {notion.error_type.replace(/_/g, " ")}</p>}
+          <label>
+            Notion data-source ID
+            <input
+              type="text"
+              value={notionDataSourceId}
+              onChange={(event) => setNotionDataSourceId(event.target.value)}
+              placeholder="Copy from Manage data sources in Notion"
+            />
+          </label>
+          <label>
+            {notion.connected ? "Replacement Notion token" : "Notion token"}
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={notionToken}
+              onChange={(event) => setNotionToken(event.target.value)}
+              placeholder="Token is never displayed after submission"
+            />
+          </label>
+          <div className="button-row">
+            <button
+              type="button"
+              onClick={() => void saveNotionConnection()}
+              disabled={loading || !notionToken || !notionDataSourceId.trim()}
+            >
+              {notion.connected ? "Replace Notion connection" : "Add Notion connection"}
+            </button>
+            {notion.connected && (
+              <button type="button" className="secondary" onClick={() => void removeNotionConnection()} disabled={loading}>
+                Remove Notion connection
+              </button>
+            )}
+          </div>
+        </section>
+      )}
+      {section === "integrations" && atlas && (
         <section className="detail-panel stack">
           <div>
             <h2>Eidolon-Atlas</h2>
@@ -363,10 +517,10 @@ export default function UsageSettingsPage() {
           </div>
         </section>
       )}
-      {catalog && !catalog.available && (
+      {section === "models" && catalog && !catalog.available && (
         <p className="error-text">Model choices are unavailable: {catalog.error ?? "Codex model catalog could not be loaded."}</p>
       )}
-      {routing && (
+      {section === "project" && routing && (
         <section className="detail-panel stack">
           <div>
             <h2>Project build workflow</h2>
@@ -395,12 +549,12 @@ export default function UsageSettingsPage() {
             Simple and Task DAG are hard overrides. Automatic preserves ProductManager selection.
           </p>
           <div className="button-row">
-            <button type="button" onClick={() => void saveRouting()} disabled={loading}>Save Codex settings</button>
+            <button type="button" onClick={() => void saveRouting("Project workflow saved.")} disabled={loading}>Save project workflow</button>
           </div>
           <RoutingSaveStatus routing={routing} dirty={routingDirty} />
         </section>
       )}
-      {routing && catalog?.available && (
+      {section === "models" && routing && catalog?.available && (
         <>
           <section className="detail-panel stack">
             <div>
@@ -451,13 +605,13 @@ export default function UsageSettingsPage() {
             <RoutingRow label="Final end-to-end" choice={routing.tester.final_e2e} fallback={routing.tester.default} models={catalog.models} onChange={(choice) => updateChoice("tester", "final_e2e", choice)} />
             <RoutingRow label="Update tests" choice={routing.tester.update} fallback={routing.tester.default} models={catalog.models} onChange={(choice) => updateChoice("tester", "update", choice)} />
             <div className="button-row">
-              <button type="button" onClick={() => void saveRouting()} disabled={loading}>Save model routing</button>
+              <button type="button" onClick={() => void saveRouting("Model routing saved.")} disabled={loading}>Save model routing</button>
             </div>
             <RoutingSaveStatus routing={routing} dirty={routingDirty} />
           </section>
         </>
       )}
-      {cliStatus && (
+      {section === "usage" && cliStatus && (
         <section className="detail-panel">
           <h2>Codex CLI</h2>
           <dl className="detail-grid">
@@ -470,8 +624,8 @@ export default function UsageSettingsPage() {
           {cliStatus.error && <p className="error-text">{cliStatus.error}</p>}
         </section>
       )}
-      {usage && !usage.available && <p className="error-text">{usage.error ?? "Codex usage is unavailable."}</p>}
-      {usage?.available && (
+      {section === "usage" && usage && !usage.available && <p className="error-text">{usage.error ?? "Codex usage is unavailable."}</p>}
+      {section === "usage" && usage?.available && (
         <>
           <section className="detail-panel">
             <dl className="detail-grid">
@@ -486,7 +640,11 @@ export default function UsageSettingsPage() {
           </div>
         </>
       )}
-      <p className="muted">Skill runtime calls are intentionally excluded from build token accounting.</p>
+      {section === "usage" && (
+        <p className="muted">
+          DAG builds pause before the next ready batch when either allowance window has less than 5% remaining. Skill runtime calls are intentionally excluded from build token accounting.
+        </p>
+      )}
     </section>
   );
 }
@@ -501,6 +659,22 @@ function atlasUnavailableStatus(err: unknown): AtlasIntegrationStatus {
     locked: null,
     passphrase_configured: false,
     startup_error: err instanceof Error ? err.message : "Atlas status is unavailable",
+  };
+}
+
+function notionUnavailableStatus(err: unknown): NotionConnectionStatus {
+  return {
+    provider: "notion",
+    connected: false,
+    status: "unavailable",
+    bot_name: null,
+    bot_id: null,
+    workspace_name: null,
+    data_source_id: null,
+    last_validated_at: null,
+    created_at: null,
+    updated_at: null,
+    error_type: err instanceof Error ? err.message : "unavailable",
   };
 }
 

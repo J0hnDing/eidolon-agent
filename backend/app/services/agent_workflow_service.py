@@ -31,7 +31,7 @@ from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
 from app.services.skill_operation_guard import SkillOperationGuard
 from app.services.skill_package_files import snapshot_skill_files
-from app.services.skill_version_service import SkillVersionError, SkillVersionService
+from app.services.skill_version_service import SkillVersionService
 from app.services.task_dag_service import TaskDagService
 from app.workflows.base import (
     DEFAULT_BUILD_WORKFLOW,
@@ -682,7 +682,7 @@ class AgentWorkflowService:
             self.db.commit()
             self.db.refresh(agent_run)
             return agent_run
-        except (SkillVersionError, Exception) as exc:
+        except Exception as exc:
             if agent_run.status not in {"blocked", "failed"}:
                 self._fail_run(agent_run, str(exc))
             raise

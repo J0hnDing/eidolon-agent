@@ -32,10 +32,6 @@ class SkillRunBase(BaseModel):
     initiating_action: str | None = None
 
 
-class SkillRunCreate(SkillRunBase):
-    pass
-
-
 class SkillRunRequest(BaseModel):
     input: dict[str, Any] = Field(default_factory=dict)
 

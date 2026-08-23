@@ -120,6 +120,7 @@ def test_private_function_capability_command_uses_internal_network_and_relay_url
     assert command[command.index("--network") + 1] == "private-function-network"
     assert "api.github.com:127.0.0.1" in command
     assert "github.com:127.0.0.1" in command
+    assert "api.notion.com:127.0.0.1" in command
     assert "PERSONAL_AGENT_BACKEND_URL=http://trusted-function-relay:8000" in command
     assert "PERSONAL_AGENT_FUNCTION_CAPABILITY=ephemeral-secret" in command
 

@@ -12,6 +12,7 @@ from app.models import ApprovalRequest, Skill, SkillSchedule
 from app.routers.skills import run_skill as run_skill_route
 from app.schemas.skill_run import SkillRunRequest
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
+from tests.sample_skill import create_sample_skill
 
 
 @pytest.fixture
@@ -33,7 +34,7 @@ def service(tmp_path: Path, db_session: Session) -> ProposedSkillService:
 
 
 def test_create_proposed_skill(service: ProposedSkillService) -> None:
-    skill = service.create_sample("sample_skill")
+    skill = create_sample_skill(service, "sample_skill")
     skill_dir = service.proposed_dir("sample_skill")
 
     assert skill.status == "proposed"
@@ -45,7 +46,7 @@ def test_create_proposed_skill(service: ProposedSkillService) -> None:
 
 def test_rejects_unsafe_skill_name(service: ProposedSkillService) -> None:
     with pytest.raises(ProposedSkillError, match="Skill name must match"):
-        service.create_sample("../unsafe")
+        create_sample_skill(service, "../unsafe")
 
 
 def test_prepare_generation_workspace_stages_existing_tree_before_cleanup(
@@ -69,7 +70,7 @@ def test_prepare_generation_workspace_stages_existing_tree_before_cleanup(
 
 
 def test_reads_allowed_proposed_skill_files(service: ProposedSkillService) -> None:
-    skill = service.create_sample("readable_skill")
+    skill = create_sample_skill(service, "readable_skill")
 
     files = service.read_skill_files(skill)
     paths = {file.path for file in files}
@@ -78,7 +79,7 @@ def test_reads_allowed_proposed_skill_files(service: ProposedSkillService) -> No
 
 
 def test_validates_skill_with_optional_instructions_file(service: ProposedSkillService) -> None:
-    skill = service.create_sample("skill_with_instructions")
+    skill = create_sample_skill(service, "skill_with_instructions")
     skill_dir = service.proposed_dir("skill_with_instructions")
     manifest_path = skill_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -92,14 +93,14 @@ def test_validates_skill_with_optional_instructions_file(service: ProposedSkillS
 
 
 def test_blocks_reads_outside_skill_directory(service: ProposedSkillService) -> None:
-    skill = service.create_sample("blocked_read")
+    skill = create_sample_skill(service, "blocked_read")
 
     with pytest.raises(ProposedSkillError, match="not readable"):
         service.read_skill_file(skill, "../AGENTS.md")
 
 
 def test_validates_proposed_skill_with_passing_tests(service: ProposedSkillService) -> None:
-    skill = service.create_sample("valid_skill")
+    skill = create_sample_skill(service, "valid_skill")
 
     result = service.validate_proposed_skill(skill)
 
@@ -111,7 +112,7 @@ def test_validates_proposed_skill_with_passing_tests(service: ProposedSkillServi
 def test_validation_rejects_manifest_dependency_not_provisioned_before_build(
     service: ProposedSkillService,
 ) -> None:
-    skill = service.create_sample("dependency_drift")
+    skill = create_sample_skill(service, "dependency_drift")
     manifest_path = service.proposed_dir(skill.name) / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["dependencies"] = ["requests"]
@@ -125,7 +126,7 @@ def test_validation_rejects_manifest_dependency_not_provisioned_before_build(
 
 
 def test_validation_fails_when_skill_tests_fail(service: ProposedSkillService) -> None:
-    skill = service.create_sample("failing_skill")
+    skill = create_sample_skill(service, "failing_skill")
     skill_dir = service.proposed_dir("failing_skill")
     (skill_dir / "tests" / "test_skill.py").write_text(
         "def test_failure():\n    assert False\n",
@@ -141,7 +142,7 @@ def test_validation_fails_when_skill_tests_fail(service: ProposedSkillService) -
 
 
 def test_installs_valid_proposed_skill(service: ProposedSkillService) -> None:
-    skill = service.create_sample("install_skill")
+    skill = create_sample_skill(service, "install_skill")
 
     installed = service.install_proposed_skill(skill)
 
@@ -158,7 +159,7 @@ def test_install_recovers_partial_folder_and_does_not_fail_on_deferred_trash_cle
     service: ProposedSkillService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    skill = service.create_sample("recover_install")
+    skill = create_sample_skill(service, "recover_install")
     partial_dir = service.installed_dir(skill.name)
     partial_dir.mkdir(parents=True)
     (partial_dir / "partial.txt").write_text("incomplete", encoding="utf-8")
@@ -174,7 +175,7 @@ def test_install_recovers_partial_folder_and_does_not_fail_on_deferred_trash_cle
 
 
 def test_install_is_idempotent_after_success(service: ProposedSkillService) -> None:
-    skill = service.create_sample("idempotent_install")
+    skill = create_sample_skill(service, "idempotent_install")
     installed = service.install_proposed_skill(skill)
 
     retried = service.install_proposed_skill(installed)
@@ -187,7 +188,7 @@ def test_install_registers_manifest_declared_schedule(
     service: ProposedSkillService,
     db_session: Session,
 ) -> None:
-    skill = service.create_sample("install_scheduled")
+    skill = create_sample_skill(service, "install_scheduled")
     skill_dir = service.proposed_dir("install_scheduled")
     manifest_path = skill_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -219,7 +220,7 @@ def test_install_registers_manifest_declared_schedule(
 
 
 def test_refuses_to_install_invalid_manifest(service: ProposedSkillService) -> None:
-    skill = service.create_sample("invalid_manifest")
+    skill = create_sample_skill(service, "invalid_manifest")
     skill_dir = service.proposed_dir("invalid_manifest")
     manifest_path = skill_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -231,7 +232,7 @@ def test_refuses_to_install_invalid_manifest(service: ProposedSkillService) -> N
 
 
 def test_validation_rejects_manifest_name_drift(service: ProposedSkillService) -> None:
-    skill = service.create_sample("stable_name")
+    skill = create_sample_skill(service, "stable_name")
     manifest_path = service.proposed_dir(skill.name) / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["name"] = "renamed_by_agent"
@@ -245,7 +246,7 @@ def test_validation_rejects_manifest_name_drift(service: ProposedSkillService) -
 
 
 def test_refuses_to_run_proposed_skills(db_session: Session, service: ProposedSkillService) -> None:
-    skill = service.create_sample("proposed_run_block")
+    skill = create_sample_skill(service, "proposed_run_block")
 
     with pytest.raises(HTTPException) as exc_info:
         run_skill_route(skill.id, SkillRunRequest(input={}), db_session)
@@ -255,7 +256,7 @@ def test_refuses_to_run_proposed_skills(db_session: Session, service: ProposedSk
 
 
 def test_rejects_and_deletes_proposed_skill(service: ProposedSkillService) -> None:
-    skill = service.create_sample("reject_me")
+    skill = create_sample_skill(service, "reject_me")
     skill_id = skill.id
 
     service.reject_proposed_skill(skill)
@@ -268,7 +269,7 @@ def test_delete_removes_installed_skill_record_and_folder(
     db_session: Session,
     service: ProposedSkillService,
 ) -> None:
-    skill = service.create_sample("delete_installed")
+    skill = create_sample_skill(service, "delete_installed")
     installed = service.install_proposed_skill(skill)
     installed_id = installed.id
 
@@ -283,7 +284,7 @@ def test_delete_commits_after_staging_even_when_trash_cleanup_is_deferred(
     service: ProposedSkillService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    skill = service.create_sample("delete_locked")
+    skill = create_sample_skill(service, "delete_locked")
     installed = service.install_proposed_skill(skill)
     installed_id = installed.id
     monkeypatch.setattr(service, "_remove_tree_best_effort", lambda _path: None)
@@ -299,7 +300,7 @@ def test_delete_removes_skill_schedules(
     db_session: Session,
     service: ProposedSkillService,
 ) -> None:
-    skill = service.create_sample("delete_scheduled")
+    skill = create_sample_skill(service, "delete_scheduled")
     installed = service.install_proposed_skill(skill)
     schedule = SkillSchedule(
         skill_id=installed.id,

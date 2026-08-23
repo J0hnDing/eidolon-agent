@@ -7,6 +7,8 @@ from app.schemas.integration import (
     GitHubCredentialWrite,
     IntegrationInvocationRequest,
     IntegrationInvocationResponse,
+    NotionConnectionStatus,
+    NotionCredentialWrite,
 )
 from app.services.function_catalog_service import FunctionCatalogService
 from app.services.function_registry_service import FunctionRegistryError, FunctionRegistryService
@@ -41,6 +43,37 @@ def put_github_connection(
 def remove_github_connection(db: Session = Depends(get_db)) -> Response:
     try:
         build_default_integration_service(db).remove_github_connection()
+        FunctionCatalogService(db).refresh()
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/settings/integrations/notion", response_model=NotionConnectionStatus)
+def notion_connection_status(db: Session = Depends(get_db)) -> NotionConnectionStatus:
+    return build_default_integration_service(db).notion_connection_status()
+
+
+@router.put("/settings/integrations/notion", response_model=NotionConnectionStatus)
+def put_notion_connection(
+    payload: NotionCredentialWrite,
+    db: Session = Depends(get_db),
+) -> NotionConnectionStatus:
+    try:
+        result = build_default_integration_service(db).put_notion_connection(
+            payload.token.get_secret_value(),
+            payload.data_source_id,
+        )
+        FunctionCatalogService(db).refresh()
+        return result
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+
+
+@router.delete("/settings/integrations/notion", status_code=status.HTTP_204_NO_CONTENT)
+def remove_notion_connection(db: Session = Depends(get_db)) -> Response:
+    try:
+        build_default_integration_service(db).remove_notion_connection()
         FunctionCatalogService(db).refresh()
     except IntegrationError as exc:
         raise _http_error(exc) from None
@@ -93,9 +126,20 @@ def _http_error(exc: IntegrationError) -> HTTPException:
     status_code = {
         "invalid_input": status.HTTP_422_UNPROCESSABLE_CONTENT,
         "invalid_credential": status.HTTP_401_UNAUTHORIZED,
+        "provider_forbidden": status.HTTP_403_FORBIDDEN,
         "not_found": status.HTTP_404_NOT_FOUND,
         "rate_limited": status.HTTP_429_TOO_MANY_REQUESTS,
         "provider_timeout": status.HTTP_504_GATEWAY_TIMEOUT,
         "response_too_large": status.HTTP_413_CONTENT_TOO_LARGE,
+        "provider_unavailable": status.HTTP_503_SERVICE_UNAVAILABLE,
     }.get(exc.error_type, status.HTTP_409_CONFLICT)
-    return HTTPException(status_code=status_code, detail={"type": exc.error_type, "message": str(exc)})
+    headers = (
+        {"Retry-After": str(exc.retry_after_seconds)}
+        if exc.error_type == "rate_limited" and exc.retry_after_seconds is not None
+        else None
+    )
+    return HTTPException(
+        status_code=status_code,
+        detail={"type": exc.error_type, "message": str(exc)},
+        headers=headers,
+    )

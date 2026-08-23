@@ -1,10 +1,11 @@
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from app.services.atlas_knowledge_service import AtlasKnowledgeError, AtlasKnowledgeService
+from app.services.atlas_knowledge_service import AtlasKnowledgeError, AtlasKnowledgeService, codex_available
 from app.services.atlas_provider import FakeAtlasProviderAdapter, UrllibAtlasProviderAdapter
 from app.services.integration_registry import OPERATIONS
 
@@ -83,6 +84,22 @@ def test_codex_failure_or_invalid_output_does_not_mutate(tmp_path: Path, codex: 
 
     assert exc.value.error_type == "codex_failed"
     assert provider.calls == []
+
+
+def test_default_knowledge_service_fails_closed_without_codex_cli(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.codex_cli_service.codex_cli_service.resolve",
+        lambda **_kwargs: SimpleNamespace(available=False, compatible=False, error="missing"),
+    )
+
+    assert codex_available() is False
+    with pytest.raises(AtlasKnowledgeError, match="compatible Codex CLI") as exc:
+        AtlasKnowledgeService(FakeAtlasProviderAdapter(), project_root=tmp_path)
+
+    assert exc.value.error_type == "codex_unavailable"
 
 
 def test_provider_derives_knowledge_functions_from_flat_primitive_nodes() -> None:

@@ -63,6 +63,12 @@ def test_registry_is_authoritative_and_context_is_selected_only() -> None:
         "atlas.knowledge.node.get",
         "atlas.knowledge.node.know",
     }
+    assert {operation_id for operation_id in OPERATIONS if operation_id.startswith("notion.")} == {
+        "notion.todo.list",
+        "notion.todo.create",
+        "notion.todo.update",
+        "notion.todo.delete",
+    }
     context = OPERATIONS["github.repository.file.read"].agent_context()
     assert context["operation"] == "github.repository.file.read"
     assert context["input_schema"] == OPERATIONS["github.repository.file.read"].input_schema
@@ -142,6 +148,36 @@ def test_manifest_accepts_separate_github_and_atlas_requirements() -> None:
     parsed = validate_manifest(manifest)
 
     assert [item.provider for item in parsed.integration_requirements] == ["github", "atlas"]
+
+
+def test_manifest_accepts_notion_without_caller_selected_scope() -> None:
+    parsed = validate_manifest(
+        manifest_with(
+            {
+                "provider": "notion",
+                "operations": ["notion.todo.list", "notion.todo.create"],
+                "resource_scope": {},
+            }
+        )
+    )
+    requirement = parsed.integration_requirements[0]
+    assert requirement.provider == "notion"
+    assert requirement.resource_scope.repositories == []
+    assert OPERATIONS["notion.todo.list"].risk == "low"
+    assert OPERATIONS["notion.todo.create"].risk == "medium"
+
+
+def test_manifest_rejects_notion_operation_under_another_provider() -> None:
+    with pytest.raises(ManifestValidationError, match="must match"):
+        validate_manifest(
+            manifest_with(
+                {
+                    "provider": "github",
+                    "operations": ["notion.todo.list"],
+                    "resource_scope": {},
+                }
+            )
+        )
 
 
 def test_trending_uses_registry_defined_non_repository_scope() -> None:

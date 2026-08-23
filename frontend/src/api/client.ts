@@ -407,6 +407,20 @@ export interface GitHubConnectionStatus {
   error_type: string | null;
 }
 
+export interface NotionConnectionStatus {
+  provider: "notion";
+  connected: boolean;
+  status: "connected" | "disconnected" | "unavailable" | "invalid";
+  bot_name: string | null;
+  bot_id: string | null;
+  workspace_name: string | null;
+  data_source_id: string | null;
+  last_validated_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  error_type: string | null;
+}
+
 export interface AtlasIntegrationStatus {
   provider: "atlas";
   directory: string;
@@ -718,6 +732,14 @@ export const api = {
     }),
   removeGitHubConnection: () =>
     request<void>("/settings/integrations/github", { method: "DELETE" }),
+  getNotionConnection: () => request<NotionConnectionStatus>("/settings/integrations/notion"),
+  putNotionConnection: (token: string, dataSourceId: string) =>
+    request<NotionConnectionStatus>("/settings/integrations/notion", {
+      method: "PUT",
+      body: JSON.stringify({ token, data_source_id: dataSourceId }),
+    }),
+  removeNotionConnection: () =>
+    request<void>("/settings/integrations/notion", { method: "DELETE" }),
   getAtlasStatus: () => request<AtlasIntegrationStatus>("/settings/integrations/atlas"),
   updateAtlasDirectory: (directory: string) =>
     request<AtlasIntegrationStatus>("/settings/integrations/atlas/directory", {

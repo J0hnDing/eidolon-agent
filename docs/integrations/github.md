@@ -18,7 +18,7 @@ Removing the connection removes the operating-system credential and active conne
 
 ## Authoritative Operations
 
-All operations are GET-only, low risk, side-effect free, authenticated by backend-created headers, limited to `https://api.github.com`, pinned to GitHub REST API version `2022-11-28`, bounded by per-operation timeouts and response sizes, and configured to reject redirects. The registry owns input and normalized output JSON Schemas, scope behavior, provider request construction, pagination/result limits, error behavior, audit resource fields, fake behavior, and usage examples.
+All operations are GET-only, low risk, side-effect free, bounded by per-operation timeouts and response sizes, and configured to reject redirects. REST requests are authenticated by backend-created headers, limited to `https://api.github.com`, and pinned to GitHub REST API version `2022-11-28`. The Trending operation additionally makes one unauthenticated request to the fixed `https://github.com/trending` page; it cannot navigate elsewhere on `github.com`. The registry owns input and normalized output JSON Schemas, scope behavior, provider request construction, pagination/result limits, error behavior, audit resource fields, fake behavior, and usage examples.
 
 | Operation | Scope | Main bounds and normalized result |
 | --- | --- | --- |
@@ -27,21 +27,22 @@ All operations are GET-only, low risk, side-effect free, authenticated by backen
 | `github.repository.file.read` | exact repository | One UTF-8 text file; at most 262,144 decoded bytes; binary, non-UTF-8, directory, and oversized content are rejected. |
 | `github.issue.list` | exact repository | One bounded provider page and at most 100 normalized issues; pull requests returned by GitHub's issues endpoint are removed; explicit `truncated`. |
 | `github.pull_request.list` | exact repository | One bounded provider page and at most 100 normalized pull requests; explicit `truncated`. |
-| `github.repository.trending.list` | none | At most 25 normalized public repositories under the ranking contract below. |
+| `github.repository.trending.list` | none | At most 25 repositories in GitHub Trending order, each with a bounded README under the contract below. |
 
 Callers never provide HTTP methods, URLs, paths, headers, authentication, GraphQL, or free-form query construction. Provider objects are projected into registry-defined normalized fields before output validation and return.
 
 ### Trending Contract
 
-`github.repository.trending.list` is an Eidolon-defined search-and-ranking operation, not a raw GitHub “trending” proxy:
+`github.repository.trending.list` reads GitHub's server-rendered Trending page rather than inventing a ranking from repository search:
 
-- lookback is exactly 30 days from the backend invocation date;
-- repositories must be public, non-fork, and non-archived;
-- an optional literal language filter may be supplied;
-- maximum results is 25;
-- GitHub search is requested in descending star order;
-- Eidolon deterministically orders the bounded result by stars descending, forks descending, then case-insensitive full name ascending;
-- output reports the ranking id, lookback, applied language, normalized repositories, and whether more provider results existed.
+- `period` is `daily`, `weekly`, or `monthly` and defaults to `weekly`;
+- an optional literal programming-language path may be supplied;
+- maximum results is 25 and GitHub's displayed order is preserved as `rank`;
+- each result contains only Trending-relevant fields: repository identity and URL, description, language, total stars, total forks, and stars gained during the selected period;
+- after selecting the requested results, the backend calls GitHub's preferred-README REST endpoint and returns at most 12,000 UTF-8 bytes as `readme` with explicit `readme_truncated`;
+- an oversized README is truncated explicitly; a missing or unsupported README produces `readme: null` without changing GitHub's ranking;
+- an empty or structurally incompatible Trending page fails as `provider_unavailable`; there is no silent repository-search fallback;
+- output reports the `github_trending` ranking id, period, applied language, normalized repositories, and whether the parsed page contained more entries than the requested limit.
 
 Tests use deterministic fake results and never depend on live GitHub ordering.
 

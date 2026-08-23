@@ -89,11 +89,12 @@ class TaskDagBuildWorkflow:
             service.artifacts.write_task_statuses(agent_run, task_statuses)
             agent_run.current_task_id = task_id
             service.db.commit()
+            task_context = service._builder_task_context(agent_run, task_node, skill)
             builder_step = service._start_step(
                 agent_run,
                 "builder",
                 task_node_id=task_id,
-                input_json={"mode": "build_task", **service._builder_task_context(agent_run, task_node, skill)},
+                input_json={"mode": "build_task", **task_context},
                 logs=f"Builder is implementing task node {task_id} only.",
             )
             try:
@@ -102,7 +103,7 @@ class TaskDagBuildWorkflow:
                         generation_request,
                         builder_writes_tests=False,
                         initial_skill_status="building",
-                        task_context=service._builder_task_context(agent_run, task_node, skill),
+                        task_context=task_context,
                         create_runtime_request=False,
                         workspace_prepared=True,
                     )
@@ -111,7 +112,7 @@ class TaskDagBuildWorkflow:
                     result, validation = service.codex_service.build_skill_task(
                         skill,
                         generation_request,
-                        service._builder_task_context(agent_run, task_node, skill),
+                        task_context,
                     )
                     builder_output = {
                         "skill_id": skill.id,
@@ -217,18 +218,28 @@ class TaskDagBuildWorkflow:
                 service.artifacts.write_task_statuses(agent_run, task_statuses)
             task_statuses[task_id] = "building"
             service.artifacts.write_task_statuses(agent_run, task_statuses)
+            agent_run.current_step = "builder"
+            agent_run.current_task_id = task_id
+            service.db.commit()
+            task_context = service._builder_task_context(agent_run, task_node, skill)
             builder_step = service._start_step(
                 agent_run,
                 "builder",
                 task_node_id=task_id,
-                input_json={"mode": "build_task", **service._builder_task_context(agent_run, task_node, skill)},
+                input_json={"mode": "build_task", **task_context},
                 logs=f"Builder is resuming task node {task_id} only.",
             )
-            result, validation = service.codex_service.build_skill_task(
-                skill,
-                generation_request,
-                service._builder_task_context(agent_run, task_node, skill),
-            )
+            try:
+                result, validation = service.codex_service.build_skill_task(
+                    skill,
+                    generation_request,
+                    task_context,
+                )
+            except CodexGenerationError as exc:
+                if "USER_ACTION_REQUIRED:" in str(exc):
+                    service._builder_user_action_required(agent_run, builder_step, str(exc), task_id)
+                    raise ProjectBuildWorkflowError(str(exc)) from exc
+                raise
             interface_artifact_path = service.artifacts.move_validated_interface_artifact(
                 agent_run,
                 service.proposed_service.skill_dir_for_record(skill),

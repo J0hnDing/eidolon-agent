@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 
-import { SkillGenerationApprovalResponse, api } from "../api/client";
+import { api } from "../api/client";
 import {
   ChatWorkspace,
   buildApprovalMessage,
@@ -14,7 +14,6 @@ import { usePolling } from "../lib/usePolling";
 
 export default function ChatPage() {
   const chat = useChatConversations();
-  const [approvalResult, setApprovalResult] = useState<SkillGenerationApprovalResponse | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,13 +57,10 @@ export default function ChatPage() {
   function handleNewChat() {
     chat.createNewConversation();
     setError(null);
-    setApprovalResult(null);
   }
 
   async function handleDeleteConversation(conversationId: string) {
-    const wasActive = conversationId === chat.activeConversationId;
     chat.deleteConversation(conversationId);
-    if (wasActive) setApprovalResult(null);
     setError(null);
     try {
       await api.deleteChatConversation(conversationId);
@@ -134,7 +130,6 @@ export default function ChatPage() {
           pendingGenerationRequestId: undefined,
           updatedAt: new Date().toISOString(),
         }));
-        setApprovalResult(null);
         const displayName =
           generationRequest.proposed_display_name || generationRequest.proposed_skill_name || "this skill";
         chat.appendMessagesToConversation(conversationId, [
@@ -181,7 +176,6 @@ export default function ChatPage() {
     setError(null);
     try {
       const result = await api.approveSkillGeneration(requestId);
-      setApprovalResult(result);
       chat.updateMessageInConversation(conversationId, message.id, (current) => ({
         ...current,
         actionStatus: "approved",
@@ -321,7 +315,6 @@ export default function ChatPage() {
       isSending={isSending}
       isGenerating={isGenerating}
       error={error}
-      approvalResult={approvalResult}
       onNewChat={handleNewChat}
       onSelectConversation={chat.selectConversation}
       onDeleteConversation={handleDeleteConversation}

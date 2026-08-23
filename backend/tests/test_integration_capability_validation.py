@@ -92,6 +92,18 @@ def test_direct_github_secret_store_auth_and_internal_path_access_are_rejected(t
     assert any(finding.capability == "credential_store" for finding in ctypes_result.findings)
 
 
+def test_direct_notion_and_integration_settings_access_are_rejected(tmp_path: Path) -> None:
+    result = scan(
+        tmp_path,
+        "import requests\n"
+        "requests.post('https://api.notion.com/v1/pages')\n"
+        "settings = '/settings/integrations/notion'\n"
+        "token = os.environ['NOTION_TOKEN']\n",
+    )
+    capabilities = {finding.capability for finding in result.findings}
+    assert {"direct_notion_access", "integration_settings_access", "secrets"}.issubset(capabilities)
+
+
 def test_browser_integration_invocation_is_rejected(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("app = object()\n", encoding="utf-8")
     (tmp_path / "app.js").write_text(

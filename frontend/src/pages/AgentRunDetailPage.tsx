@@ -131,7 +131,7 @@ export default function AgentRunDetailPage() {
     }
   }
 
-  async function handleRetryCurrentMilestone() {
+  async function handleRetryCurrentTask() {
     if (!run) return;
     setIsWorking(true);
     setError(null);
@@ -238,7 +238,7 @@ export default function AgentRunDetailPage() {
             <button
               type="button"
               className="secondary"
-              onClick={handleRetryCurrentMilestone}
+              onClick={handleRetryCurrentTask}
               disabled={isWorking}
             >
               Retry Current Task

@@ -38,6 +38,7 @@ MAX_SOURCE_BYTES = 1_000_000
 WEB_ASSET_SUFFIXES = {".css", ".html", ".htm", ".js", ".mjs"}
 ABSOLUTE_BROWSER_URL = re.compile(r"https?://[^\s\"'<>)}]+", re.IGNORECASE)
 GITHUB_HOSTS = {"api.github.com", "github.com"}
+NOTION_HOSTS = {"api.notion.com"}
 ATLAS_HOSTS = {"127.0.0.1", "localhost", "::1"}
 ATLAS_MARKERS = (
     "127.0.0.1:4817",
@@ -190,7 +191,13 @@ class StaticCapabilityScanner:
                 domain = self._url_domain(match.group(0))
                 findings.append(
                     CapabilityFinding(
-                        capability="direct_github_access" if domain in GITHUB_HOSTS else "browser_network",
+                        capability=(
+                            "direct_github_access"
+                            if domain in GITHUB_HOSTS
+                            else "direct_notion_access"
+                            if domain in NOTION_HOSTS
+                            else "browser_network"
+                        ),
                         status="blocked",
                         path=relative,
                         line=source.count("\n", 0, match.start()) + 1,
@@ -206,6 +213,7 @@ class StaticCapabilityScanner:
                 "/integrations/capabilities",
                 "/capabilities/integrations",
                 "PERSONAL_AGENT_",
+                "/settings/integrations/",
                 *ATLAS_MARKERS,
             ):
                 if marker in source:
@@ -297,6 +305,28 @@ class StaticCapabilityScanner:
                             line=getattr(node, "lineno", 1),
                             evidence="contains a direct GitHub host",
                             message="Direct GitHub access is blocked; use the trusted integration helper.",
+                        )
+                    )
+                if "api.notion.com" in lowered:
+                    findings.append(
+                        CapabilityFinding(
+                            capability="direct_notion_access",
+                            status="blocked",
+                            path=relative_path,
+                            line=getattr(node, "lineno", 1),
+                            evidence="contains the direct Notion API host",
+                            message="Direct Notion access is blocked; use the trusted integration helper.",
+                        )
+                    )
+                if "/settings/integrations/" in lowered:
+                    findings.append(
+                        CapabilityFinding(
+                            capability="integration_settings_access",
+                            status="blocked",
+                            path=relative_path,
+                            line=getattr(node, "lineno", 1),
+                            evidence="references trusted integration settings routes",
+                            message="Generated code cannot access integration connection settings.",
                         )
                     )
                 if any(marker in lowered for marker in ATLAS_MARKERS):
@@ -632,7 +662,7 @@ class StaticCapabilityScanner:
         allowed = secret_name.lower() in approved_secrets
         if any(
             part in secret_name.lower()
-            for part in ("github", "atlas", "capability", "token", "credential", "secret", "passphrase")
+            for part in ("github", "atlas", "notion", "capability", "token", "credential", "secret", "passphrase")
         ):
             allowed = False
         return CapabilityFinding(

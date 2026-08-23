@@ -24,6 +24,27 @@ class GitHubConnectionStatus(BaseModel):
     error_type: str | None = None
 
 
+class NotionCredentialWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: SecretStr
+    data_source_id: str = Field(min_length=1, max_length=256)
+
+
+class NotionConnectionStatus(BaseModel):
+    provider: Literal["notion"] = "notion"
+    connected: bool
+    status: Literal["connected", "disconnected", "unavailable", "invalid"]
+    bot_name: str | None = None
+    bot_id: str | None = None
+    workspace_name: str | None = None
+    data_source_id: str | None = None
+    last_validated_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    error_type: str | None = None
+
+
 class IntegrationInvocationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -33,9 +54,3 @@ class IntegrationInvocationRequest(BaseModel):
 
 class IntegrationInvocationResponse(BaseModel):
     output: dict[str, Any]
-
-
-class IntegrationOperationSummary(BaseModel):
-    operation: str
-    title: str
-    description: str

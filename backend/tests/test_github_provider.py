@@ -1,6 +1,5 @@
 import base64
 import io
-import json
 from urllib.error import HTTPError
 
 import pytest
@@ -120,24 +119,75 @@ def test_redirect_and_oversized_provider_response_are_rejected(
     assert large.value.error_type == "response_too_large"
 
 
-def test_trending_ranking_is_deterministic_and_not_live_order_dependent(
+def test_trending_uses_github_page_order_and_enriches_bounded_readmes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = UrllibGitHubProviderAdapter()
-    payload = {
-        "total_count": 3,
-        "items": [
-            {"full_name": "z/repo", "stargazers_count": 10, "forks_count": 1},
-            {"full_name": "a/repo", "stargazers_count": 10, "forks_count": 2},
-            {"full_name": "b/repo", "stargazers_count": 10, "forks_count": 2},
-        ],
-    }
-    monkeypatch.setattr(adapter, "_request", lambda *_args, **_kwargs: json.loads(json.dumps(payload)))
+    html = """
+    <html><body>
+      <article class="Box-row">
+        <a href="/sponsors/not-the-repository">Sponsor</a>
+        <h2><a href="/z/repo">z / repo</a></h2>
+        <p>A trending repository.</p>
+        <span itemprop="programmingLanguage">Python</span>
+        <a href="/z/repo/stargazers">10</a>
+        <a href="/z/repo/forks">1</a>
+        <img alt="contributor" src="avatar.png">
+        <span class="d-inline-block float-sm-right">7 stars this week</span>
+      </article>
+      <article class="Box-row">
+        <h2><a href="/a/repo">a / repo</a></h2>
+        <a href="/a/repo/stargazers">2,000</a>
+        <a href="/a/repo/forks">25</a>
+        <span class="d-inline-block float-sm-right">3 stars this week</span>
+      </article>
+    </body></html>
+    """
+    calls = []
+
+    def fake_request_text(url, **kwargs):
+        calls.append((url, kwargs))
+        if url.startswith("https://github.com/trending"):
+            return html, False
+        return "# README\nUseful details.", False
+
+    monkeypatch.setattr(adapter, "_request_text", fake_request_text)
     output = adapter.execute(
         OPERATIONS["github.repository.trending.list"],
-        {"lookback_days": 30, "limit": 3},
-        "unused",
+        {"period": "weekly", "language": "python", "limit": 2},
+        "secret-token",
     )
-    assert [item["full_name"] for item in output["repositories"]] == ["a/repo", "b/repo", "z/repo"]
-    assert output["ranking"] == "stars_desc_forks_desc_full_name_asc"
-    assert output["lookback_days"] == 30
+    assert [item["full_name"] for item in output["repositories"]] == ["z/repo", "a/repo"]
+    assert output["repositories"][0] == {
+        "rank": 1,
+        "full_name": "z/repo",
+        "description": "A trending repository.",
+        "language": "Python",
+        "html_url": "https://github.com/z/repo",
+        "stars": 10,
+        "forks": 1,
+        "stars_gained": 7,
+        "readme": "# README\nUseful details.",
+        "readme_truncated": False,
+    }
+    assert output["ranking"] == "github_trending"
+    assert output["period"] == "weekly"
+    assert output["truncated"] is False
+    assert calls[0][0] == "https://github.com/trending/python?since=weekly"
+    assert calls[0][1]["credential"] is None
+    assert calls[1][0] == "https://api.github.com/repos/z/repo/readme"
+    assert calls[1][1]["credential"] == "secret-token"
+
+
+def test_trending_rejects_markup_without_repository_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = UrllibGitHubProviderAdapter()
+    monkeypatch.setattr(adapter, "_request_text", lambda *_args, **_kwargs: ("<html></html>", False))
+
+    with pytest.raises(IntegrationProviderError) as exc_info:
+        adapter.execute(
+            OPERATIONS["github.repository.trending.list"],
+            {"period": "daily", "limit": 10},
+            "unused",
+        )
+
+    assert exc_info.value.error_type == "provider_unavailable"

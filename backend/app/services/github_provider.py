@@ -3,22 +3,42 @@ from __future__ import annotations
 import base64
 import binascii
 import json
-from datetime import UTC, datetime, timedelta
+import re
+from html.parser import HTMLParser
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from app.services.integration_registry import IntegrationOperation
 
 GITHUB_API_BASE = "https://api.github.com"
+GITHUB_WEB_BASE = "https://github.com"
 MAX_FILE_BYTES = 262_144
+MAX_TRENDING_README_BYTES = 12_000
+HTML_VOID_ELEMENTS = {
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "param",
+    "source",
+    "track",
+    "wbr",
+}
 
 
 class IntegrationProviderError(RuntimeError):
-    def __init__(self, error_type: str, message: str) -> None:
+    def __init__(self, error_type: str, message: str, *, retry_after_seconds: int | None = None) -> None:
         super().__init__(message)
         self.error_type = error_type
+        self.retry_after_seconds = retry_after_seconds
 
 
 class GitHubProviderAdapter(Protocol):
@@ -35,6 +55,109 @@ class GitHubProviderAdapter(Protocol):
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201
         return None
+
+
+def _class_names(attributes: dict[str, str | None]) -> set[str]:
+    return set((attributes.get("class") or "").split())
+
+
+def _compact_text(parts: list[str]) -> str:
+    return " ".join(" ".join(parts).split())
+
+
+def _count(value: str) -> int:
+    compact = value.strip().lower().replace(",", "")
+    match = re.search(r"(\d+(?:\.\d+)?)\s*([km]?)", compact)
+    if match is None:
+        raise ValueError("GitHub Trending count is missing")
+    number = float(match.group(1))
+    multiplier = {"": 1, "k": 1_000, "m": 1_000_000}[match.group(2)]
+    return int(number * multiplier)
+
+
+class _TrendingHTMLParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.repositories: list[dict[str, Any]] = []
+        self._article_depth = 0
+        self._current: dict[str, Any] | None = None
+        self._inside_heading = False
+        self._capture: str | None = None
+        self._capture_depth = 0
+        self._capture_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        if self._current is None:
+            if tag == "article" and "Box-row" in _class_names(attributes):
+                self._current = {}
+                self._article_depth = 1
+            return
+
+        is_void = tag in HTML_VOID_ELEMENTS
+        if not is_void:
+            self._article_depth += 1
+        if tag == "h2":
+            self._inside_heading = True
+        if self._capture is not None:
+            if not is_void:
+                self._capture_depth += 1
+            return
+
+        href = attributes.get("href") or ""
+        if (
+            tag == "a"
+            and self._inside_heading
+            and re.fullmatch(r"/[A-Za-z0-9-]+/[A-Za-z0-9_.-]+", href)
+        ):
+            self._current.setdefault("full_name", href.removeprefix("/"))
+            self._current.setdefault("html_url", f"{GITHUB_WEB_BASE}{href}")
+        elif tag == "p" and "description" not in self._current:
+            self._begin_capture("description")
+        elif attributes.get("itemprop") == "programmingLanguage":
+            self._begin_capture("language")
+        elif tag == "a" and href.endswith("/stargazers"):
+            self._begin_capture("stars")
+        elif tag == "a" and href.endswith("/forks"):
+            self._begin_capture("forks")
+        elif tag == "span" and "float-sm-right" in _class_names(attributes):
+            self._begin_capture("stars_gained")
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        if tag not in HTML_VOID_ELEMENTS:
+            self.handle_endtag(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._current is None:
+            return
+        if self._capture is not None:
+            self._capture_depth -= 1
+            if self._capture_depth == 0:
+                self._finish_capture()
+        if tag == "h2":
+            self._inside_heading = False
+        self._article_depth -= 1
+        if self._article_depth == 0 and tag == "article":
+            self.repositories.append(self._current)
+            self._current = None
+
+    def handle_data(self, data: str) -> None:
+        if self._capture is not None:
+            self._capture_parts.append(data)
+
+    def _begin_capture(self, name: str) -> None:
+        self._capture = name
+        self._capture_depth = 1
+        self._capture_parts = []
+
+    def _finish_capture(self) -> None:
+        assert self._current is not None
+        assert self._capture is not None
+        text = _compact_text(self._capture_parts)
+        self._current[self._capture] = text
+        self._capture = None
+        self._capture_parts = []
 
 
 class UrllibGitHubProviderAdapter:
@@ -219,31 +342,87 @@ class UrllibGitHubProviderAdapter:
         value: dict[str, Any],
         credential: str,
     ) -> dict[str, Any]:
-        lookback_days = 30
-        start = (datetime.now(UTC) - timedelta(days=lookback_days)).date().isoformat()
+        period = str(value.get("period") or "weekly")
         language = value.get("language")
-        query = f"created:>={start} is:public fork:false archived:false"
-        if isinstance(language, str) and language.strip():
-            query += f" language:{language.strip()}"
+        selected_language = language.strip() if isinstance(language, str) and language.strip() else None
+        language_path = f"/{quote(selected_language.lower(), safe='')}" if selected_language else ""
         limit = min(int(value.get("limit", 10)), operation.max_results)
-        payload = self._request(
-            f"/search/repositories?{urlencode({'q': query, 'sort': 'stars', 'order': 'desc', 'per_page': limit})}",
-            {},
-            credential,
+        html, _ = self._request_text(
+            f"{GITHUB_WEB_BASE}/trending{language_path}?{urlencode({'since': period})}",
+            credential=None,
+            accept="text/html",
             timeout=operation.timeout_seconds,
             max_bytes=operation.max_provider_response_bytes,
         )
-        raw_items = payload.get("items")
-        if not isinstance(raw_items, list):
-            raise IntegrationProviderError("provider_unavailable", "GitHub returned an invalid search response")
-        items = [self._repository(item) for item in raw_items if isinstance(item, dict)]
-        items.sort(key=lambda item: (-item["stars"], -item["forks"], item["full_name"].lower()))
+        parser = _TrendingHTMLParser()
+        try:
+            parser.feed(html)
+            raw_items = parser.repositories
+            if not raw_items:
+                raise ValueError("GitHub Trending did not contain repository entries")
+            items = [self._normalize_trending(item, rank) for rank, item in enumerate(raw_items, start=1)]
+        except (AssertionError, ValueError) as exc:
+            raise IntegrationProviderError(
+                "provider_unavailable", "GitHub Trending returned unsupported markup"
+            ) from exc
+
+        selected = items[:limit]
+        for item in selected:
+            readme, readme_truncated = self._read_trending_readme(
+                item["full_name"],
+                credential,
+                timeout=operation.timeout_seconds,
+            )
+            item["readme"] = readme
+            item["readme_truncated"] = readme_truncated
         return {
-            "ranking": "stars_desc_forks_desc_full_name_asc",
-            "lookback_days": lookback_days,
-            "language": language.strip() if isinstance(language, str) and language.strip() else None,
-            "repositories": items[:limit],
-            "truncated": int(payload.get("total_count") or 0) > limit,
+            "ranking": "github_trending",
+            "period": period,
+            "language": selected_language,
+            "repositories": selected,
+            "truncated": len(items) > limit,
+        }
+
+    def _read_trending_readme(
+        self,
+        full_name: str,
+        credential: str,
+        *,
+        timeout: float,
+    ) -> tuple[str | None, bool]:
+        owner, repository = full_name.split("/", 1)
+        try:
+            return self._request_text(
+                f"{GITHUB_API_BASE}/repos/{quote(owner, safe='')}/{quote(repository, safe='')}/readme",
+                credential=credential,
+                accept="application/vnd.github.raw+json",
+                timeout=timeout,
+                max_bytes=MAX_TRENDING_README_BYTES,
+                truncate=True,
+            )
+        except IntegrationProviderError as exc:
+            if exc.error_type in {"not_found", "response_too_large", "unsupported_file_type"}:
+                return None, False
+            raise
+
+    @staticmethod
+    def _normalize_trending(value: dict[str, Any], rank: int) -> dict[str, Any]:
+        full_name = value.get("full_name")
+        html_url = value.get("html_url")
+        if not isinstance(full_name, str) or full_name.count("/") != 1 or not isinstance(html_url, str):
+            raise ValueError("GitHub Trending repository identity is missing")
+        gain_text = str(value.get("stars_gained") or "")
+        if "star" not in gain_text.lower():
+            raise ValueError("GitHub Trending period stars are missing")
+        return {
+            "rank": rank,
+            "full_name": full_name,
+            "description": str(value["description"]) if value.get("description") else None,
+            "language": str(value["language"]) if value.get("language") else None,
+            "html_url": html_url,
+            "stars": _count(str(value.get("stars") or "")),
+            "forks": _count(str(value.get("forks") or "")),
+            "stars_gained": _count(gain_text),
         }
 
     def _request(
@@ -255,14 +434,72 @@ class UrllibGitHubProviderAdapter:
         timeout: float,
         max_bytes: int,
     ) -> Any:
-        request = Request(
+        raw, _ = self._request_bytes(
             f"{GITHUB_API_BASE}{path}",
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {credential}",
-                "User-Agent": "eidolon-github-integration",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
+            credential=credential,
+            accept="application/vnd.github+json",
+            timeout=timeout,
+            max_bytes=max_bytes,
+        )
+        try:
+            return json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise IntegrationProviderError("provider_unavailable", "GitHub returned an invalid response") from exc
+
+    def _request_text(
+        self,
+        url: str,
+        *,
+        credential: str | None,
+        accept: str,
+        timeout: float,
+        max_bytes: int,
+        truncate: bool = False,
+    ) -> tuple[str, bool]:
+        raw, truncated = self._request_bytes(
+            url,
+            credential=credential,
+            accept=accept,
+            timeout=timeout,
+            max_bytes=max_bytes,
+            truncate=truncate,
+        )
+        try:
+            return raw.decode("utf-8", errors="ignore" if truncated else "strict"), truncated
+        except UnicodeDecodeError as exc:
+            raise IntegrationProviderError("unsupported_file_type", "GitHub returned non-UTF-8 text") from exc
+
+    def _request_bytes(
+        self,
+        url: str,
+        *,
+        credential: str | None,
+        accept: str,
+        timeout: float,
+        max_bytes: int,
+        truncate: bool = False,
+    ) -> tuple[bytes, bool]:
+        parsed_url = urlsplit(url)
+        allowed = (
+            parsed_url.scheme == "https"
+            and (
+                (parsed_url.netloc == "api.github.com" and parsed_url.path.startswith("/"))
+                or (parsed_url.netloc == "github.com" and parsed_url.path.startswith("/trending"))
+            )
+        )
+        if not allowed:
+            raise IntegrationProviderError("internal_failure", "GitHub provider URL is outside the trusted boundary")
+        headers = {
+            "Accept": accept,
+            "User-Agent": "eidolon-github-integration",
+        }
+        if parsed_url.netloc == "api.github.com":
+            headers["X-GitHub-Api-Version"] = "2022-11-28"
+        if credential:
+            headers["Authorization"] = f"Bearer {credential}"
+        request = Request(
+            url,
+            headers=headers,
             method="GET",
         )
         try:
@@ -298,12 +535,10 @@ class UrllibGitHubProviderAdapter:
             raw = response.read(max_bytes + 1)
         finally:
             response.close()
-        if len(raw) > max_bytes:
+        was_truncated = len(raw) > max_bytes
+        if was_truncated and not truncate:
             raise IntegrationProviderError("response_too_large", "GitHub response exceeded the size limit")
-        try:
-            return json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise IntegrationProviderError("provider_unavailable", "GitHub returned an invalid response") from exc
+        return raw[:max_bytes], was_truncated
 
     @staticmethod
     def _repo_path(value: dict[str, Any]) -> str:
@@ -456,10 +691,23 @@ class FakeGitHubProviderAdapter:
             }
         if operation.fake_behavior == "trending_repositories":
             return {
-                "ranking": "stars_desc_forks_desc_full_name_asc",
-                "lookback_days": 30,
+                "ranking": "github_trending",
+                "period": input_json.get("period", "weekly"),
                 "language": input_json.get("language"),
-                "repositories": [base_repository],
+                "repositories": [
+                    {
+                        "rank": 1,
+                        "full_name": base_repository["full_name"],
+                        "description": base_repository["description"],
+                        "language": input_json.get("language") or "Python",
+                        "html_url": base_repository["html_url"],
+                        "stars": base_repository["stars"],
+                        "forks": base_repository["forks"],
+                        "stars_gained": 5,
+                        "readme": "# Deterministic fake repository\n",
+                        "readme_truncated": False,
+                    }
+                ],
                 "truncated": False,
             }
         raise IntegrationProviderError("internal_failure", "Fake integration operation is unsupported")

@@ -44,6 +44,7 @@ class WindowsCredentialSecretStore:
     implementation_id = "windows_credential_manager"
     _prefix_by_namespace = {
         "github": "Eidolon/GitHub/",  # Preserve existing credential targets.
+        "notion": "Eidolon/Notion/",
         "atlas_api_key": "Eidolon/Atlas/APIKey/",
         "atlas_passphrase": "Eidolon/Atlas/Passphrase/",
     }

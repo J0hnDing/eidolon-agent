@@ -21,9 +21,11 @@ from app.services.atlas_provider import FakeAtlasProviderAdapter
 from app.services.github_provider import FakeGitHubProviderAdapter
 from app.services.integration_service import IntegrationCaller, IntegrationError, IntegrationService
 from app.services.secret_store import FakeSecretStore
+from app.services.todo_service import FakeTodoProvider
 
 SENTINEL = "EIDOLON_GITHUB_SENTINEL_7e9525f4"
 ATLAS_SENTINEL = "ATLAS_KEY_SENTINEL_4221"
+NOTION_SENTINEL = "EIDOLON_NOTION_SENTINEL_90b7d"
 
 
 @pytest.fixture
@@ -40,13 +42,16 @@ def db() -> Session:
 
 def integration_requirement(
     *,
+    provider: str = "github",
     operations: list[str] | None = None,
     repositories: list[str] | None = None,
 ) -> dict:
     return {
-        "provider": "github",
-        "operations": operations or ["github.repository.get"],
-        "resource_scope": {"repositories": repositories if repositories is not None else ["octo/demo"]},
+        "provider": provider,
+        "operations": operations or (["github.repository.get"] if provider == "github" else ["notion.todo.list"]),
+        "resource_scope": {
+            "repositories": repositories if repositories is not None else (["octo/demo"] if provider == "github" else [])
+        },
     }
 
 
@@ -247,6 +252,150 @@ def test_account_identity_change_invalidates_authorization(db: Session, tmp_path
     db.refresh(authorization)
     assert authorization.invalidated_at is not None
     assert authorization.approval_request.status == "superseded"
+
+
+def test_notion_connection_is_atomic_secret_free_and_coexists_with_github_and_atlas_rows(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    store = FakeSecretStore()
+    notion = FakeTodoProvider()
+    service = IntegrationService(
+        db,
+        project_root=tmp_path,
+        secret_store=store,
+        github=FakeGitHubProviderAdapter(),
+        notion_provider_factory=lambda _token, _source: notion,
+    )
+    service.put_github_connection(SENTINEL)
+    db.add(
+        IntegrationConnection(
+            provider="atlas",
+            secret_store_id=store.implementation_id,
+            secret_reference="atlas-native",
+            credential_kind="native",
+            status="connected",
+            account_login="local",
+            account_id="local-atlas",
+            last_validated_at=db.scalar(select(IntegrationConnection).where(IntegrationConnection.provider == "github")).last_validated_at,
+        )
+    )
+    db.commit()
+
+    status = service.put_notion_connection(NOTION_SENTINEL, "source-id")
+
+    assert status.connected is True
+    assert status.bot_name == "Fake Notion bot"
+    assert status.workspace_name == "Fake workspace"
+    assert status.data_source_id == "source-id"
+    connections = db.scalars(select(IntegrationConnection).order_by(IntegrationConnection.provider)).all()
+    assert [item.provider for item in connections] == ["atlas", "github", "notion"]
+    notion_row = next(item for item in connections if item.provider == "notion")
+    assert notion_row.secret_reference != NOTION_SENTINEL
+    assert store.namespaces[notion_row.secret_reference] == "notion"
+    for table_name in [
+        row[0]
+        for row in db.connection().exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        )
+    ]:
+        assert NOTION_SENTINEL not in repr(
+            db.connection().exec_driver_sql(f'SELECT * FROM "{table_name}"').fetchall()
+        )
+
+    old_reference = notion_row.secret_reference
+
+    class RejectedProvider(FakeTodoProvider):
+        def validate_connection(self):
+            from app.services.github_provider import IntegrationProviderError
+
+            raise IntegrationProviderError("invalid_credential", "sentinel must not escape")
+
+    service.notion_provider_factory = lambda _token, _source: RejectedProvider()
+    with pytest.raises(IntegrationError) as rejected:
+        service.put_notion_connection("failed-replacement", "other-source")
+    assert rejected.value.error_type == "invalid_credential"
+    db.refresh(notion_row)
+    assert notion_row.secret_reference == old_reference
+    assert notion_row.configured_resource_id == "source-id"
+
+    service.notion_provider_factory = lambda _token, _source: notion
+    service.remove_notion_connection()
+    assert db.scalar(select(IntegrationConnection).where(IntegrationConnection.provider == "notion")) is None
+    assert old_reference not in store.values
+
+
+@pytest.mark.parametrize("change_kind", ["identity", "data_source"])
+def test_notion_identity_or_data_source_change_invalidates_authorization(
+    db: Session,
+    tmp_path: Path,
+    change_kind: str,
+) -> None:
+    requirement = integration_requirement(provider="notion", operations=["notion.todo.list"])
+    skill, manifest = create_installed_skill(db, tmp_path, requirement=requirement)
+    store = FakeSecretStore()
+    notion = FakeTodoProvider(bot_id="first-bot")
+    service = IntegrationService(
+        db,
+        project_root=tmp_path,
+        secret_store=store,
+        notion_provider_factory=lambda _token, _source: notion,
+    )
+    service.put_notion_connection(NOTION_SENTINEL, "source-id")
+    authorization = authorize(service, skill, manifest)
+    assert authorization.approval_request.risk_level == "low"
+
+    if change_kind == "identity":
+        notion.bot_id = "second-bot"
+    service.put_notion_connection(
+        "replacement",
+        "other-source" if change_kind == "data_source" else "source-id",
+    )
+
+    db.refresh(authorization)
+    assert authorization.invalidated_at is not None
+    assert authorization.approval_request.status == "superseded"
+
+
+def test_notion_todo_operations_use_existing_authorization_audit_and_fake_provider(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    requirement = integration_requirement(
+        provider="notion",
+        operations=["notion.todo.list", "notion.todo.create", "notion.todo.update", "notion.todo.delete"],
+    )
+    skill, manifest = create_installed_skill(db, tmp_path, requirement=requirement)
+    store = FakeSecretStore()
+    notion = FakeTodoProvider()
+    service = IntegrationService(
+        db,
+        project_root=tmp_path,
+        secret_store=store,
+        notion_provider_factory=lambda _token, _source: notion,
+    )
+    service.put_notion_connection(NOTION_SENTINEL, "source-id")
+    authorization = authorize(service, skill, manifest)
+    assert authorization.approval_request.risk_level == "medium"
+    caller = IntegrationCaller(skill_id=skill.id, version_id=skill.active_version_id, runtime="function")
+
+    created = service.invoke(caller, "notion.todo.create", {"title": "Title only"})
+    updated = service.invoke(caller, "notion.todo.update", {"id": created["id"], "notes": None})
+    listed = service.invoke(caller, "notion.todo.list", {"page_size": 1})
+    removed = service.invoke(caller, "notion.todo.delete", {"id": created["id"]})
+
+    assert updated["notes"] is None
+    assert listed["todos"][0]["id"] == created["id"]
+    assert removed == {"id": created["id"], "removed": True}
+    audits = db.scalars(select(IntegrationAuditRecord).order_by(IntegrationAuditRecord.id)).all()
+    assert [audit.operation_id for audit in audits] == [
+        "notion.todo.create",
+        "notion.todo.update",
+        "notion.todo.list",
+        "notion.todo.delete",
+    ]
+    assert audits[1].resource == f"notion-page:{created['id']}"
+    assert NOTION_SENTINEL not in repr([(audit.resource, audit.error_type) for audit in audits])
 
 
 def test_declared_approved_call_is_normalized_audited_and_secret_free(

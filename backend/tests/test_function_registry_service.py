@@ -171,12 +171,12 @@ def test_unified_catalog_persists_categories_states_and_user_lifecycle(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    connection_state = {"connected": False}
+    connection_state = {"github": False, "notion": False}
     monkeypatch.setattr(
         "app.services.function_catalog_service.build_default_integration_service",
         lambda _db: SimpleNamespace(
-            connection_status=lambda: SimpleNamespace(connected=connection_state["connected"]),
-            provider_connected=lambda provider: connection_state["connected"] if provider == "github" else False,
+            connection_status=lambda: SimpleNamespace(connected=connection_state["github"]),
+            provider_connected=lambda provider: connection_state.get(provider, False),
         ),
     )
     target = make_function(db_session, tmp_path, "normalize_text")
@@ -195,14 +195,25 @@ def test_unified_catalog_persists_categories_states_and_user_lifecycle(
     assert entries["github.repository.get"]["availability_reasons"] == [
         "GitHub connection is not configured"
     ]
+    assert entries["notion.todo.list"]["availability"] == "unavailable"
+    assert entries["notion.todo.list"]["availability_reasons"] == [
+        "Notion connection is not configured"
+    ]
+    assert entries["notion.todo.create"]["risk_level"] == "medium"
+    assert entries["notion.todo.create"]["invocation"]["risk"] == "medium"
+    assert "integration_test_adapter.DeterministicFakeIntegrationAdapter" in entries[
+        "notion.todo.create"
+    ]["invocation"]["test_adapter"]
     available_index = {entry["id"]: entry for entry in catalog.available_index()}
     assert available_index["backend.codex.call"]["risk_level"] == "low"
     assert "input_schema" not in available_index["backend.codex.call"]
     assert "github.repository.get" not in available_index
 
-    connection_state["connected"] = True
+    connection_state["github"] = True
+    connection_state["notion"] = True
     connected = {entry["id"]: entry for entry in catalog.list_entries()}
     assert connected["github.repository.get"]["availability"] == "available"
+    assert connected["notion.todo.list"]["availability"] == "available"
     assert "github.repository.get" in {
         entry["id"] for entry in catalog.available_index()
     }

@@ -223,6 +223,35 @@ a:hover {
   font-size: 2rem;
 }
 
+.settings-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border: 1px solid #dfe3ea;
+  border-radius: 8px;
+  background: #f7f9fc;
+  padding: 6px;
+}
+
+.settings-nav-link {
+  border-radius: 6px;
+  color: #465468;
+  font-size: 0.9rem;
+  font-weight: 650;
+  padding: 9px 12px;
+}
+
+.settings-nav-link:hover {
+  background: #eef2f7;
+  color: #162033;
+}
+
+.settings-nav-link.active {
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgb(16 24 40 / 12%);
+  color: #162033;
+}
+
 .eyebrow {
   color: #637083;
   font-size: 0.78rem;

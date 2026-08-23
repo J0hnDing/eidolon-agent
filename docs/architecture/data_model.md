@@ -62,7 +62,7 @@ Links one caller skill, one target function, the user-facing approval request, a
 
 ### integration_connections
 
-Stores the single GitHub connection's sanitized lifecycle metadata: provider, operating-system secret-store implementation id, opaque secret reference, status, validated account identity, and timestamps. Credential plaintext, authorization headers, and provider responses are never stored.
+Stores one sanitized connection row per provider. GitHub stores validated account identity. Notion additionally stores sanitized bot/workspace identity and its non-secret configured data-source ID. Atlas may use the row for its optional owned-process passphrase lifecycle. Every secret-bearing provider stores only the operating-system secret-store implementation id and opaque reference; credential plaintext, authorization headers, provider responses, and todos are never stored.
 
 ### integration_authorizations
 

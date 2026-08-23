@@ -9,6 +9,7 @@ from app.db import Base
 from app.models import Skill, SkillOperationLock, SkillRun
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
+from tests.sample_skill import create_sample_skill
 
 
 @pytest.fixture
@@ -80,7 +81,7 @@ def test_delete_refuses_active_run_and_keeps_record(
     db_session: Session,
 ) -> None:
     service = ProposedSkillService(db_session, project_root=tmp_path)
-    skill = service.create_sample("delete_guard")
+    skill = create_sample_skill(service, "delete_guard")
     db_session.add(SkillRun(skill_id=skill.id, status="running", input_json={}))
     db_session.commit()
 

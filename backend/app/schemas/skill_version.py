@@ -23,10 +23,6 @@ class SkillVersionBase(BaseModel):
     changelog: str | None = None
 
 
-class SkillVersionCreate(SkillVersionBase):
-    pass
-
-
 class SkillVersionRead(SkillVersionBase):
     model_config = ConfigDict(from_attributes=True)
 

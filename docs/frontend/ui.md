@@ -18,6 +18,10 @@ Routes are defined in `frontend/src/App.tsx`:
 - `/agent-runs/:agentRunId`
 - `/approval-requests`
 - `/settings/usage`
+- `/settings/project`
+- `/settings/models`
+- `/settings/integrations`
+- `/settings/permissions`
 
 ## API Client
 
@@ -82,15 +86,23 @@ Agent Runs list and detail pages show run status, current task node or parallel 
 
 ## Codex Settings
 
-`/settings/usage` shows the resolved CLI and both the 5-hour and weekly Codex allowance windows. It also shows the read-only current permission policy loaded from `/settings/permission-policy`: default-allowed capabilities, the exact approval-required template, blocked capabilities, the web-application policy, and the checked-in source path. The frontend does not embed a second policy copy.
+Settings uses a shared section navigation so each concern has a focused URL and loads only the data it needs. `/settings` redirects to `/settings/usage`.
 
-The page labels the existing blueprint route **Project planning and clarification**. It lets the user keep automatic Project build workflow selection or force every new build through Simple (`single_codex`) or Task DAG (`task_dag`); forced selection overrides ProductManager output in the backend. It also loads the live App Server model catalog and lets the user choose model and reasoning effort independently for Chat, ProductManager actions, the single-Codex Builder, Builder difficulty tiers plus repair/update, and Tester task/final/update actions. Model controls have an adjacent **Save model routing** action and show whether changes are unsaved or when the persisted routes were last saved. Unsupported model/effort combinations are rejected by the backend. Refresh reads current local App Server state; it does not infer quota from project-build token totals.
+`/settings/usage` shows the resolved CLI and both the 5-hour and weekly Codex allowance windows. DAG builds pause before the next ready batch when either window has less than 5% remaining. Refresh reads current local App Server state; it does not infer quota from project-build token totals. Skill runtime calls remain excluded from build token accounting.
 
-The same trusted Settings page includes the single GitHub connection. It shows connected/disconnected/unavailable state, validated account identity, last validation time, and sanitized errors, with add, replace, and remove actions. The token input is password-style, is cleared after submission, and is never returned or redisplayed.
+`/settings/project` lets the user keep automatic Project build workflow selection or force every new build through Simple (`single_codex`) or Task DAG (`task_dag`); forced selection overrides ProductManager output in the backend.
 
-Settings also includes local Eidolon-Atlas lifecycle and passphrase controls. It shows the selected directory, owned/external process state, initialized/locked state, saved-passphrase state, and bounded errors. Directory save restarts immediately. The write-only passphrase and **Unlock now** controls are enabled only for an Eidolon-owned process; an external process is explicitly directed to unlock through Atlas itself. The UI discloses that storing the passphrase shifts practical at-rest protection to the Windows account. Submitted passphrases are cleared and never redisplayed.
+`/settings/models` labels the existing blueprint route **Project planning and clarification**. It loads the live App Server model catalog and lets the user choose model and reasoning effort independently for Chat, ProductManager actions, the single-Codex Builder, Builder difficulty tiers plus repair/update, and Tester task/final/update actions. Model controls have an adjacent **Save model routing** action and show whether changes are unsaved or when the persisted routes were last saved. Unsupported model/effort combinations are rejected by the backend.
 
-Runtime approval uses the existing `PermissionRequestModal`. GitHub `integration_access` reviews show provider, operation ids, read-only status, normalized repositories, and current connection availability. Connection state alone never marks a skill approved.
+`/settings/integrations` includes the single GitHub connection. It shows connected/disconnected/unavailable state, validated account identity, last validation time, and sanitized errors, with add, replace, and remove actions. The token input is password-style, is cleared after submission, and is never returned or redisplayed.
+
+The Integrations subpage also includes one connection-only Notion todo panel. It accepts the write-only private-connection token and non-secret data-source ID, then shows sanitized bot/workspace identity, configured source, status, and validation time. It explicitly states that Notion and its iOS app remain the only todo UI and that Eidolon has no todo page, local copy, cache, or sync controls. The token is cleared after every submission and never redisplayed.
+
+The Integrations subpage also includes local Eidolon-Atlas lifecycle and passphrase controls. It shows the selected directory, owned/external process state, initialized/locked state, saved-passphrase state, and bounded errors. Directory save restarts immediately. The write-only passphrase and **Unlock now** controls are enabled only for an Eidolon-owned process; an external process is explicitly directed to unlock through Atlas itself. The UI discloses that storing the passphrase shifts practical at-rest protection to the Windows account. Submitted passphrases are cleared and never redisplayed.
+
+`/settings/permissions` shows the read-only current permission policy loaded from `/settings/permission-policy`: default-allowed capabilities, the exact approval-required template, blocked capabilities, the web-application policy, and the checked-in source path. The frontend does not embed a second policy copy.
+
+Runtime approval uses the existing `PermissionRequestModal`. GitHub `integration_access` reviews show provider, operation ids, read-only status, normalized repositories, and current connection availability. Notion uses the same separate approval with no caller-selected scope; list is low risk while create, update, and trash-delete are medium-risk writes. Connection state alone never marks a skill approved.
 
 Atlas reviews use the same modal with empty resource scope. Reads are low risk; `atlas.knowledge.node.know` is medium risk and describes its internet-enabled Codex call and bounded Knowledge write.
 
