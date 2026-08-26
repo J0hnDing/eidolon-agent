@@ -17,6 +17,11 @@ import {
   updateResponseText,
   updateUpdateMessage,
 } from "../features/skill-detail/SkillDetailPanels";
+import {
+  runtimePermissionRequest,
+  runtimePermissionStatus,
+  runtimePermissionsApproved,
+} from "../features/skill-detail/runtimePermissions";
 import { usePolling } from "../lib/usePolling";
 import {
   AgentRun,
@@ -76,7 +81,11 @@ export default function SkillDetailPage() {
 
   const hasLiveAgentRun = agentRuns.some((run) => LIVE_AGENT_RUN_STATUSES.has(run.status));
   const shouldPollSkillDetail = Boolean(
-    skill && (LIVE_SKILL_STATUSES.has(skill.status) || hasLiveAgentRun || runtimePermission?.status === "pending"),
+    skill && (
+      LIVE_SKILL_STATUSES.has(skill.status)
+      || hasLiveAgentRun
+      || runtimePermissionStatus(runtimePermission) === "pending"
+    ),
   );
 
   usePolling(() => loadSkillDetail({ showLoading: false }), shouldPollSkillDetail, 2000);
@@ -100,7 +109,7 @@ export default function SkillDetailPage() {
       setSkill(loadedSkill);
       setRuns(loadedRuns);
       setFiles(loadedFiles);
-      setRuntimePermission(permissionRequests[0] ?? null);
+      applyRuntimePermissionRequests(permissionRequests);
       setRunnerStatus(loadedRunnerStatus);
       setSchedules(loadedSchedules);
       setAgentRuns(loadedAgentRuns.filter((run) => run.skill_id === id));
@@ -112,9 +121,13 @@ export default function SkillDetailPage() {
     }
   }
 
+  function applyRuntimePermissionRequests(requests: ApprovalRequest[]) {
+    setRuntimePermission(runtimePermissionRequest(requests));
+  }
+
   async function handleRun() {
     if (!skill) return;
-    if (runtimePermission?.status !== "approved") {
+    if (!runtimePermissionsApproved(runtimePermission)) {
       await handleReviewRuntimePermissions(true);
       return;
     }
@@ -149,7 +162,7 @@ export default function SkillDetailPage() {
 
   async function handleInstall() {
     if (!skill) return;
-    if (runtimePermission?.status !== "approved") {
+    if (!runtimePermissionsApproved(runtimePermission)) {
       await handleReviewRuntimePermissions(true);
       return;
     }
@@ -362,7 +375,9 @@ export default function SkillDetailPage() {
       setSkill(updated);
       setFiles(await api.listSkillFiles(updated.id));
       await refreshVersions();
-      setRuntimePermission((await api.listPermissionRequests({ skill_id: updated.id, request_scope: "runtime" }))[0] ?? null);
+      applyRuntimePermissionRequests(
+        await api.listPermissionRequests({ skill_id: updated.id, request_scope: "runtime" }),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not activate version");
     } finally {
@@ -414,12 +429,11 @@ export default function SkillDetailPage() {
   }
 
   async function handleApproveRuntimePermissions() {
-    if (!skill) return;
+    if (!skill || !runtimePermission) return;
     setIsWorking(true);
     setError(null);
     try {
-      const request = await api.approveRuntimePermissions(skill.id);
-      setRuntimePermission(request);
+      setRuntimePermission(await api.approveRuntimePermissions(skill.id));
       setShowRuntimeModal(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not approve runtime permissions");
@@ -429,12 +443,11 @@ export default function SkillDetailPage() {
   }
 
   async function handleDenyRuntimePermissions() {
-    if (!skill) return;
+    if (!skill || !runtimePermission) return;
     setIsWorking(true);
     setError(null);
     try {
-      const request = await api.denyRuntimePermissions(skill.id);
-      setRuntimePermission(request);
+      setRuntimePermission(await api.denyRuntimePermissions(skill.id));
       setShowRuntimeModal(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not deny runtime permissions");
@@ -527,7 +540,8 @@ export default function SkillDetailPage() {
 
   const isInstalled = skill.status === "installed";
   const isFunction = skill.runtime === "function";
-  const runtimeApproved = runtimePermission?.status === "approved";
+  const runtimeStatus = runtimePermissionStatus(runtimePermission);
+  const runtimeApproved = runtimePermissionsApproved(runtimePermission);
   const canRun = isFunction && isInstalled && skill.enabled && runtimeApproved;
   const isProposed = skill.status === "proposed";
 
@@ -646,7 +660,7 @@ export default function SkillDetailPage() {
             </p>
           </div>
           <span className={`badge ${runtimePermission ? `risk-${runtimePermission.risk_level}` : ""}`}>
-            {runtimePermission ? runtimePermission.status : "not analyzed"}
+            {runtimeStatus.replace("_", " ")}
           </span>
         </header>
         {isNonEmptyObject(runtimePermission?.reason_json?.permission_expansion) && (

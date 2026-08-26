@@ -12,6 +12,10 @@ Compatibility storage for chat messages with role, content, optional conversatio
 
 Stores the single-user Codex invocation routing document. It contains independent Chat settings, ProductManager action settings, Builder default/difficulty/repair/update settings, and Tester task/final/update settings. Model ids and reasoning efforts are user-owned settings; ProductManager task DAG output does not contain them.
 
+### codex_mcp_settings
+
+Stores the single host registration state: whether running MCP processes may invoke tools, the fingerprint of the exact Eidolon-owned `mcp_servers.eidolon` table, bounded last-error metadata, and update time. Removal commits `enabled = false` before editing Codex configuration so already-running MCP processes are revoked immediately.
+
 ### memory_facts
 
 Stores explicit user-editable memory facts. Typical categories include interests, goals, preferences, routines, trusted sources, blocked sources, writing style, and risk tolerance.
@@ -71,6 +75,10 @@ Links one skill/provider integration-contract fingerprint to its `integration_ac
 ### integration_audit_records
 
 Stores one bounded sanitized record per authenticated caller attempt: caller skill/version, function run or web-app instance, operation, normalized repository resource when applicable, timing, status, normalized error type, and size metadata. Raw inputs, credentials, secret references, headers, capability material, and provider responses are excluded.
+
+### mcp_audit_records
+
+Stores one bounded sanitized record per Codex MCP attempt: fixed caller type, exact catalog function ID and category, normalized resource identifier when applicable, status, normalized error type, request/response byte counts, and timestamps. Prompts, arguments, outputs, credentials, headers, secret references, and capability material are excluded.
 
 ### web_app_instances
 

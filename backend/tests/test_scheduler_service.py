@@ -13,10 +13,16 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db import Base
 from app.models import Skill, SkillRun, SkillSchedule
 from app.routers.permission_requests import approve_permission_request
-from app.routers.schedules import run_schedule_now
+from app.routers.schedules import list_schedules, run_schedule_now
 from app.schemas.schedule import ScheduleCreate, SchedulePayload
 from app.services.permission_service import PermissionService
-from app.services.scheduler_service import ScheduleError, SchedulerService
+from app.services.scheduler_service import (
+    NOTION_DONE_CLEANUP_FUNCTION_ID,
+    NOTION_DONE_CLEANUP_JOB_ID,
+    NOTION_DONE_CLEANUP_TIMEZONE,
+    ScheduleError,
+    SchedulerService,
+)
 
 
 class FakeJob:
@@ -49,6 +55,11 @@ class FakeScheduler:
     def remove_job(self, id: str) -> None:
         self.removed.append(id)
         self.jobs.pop(id, None)
+
+    def get_job(self, id: str):
+        if id not in self.jobs:
+            return None
+        return SimpleNamespace(next_run_time=FakeJob.next_run_time)
 
 
 @pytest.fixture
@@ -140,6 +151,67 @@ def approve_runtime(db: Session, skill: Skill, project_root: Path) -> None:
     permission_service = PermissionService(db, project_root=project_root)
     request = permission_service.create_runtime_request(skill)
     permission_service.approve_request(request)
+
+
+def test_start_automatically_registers_scheduler_only_notion_cleanup(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import scheduler_service
+
+    monkeypatch.setattr(scheduler_service, "CronTrigger", None)
+    fake_scheduler = FakeScheduler()
+    scheduler = service(db_session, tmp_path, fake_scheduler)
+
+    scheduler.start()
+
+    job = fake_scheduler.jobs[NOTION_DONE_CLEANUP_JOB_ID]
+    assert job["args"] == [NOTION_DONE_CLEANUP_FUNCTION_ID]
+    assert job["trigger"] == {
+        "type": "daily",
+        "hour": 3,
+        "minute": 0,
+        "timezone": NOTION_DONE_CLEANUP_TIMEZONE,
+    }
+    assert job["max_instances"] == 1
+    assert job["coalesce"] is True
+    platform_schedule = scheduler.serialize_notion_done_cleanup_schedule()
+    assert platform_schedule["schedule_kind"] == "platform"
+    assert platform_schedule["read_only"] is True
+    assert platform_schedule["skill_id"] is None
+    assert platform_schedule["status"] == "active"
+    assert platform_schedule["next_run_at"] == FakeJob.next_run_time
+
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(scheduler_service=scheduler)))
+    listed = list_schedules(request, db=db_session)  # type: ignore[arg-type]
+    assert listed[0]["function_id"] == NOTION_DONE_CLEANUP_FUNCTION_ID
+
+
+def test_scheduler_dispatches_backend_core_cleanup_with_scheduler_source(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import scheduler_service
+
+    calls: list[tuple[str, dict, str]] = []
+
+    class FakeBackendCoreFunctions:
+        def __init__(self, _db: Session) -> None:
+            pass
+
+        def invoke(self, function_id: str, input_json: dict, *, source: str) -> dict:
+            calls.append((function_id, input_json, source))
+            return {"status": "succeeded", "scanned_count": 2, "deleted_count": 1}
+
+    monkeypatch.setattr(scheduler_service, "BackendCoreFunctionService", FakeBackendCoreFunctions)
+    scheduler = service(db_session, tmp_path)
+
+    result = scheduler.execute_backend_core_function(NOTION_DONE_CLEANUP_FUNCTION_ID)
+
+    assert result == {"status": "succeeded", "scanned_count": 2, "deleted_count": 1}
+    assert calls == [(NOTION_DONE_CLEANUP_FUNCTION_ID, {}, "scheduler")]
 
 
 def test_creates_daily_weekly_and_interval_schedules(tmp_path: Path, db_session: Session) -> None:

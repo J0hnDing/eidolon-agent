@@ -87,6 +87,8 @@ The `single_codex` workflow package contains `workflow.py`, `prompts.py`, and `i
 
 After the writable invocation returns, the backend runs the shared deterministic final validator: static capability scan, actual manifest/package validation, and authoritative execution of the generated tests. This validator does not invoke ProductManager, Builder, Tester, or another Codex agent. Any invocation or validation error permanently stops that single-Codex run; resume, task retry, and step retry cannot invoke Builder again. The user may start a separate new Project build, whose proposed workspace is atomically replaced without descending into sandbox-owned cache directories. Runtime permission review is created only after final validation passes.
 
+Cancellation records a terminal cancelled state and terminates the Codex subprocess owned by that agent run. Cancellation and successful finalization share one backend transition boundary: if cancellation wins, no runtime permission request or successful finalization may be created afterward; if finalization wins, a later cancellation is a no-op because the run is already terminal. A cancelled proposed package is marked failed and cannot be installed without explicit deterministic recovery.
+
 The workflow can pause before its single invocation when Codex allowance is below the configured reserve. A pre-invocation allowance pause may resume, but an invocation or validation error cannot resume or retry.
 
 ## Shared Final Validation

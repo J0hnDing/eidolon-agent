@@ -45,8 +45,9 @@ export default function SchedulesPage() {
     <section className="page stack">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Approved recurring runs</p>
+          <p className="eyebrow">Recurring runs</p>
           <h1>Schedules</h1>
+          <p className="muted">Review platform jobs and manage approved installed-function schedules.</p>
         </div>
       </header>
 
@@ -68,9 +69,13 @@ export default function SchedulesPage() {
             </thead>
             <tbody>
               {schedules.map((schedule) => (
-                <tr key={schedule.id}>
+                <tr key={`${schedule.schedule_kind}-${schedule.id}`}>
                   <td>
-                    <strong>{schedule.skill_name ?? `Skill #${schedule.skill_id}`}</strong>
+                    <strong>
+                      {schedule.schedule_kind === "platform"
+                        ? "Backend Core"
+                        : schedule.skill_name ?? `Skill #${schedule.skill_id}`}
+                    </strong>
                   </td>
                   <td>
                     <strong>{schedule.name}</strong>
@@ -87,7 +92,10 @@ export default function SchedulesPage() {
                     )}
                   </td>
                   <td>
-                    <div className="button-row">
+                    {schedule.read_only ? (
+                      <span className="muted">Managed by Eidolon</span>
+                    ) : (
+                      <div className="button-row">
                       {schedule.status === "pending" && (
                         <>
                           <button type="button" onClick={() => act(() => api.approveSchedule(schedule.id))} disabled={isWorking}>
@@ -114,8 +122,9 @@ export default function SchedulesPage() {
                       <button type="button" className="danger" onClick={() => act(() => api.deleteSchedule(schedule.id))} disabled={isWorking}>
                         Delete
                       </button>
-                      <Link to={`/skills/${schedule.skill_id}`}>Skill</Link>
-                    </div>
+                        {schedule.skill_id !== null && <Link to={`/skills/${schedule.skill_id}`}>Skill</Link>}
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}

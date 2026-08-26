@@ -180,6 +180,7 @@ def test_unified_catalog_persists_categories_states_and_user_lifecycle(
         ),
     )
     target = make_function(db_session, tmp_path, "normalize_text")
+    make_function(db_session, tmp_path, "network_lookup", network=["example.com"])
     catalog = FunctionCatalogService(db_session, project_root=tmp_path)
 
     catalog.register_user_function(target)
@@ -188,8 +189,17 @@ def test_unified_catalog_persists_categories_states_and_user_lifecycle(
     assert (tmp_path / "runtime" / "function_catalog.json").is_file()
     assert entries["backend.codex.call"]["category"] == "backend_core"
     assert entries["backend.codex.call"]["availability"] == "available"
+    assert entries["backend.codex.call"]["mcp_exposed"] is False
+    cleanup = entries["backend.notion.todo.cleanup_done"]
+    assert cleanup["availability"] == "unavailable"
+    assert cleanup["availability_reasons"] == ["Scheduler-only backend function"]
+    assert cleanup["mcp_exposed"] is False
     assert entries["normalize_text"]["category"] == "user"
     assert entries["normalize_text"]["availability"] == "available"
+    assert entries["normalize_text"]["mcp_exposed"] is True
+    assert entries["normalize_text"]["mcp_read_only"] is False
+    assert entries["normalize_text"]["mcp_open_world"] is False
+    assert entries["network_lookup"]["mcp_open_world"] is True
     assert entries["github.repository.get"]["category"] == "integration"
     assert entries["github.repository.get"]["availability"] == "unavailable"
     assert entries["github.repository.get"]["availability_reasons"] == [
@@ -200,12 +210,17 @@ def test_unified_catalog_persists_categories_states_and_user_lifecycle(
         "Notion connection is not configured"
     ]
     assert entries["notion.todo.create"]["risk_level"] == "medium"
+    assert entries["notion.todo.list"]["mcp_read_only"] is True
+    assert entries["notion.todo.list"]["mcp_open_world"] is True
+    assert entries["notion.todo.delete"]["mcp_destructive"] is True
+    assert entries["notion.todo.update"]["mcp_destructive"] is False
     assert entries["notion.todo.create"]["invocation"]["risk"] == "medium"
     assert "integration_test_adapter.DeterministicFakeIntegrationAdapter" in entries[
         "notion.todo.create"
     ]["invocation"]["test_adapter"]
     available_index = {entry["id"]: entry for entry in catalog.available_index()}
     assert available_index["backend.codex.call"]["risk_level"] == "low"
+    assert "backend.notion.todo.cleanup_done" not in available_index
     assert "input_schema" not in available_index["backend.codex.call"]
     assert "github.repository.get" not in available_index
 
@@ -263,6 +278,28 @@ def test_declared_low_risk_function_invokes_without_caller_approval(
         )
         is None
     )
+
+
+def test_codex_mcp_direct_call_keeps_run_history_lock_context_and_nested_capability(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    target = make_function(db_session, tmp_path, "normalize_text")
+    runner = FakeRunner(db_session)
+    registry = service(db_session, tmp_path, runner)
+
+    run = registry.invoke_direct(
+        target,
+        {"value": "Hello"},
+        source="codex_mcp",
+        initiating_action="codex_mcp",
+    )
+
+    assert run.status == "succeeded"
+    assert run.invocation_source == "codex_mcp"
+    assert run.initiating_action == "codex_mcp"
+    assert runner.calls[0]["context"].capability_token is not None
+    assert runner.calls[0]["context"].capability_token_hash is not None
 
 
 def test_undeclared_function_call_is_blocked_before_execution(tmp_path: Path, db_session: Session) -> None:
@@ -349,7 +386,7 @@ def test_changed_target_permission_contract_makes_approval_stale(
         initiating_action="test_call",
     )
     assert run.status == "blocked"
-    assert "Caller-specific approval is required" in run.error_message
+    assert run.error_message == "Runtime permissions do not match the current manifest"
 
 
 def test_incompatible_input_is_blocked_and_output_contract_is_enforced(

@@ -2,6 +2,8 @@ import json
 import os
 import re
 import subprocess
+import threading
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +53,58 @@ from app.workflows.task_dag.prompts import (
 
 class CodexGenerationError(RuntimeError):
     pass
+
+
+class CodexProcessRegistry:
+    """Tracks Codex subprocesses owned by cancellable agent runs."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._processes: dict[int, subprocess.Popen[str]] = {}
+        self._cancelled_run_ids: set[int] = set()
+
+    def register(self, agent_run_id: int, process: subprocess.Popen[str]) -> None:
+        with self._lock:
+            cancelled = agent_run_id in self._cancelled_run_ids
+            if not cancelled:
+                self._processes[agent_run_id] = process
+        if cancelled:
+            self._terminate(process)
+
+    def unregister(self, agent_run_id: int, process: subprocess.Popen[str]) -> None:
+        with self._lock:
+            if self._processes.get(agent_run_id) is process:
+                self._processes.pop(agent_run_id, None)
+
+    def cancel(self, agent_run_id: int) -> None:
+        with self._lock:
+            self._cancelled_run_ids.add(agent_run_id)
+            process = self._processes.get(agent_run_id)
+        if process is not None:
+            self._terminate(process)
+
+    def reset(self, agent_run_id: int) -> None:
+        with self._lock:
+            self._cancelled_run_ids.discard(agent_run_id)
+            self._processes.pop(agent_run_id, None)
+
+    def is_cancelled(self, agent_run_id: int | None) -> bool:
+        if agent_run_id is None:
+            return False
+        with self._lock:
+            return agent_run_id in self._cancelled_run_ids
+
+    @staticmethod
+    def _terminate(process: subprocess.Popen[str]) -> None:
+        if process.poll() is not None:
+            return
+        try:
+            process.terminate()
+        except OSError:
+            return
+
+
+codex_process_registry = CodexProcessRegistry()
 
 
 PRODUCT_MANAGER_SANDBOX = "read-only"
@@ -190,18 +244,29 @@ class RealCodexAdapter:
         command.append("-")
         timeout_seconds = self.timeout_seconds if self.timeout_seconds is not None else codex_action_timeout_seconds(plan)
         try:
-            result = subprocess.run(
-                command,
-                cwd=output_dir,
-                input=prompt,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=build_dependency_environment(output_dir),
-                timeout=timeout_seconds,
-                shell=False,
-            )
+            raw_agent_run_id = plan.get("_agent_run_id")
+            agent_run_id = raw_agent_run_id if isinstance(raw_agent_run_id, int) else None
+            if agent_run_id is None:
+                result = subprocess.run(
+                    command,
+                    cwd=output_dir,
+                    input=prompt,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=build_dependency_environment(output_dir),
+                    timeout=timeout_seconds,
+                    shell=False,
+                )
+            else:
+                result = self._run_cancellable(
+                    command,
+                    output_dir=output_dir,
+                    prompt=prompt,
+                    timeout_seconds=timeout_seconds,
+                    agent_run_id=agent_run_id,
+                )
         finally:
             if output_schema_path is not None:
                 output_schema_path.unlink(missing_ok=True)
@@ -226,6 +291,62 @@ class RealCodexAdapter:
         if last_message_path.is_file():
             result.stdout = last_message_path.read_text(encoding="utf-8", errors="replace")
         return result
+
+    @staticmethod
+    def _run_cancellable(
+        command: list[str],
+        *,
+        output_dir: Path,
+        prompt: str,
+        timeout_seconds: int,
+        agent_run_id: int,
+    ) -> subprocess.CompletedProcess[str]:
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+        process = subprocess.Popen(
+            command,
+            cwd=output_dir,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=build_dependency_environment(output_dir),
+            shell=False,
+            creationflags=creationflags,
+        )
+        codex_process_registry.register(agent_run_id, process)
+        deadline = time.monotonic() + timeout_seconds
+        pending_input: str | None = prompt
+        stdout = ""
+        stderr = ""
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    process.kill()
+                    stdout, stderr = process.communicate()
+                    raise subprocess.TimeoutExpired(command, timeout_seconds, output=stdout, stderr=stderr)
+                try:
+                    stdout, stderr = process.communicate(input=pending_input, timeout=min(0.25, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    pending_input = None
+                    if not codex_process_registry.is_cancelled(agent_run_id):
+                        continue
+                    if process.poll() is None:
+                        process.terminate()
+                    try:
+                        stdout, stderr = process.communicate(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        stdout, stderr = process.communicate()
+                    raise CodexGenerationError("Agent run is cancelled")
+            if codex_process_registry.is_cancelled(agent_run_id):
+                raise CodexGenerationError("Agent run is cancelled")
+            return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        finally:
+            codex_process_registry.unregister(agent_run_id, process)
 
     @staticmethod
     def _json_events(raw: str) -> list[dict]:
@@ -925,6 +1046,7 @@ class CodexService:
     db: Session
     adapter: CodexAdapter | None = None
     project_root: Path | None = None
+    agent_run_id: int | None = None
     def __post_init__(self) -> None:
         if self.project_root is None:
             self.project_root = Path(__file__).resolve().parents[3]
@@ -951,13 +1073,15 @@ class CodexService:
                 plan=payload,
                 sandbox_mode=PRODUCT_MANAGER_SANDBOX,
             )
-        result = adapter.generate(prompt, self._product_manager_workspace(), payload)
+        result = adapter.generate(prompt, self._product_manager_workspace(), self._adapter_payload(payload))
         self.invocations.record_build_result(
             result,
             payload,
             default_adapter_name=type(self.adapter).__name__,
             prompt=prompt,
         )
+        if codex_process_registry.is_cancelled(self.agent_run_id):
+            raise CodexGenerationError("Agent run is cancelled")
         return result
 
     def _generate_writable_skill(
@@ -983,14 +1107,24 @@ class CodexService:
                 plan=plan,
                 sandbox_mode=WRITABLE_SKILL_SANDBOX,
             )
-        result = adapter.generate(prompt, output_dir, plan)
+        result = adapter.generate(prompt, output_dir, self._adapter_payload(plan))
         self.invocations.record_build_result(
             result,
             plan,
             default_adapter_name=type(self.adapter).__name__,
             prompt=prompt,
         )
+        if codex_process_registry.is_cancelled(self.agent_run_id):
+            raise CodexGenerationError("Agent run is cancelled")
         return result
+
+    def bind_agent_run(self, agent_run_id: int) -> None:
+        self.agent_run_id = agent_run_id
+
+    def _adapter_payload(self, payload: dict[str, object]) -> dict[str, object]:
+        if self.agent_run_id is None:
+            return payload
+        return {**payload, "_agent_run_id": self.agent_run_id}
 
     def _generate_builder_with_test_guard(
         self,
@@ -1677,7 +1811,7 @@ class CodexService:
             raise CodexGenerationError(generation_request.error_message)
 
         self.finalize_manifest(proposed_dir, plan, workflow_context)
-        skill = self.create_or_update_skill_record(plan, proposed_dir, status="proposed")
+        skill = self.create_or_update_skill_record(plan, proposed_dir, status="building")
         generation_request.status = "generated"
         generation_request.proposed_skill_id = skill.id
         generation_request.error_message = None

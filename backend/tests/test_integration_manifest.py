@@ -165,6 +165,12 @@ def test_manifest_accepts_notion_without_caller_selected_scope() -> None:
     assert requirement.resource_scope.repositories == []
     assert OPERATIONS["notion.todo.list"].risk == "low"
     assert OPERATIONS["notion.todo.create"].risk == "medium"
+    assert OPERATIONS["notion.todo.list"].output_schema["properties"]["todos"]["items"]["properties"][
+        "done"
+    ] == {"type": "boolean"}
+    assert OPERATIONS["notion.todo.create"].input_schema["properties"]["done"] == {"type": "boolean"}
+    assert OPERATIONS["notion.todo.update"].input_schema["properties"]["done"] == {"type": "boolean"}
+    assert OPERATIONS["notion.todo.list"].contract_version == 2
 
 
 def test_manifest_rejects_notion_operation_under_another_provider() -> None:

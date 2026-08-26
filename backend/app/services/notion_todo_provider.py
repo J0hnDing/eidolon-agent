@@ -16,6 +16,7 @@ MAX_PROVIDER_RESPONSE_BYTES = 2_000_000
 
 PROPERTY_TYPES = {
     "Title": "title",
+    "Done": "checkbox",
     "Priority": "select",
     "Start At": "date",
     "Due At": "date",
@@ -62,7 +63,6 @@ class NotionTodoProvider:
     def list(self, *, page_size: int, start_cursor: str | None) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "page_size": page_size,
-            "in_trash": False,
             "result_type": "page",
             "sorts": [{"timestamp": "created_time", "direction": "descending"}],
         }
@@ -82,7 +82,7 @@ class NotionTodoProvider:
         for page in results:
             if not isinstance(page, dict):
                 raise IntegrationProviderError("schema_mismatch", "A Notion todo row is malformed")
-            if page.get("in_trash") is True:
+            if self._in_trash(page):
                 continue
             self._assert_contained(page)
             todos.append(self._todo_from_page(page))
@@ -128,7 +128,7 @@ class NotionTodoProvider:
             max_bytes=MAX_PROVIDER_RESPONSE_BYTES,
         )
         self._assert_contained(page)
-        if page.get("in_trash") is not True:
+        if not self._in_trash(page):
             raise IntegrationProviderError("provider_unavailable", "Notion did not confirm todo removal")
         return {"id": todo_id, "removed": True}
 
@@ -172,6 +172,7 @@ class NotionTodoProvider:
         properties = page.get("properties")
         if not isinstance(page_id, str) or not page_id or not isinstance(properties, dict):
             raise IntegrationProviderError("schema_mismatch", "A Notion todo row is malformed")
+        self._in_trash(page)
         self._validate_created_at(created_at)
         self._require_page_property_types(properties)
         title = self._text_value(properties["Title"], "title", required=True)
@@ -187,9 +188,13 @@ class NotionTodoProvider:
             not isinstance(estimated, int) or isinstance(estimated, bool) or estimated <= 0
         ):
             raise IntegrationProviderError("schema_mismatch", "A Notion todo estimate is invalid")
+        done = properties["Done"].get("checkbox")
+        if not isinstance(done, bool):
+            raise IntegrationProviderError("schema_mismatch", "A Notion todo done status is invalid")
         return {
             "id": page_id,
             "title": title,
+            "done": done,
             "priority": priority,
             "start_at": self._date_value(properties["Start At"]),
             "due_at": self._date_value(properties["Due At"]),
@@ -198,6 +203,13 @@ class NotionTodoProvider:
             "notes": self._text_value(properties["Notes"], "rich_text"),
             "created_at": created_at,
         }
+
+    @staticmethod
+    def _in_trash(page: dict[str, Any]) -> bool:
+        value = page.get("in_trash")
+        if not isinstance(value, bool):
+            raise IntegrationProviderError("schema_mismatch", "A Notion todo trash status is invalid")
+        return value
 
     @staticmethod
     def _require_page_property_types(properties: dict[str, Any]) -> None:
@@ -253,6 +265,8 @@ class NotionTodoProvider:
         if "title" in values:
             title = cls._bounded_text(values["title"], required=True)
             properties["Title"] = {"title": [cls._text_fragment(title)]}
+        if "done" in values:
+            properties["Done"] = {"checkbox": values["done"]}
         if "priority" in values:
             priority = values["priority"]
             properties["Priority"] = {

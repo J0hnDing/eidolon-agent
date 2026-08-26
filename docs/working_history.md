@@ -556,3 +556,29 @@ Replaced the unconstrained whole-blueprint transport workaround with a confined 
 ### Limitations
 
 The transport removes unsupported uniqueItems keywords only from the Codex-facing schema; canonical backend validation remains authoritative. Existing unrelated worktree changes were left untouched.
+
+## 2026-08-14 00:19 — Migrated Atlas integration to native unlocked API
+
+- Category: refactor
+- Area: Integrations and Settings
+
+### Summary
+
+Preserved all nine Atlas function contracts while replacing Agent calls with native record, Goal progression, Relationship, and Knowledge routes without credentials or Authorization headers. Added passphrase-only owned-process setup, external-process refusal and guidance, runtime-only availability, primary passphrase credentials, legacy key/passphrase cleanup with retry, authorization invalidation, native normalization coverage, frontend cleanup, and updated architecture/security documentation. Ruff passed, 439 backend tests passed, 18 frontend tests passed, production build passed, and live unlocked/locked runtime checks passed.
+
+### Limitations
+
+In-app browser visual QA was unavailable because the browser-control runtime failed to initialize; frontend component tests and the production build passed.
+
+## 2026-08-23 17:55 — Polished frontend navigation and interaction system
+
+- Category: feature
+- Area: frontend-ui
+
+### Summary
+
+Reworked Eidolon's shared application shell into grouped icon-led navigation; introduced a cohesive responsive visual system for pages, cards, tables, forms, modals, chat, settings, and detail views; added subtle reduced-motion-aware transitions; improved chat deletion and approval-request selection; documented the current UI system; and added navigation regression coverage. Frontend tests and the production build pass.
+
+### Limitations
+
+Rendered in-app browser QA was unavailable because the browser bridge could not be established in this environment; validation used automated frontend tests, production build, and diff inspection.

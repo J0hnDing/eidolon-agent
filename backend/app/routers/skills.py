@@ -293,10 +293,9 @@ def approve_runtime_permissions(skill_id: int, db: Session = Depends(get_db)):
     if skill is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
     permission_service = PermissionService(db)
-    request = permission_service.create_runtime_request(skill)
     try:
-        return permission_service.approve_request(request)
-    except PermissionError as exc:
+        return permission_service.approve_runtime_bundle(skill)
+    except (PermissionError, ProposedSkillError, FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
@@ -306,10 +305,9 @@ def deny_runtime_permissions(skill_id: int, db: Session = Depends(get_db)):
     if skill is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
     permission_service = PermissionService(db)
-    request = permission_service.create_runtime_request(skill)
     try:
-        return permission_service.deny_request(request)
-    except PermissionError as exc:
+        return permission_service.deny_runtime_bundle(skill)
+    except (PermissionError, ProposedSkillError, FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 

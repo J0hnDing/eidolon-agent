@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Notion Todo Manager</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">NOTION WORKSPACE</p>
+          <h1>Todo manager</h1>
+          <p class="lede">A focused view of the todos in your configured Notion data source.</p>
+        </div>
+        <button id="refresh-button" class="button secondary" type="button">Refresh</button>
+      </header>
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+      <section class="create-panel panel" aria-labelledby="create-heading">
+        <div class="section-heading"><div><p class="eyebrow">NEW TODO</p><h2 id="create-heading">Capture the next thing</h2></div><span class="required-note">Title is required</span></div>
+        <form id="create-form" class="todo-form">
+          <label class="field wide">Title <input name="title" required maxlength="2000" autocomplete="off" placeholder="What needs doing?"></label>
+          <label class="field">Priority <select name="priority"><option value="">None</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+          <label class="field">Start date/time <input name="start_at" placeholder="YYYY-MM-DD or ISO date-time"></label>
+          <label class="field">Due date/time <input name="due_at" placeholder="YYYY-MM-DD or ISO date-time"></label>
+          <label class="field">Estimate (minutes) <input name="estimated_minutes" type="number" min="1" step="1"></label>
+          <label class="field wide">Atlas goal reference <input name="atlas_goal_id" maxlength="2000"></label>
+          <label class="field wide">Notes <textarea name="notes" maxlength="2000" rows="2"></textarea></label>
+          <button class="button primary" type="submit">Add todo</button>
+        </form>
+      </section>
+      <section class="list-section" aria-labelledby="list-heading">
+        <div class="section-heading"><div><p class="eyebrow">YOUR LIST</p><h2 id="list-heading">Recent todos</h2></div><span id="count" class="count"></span></div>
+        <div id="todo-list" class="todo-list" aria-live="polite"><div class="loading">Loading todos…</div></div>
+        <button id="next-button" class="button secondary hidden" type="button">Load more</button>
+      </section>
+      <footer>Deleting moves a Notion page to trash. Notion does not offer permanent deletion through this app.</footer>
+    </main>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

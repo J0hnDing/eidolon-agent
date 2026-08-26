@@ -171,17 +171,10 @@ class TaskDagBuildWorkflow:
                 return agent_run, skill, validation
             validation = service._repair_final_e2e(agent_run, skill, validation)
         pm_runtime_summary = service._pm_runtime_summary(skill, validation)
-        runtime_status = service._runtime_permission_review(
+        service._finalize_validated_skill(
             agent_run,
             skill,
             validation,
-            pm_summary=pm_runtime_summary,
-        )
-        service._product_manager_finish(
-            agent_run,
-            skill,
-            validation,
-            runtime_status,
             pm_summary=pm_runtime_summary,
         )
         service.db.refresh(agent_run)
@@ -287,17 +280,10 @@ class TaskDagBuildWorkflow:
                 return agent_run
             validation = service._repair_final_e2e(agent_run, skill, validation)
         pm_runtime_summary = service._pm_runtime_summary(skill, validation)
-        runtime_status = service._runtime_permission_review(
+        service._finalize_validated_skill(
             agent_run,
             skill,
             validation,
-            pm_summary=pm_runtime_summary,
-        )
-        service._product_manager_finish(
-            agent_run,
-            skill,
-            validation,
-            runtime_status,
             pm_summary=pm_runtime_summary,
         )
         service.db.refresh(agent_run)

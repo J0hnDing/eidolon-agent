@@ -255,7 +255,7 @@ export default function ChatPage() {
   }
 
   async function handleApproveRuntime(message: ChatMessage) {
-    if (!message.skill) return;
+    if (!message.skill || !message.permissionRequest) return;
     const conversationId = chat.activeConversationId;
     chat.updateMessageInConversation(conversationId, message.id, (current) => ({
       ...current,
@@ -268,7 +268,7 @@ export default function ChatPage() {
         ...current,
         permissionRequest: request,
         actionStatus: "approved",
-        content: `${runtimeApprovalMessage(message.skill?.name ?? "this skill", request)}\n\nApproved. This does not install or run the skill automatically.`,
+        content: `${runtimeApprovalMessage(message.skill?.name ?? "this skill", request)}\n\nApproved. This covers the complete runtime request shown, including its integration operations. It does not install or run the skill automatically.`,
       }));
     } catch (err) {
       chat.updateMessageInConversation(conversationId, message.id, (current) => ({
@@ -280,7 +280,7 @@ export default function ChatPage() {
   }
 
   async function handleDenyRuntime(message: ChatMessage) {
-    if (!message.skill) return;
+    if (!message.skill || !message.permissionRequest) return;
     const conversationId = chat.activeConversationId;
     chat.updateMessageInConversation(conversationId, message.id, (current) => ({
       ...current,

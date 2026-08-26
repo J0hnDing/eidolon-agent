@@ -7,6 +7,7 @@
       "title": "Skill Codex Call",
       "description": "Ask Eidolon to make one bounded Codex call from an installed skill.",
       "risk_level": "low",
+      "mcp_exposed": false,
       "input_schema": {
         "type": "object",
         "properties": {
@@ -76,6 +77,72 @@
           "Batch multi-item work into one bounded Codex request.",
           "internet_access=true requires approved runtime network access.",
           "Shell and arbitrary filesystem access are not available."
+        ]
+      }
+    },
+    {
+      "id": "backend.notion.todo.cleanup_done",
+      "category": "backend_core",
+      "title": "Daily Notion Done Cleanup",
+      "description": "Move todos with the Done checkbox selected from the configured Notion data source to trash.",
+      "risk_level": "medium",
+      "mcp_exposed": false,
+      "scheduler_only": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["succeeded", "partial", "failed"]
+          },
+          "scanned_count": {"type": "integer", "minimum": 0},
+          "matched_count": {"type": "integer", "minimum": 0},
+          "deleted_count": {"type": "integer", "minimum": 0},
+          "deleted_ids": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {"type": "string"}
+          },
+          "deleted_ids_truncated": {"type": "boolean"},
+          "failures": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {"type": ["string", "null"]},
+                "error_type": {"type": "string"}
+              },
+              "required": ["id", "error_type"],
+              "additionalProperties": false
+            }
+          },
+          "failures_truncated": {"type": "boolean"},
+          "error_type": {"type": ["string", "null"]}
+        },
+        "required": [
+          "status",
+          "scanned_count",
+          "matched_count",
+          "deleted_count",
+          "deleted_ids",
+          "deleted_ids_truncated",
+          "failures",
+          "failures_truncated",
+          "error_type"
+        ],
+        "additionalProperties": false
+      },
+      "invocation": {
+        "rules": [
+          "Registered automatically by SchedulerService.",
+          "Unavailable to ProductManager, skills, direct API callers, and Codex MCP."
         ]
       }
     }

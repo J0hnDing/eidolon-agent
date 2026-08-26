@@ -12,6 +12,7 @@ Create one database/data source with this exact property schema:
 | --- | --- | --- |
 | `id` | none | Notion page ID |
 | `title` | `Title` | Title |
+| `done` | `Done` | Checkbox |
 | `priority` | `Priority` | Select with exactly `Low`, `Medium`, and `High` |
 | `start_at` | `Start At` | Date |
 | `due_at` | `Due At` | Date |
@@ -20,7 +21,7 @@ Create one database/data source with this exact property schema:
 | `notes` | `Notes` | Rich text |
 | `created_at` | `Created At` | Created time |
 
-All editable properties except `Title` are optional. A title-only row therefore works naturally in Notion mobile, and `Created At` is populated automatically. Arrange database views manually in Notion; Eidolon never creates, migrates, renames, or continuously reconciles the schema.
+All editable properties except `Title` are optional. `Done` is always returned as a boolean and defaults to unchecked when omitted during creation. A title-only row therefore works naturally in Notion mobile, and `Created At` is populated automatically. Arrange database views manually in Notion; Eidolon never creates, migrates, renames, or continuously reconciles the schema.
 
 Copy the data-source ID from **Manage data sources** in Notion, then open Eidolon Settings and submit the write-only connection token plus that ID. Connection save retrieves the bot identity and data source, verifies access and the exact property types/options, and only then atomically switches the Windows Credential Manager entry. A failed replacement preserves the prior connection. SQLite stores only the opaque secret reference, sanitized bot/workspace identity, configured data-source ID, status, and timestamps.
 
@@ -37,9 +38,17 @@ The registry exposes exactly four generated-skill operations:
 | `notion.todo.update` | medium write | Requires `id` and at least one mutable field. Omitted fields are unchanged and explicit `null` clears an optional field. |
 | `notion.todo.delete` | medium write | Requires `id`, sets `in_trash: true`, and returns `{id, removed: true}`. |
 
-`id` is the Notion page ID, and `created_at` is the immutable page creation timestamp. `atlas_goal_id` is an opaque optional string. Atlas does not know about Notion, and every todo operation remains independent of Atlas availability.
+`id` is the Notion page ID, `done` is the `Done` checkbox state, and `created_at` is the immutable page creation timestamp. Create and update accept `done`; list returns it for every todo. `atlas_goal_id` is an opaque optional string. Atlas does not know about Notion, and every todo operation remains independent of Atlas availability.
+
+The list request does not send `in_trash` in its query body because Notion rejects that parameter for this data-source query. The provider requires every returned page to contain a boolean `in_trash` value and excludes pages where it is `true`, so malformed or trashed rows cannot enter the normalized result. Delete uses `in_trash: true` only in the supported page-update body and requires the returned page to confirm the boolean value.
 
 Notion does not provide permanent page deletion through the API. In this contract, delete and completion both mean moving the page to trash. See [Notion trash semantics](https://developers.notion.com/reference/trash-page).
+
+## Scheduled Done Cleanup
+
+The scheduler automatically registers the trusted backend-core function `backend.notion.todo.cleanup_done` to run daily at 03:00 `America/Toronto`. It follows every `next_cursor` within a 100-page bound, moves only todos with `done: true` to trash, continues processing after an individual deletion failure, and returns bounded deleted IDs and failure details. A disconnected or invalid Notion connection fails safely and is tried again on the next daily run.
+
+This function is always unavailable in the ordinary function catalog and is not exposed to ProductManager, generated skills, direct API callers, or Codex MCP. Only the scheduler-owned backend dispatcher may invoke it. It is a platform job rather than a `SkillSchedule`, so it does not require skill/runtime/schedule approval records. The Schedules page includes a read-only view of the registered platform job with its next and last run state.
 
 ## Trust and Resource Boundary
 

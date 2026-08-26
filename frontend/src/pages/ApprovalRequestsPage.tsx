@@ -50,23 +50,29 @@ export default function ApprovalRequestsPage() {
         <div>
           <p className="eyebrow">Risk control</p>
           <h1>Approval Requests</h1>
+          <p className="muted">Review requested access before any controlled action can continue.</p>
         </div>
       </header>
 
       {error && <p className="error-text">{error}</p>}
 
       <section className="section-grid">
-        <div className="detail-panel">
+        <div className="detail-panel request-browser">
           <h2>Requests</h2>
           <div className="run-list">
             {requests.map((request) => (
               <button
                 key={request.id}
                 type="button"
-                className="secondary"
+                className={`request-option ${selected?.id === request.id ? "active" : ""}`}
                 onClick={() => setSelected(request)}
+                aria-pressed={selected?.id === request.id}
               >
-                #{request.id} {request.request_scope} {request.status}
+                <span>
+                  <strong>#{request.id} {request.request_scope}</strong>
+                  <small>{request.request_type}</small>
+                </span>
+                <span className={`badge status-${request.status}`}>{request.status}</span>
               </button>
             ))}
             {requests.length === 0 && <p className="muted">No approval requests yet.</p>}
@@ -84,11 +90,11 @@ export default function ApprovalRequestsPage() {
                 </div>
                 <div>
                   <dt>Status</dt>
-                  <dd>{selected.status}</dd>
+                  <dd><span className={`badge status-${selected.status}`}>{selected.status}</span></dd>
                 </div>
                 <div>
                   <dt>Risk</dt>
-                  <dd>{selected.risk_level}</dd>
+                  <dd><span className={`badge risk-${selected.risk_level}`}>{selected.risk_level}</span></dd>
                 </div>
                 <div>
                   <dt>Type</dt>

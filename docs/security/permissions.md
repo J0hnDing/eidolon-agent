@@ -24,7 +24,7 @@ Runtime approval is based on the actual generated `manifest.json`. Installation 
 
 Declared `function_requirements` are shown during build-time and runtime review but are not permissions inherited from the target. Low-risk targets need no additional caller approval. Medium- and high-risk targets create a separate `function_access` approval tied to the caller and target. That approval is reusable only while the target risk, permissions, dependencies, and JSON callable schemas keep the same backend fingerprint. It never overrides a disabled target, missing runtime approval, unsupported permission, or blocked platform policy.
 
-Provider availability and skill authorization are separate decisions. Every actual-manifest `integration_requirements` entry creates or reuses a separate, never-automatic `integration_access` review showing operations, read/write behavior, provider scope, and connection availability. Its fingerprint includes provider, operations, normalized scope, and registry contract versions. Expansion, GitHub account change, an Atlas native-contract or directory change, or a Notion bot/data-source change requires reapproval. Removing an Atlas auto-unlock passphrase does not invalidate authorization. See [GitHub integration](../integrations/github.md), [Atlas integration](../integrations/atlas.md), and [Notion todo integration](../integrations/notion.md).
+Provider availability and skill authorization remain separate facts. Every actual-manifest `integration_requirements` entry creates or reuses an auditable `integration_access` record, but the user reviews it together with the base manifest permissions in one complete runtime approval. One decision applies to every pending component shown. Each integration fingerprint includes provider, operations, normalized scope, and registry contract versions. Expansion, GitHub account change, an Atlas native-contract or directory change, or a Notion bot/data-source change requires reapproval. Removing an Atlas auto-unlock passphrase does not invalidate authorization. See [GitHub integration](../integrations/github.md), [Atlas integration](../integrations/atlas.md), and [Notion todo integration](../integrations/notion.md).
 
 ### Schedule
 
@@ -119,7 +119,7 @@ Ordinary network approval never authorizes direct provider traffic. GitHub, Atla
 
 ## Permission Expansion
 
-Runtime permission review compares actual manifest permissions/dependencies against the approved build-time plan. Meaningful expansion requires explicit runtime review. Empty expansion should not be displayed as a warning.
+Runtime permission review compares actual manifest permissions/dependencies against the approved build-time plan. Meaningful expansion requires explicit runtime review. Empty expansion should not be displayed as a warning. The backend creates this review only for a finalized proposed or installed skill, fingerprints the validated manifest permission/dependency contract, and verifies that fingerprint again before installation or execution. If that contract changes, the old runtime request is superseded and a new decision is required.
 
 Runtime review also resolves every declared function requirement against the current dynamic registry. Missing, disabled, schema-less legacy, permission-blocked, or otherwise unavailable targets are reported explicitly. Discovery alone never grants invocation authority.
 

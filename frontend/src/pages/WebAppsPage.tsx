@@ -37,12 +37,12 @@ export default function WebAppsPage() {
         <div>
           <p className="eyebrow">Self-rendered sandboxed skills</p>
           <h1>Applications</h1>
+          <p className="muted">
+            Application content runs on an isolated origin while Eidolon keeps lifecycle, version,
+            permission, and sandbox controls outside the frame.
+          </p>
         </div>
       </header>
-      <p className="muted">
-        Application content runs on an isolated origin. Eidolon keeps lifecycle, version, permission, and
-        sandbox controls outside the application frame.
-      </p>
       {error && <p className="error-text">{error}</p>}
       {isLoading ? (
         <p className="muted">Loading applications...</p>

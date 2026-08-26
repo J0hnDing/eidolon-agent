@@ -137,7 +137,9 @@ function ChatSidebar({
               aria-label={`Delete chat ${conversation.title}`}
               title="Delete chat"
             >
-              Delete
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 7h14M9 7V4h6v3m2 0-1 13H8L7 7m3 4v5m4-5v5" />
+              </svg>
             </button>
           </div>
         ))}

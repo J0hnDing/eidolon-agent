@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -9,6 +9,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db import SessionLocal
 from app.models import ApprovalRequest, Skill, SkillRun, SkillSchedule
 from app.schemas.schedule import ScheduleCreate, SchedulePayload
+from app.services.backend_core_function_service import (
+    NOTION_DONE_CLEANUP_FUNCTION_ID,
+    BackendCoreFunctionService,
+)
 from app.services.function_registry_service import FunctionRegistryService
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
@@ -42,6 +46,10 @@ KNOWN_TIMEZONES = {
     "America/Los_Angeles",
     "Europe/London",
 }
+NOTION_DONE_CLEANUP_JOB_ID = "backend_notion_todo_cleanup_daily"
+NOTION_DONE_CLEANUP_SCHEDULE_ID = 0
+NOTION_DONE_CLEANUP_TIME = "03:00"
+NOTION_DONE_CLEANUP_TIMEZONE = "America/Toronto"
 
 
 class ScheduleError(ValueError):
@@ -58,6 +66,9 @@ class SchedulerService:
     scheduler: Any | None = None
     session_factory: sessionmaker[Session] = SessionLocal
     project_root: Path | None = None
+    platform_started_at: datetime = field(default_factory=utc_now, init=False)
+    platform_last_run_at: datetime | None = field(default=None, init=False)
+    platform_last_run_status: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self.scheduler is None and BackgroundScheduler is not None:
@@ -70,6 +81,7 @@ class SchedulerService:
         if not getattr(self.scheduler, "running", False):
             self.scheduler.start()
         self.load_active_schedules()
+        self.register_backend_core_jobs()
 
     def shutdown(self) -> None:
         if self.scheduler is not None and getattr(self.scheduler, "running", False):
@@ -78,6 +90,79 @@ class SchedulerService:
     def load_active_schedules(self) -> None:
         for schedule in self.db.scalars(select(SkillSchedule).where(SkillSchedule.status == "active")).all():
             self.register_job(schedule)
+
+    def register_backend_core_jobs(self) -> None:
+        if self.scheduler is None:
+            return
+        hour, minute = self._parse_time(NOTION_DONE_CLEANUP_TIME)
+        trigger: Any
+        if CronTrigger is None:
+            trigger = {
+                "type": "daily",
+                "hour": hour,
+                "minute": minute,
+                "timezone": NOTION_DONE_CLEANUP_TIMEZONE,
+            }
+        else:
+            trigger = CronTrigger(hour=hour, minute=minute, timezone=NOTION_DONE_CLEANUP_TIMEZONE)
+        self.scheduler.add_job(
+            self.execute_backend_core_function,
+            trigger=trigger,
+            id=NOTION_DONE_CLEANUP_JOB_ID,
+            args=[NOTION_DONE_CLEANUP_FUNCTION_ID],
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
+    def execute_backend_core_function(self, function_id: str) -> dict[str, Any] | None:
+        with self.session_factory() as db:
+            try:
+                result = BackendCoreFunctionService(db).invoke(function_id, {}, source="scheduler")
+            except Exception as exc:
+                self.platform_last_run_at = utc_now()
+                self.platform_last_run_status = "failed"
+                print(f"Scheduled backend function {function_id} failed safely: {type(exc).__name__}")
+                return None
+            self.platform_last_run_at = utc_now()
+            self.platform_last_run_status = str(result["status"])
+            print(
+                f"Scheduled backend function {function_id} completed with status {result['status']}; "
+                f"scanned={result['scanned_count']}; deleted={result['deleted_count']}"
+            )
+            return result
+
+    def serialize_notion_done_cleanup_schedule(self) -> dict[str, Any]:
+        job = None
+        if self.scheduler is not None and hasattr(self.scheduler, "get_job"):
+            try:
+                job = self.scheduler.get_job(NOTION_DONE_CLEANUP_JOB_ID)
+            except Exception:
+                job = None
+        return {
+            "id": NOTION_DONE_CLEANUP_SCHEDULE_ID,
+            "schedule_kind": "platform",
+            "function_id": NOTION_DONE_CLEANUP_FUNCTION_ID,
+            "read_only": True,
+            "skill_id": None,
+            "skill_name": None,
+            "name": "Daily Notion Done Cleanup",
+            "status": "active" if job is not None else "paused",
+            "schedule_type": "daily",
+            "schedule_json": {
+                "type": "daily",
+                "time": NOTION_DONE_CLEANUP_TIME,
+                "timezone": NOTION_DONE_CLEANUP_TIMEZONE,
+                "input": {},
+            },
+            "input_json": {},
+            "timezone": NOTION_DONE_CLEANUP_TIMEZONE,
+            "next_run_at": getattr(job, "next_run_time", None),
+            "last_run_at": self.platform_last_run_at,
+            "last_run_status": self.platform_last_run_status,
+            "created_at": self.platform_started_at,
+            "updated_at": self.platform_last_run_at or self.platform_started_at,
+        }
 
     def create_schedule(
         self,
@@ -377,6 +462,9 @@ class SchedulerService:
 def serialize_schedule(schedule: SkillSchedule) -> dict[str, Any]:
     return {
         "id": schedule.id,
+        "schedule_kind": "skill",
+        "function_id": None,
+        "read_only": False,
         "skill_id": schedule.skill_id,
         "skill_name": schedule.skill.name if schedule.skill else None,
         "name": schedule.name,

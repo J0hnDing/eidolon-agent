@@ -449,10 +449,11 @@ class IntegrationService:
 
     def integration_review(self, skill: Skill, manifest: SkillManifest) -> list[dict[str, Any]]:
         return [
-            {
-                "provider": requirement.provider,
-                "operations": list(requirement.operations),
-                "read_only": all(OPERATIONS[operation_id].read_only for operation_id in requirement.operations),
+                {
+                    "provider": requirement.provider,
+                    "operations": list(requirement.operations),
+                    "contract_fingerprint": self.contract_fingerprint(requirement),
+                    "read_only": all(OPERATIONS[operation_id].read_only for operation_id in requirement.operations),
                 "resource_scope": requirement.resource_scope.model_dump(mode="json"),
                 "connection_available": self.provider_connected(requirement.provider),
                 "authorization_state": self.authorization_state(skill, requirement),
@@ -503,6 +504,22 @@ class IntegrationService:
             self._commit_audit()
             raise IntegrationError("internal_failure", "Integration failed safely") from None
 
+    def invoke_direct(
+        self,
+        operation_id: str,
+        input_json: dict[str, Any],
+        *,
+        audit_record: Any | None = None,
+    ) -> dict[str, Any]:
+        """Invoke a provider operation as the trusted local user, without skill authorization."""
+
+        return self._invoke_operation(
+            operation_id,
+            input_json,
+            audit_record=audit_record,
+            allowed_repositories=None,
+        )
+
     def _invoke_checked(
         self,
         skill: Skill,
@@ -537,6 +554,24 @@ class IntegrationService:
             raise IntegrationError("operation_undeclared", "Integration operation is not declared by the active manifest")
         if self.authorization_state(skill, requirement) != "approved":
             raise IntegrationError("authorization_missing_or_stale", "Integration authorization is missing or stale")
+        return self._invoke_operation(
+            operation_id,
+            input_json,
+            audit_record=audit,
+            allowed_repositories=set(requirement.resource_scope.repositories),
+        )
+
+    def _invoke_operation(
+        self,
+        operation_id: str,
+        input_json: dict[str, Any],
+        *,
+        audit_record: Any | None,
+        allowed_repositories: set[str] | None,
+    ) -> dict[str, Any]:
+        # Credentials are retrieved only after operation, connection, containment,
+        # and input validation. Direct-user calls intentionally omit only the
+        # skill-specific manifest and authorization checks above.
         operation = OPERATIONS.get(operation_id)
         if operation is None:
             raise IntegrationError("operation_undeclared", "Integration operation does not exist")
@@ -562,8 +597,13 @@ class IntegrationService:
             todo_id = input_json.get("id")
             if isinstance(todo_id, str):
                 resource = f"notion-page:{todo_id}"
-        audit.resource = resource
-        if scoped_resource is not None and scoped_resource not in requirement.resource_scope.repositories:
+        if audit_record is not None:
+            audit_record.resource = resource
+        if (
+            allowed_repositories is not None
+            and scoped_resource is not None
+            and scoped_resource not in allowed_repositories
+        ):
             raise IntegrationError("repository_outside_scope", "GitHub repository is outside the approved scope")
         try:
             Draft202012Validator(operation.input_schema).validate(input_json)

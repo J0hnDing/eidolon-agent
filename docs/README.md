@@ -45,6 +45,7 @@ The product and repository are named **Eidolon**. Existing environment variables
 - [Eidolon-Atlas integration](integrations/atlas.md)
 - [Notion todo integration](integrations/notion.md)
 - [Codex CLI integration](integrations/codex_cli.md)
+- [Codex MCP tools](integrations/codex_mcp.md)
 - [Working history file](working_history.md)
 - [TODO](todo.md)
 

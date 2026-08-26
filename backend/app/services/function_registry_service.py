@@ -378,7 +378,7 @@ class FunctionRegistryService:
                 initiating_action=initiating_action,
             )
         capability_token = None
-        if source in {"direct_user", "backend", "schedule"}:
+        if source in {"direct_user", "backend", "schedule", "codex_mcp"}:
             capability_token = secrets.token_urlsafe(32)
         context = FunctionRunContext(
             version_id=target.active_version_id,

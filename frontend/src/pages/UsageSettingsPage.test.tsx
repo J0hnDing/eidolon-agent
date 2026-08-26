@@ -249,6 +249,60 @@ describe("Notion Settings connection", () => {
   });
 });
 
+describe("Codex tools registration", () => {
+  it("installs, repairs, and removes the owned MCP registration", async () => {
+    vi.spyOn(api, "getGitHubConnection").mockResolvedValue({
+      provider: "github",
+      connected: false,
+      status: "disconnected",
+      account_login: null,
+      account_id: null,
+      last_validated_at: null,
+      created_at: null,
+      updated_at: null,
+      error_type: null,
+    });
+    vi.spyOn(api, "getAtlasStatus").mockRejectedValue(new Error("not running"));
+    vi.spyOn(api, "getNotionConnection").mockRejectedValue(new Error("not connected"));
+    const unregistered = {
+      enabled: false,
+      registered: false,
+      config_matches: false,
+      available_tool_count: 9,
+      excluded_ids: ["backend.codex.call"],
+      config_path: "C:\\Users\\tester\\.codex\\config.toml",
+      restart_required: false,
+      error_type: null,
+      error: null,
+    };
+    const installed = {
+      ...unregistered,
+      enabled: true,
+      registered: true,
+      config_matches: true,
+      restart_required: true,
+    };
+    vi.spyOn(api, "getCodexMcpStatus").mockResolvedValue(unregistered);
+    const update = vi.spyOn(api, "updateCodexMcp").mockResolvedValue(installed);
+    const remove = vi.spyOn(api, "removeCodexMcp").mockResolvedValue(unregistered);
+
+    renderSettings("integrations");
+    expect(await screen.findByRole("heading", { name: "Codex tools" })).toBeTruthy();
+    expect(screen.getByText("backend.codex.call")).toBeTruthy();
+    expect(screen.getByText(/Open sessions are not hot-refreshed/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith("install"));
+    expect(await screen.findByRole("button", { name: "Repair" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Repair" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith("repair"));
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole("button", { name: "Install" })).toBeTruthy();
+  });
+});
+
 describe("Codex model routing", () => {
   it("saves an independent model and effort for the single Codex Builder", async () => {
     vi.spyOn(api, "getCodexUsage").mockResolvedValue({

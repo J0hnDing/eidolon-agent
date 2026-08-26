@@ -77,12 +77,17 @@ export default function PermissionRequestModal({
 
         {integrationReview.length > 0 && (
           <section className="permission-summary">
-            <h3>GitHub integration authorization</h3>
+            <h3>Integration Access</h3>
             {integrationReview.map((review, index) => (
               <div key={`${String(review.provider)}-${index}`}>
-                <p><strong>{String(review.provider)}</strong> · read-only · connection {review.connection_available ? "available" : "unavailable"}</p>
+                <p>
+                  <strong>{providerLabel(review.provider)}</strong>
+                  {` · ${review.read_only === false ? "bounded write access" : "read-only access"}`}
+                  {` · connection ${review.connection_available ? "available" : "unavailable"}`}
+                  {typeof review.authorization_state === "string" ? ` · ${review.authorization_state}` : ""}
+                </p>
                 <ChipList values={stringList(review.operations)} />
-                <p className="muted">Repositories: {repositoriesFromReview(review).join(", ") || "None"}</p>
+                <p className="muted">Scope: {resourceScopeFromReview(review)}</p>
               </div>
             ))}
           </section>
@@ -169,7 +174,14 @@ function isNonEmptyObject(value: unknown): boolean {
   return isRecord(value) && Object.keys(value).length > 0;
 }
 
-function repositoriesFromReview(review: Record<string, unknown>): string[] {
+function resourceScopeFromReview(review: Record<string, unknown>): string {
   const scope = review.resource_scope;
-  return isRecord(scope) ? stringList(scope.repositories) : [];
+  const repositories = isRecord(scope) ? stringList(scope.repositories) : [];
+  return repositories.length ? repositories.join(", ") : "provider-local only";
+}
+
+function providerLabel(value: unknown): string {
+  const provider = String(value || "Integration");
+  if (provider.toLowerCase() === "github") return "GitHub";
+  return `${provider.charAt(0).toUpperCase()}${provider.slice(1)}`;
 }

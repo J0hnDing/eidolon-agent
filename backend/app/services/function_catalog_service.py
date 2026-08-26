@@ -133,11 +133,21 @@ class FunctionCatalogService:
 
     def _fixed_entries(self) -> list[dict[str, Any]]:
         seed = self._read_json(FUNCTION_CATALOG_SEED_PATH)
-        entries = [
-            self._with_availability(dict(entry), True, [])
-            for entry in seed.get("functions", [])
-            if isinstance(entry, dict)
-        ]
+        entries = []
+        for raw_entry in seed.get("functions", []):
+            if not isinstance(raw_entry, dict):
+                continue
+            entry = dict(raw_entry)
+            if entry.get("category") == "backend_core":
+                entry.setdefault("mcp_exposed", False)
+            scheduler_only = entry.pop("scheduler_only", False) is True
+            entries.append(
+                self._with_availability(
+                    entry,
+                    not scheduler_only,
+                    ["Scheduler-only backend function"] if scheduler_only else [],
+                )
+            )
         integrations = build_default_integration_service(self.db)
         provider_state = {
             provider: integrations.provider_connected(provider)
@@ -167,6 +177,13 @@ class FunctionCatalogService:
                         "output_schema": operation.output_schema,
                         "provider": operation.provider,
                         "invocation": operation.agent_context(),
+                        "mcp_exposed": True,
+                        "mcp_read_only": operation.read_only,
+                        "mcp_destructive": operation.operation_id == "notion.todo.delete",
+                        "mcp_open_world": operation.provider in {"github", "notion"},
+                        "mcp_contract_fingerprint": (
+                            f"{operation.operation_id}:v{operation.contract_version}"
+                        ),
                     },
                     available,
                     reasons,
@@ -189,6 +206,12 @@ class FunctionCatalogService:
         entries: list[dict[str, Any]] = []
         for skill in skills:
             contract = registry.contract_for_skill(skill)
+            permissions = contract.permissions
+            integration_providers = {
+                str(requirement.get("provider"))
+                for requirement in (skill.integration_requirements_json or [])
+                if isinstance(requirement, dict)
+            }
             entries.append(
                 {
                     "id": skill.name,
@@ -212,6 +235,16 @@ class FunctionCatalogService:
                         ),
                         "test_guidance": "Mock the runtime helper and assert input/output JSON contract handling.",
                     },
+                    "mcp_exposed": True,
+                    "mcp_read_only": False,
+                    "mcp_destructive": False,
+                    "mcp_open_world": bool(permissions.get("network"))
+                    or bool(integration_providers.intersection({"github", "notion"})),
+                    "mcp_contract_fingerprint": (
+                        registry.target_contract_fingerprint(skill)
+                        if contract.availability == "available"
+                        else None
+                    ),
                 }
             )
         return entries

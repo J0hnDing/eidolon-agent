@@ -23,6 +23,14 @@ Routes are defined in `frontend/src/App.tsx`:
 - `/settings/integrations`
 - `/settings/permissions`
 
+The application shell groups these destinations into Workspace, Capabilities, and Control navigation. It uses one persistent desktop sidebar and a horizontally scrollable compact navigation bar on narrower screens. Each destination has a text label and decorative icon, the current route remains visibly selected, and a keyboard skip link moves directly to page content.
+
+## Visual and Interaction System
+
+The shared stylesheet defines Eidolon's neutral local-first interface system across every route: dark navigation chrome, warm canvas surfaces, green action accents, consistent cards, tables, forms, status badges, modals, and responsive spacing. Page and message transitions use short motion with no workflow-level delay. `prefers-reduced-motion` disables non-essential animation, and focused controls retain an explicit visible ring.
+
+Settings section navigation stays visible while scrolling and becomes horizontally scrollable on narrow screens. Chat keeps conversation management separate from the transcript, uses a bounded scrolling message area, and anchors its composer at the bottom of the chat surface. Approval Requests uses a selectable request browser with visible active, status, and risk states beside the detail panel.
+
 ## API Client
 
 `frontend/src/api/client.ts` defines API types and request helpers. Frontend types mirror backend schemas for skills, runs, versions, approvals, schedules, generation requests, and agent runs.
@@ -53,6 +61,10 @@ Lists skills in one list with their `function` or `web_app` runtime. Installed e
 
 `/functions` displays the backend-owned unified catalog. It includes backend-core, installed user, and integration functions in every state, with id, description, category, risk, version, availability, and unavailability reasons. The page polls the catalog so enablement, deletion, dependency changes, and integration connection changes remain visible. Only available entries are injected into ProductManager prompts.
 
+## Schedules Page
+
+The top-level Schedules page includes both mutable approved skill schedules and read-only platform schedules. The daily Notion Done cleanup appears as an active Backend Core row with next/last run state and “Managed by Eidolon” instead of approval, pause, run-now, delete, or Skill navigation controls.
+
 ## Skill Detail Page
 
 Shows:
@@ -68,7 +80,7 @@ Shows:
 - update suggestion chat;
 - schedules.
 
-Installed function skills show a bounded JSON run-input panel and may be run manually only when backend checks pass. The returned result appears in a separate Output panel. Run History has no separate latest-run view: every stored run displays its output, status, error summary, token breakdown, and Codex call count inline. Web application details replace bounded-run input, output, history, and schedule controls with an Open Application action while retaining files, validation, permission, version, update, and agent-run controls.
+Installed function skills show a bounded JSON run-input panel and may be run manually only when backend checks pass. The returned result appears in a separate Output panel. Run History has no separate latest-run view: every stored run displays its output, status, error summary, token breakdown, and Codex call count inline. Web application details replace bounded-run input, output, history, and schedule controls with an Open Application action while retaining files, validation, permission, version, update, and agent-run controls. Skill Detail presents one complete runtime approval containing the base manifest permissions, dependencies, and every current provider integration operation. One approve or deny action applies to all pending components of that displayed contract. Installation and execution require the complete current runtime contract to be approved.
 
 `SkillDetailPage` retains route loading, polling, and mutation orchestration. Cohesive update-chat, version, comparison, schedule, validation, and run-detail presentation lives under `features/skill-detail/SkillDetailPanels.tsx`. Feature tests cover conversation state transitions, chat workspace interactions, schedule delegation, version empty state, and run-input validation; `npm test` is the frontend regression command and `npm run build` remains the production type/build check.
 
@@ -82,7 +94,7 @@ If the backend gateway domain is customized, `VITE_WEB_APP_GATEWAY_DOMAIN` must 
 
 ## Agent Runs Pages
 
-Agent Runs list and detail pages show run status, current task node or parallel active nodes, current step, step logs, DAG progress, node failures, and applicable retry/cancel controls. ProductManager, Builder, and Tester steps expose the exact complete prompt sent to Codex—including instructions and composed inputs—and the exact final response returned by Codex. Backend-only permission, dependency, validation, finalization, and bounded-stop steps are labeled `Backend` and show only a fixed summary, never agent input/output controls. Historical agent steps without a recoverable exact transcript are labeled unavailable instead of falling back to normalized workflow JSON. Task-DAG failures expose run-level and failed-step retry actions. Single-Codex errors are terminal and expose no retry action; only a pre-invocation quota pause may resume. The detail page has Build Details and Skill Run History tabs. Build Details renders the recorded task DAG using each stable node id, task prompt, status, dependencies, write paths, assigned function ids, per-node Codex tokens, build totals, usage pause reason, and resume control. Skill Run History lists runs for the linked skill with separate runtime Codex totals and per-invocation success/failure metadata, including retained CLI diagnostics for failed calls. Skill detail shows completed agent-run token totals.
+Agent Runs list and detail pages show run status, current task node or parallel active nodes, current step, step logs, DAG progress, node failures, and applicable retry/cancel controls. ProductManager, Builder, and Tester steps expose the exact complete prompt sent to Codex—including instructions and composed inputs—and the exact final response returned by Codex. Backend-only permission, dependency, validation, finalization, and bounded-stop steps are labeled `Backend` and show only a fixed summary, never agent input/output controls. Historical agent steps without a recoverable exact transcript are labeled unavailable instead of falling back to normalized workflow JSON. Task-DAG failures expose run-level and failed-step retry actions. Single-Codex errors are terminal and expose no retry action; only a pre-invocation quota pause may resume. Cancelling an active Codex-backed run terminates its owned Codex process and leaves the run cancelled; it cannot later become failed or create runtime approvals. The detail page has Build Details and Skill Run History tabs. Build Details renders the recorded task DAG using each stable node id, task prompt, status, dependencies, write paths, assigned function ids, per-node Codex tokens, build totals, usage pause reason, and resume control. Skill Run History lists runs for the linked skill with separate runtime Codex totals and per-invocation success/failure metadata, including retained CLI diagnostics for failed calls. Skill detail shows completed agent-run token totals.
 
 ## Codex Settings
 
@@ -100,9 +112,11 @@ The Integrations subpage also includes one connection-only Notion todo panel. It
 
 The Integrations subpage also includes local Eidolon-Atlas lifecycle and passphrase controls. It shows the selected directory, owned/external process state, initialized/locked state, saved-passphrase state, and bounded errors. Directory save restarts immediately. The write-only passphrase and **Unlock now** controls are enabled only for an Eidolon-owned process; an external process is explicitly directed to unlock through Atlas itself. The UI discloses that storing the passphrase shifts practical at-rest protection to the Windows account. Submitted passphrases are cleared and never redisplayed.
 
+The Integrations subpage includes a compact **Codex tools** panel. It shows enabled, registered, configuration-match, available-tool, excluded-ID, and bounded-error status. Install, Repair, and Remove call the owned `/settings/codex-mcp` lifecycle. The panel explains that new or restarted Codex Desktop, CLI, and IDE sessions discover the current catalog and that open sessions are not hot-refreshed.
+
 `/settings/permissions` shows the read-only current permission policy loaded from `/settings/permission-policy`: default-allowed capabilities, the exact approval-required template, blocked capabilities, the web-application policy, and the checked-in source path. The frontend does not embed a second policy copy.
 
-Runtime approval uses the existing `PermissionRequestModal`. GitHub `integration_access` reviews show provider, operation ids, read-only status, normalized repositories, and current connection availability. Notion uses the same separate approval with no caller-selected scope; list is low risk while create, update, and trash-delete are medium-risk writes. Connection state alone never marks a skill approved.
+Runtime approval uses the existing `PermissionRequestModal`. Its single review shows each provider, operation id, read/write behavior, normalized scope, current authorization state, and connection availability alongside the base manifest permissions. Notion has no caller-selected scope; list is low risk while create, update, and trash-delete are medium-risk writes. Connection state alone never marks a skill approved.
 
 Atlas reviews use the same modal with empty resource scope. Reads are low risk; `atlas.knowledge.node.know` is medium risk and describes its internet-enabled Codex call and bounded Knowledge write.
 

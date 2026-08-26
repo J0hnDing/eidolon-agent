@@ -34,6 +34,22 @@ class CodexRoutingSettings(Base):
     )
 
 
+class CodexMcpSettings(Base):
+    __tablename__ = "codex_mcp_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    config_fingerprint: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    last_error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+
 class MemoryFact(Base):
     __tablename__ = "memory_facts"
 
@@ -256,6 +272,22 @@ class IntegrationAuditRecord(Base):
     skill: Mapped["Skill"] = relationship(back_populates="integration_audit_records")
     version: Mapped["SkillVersion"] = relationship()
     skill_run: Mapped["SkillRun | None"] = relationship()
+
+
+class McpAuditRecord(Base):
+    __tablename__ = "mcp_audit_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    caller_type: Mapped[str] = mapped_column(String(32), default="codex_mcp", nullable=False, index=True)
+    function_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    resource: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class WebAppInstance(Base):

@@ -26,6 +26,7 @@ from app.services.codex_service import (
     FakeCodexAdapter,
     RealCodexAdapter,
     codex_action_timeout_seconds,
+    codex_process_registry,
     default_codex_adapter,
 )
 from app.services.direct_chat_service import DirectChatService, RealDirectChatAdapter
@@ -895,6 +896,61 @@ def test_install_decision_blocks_denied_runtime_permissions(
     assert decision.reason == "Runtime permission request is denied"
 
 
+def test_runtime_approval_is_superseded_when_manifest_permissions_change(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    generation_request = ChatOrchestrator(db_session).create_generation_request(
+        "Create a reusable local workflow skill."
+    )
+    approve_build_time_permissions(db_session, generation_request)
+    skill, _validation = CodexService(
+        db_session,
+        adapter=RecordingCodexAdapter(),
+        project_root=tmp_path,
+    ).generate_from_request(generation_request)
+    permission_service = PermissionService(db_session, project_root=tmp_path)
+    approved = permission_service.create_runtime_request(skill)
+    permission_service.approve_request(approved)
+
+    manifest_path = tmp_path / skill.manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["permissions"]["network"] = ["example.com"]
+    manifest["permissions"]["codex"]["internet_access"] = True
+    manifest["risk_level"] = "medium"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    decision = permission_service.can_install(skill)
+    assert decision.allowed is False
+    assert decision.reason == "Runtime permissions do not match the current manifest"
+
+    replacement = permission_service.create_runtime_request(skill)
+    db_session.refresh(approved)
+    assert approved.status == "superseded"
+    assert replacement.id != approved.id
+    assert replacement.status == "pending"
+    assert replacement.requested_permissions_json["network"] == ["example.com"]
+
+
+def test_runtime_permissions_cannot_be_reviewed_for_unfinalized_skill(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill = Skill(
+        name="still_building",
+        description="Still building.",
+        runtime="function",
+        status="building",
+        risk_level="low",
+        manifest_path="skills/proposed/still_building/manifest.json",
+    )
+    db_session.add(skill)
+    db_session.commit()
+
+    with pytest.raises(Exception, match="only after a skill has passed validation"):
+        PermissionService(db_session, project_root=tmp_path).create_runtime_request(skill)
+
+
 def test_blocked_permissions_cannot_be_approved(tmp_path: Path, db_session: Session) -> None:
     generation_request = ChatOrchestrator(db_session).create_generation_request(
         "Create a reusable local workflow skill."
@@ -1471,6 +1527,41 @@ def test_real_codex_adapter_applies_action_specific_timeout(
     )
 
     assert captured["kwargs"]["timeout"] == 900
+
+
+def test_real_codex_adapter_terminates_pre_cancelled_agent_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        returncode: int | None = None
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = 1
+
+        def kill(self) -> None:
+            self.returncode = 1
+
+        def communicate(self, input=None, timeout=None):  # noqa: ANN001
+            del input, timeout
+            return "", ""
+
+    process = FakeProcess()
+    monkeypatch.setattr("app.services.codex_service.subprocess.Popen", lambda *args, **kwargs: process)
+    agent_run_id = 987654
+    codex_process_registry.cancel(agent_run_id)
+
+    with pytest.raises(CodexGenerationError, match="cancelled"):
+        RealCodexAdapter(command="codex", timeout_seconds=10, enable_search="false").generate(
+            "Build the package.",
+            tmp_path / "generated",
+            {"codex_task": "single_codex_build", "_agent_run_id": agent_run_id},
+        )
+
+    assert process.returncode == 1
 
 
 def test_product_manager_codex_calls_force_read_only_sandbox(

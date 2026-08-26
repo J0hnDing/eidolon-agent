@@ -6,6 +6,8 @@
 
 `GET /functions/catalog` returns all catalog entries with category, description, input/output JSON Schemas, invocation guidance, derived risk, availability state, and availability reasons. This is the source for the ProductManager catalog and Functions UI. Only available entries are included in ProductManager prompts.
 
+The platform-owned `backend.notion.todo.cleanup_done` entry is an intentional exception: it remains cataloged as unavailable and MCP-hidden so ordinary callers cannot select or invoke it. `SchedulerService` registers and dispatches it through the scheduler-only backend-core boundary.
+
 `GET /functions` remains the runtime-facing installed user-function discovery route. Results never expose package paths, entrypoint commands, credentials, container identities, or unrelated lifecycle state.
 
 An installed function is available for registry invocation only when it is enabled, has a current active function version, has valid object-shaped input/output schemas, has approved and supported runtime permissions, and its active manifest matches the backend identity. Disabled or otherwise unavailable functions remain discoverable with explicit reasons.

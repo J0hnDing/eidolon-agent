@@ -81,6 +81,7 @@ class FakeTodoProvider:
         todo = {
             "id": f"fake-notion-page-{self._counter}",
             "title": values["title"],
+            "done": values.get("done", False),
             "priority": values.get("priority"),
             "start_at": values.get("start_at"),
             "due_at": values.get("due_at"),

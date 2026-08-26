@@ -1,0 +1,36 @@
+{
+  "manifest_version": 1,
+  "name": "notion_todo_manager",
+  "display_name": "Notion Todo Manager",
+  "description": "A simple web application for managing todos in the configured Notion data source.",
+  "runtime": "web_app",
+  "entrypoint": "app:app",
+  "instructions_path": null,
+  "input_schema": null,
+  "output_schema": null,
+  "function_requirements": [],
+  "integration_requirements": [
+    {
+      "provider": "notion",
+      "operations": [
+        "notion.todo.create",
+        "notion.todo.delete",
+        "notion.todo.list",
+        "notion.todo.update"
+      ],
+      "resource_scope": {}
+    }
+  ],
+  "dependencies": [],
+  "permissions": {
+    "network": [],
+    "filesystem_read": [],
+    "filesystem_write": [],
+    "secrets": [],
+    "shell": false,
+    "codex": {
+      "internet_access": false
+    }
+  },
+  "schedule": null
+}

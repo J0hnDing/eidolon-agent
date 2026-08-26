@@ -101,6 +101,7 @@ export default function MemoryPage() {
         <div>
           <p className="eyebrow">Editable facts</p>
           <h1>Memory</h1>
+          <p className="muted">Keep the context Eidolon uses explicit, focused, and under your control.</p>
         </div>
       </header>
 

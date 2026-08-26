@@ -395,6 +395,18 @@ export interface CodexModelCatalog {
   models: CodexModelOption[];
 }
 
+export interface CodexMcpStatus {
+  enabled: boolean;
+  registered: boolean;
+  config_matches: boolean;
+  available_tool_count: number;
+  excluded_ids: string[];
+  config_path: string;
+  restart_required: boolean;
+  error_type: string | null;
+  error: string | null;
+}
+
 export interface GitHubConnectionStatus {
   provider: "github";
   connected: boolean;
@@ -467,7 +479,10 @@ export interface SchedulePayload {
 
 export interface SkillSchedule {
   id: number;
-  skill_id: number;
+  schedule_kind: "skill" | "platform";
+  function_id: string | null;
+  read_only: boolean;
+  skill_id: number | null;
   skill_name: string | null;
   name: string;
   status: ScheduleStatus;
@@ -724,6 +739,14 @@ export const api = {
     }),
   getCodexModels: (refresh = false) =>
     request<CodexModelCatalog>(`/settings/codex-models?refresh=${refresh}`),
+  getCodexMcpStatus: () => request<CodexMcpStatus>("/settings/codex-mcp"),
+  updateCodexMcp: (action: "install" | "repair") =>
+    request<CodexMcpStatus>("/settings/codex-mcp", {
+      method: "PUT",
+      body: JSON.stringify({ action }),
+    }),
+  removeCodexMcp: () =>
+    request<CodexMcpStatus>("/settings/codex-mcp", { method: "DELETE" }),
   getGitHubConnection: () => request<GitHubConnectionStatus>("/settings/integrations/github"),
   putGitHubConnection: (token: string) =>
     request<GitHubConnectionStatus>("/settings/integrations/github", {

@@ -18,11 +18,20 @@ def get_scheduler_service(request: Request, db: Session = Depends(get_db)) -> Sc
 
 
 @router.get("", response_model=list[ScheduleRead])
-def list_schedules(skill_id: int | None = None, db: Session = Depends(get_db)) -> list[dict]:
+def list_schedules(
+    request: Request,
+    skill_id: int | None = None,
+    db: Session = Depends(get_db),
+) -> list[dict]:
     query = select(SkillSchedule).order_by(SkillSchedule.created_at.desc())
     if skill_id is not None:
         query = query.where(SkillSchedule.skill_id == skill_id)
-    return [serialize_schedule(schedule) for schedule in db.scalars(query).all()]
+    serialized = [serialize_schedule(schedule) for schedule in db.scalars(query).all()]
+    if skill_id is None:
+        lifespan_service = getattr(request.app.state, "scheduler_service", None)
+        if isinstance(lifespan_service, SchedulerService):
+            serialized.insert(0, lifespan_service.serialize_notion_done_cleanup_schedule())
+    return serialized
 
 
 @router.get("/{schedule_id}", response_model=ScheduleRead)

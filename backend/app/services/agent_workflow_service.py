@@ -16,7 +16,7 @@ from app.services.agent_run_artifact_store import AgentRunArtifactStore
 from app.services.build_dependency_service import BuildDependencyError, BuildDependencyService
 from app.services.capability_scanner import CapabilityScanResult, StaticCapabilityScanner
 from app.services.codex_routing_service import CodexRoutingService
-from app.services.codex_service import CodexGenerationError, CodexService
+from app.services.codex_service import CodexGenerationError, CodexService, codex_process_registry
 from app.services.codex_usage_service import codex_usage_service
 from app.services.default_permissions import (
     agent_permission_bounds,
@@ -47,6 +47,8 @@ DEFAULT_TASK_ID = "core_skill"
 CODEX_USAGE_RESERVE_PERCENT = 5
 _GENERATION_PLANNING_LOCKS: dict[int, threading.Lock] = {}
 _GENERATION_PLANNING_LOCKS_GUARD = threading.Lock()
+_RUN_FINALIZATION_LOCKS: dict[int, threading.Lock] = {}
+_RUN_FINALIZATION_LOCKS_GUARD = threading.Lock()
 
 
 def utc_now() -> datetime:
@@ -102,6 +104,7 @@ class AgentWorkflowService:
         self.db.add(agent_run)
         self.db.commit()
         self.db.refresh(agent_run)
+        codex_process_registry.reset(agent_run.id)
         self.artifacts.initialize(agent_run)
         return self._plan_build(generation_request, agent_run, initial=True)
 
@@ -429,6 +432,7 @@ class AgentWorkflowService:
         self.db.add(agent_run)
         self.db.commit()
         self.db.refresh(agent_run)
+        codex_process_registry.reset(agent_run.id)
         self.artifacts.initialize(agent_run)
 
         try:
@@ -465,8 +469,12 @@ class AgentWorkflowService:
                 validation = self._repair_current_task(agent_run, repair_skill, validation, task_node_id="repair_skill")
 
             self._product_manager_after_tests(agent_run, repair_skill, validation, task_node_id="repair_skill")
-            runtime_status = self._runtime_permission_review(agent_run, repair_skill, validation, task_node_id="repair_skill")
-            self._product_manager_finish(agent_run, repair_skill, validation, runtime_status, task_node_id="repair_skill")
+            self._finalize_validated_skill(
+                agent_run,
+                repair_skill,
+                validation,
+                task_node_id="repair_skill",
+            )
         except Exception as exc:
             if agent_run.status != "blocked":
                 self._fail_run(agent_run, str(exc))
@@ -494,6 +502,7 @@ class AgentWorkflowService:
         self.db.add(agent_run)
         self.db.commit()
         self.db.refresh(agent_run)
+        codex_process_registry.reset(agent_run.id)
         self.artifacts.initialize(agent_run)
         blueprint_path = self.artifacts.write_json(agent_run, "blueprint.json", blueprint)
         permission_plan = self._permission_plan_from_blueprint(blueprint)
@@ -802,35 +811,48 @@ class AgentWorkflowService:
         return self.retry_current_task(agent_run)
 
     def cancel_run(self, agent_run: AgentRun) -> AgentRun:
-        clarification_wait = (
-            agent_run.status == "blocked"
-            and (agent_run.final_summary_json or {}).get("decision_json", {}).get("decision")
-            == "ask_user_for_input"
-        )
-        if agent_run.status in {"succeeded", "failed", "cancelled"} or (
-            agent_run.status == "blocked" and not clarification_wait
-        ):
+        with self._run_finalization_lock(agent_run.id):
+            self.db.refresh(agent_run)
+            clarification_wait = (
+                agent_run.status == "blocked"
+                and (agent_run.final_summary_json or {}).get("decision_json", {}).get("decision")
+                == "ask_user_for_input"
+            )
+            if agent_run.status in {"succeeded", "failed", "cancelled"} or (
+                agent_run.status == "blocked" and not clarification_wait
+            ):
+                return agent_run
+            agent_run.status = "cancelled"
+            agent_run.completed_at = utc_now()
+            agent_run.error_message = "Cancelled by local user."
+            codex_process_registry.cancel(agent_run.id)
+            if agent_run.generation_request_id:
+                generation_request = self.db.get(SkillGenerationRequest, agent_run.generation_request_id)
+                if generation_request is not None:
+                    archive_warning = self.codex_service.archive_product_manager_thread(generation_request)
+                    generation_request.status = "cancelled"
+                    generation_request.error_message = "Cancelled by local user."
+                    for request in generation_request.approval_requests:
+                        if request.status == "pending":
+                            request.status = "superseded"
+                            request.resolved_at = utc_now()
+                            request.resolved_by = "backend_cancellation"
+                            request.decision_notes = "The linked generation request was cancelled."
+                    if archive_warning:
+                        final_summary = dict(agent_run.final_summary_json or {})
+                        final_summary["thread_archive_warning"] = archive_warning
+                        agent_run.final_summary_json = final_summary
+            if agent_run.skill_id:
+                skill = self.db.get(Skill, agent_run.skill_id)
+                if skill is not None and skill.status in {"building", "proposed"}:
+                    skill.status = "failed"
+            for step in agent_run.steps:
+                if step.status in {"pending", "running", "waiting_for_approval"}:
+                    step.status = "cancelled"
+                    step.ended_at = utc_now()
+            self.db.commit()
+            self.db.refresh(agent_run)
             return agent_run
-        agent_run.status = "cancelled"
-        agent_run.completed_at = utc_now()
-        agent_run.error_message = "Cancelled by local user."
-        if agent_run.generation_request_id:
-            generation_request = self.db.get(SkillGenerationRequest, agent_run.generation_request_id)
-            if generation_request is not None:
-                archive_warning = self.codex_service.archive_product_manager_thread(generation_request)
-                generation_request.status = "cancelled"
-                generation_request.error_message = "Cancelled by local user."
-                if archive_warning:
-                    final_summary = dict(agent_run.final_summary_json or {})
-                    final_summary["thread_archive_warning"] = archive_warning
-                    agent_run.final_summary_json = final_summary
-        for step in agent_run.steps:
-            if step.status in {"pending", "running", "waiting_for_approval"}:
-                step.status = "cancelled"
-                step.ended_at = utc_now()
-        self.db.commit()
-        self.db.refresh(agent_run)
-        return agent_run
 
     def latest_run_for_generation(self, generation_request_id: int) -> AgentRun | None:
         return self.db.scalar(
@@ -916,6 +938,8 @@ class AgentWorkflowService:
         return validation
 
     def _run_final_validation(self, agent_run: AgentRun, skill: Skill) -> ProposedSkillValidationRead:
+        self.db.refresh(agent_run)
+        self._ensure_not_cancelled(agent_run)
         agent_run.current_task_id = "final_e2e"
         skill_dir = self.proposed_service.skill_dir_for_record(skill)
         manifest_failure: ProposedSkillValidationRead | None = None
@@ -991,6 +1015,8 @@ class AgentWorkflowService:
                 "final_e2e_failure.log",
                 self._validation_log_text("final_e2e", validation),
             )
+        self.db.refresh(agent_run)
+        self._ensure_not_cancelled(agent_run)
         return validation
 
     def _merge_task_integration_context_scans(
@@ -1394,7 +1420,10 @@ class AgentWorkflowService:
         task_node_id: str = DEFAULT_TASK_ID,
         pm_summary: str | None = None,
     ) -> str:
-        runtime_request = PermissionService(self.db, project_root=self.project_root).create_runtime_request(skill)
+        runtime_request = PermissionService(self.db, project_root=self.project_root).create_runtime_request(
+            skill,
+            allow_unfinalized=True,
+        )
         permission_summary = self._permission_runtime_summary(skill, runtime_request)
         if pm_summary is None:
             pm_summary = self.codex_service.product_manager_summary(
@@ -1426,6 +1455,35 @@ class AgentWorkflowService:
             },
         )
         return runtime_request.status
+
+    def _finalize_validated_skill(
+        self,
+        agent_run: AgentRun,
+        skill: Skill,
+        validation: Any,
+        *,
+        task_node_id: str = DEFAULT_TASK_ID,
+        pm_summary: str | None = None,
+    ) -> str:
+        with self._run_finalization_lock(agent_run.id):
+            self.db.refresh(agent_run)
+            self._ensure_not_cancelled(agent_run)
+            runtime_status = self._runtime_permission_review(
+                agent_run,
+                skill,
+                validation,
+                task_node_id=task_node_id,
+                pm_summary=pm_summary,
+            )
+            self._product_manager_finish(
+                agent_run,
+                skill,
+                validation,
+                runtime_status,
+                task_node_id=task_node_id,
+                pm_summary=pm_summary,
+            )
+            return runtime_status
 
     def _product_manager_finish(
         self,
@@ -2221,6 +2279,7 @@ class AgentWorkflowService:
         input_json: dict[str, Any] | None = None,
         logs: str | None = None,
     ) -> AgentRunStep:
+        self.codex_service.bind_agent_run(agent_run.id)
         self._ensure_not_cancelled(agent_run)
         recorded_action = action
         if recorded_action is None and input_json:
@@ -2305,6 +2364,9 @@ class AgentWorkflowService:
         self.db.commit()
 
     def _fail_run(self, agent_run: AgentRun, message: str) -> None:
+        self.db.refresh(agent_run)
+        if agent_run.status == "cancelled":
+            return
         agent_run.status = "failed"
         agent_run.error_message = message
         agent_run.completed_at = utc_now()
@@ -2330,3 +2392,8 @@ class AgentWorkflowService:
     def _ensure_not_cancelled(self, agent_run: AgentRun) -> None:
         if agent_run.status == "cancelled":
             raise AgentWorkflowError("Agent run is cancelled")
+
+    @staticmethod
+    def _run_finalization_lock(agent_run_id: int) -> threading.Lock:
+        with _RUN_FINALIZATION_LOCKS_GUARD:
+            return _RUN_FINALIZATION_LOCKS.setdefault(agent_run_id, threading.Lock())

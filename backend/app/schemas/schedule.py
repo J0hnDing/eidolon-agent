@@ -54,7 +54,10 @@ class ScheduleRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    skill_id: int
+    schedule_kind: Literal["skill", "platform"] = "skill"
+    function_id: str | None = None
+    read_only: bool = False
+    skill_id: int | None
     skill_name: str | None = None
     name: str
     status: ScheduleStatus

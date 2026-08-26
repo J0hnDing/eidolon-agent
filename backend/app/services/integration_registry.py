@@ -692,6 +692,7 @@ _TODO_OUTPUT = _object_schema(
     {
         "id": {"type": "string", "minLength": 1, "maxLength": 128},
         "title": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "done": {"type": "boolean"},
         "priority": _TODO_PRIORITY,
         "start_at": _TODO_DATE,
         "due_at": _TODO_DATE,
@@ -701,12 +702,13 @@ _TODO_OUTPUT = _object_schema(
         "created_at": {"type": "string", "minLength": 1, "maxLength": 64},
     },
     [
-        "id", "title", "priority", "start_at", "due_at", "estimated_minutes",
+        "id", "title", "done", "priority", "start_at", "due_at", "estimated_minutes",
         "atlas_goal_id", "notes", "created_at",
     ],
 )
 _TODO_MUTABLE_PROPERTIES = {
     "title": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "done": {"type": "boolean"},
     "priority": _TODO_PRIORITY,
     "start_at": _TODO_DATE,
     "due_at": _TODO_DATE,
@@ -747,6 +749,7 @@ _NOTION_OPERATIONS = (
         max_provider_response_bytes=2_000_000, normalized_errors=_NOTION_ERRORS,
         audit_resource_fields=(), fake_behavior="notion_todo_list",
         usage_example={"operation": "notion.todo.list", "input": {"page_size": 25}},
+        contract_version=2,
     ),
     IntegrationOperation(
         operation_id="notion.todo.create",
@@ -760,6 +763,7 @@ _NOTION_OPERATIONS = (
         allow_redirects=False, max_pages=1, max_results=1, max_provider_response_bytes=2_000_000,
         normalized_errors=_NOTION_ERRORS, audit_resource_fields=(), fake_behavior="notion_todo_create",
         usage_example={"operation": "notion.todo.create", "input": {"title": "Buy groceries"}},
+        contract_version=2,
     ),
     IntegrationOperation(
         operation_id="notion.todo.update",
@@ -772,7 +776,8 @@ _NOTION_OPERATIONS = (
         endpoint_template="/v1/pages/{id} after configured data-source containment check", timeout_seconds=15,
         allow_redirects=False, max_pages=1, max_results=1, max_provider_response_bytes=2_000_000,
         normalized_errors=_NOTION_ERRORS, audit_resource_fields=("id",), fake_behavior="notion_todo_update",
-        usage_example={"operation": "notion.todo.update", "input": {"id": "page-id", "priority": "high"}},
+        usage_example={"operation": "notion.todo.update", "input": {"id": "page-id", "done": True}},
+        contract_version=2,
     ),
     IntegrationOperation(
         operation_id="notion.todo.delete",

@@ -6,6 +6,7 @@ import {
   CodexAccountUsage,
   CodexCliStatus,
   CodexInvocationChoice,
+  CodexMcpStatus,
   CodexModelCatalog,
   CodexRoutingSettings,
   CodexRoutingSettingsPayload,
@@ -56,6 +57,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
   const [routing, setRouting] = useState<CodexRoutingSettings | null>(null);
   const [permissionPolicy, setPermissionPolicy] = useState<PermissionPolicy | null>(null);
   const [github, setGitHub] = useState<GitHubConnectionStatus | null>(null);
+  const [codexMcp, setCodexMcp] = useState<CodexMcpStatus | null>(null);
   const [githubToken, setGitHubToken] = useState("");
   const [notion, setNotion] = useState<NotionConnectionStatus | null>(null);
   const [notionToken, setNotionToken] = useState("");
@@ -92,16 +94,18 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setRouting(nextRouting);
         setRoutingDirty(false);
       } else if (section === "integrations") {
-        const [nextGitHub, nextAtlas, nextNotion] = await Promise.all([
+        const [nextGitHub, nextAtlas, nextNotion, nextCodexMcp] = await Promise.all([
           api.getGitHubConnection(),
           api.getAtlasStatus().catch((err) => atlasUnavailableStatus(err)),
           api.getNotionConnection().catch((err) => notionUnavailableStatus(err)),
+          api.getCodexMcpStatus().catch((err) => codexMcpUnavailableStatus(err)),
         ]);
         setGitHub(nextGitHub);
         setAtlas(nextAtlas);
         setAtlasDirectory(atlasDirectoryForStatus(nextAtlas));
         setNotion(nextNotion);
         setNotionDataSourceId(nextNotion.data_source_id ?? "");
+        setCodexMcp(nextCodexMcp);
       } else {
         setPermissionPolicy(await api.getPermissionPolicy());
       }
@@ -232,6 +236,35 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
       setSaved("Atlas directory saved and Atlas restarted.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save the Atlas directory");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function updateCodexMcp(action: "install" | "repair") {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const next = await api.updateCodexMcp(action);
+      setCodexMcp(next);
+      setSaved(action === "repair" ? "Codex tools registration repaired." : "Codex tools installed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update Codex tools registration");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function removeCodexMcp() {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      setCodexMcp(await api.removeCodexMcp());
+      setSaved("Codex tools removed and access disabled.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove Codex tools registration");
     } finally {
       setLoading(false);
     }
@@ -394,6 +427,47 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
               </button>
             )}
           </div>
+        </section>
+      )}
+      {section === "integrations" && codexMcp && (
+        <section className="detail-panel stack">
+          <div>
+            <h2>Codex tools</h2>
+            <p className="muted">
+              Register Eidolon&apos;s available integration and installed-user functions as typed tools for Codex Desktop, CLI, and IDE sessions on this host.
+            </p>
+          </div>
+          <dl className="detail-grid">
+            <div><dt>Access</dt><dd>{codexMcp.enabled ? "Enabled" : "Disabled"}</dd></div>
+            <div><dt>Registration</dt><dd>{codexMcp.registered ? "Installed" : "Not installed"}</dd></div>
+            <div><dt>Configuration</dt><dd>{codexMcp.config_matches ? "Matches" : "Needs attention"}</dd></div>
+            <div><dt>Available tools</dt><dd>{codexMcp.available_tool_count}</dd></div>
+          </dl>
+          <p className="muted"><strong>Config:</strong> <code>{codexMcp.config_path}</code></p>
+          {codexMcp.excluded_ids.length > 0 && (
+            <p className="muted">Intentionally excluded: <code>{codexMcp.excluded_ids.join(", ")}</code></p>
+          )}
+          {codexMcp.error && <p className="error-text">Codex tools: {codexMcp.error}</p>}
+          <div className="button-row">
+            {!codexMcp.registered && (
+              <button type="button" onClick={() => void updateCodexMcp("install")} disabled={loading}>
+                Install
+              </button>
+            )}
+            {codexMcp.registered && (
+              <>
+                <button type="button" onClick={() => void updateCodexMcp("repair")} disabled={loading}>
+                  Repair
+                </button>
+                <button type="button" className="secondary" onClick={() => void removeCodexMcp()} disabled={loading}>
+                  Remove
+                </button>
+              </>
+            )}
+          </div>
+          <p className="muted">
+            New and restarted Codex sessions load the current catalog automatically. Open sessions are not hot-refreshed; restart them after installation, repair, or catalog changes.
+          </p>
         </section>
       )}
       {section === "integrations" && notion && (
@@ -675,6 +749,20 @@ function notionUnavailableStatus(err: unknown): NotionConnectionStatus {
     created_at: null,
     updated_at: null,
     error_type: err instanceof Error ? err.message : "unavailable",
+  };
+}
+
+function codexMcpUnavailableStatus(err: unknown): CodexMcpStatus {
+  return {
+    enabled: false,
+    registered: false,
+    config_matches: false,
+    available_tool_count: 0,
+    excluded_ids: ["backend.codex.call"],
+    config_path: "Unavailable",
+    restart_required: false,
+    error_type: "unavailable",
+    error: err instanceof Error ? err.message : "Codex tools status is unavailable",
   };
 }
 

@@ -2,6 +2,8 @@
 
 Scheduling uses APScheduler through `SchedulerService`.
 
+In addition to user-approved `SkillSchedule` jobs, `SchedulerService` registers the platform-owned `backend.notion.todo.cleanup_done` backend-core function every time the backend starts. It runs daily at 03:00 `America/Toronto`, uses a stable replacement job id, coalesces missed runs, and permits only one concurrent instance. `GET /schedules` includes a read-only platform-schedule projection with its next and last run state; it is not a mutable `SkillSchedule` row and remains outside schedule approval and mutation flows.
+
 ## Schedule Types
 
 Supported schedule forms:

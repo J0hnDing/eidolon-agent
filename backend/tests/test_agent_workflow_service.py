@@ -4,6 +4,7 @@ import subprocess
 import sys
 from collections.abc import Generator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine
@@ -11,7 +12,15 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import app.services.agent_workflow_service as workflow_module
 from app.db import Base
-from app.models import AgentRun, AgentRunStep, CodexRoutingSettings, Skill, SkillGenerationRequest, SkillRun
+from app.models import (
+    AgentRun,
+    AgentRunStep,
+    ApprovalRequest,
+    CodexRoutingSettings,
+    Skill,
+    SkillGenerationRequest,
+    SkillRun,
+)
 from app.routers.agent_runs import delete_agent_run
 from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
 from app.services.chat_orchestrator import ChatOrchestrator
@@ -1525,10 +1534,20 @@ def test_cancelled_agent_run_blocks_further_steps(tmp_path: Path, db_session: Se
     service = AgentWorkflowService(db_session, project_root=tmp_path)
     agent_run = service.create_build_run(generation_request)
     service.cancel_run(agent_run)
-    approve_generation(db_session, generation_request, tmp_path)
+    with pytest.raises(Exception, match="cannot be approved"):
+        approve_generation(db_session, generation_request, tmp_path)
 
     with pytest.raises(AgentWorkflowError, match="cancelled"):
         service.continue_build_after_approval(generation_request)
+
+    skill = db_session.get(Skill, agent_run.skill_id)
+    assert agent_run.status == "cancelled"
+    assert generation_request.status == "cancelled"
+    assert skill.status == "failed"
+    with pytest.raises(AgentWorkflowError, match="cancelled"):
+        service._finalize_validated_skill(agent_run, skill, SimpleNamespace(ok=True))
+    assert db_session.query(AgentRunStep).filter_by(agent_run_id=agent_run.id).count() == 3
+    assert db_session.query(ApprovalRequest).filter_by(skill_id=skill.id).count() == 0
 
 
 def test_cancelling_while_waiting_for_clarification_archives_session(

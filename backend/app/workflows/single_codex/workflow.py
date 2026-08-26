@@ -78,18 +78,10 @@ class SingleCodexBuildWorkflow:
             f"Codex built and tested {skill.name}, and backend validation passed its manifest, package tests, "
             "and static capability scan. The skill remains proposed and was not installed or run automatically."
         )
-        runtime_status = service._runtime_permission_review(
+        service._finalize_validated_skill(
             agent_run,
             skill,
             validation,
-            task_node_id="single_codex",
-            pm_summary=summary,
-        )
-        service._product_manager_finish(
-            agent_run,
-            skill,
-            validation,
-            runtime_status,
             task_node_id="single_codex",
             pm_summary=summary,
         )

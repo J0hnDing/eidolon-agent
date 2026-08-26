@@ -20,6 +20,7 @@ from app.schemas.manifest import SkillManifest
 from app.services.atlas_provider import FakeAtlasProviderAdapter
 from app.services.github_provider import FakeGitHubProviderAdapter
 from app.services.integration_service import IntegrationCaller, IntegrationError, IntegrationService
+from app.services.permission_service import PermissionService
 from app.services.secret_store import FakeSecretStore
 from app.services.todo_service import FakeTodoProvider
 
@@ -151,6 +152,40 @@ def authorize(
     authorization.approval_request.status = "approved"
     service.db.commit()
     return authorization
+
+
+def test_runtime_bundle_approval_resolves_base_and_integration_together(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    skill, _ = create_installed_skill(db, tmp_path)
+    permission_service = PermissionService(db, project_root=tmp_path)
+    request = permission_service.create_runtime_request(skill)
+    assert request.status == "approved"
+    assert request.reason_json["integration_requirements"][0]["authorization_state"] == "pending"
+
+    approved = permission_service.approve_runtime_bundle(skill)
+
+    assert approved.status == "approved"
+    assert approved.reason_json["integration_requirements"][0]["authorization_state"] == "approved"
+    integration_requests = db.scalars(
+        select(ApprovalRequest).where(ApprovalRequest.request_type == "integration_access")
+    ).all()
+    assert [item.status for item in integration_requests] == ["approved"]
+
+
+def test_runtime_bundle_denial_resolves_every_pending_component(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    skill, _ = create_installed_skill(db, tmp_path)
+    permission_service = PermissionService(db, project_root=tmp_path)
+    permission_service.create_runtime_request(skill)
+
+    denied = permission_service.deny_runtime_bundle(skill)
+
+    assert denied.status == "approved"
+    assert denied.reason_json["integration_requirements"][0]["authorization_state"] == "denied"
 
 
 def connected_service(
@@ -380,11 +415,17 @@ def test_notion_todo_operations_use_existing_authorization_audit_and_fake_provid
     caller = IntegrationCaller(skill_id=skill.id, version_id=skill.active_version_id, runtime="function")
 
     created = service.invoke(caller, "notion.todo.create", {"title": "Title only"})
-    updated = service.invoke(caller, "notion.todo.update", {"id": created["id"], "notes": None})
+    updated = service.invoke(
+        caller,
+        "notion.todo.update",
+        {"id": created["id"], "done": True, "notes": None},
+    )
     listed = service.invoke(caller, "notion.todo.list", {"page_size": 1})
     removed = service.invoke(caller, "notion.todo.delete", {"id": created["id"]})
 
     assert updated["notes"] is None
+    assert updated["done"] is True
+    assert listed["todos"][0]["done"] is True
     assert listed["todos"][0]["id"] == created["id"]
     assert removed == {"id": created["id"], "removed": True}
     audits = db.scalars(select(IntegrationAuditRecord).order_by(IntegrationAuditRecord.id)).all()
@@ -657,6 +698,70 @@ def test_disabled_and_stale_version_are_rejected_before_provider_call(
         )
     assert stale.value.error_type == "authorization_missing_or_stale"
     assert provider.calls == []
+
+
+def test_direct_user_integration_path_preserves_provider_boundaries_without_skill_scope(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    store = FakeSecretStore()
+    provider = FakeGitHubProviderAdapter()
+    service = connected_service(db, tmp_path, store=store, provider=provider)
+
+    output = service.invoke_direct(
+        "github.repository.get",
+        {"owner": "outside", "repository": "token-allowed"},
+    )
+
+    assert output["full_name"] == "outside/token-allowed"
+    assert provider.calls == [
+        ("github.repository.get", {"owner": "outside", "repository": "token-allowed"})
+    ]
+    store.fail_get = True
+    with pytest.raises(IntegrationError) as unavailable:
+        service.invoke_direct(
+            "github.repository.get",
+            {"owner": "outside", "repository": "token-allowed"},
+        )
+    assert unavailable.value.error_type == "connection_unavailable"
+
+    with pytest.raises(IntegrationError) as invalid:
+        service.invoke_direct("github.repository.get", {"owner": "invalid owner", "repository": "repo"})
+    assert invalid.value.error_type == "invalid_input"
+    assert len(provider.calls) == 1
+
+
+def test_direct_user_notion_and_atlas_calls_reuse_configured_containment(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    store = FakeSecretStore()
+    notion = FakeTodoProvider()
+    configured_sources: list[str] = []
+
+    def notion_factory(_token: str, source: str) -> FakeTodoProvider:
+        configured_sources.append(source)
+        return notion
+
+    atlas = FakeAtlasProviderAdapter()
+    service = IntegrationService(
+        db,
+        project_root=tmp_path,
+        secret_store=store,
+        github=FakeGitHubProviderAdapter(),
+        atlas=atlas,
+        notion_provider_factory=notion_factory,
+    )
+    service.put_notion_connection(NOTION_SENTINEL, "only-configured-source")
+    service.provider_connected = lambda provider: provider == "atlas"  # type: ignore[method-assign]
+
+    notion_output = service.invoke_direct("notion.todo.list", {"page_size": 10})
+    atlas_output = service.invoke_direct("atlas.person.get", {})
+
+    assert notion_output == {"todos": [], "has_more": False, "next_cursor": None}
+    assert configured_sources[-1] == "only-configured-source"
+    assert atlas_output == {"personal_info": None}
+    assert atlas.calls == [("atlas.person.get", {})]
 
 
 def test_atlas_know_uses_bounded_codex_and_audits_only_node_id(db: Session, tmp_path: Path) -> None:

@@ -1,3 +1,5 @@
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -232,13 +234,32 @@ class PermissionService:
         self.db.refresh(request)
         return request
 
-    def create_runtime_request(self, skill: Skill) -> ApprovalRequest:
+    def create_runtime_request(self, skill: Skill, *, allow_unfinalized: bool = False) -> ApprovalRequest:
+        if skill.status not in {"proposed", "installed"} and not allow_unfinalized:
+            raise PermissionError(
+                "Runtime permissions can be reviewed only after a skill has passed validation and is proposed or installed"
+            )
         skill_dir = self.proposed_service.skill_dir_for_record(skill)
         manifest = validate_manifest_file(skill_dir / "manifest.json")
+        manifest_fingerprint = self._runtime_manifest_fingerprint(manifest)
         existing = self._latest_request(skill_id=skill.id, scope="runtime", request_type="install")
         if existing and existing.status in {"pending", "approved", "denied"}:
-            request = self._attach_function_requirement_review(existing, skill, manifest=manifest)
-            return self._attach_integration_review(request, skill, manifest)
+            reason_json = dict(existing.reason_json or {})
+            existing_fingerprint = reason_json.get("manifest_permission_fingerprint")
+            if existing_fingerprint is None and self._runtime_request_matches_manifest(existing, manifest):
+                reason_json["manifest_permission_fingerprint"] = manifest_fingerprint
+                existing.reason_json = reason_json
+                self.db.commit()
+                self.db.refresh(existing)
+                existing_fingerprint = manifest_fingerprint
+            if existing_fingerprint == manifest_fingerprint:
+                request = self._attach_function_requirement_review(existing, skill, manifest=manifest)
+                return self._attach_integration_review(request, skill, manifest)
+            existing.status = "superseded"
+            existing.resolved_at = utc_now()
+            existing.resolved_by = "backend_manifest_change"
+            existing.decision_notes = "The final manifest permission or dependency contract changed."
+            self.db.commit()
 
         permissions = manifest.permissions.model_dump()
         dependencies = list(manifest.dependencies)
@@ -270,6 +291,8 @@ class PermissionService:
                 ],
                 "permission_expansion": expansion,
                 "dependency_expansion": dependency_expansion,
+                "base_risk_level": risk_level,
+                "manifest_permission_fingerprint": manifest_fingerprint,
                 "runner_unsupported": self.unsupported_runtime_reasons(permissions),
                 "runner_network_enforcement": (
                     "Approved network domains enable container network access for this MVP; "
@@ -330,9 +353,17 @@ class PermissionService:
     def approve_request(self, request: ApprovalRequest, notes: str | None = None) -> ApprovalRequest:
         if request.status == "denied":
             raise PermissionError("Denied permission requests cannot be approved")
+        if request.status in {"expired", "superseded"}:
+            raise PermissionError(f"{request.status.title()} permission requests cannot be approved")
         if request.status == "approved":
             self._sync_agent_permission_steps(request, approved=True)
             return request
+        if (
+            request.request_scope == "build_time"
+            and request.generation_request is not None
+            and request.generation_request.status == "cancelled"
+        ):
+            raise PermissionError("Cancelled generation requests cannot be approved")
         if request.status == "pending" and request.request_scope == "build_time" and request.generation_request is not None:
             request = self._refresh_build_time_request(request, request.generation_request)
         if request.risk_level == "blocked":
@@ -365,6 +396,49 @@ class PermissionService:
         self._sync_agent_permission_steps(request, approved=False)
         return request
 
+    def approve_runtime_bundle(self, skill: Skill, notes: str | None = None) -> ApprovalRequest:
+        request, integration_requests = self._runtime_bundle_requests(skill)
+        requests = [request, *integration_requests]
+        for component in requests:
+            if component.status == "denied":
+                raise PermissionError("Denied runtime permission bundles must be reviewed again before approval")
+            if component.status in {"expired", "superseded"}:
+                raise PermissionError(f"{component.status.title()} runtime permission requests cannot be approved")
+            if component.risk_level == "blocked":
+                raise PermissionError("Blocked or unsupported runtime permissions cannot be approved in this milestone")
+
+        changed = []
+        for component in requests:
+            if component.status != "pending":
+                continue
+            component.status = "approved"
+            component.resolved_at = utc_now()
+            component.resolved_by = "local_user"
+            component.decision_notes = notes
+            changed.append(component)
+        self.db.commit()
+        for component in changed:
+            self.db.refresh(component)
+            self._sync_agent_permission_steps(component, approved=True)
+        return self._refresh_integration_review(request, skill)
+
+    def deny_runtime_bundle(self, skill: Skill, notes: str | None = None) -> ApprovalRequest:
+        request, integration_requests = self._runtime_bundle_requests(skill)
+        pending = [component for component in [request, *integration_requests] if component.status == "pending"]
+        if not pending:
+            raise PermissionError("This runtime permission bundle has no pending decision")
+
+        for component in pending:
+            component.status = "denied"
+            component.resolved_at = utc_now()
+            component.resolved_by = "local_user"
+            component.decision_notes = notes
+        self.db.commit()
+        for component in pending:
+            self.db.refresh(component)
+            self._sync_agent_permission_steps(component, approved=False)
+        return self._refresh_integration_review(request, skill)
+
     def can_generate(self, generation_request: SkillGenerationRequest) -> PermissionDecision:
         request = self._latest_request(generation_request_id=generation_request.id, scope="build_time")
         if request is None:
@@ -374,6 +448,8 @@ class PermissionService:
         return PermissionDecision(True, "Build-time permissions are approved")
 
     def can_install(self, skill: Skill, *, include_integrations: bool = True) -> PermissionDecision:
+        if skill.status not in {"proposed", "installed"}:
+            return PermissionDecision(False, "Only proposed skills can be installed")
         request = self._latest_active_runtime_request(skill)
         if request is None:
             return PermissionDecision(False, "Runtime permissions have not been reviewed")
@@ -381,11 +457,20 @@ class PermissionService:
             return PermissionDecision(False, "Runtime permissions include blocked or unsupported requests")
         if request.status != "approved":
             return PermissionDecision(False, f"Runtime permission request is {request.status}")
-        if include_integrations:
-            try:
-                manifest = validate_manifest_file(self.proposed_service.skill_dir_for_record(skill) / "manifest.json")
-            except Exception:
-                return PermissionDecision(False, "Active integration manifest is invalid")
+        try:
+            manifest = validate_manifest_file(self.proposed_service.skill_dir_for_record(skill) / "manifest.json")
+        except Exception:
+            return PermissionDecision(False, "Active runtime manifest is invalid")
+        approved_fingerprint = (request.reason_json or {}).get("manifest_permission_fingerprint")
+        if approved_fingerprint is None and self._runtime_request_matches_manifest(request, manifest):
+            reason_json = dict(request.reason_json or {})
+            approved_fingerprint = self._runtime_manifest_fingerprint(manifest)
+            reason_json["manifest_permission_fingerprint"] = approved_fingerprint
+            request.reason_json = reason_json
+            self.db.commit()
+            self.db.refresh(request)
+        if approved_fingerprint != self._runtime_manifest_fingerprint(manifest):
+            return PermissionDecision(False, "Runtime permissions do not match the current manifest")
         if include_integrations and manifest.integration_requirements:
             from app.services.integration_service import build_default_integration_service
 
@@ -407,7 +492,39 @@ class PermissionService:
         from app.services.integration_service import build_default_integration_service
 
         service = build_default_integration_service(self.db)
-        service.ensure_authorization_requests(skill, manifest, version_id=version_id)
+        authorizations = service.ensure_authorization_requests(skill, manifest, version_id=version_id)
+        reason_json = dict(request.reason_json or {})
+        base_risk_level = reason_json.get("base_risk_level")
+        if base_risk_level not in {"low", "medium", "high", "blocked"}:
+            base_risk_level, _ = self._risk_for_permissions(
+                manifest.permissions.model_dump(mode="json"),
+                dependencies=list(manifest.dependencies),
+            )
+        reason_json["base_risk_level"] = base_risk_level
+        reason_json["integration_requirements"] = service.integration_review(skill, manifest)
+        request.reason_json = reason_json
+        request.risk_level = max(
+            [base_risk_level, *(authorization.approval_request.risk_level for authorization in authorizations)],
+            key={"low": 0, "medium": 1, "high": 2, "blocked": 3}.__getitem__,
+        )
+        self.db.commit()
+        self.db.refresh(request)
+        return request
+
+    def _runtime_bundle_requests(self, skill: Skill) -> tuple[ApprovalRequest, list[ApprovalRequest]]:
+        from app.services.integration_service import build_default_integration_service
+
+        request = self.create_runtime_request(skill)
+        manifest = validate_manifest_file(self.proposed_service.skill_dir_for_record(skill) / "manifest.json")
+        service = build_default_integration_service(self.db)
+        authorizations = service.ensure_authorization_requests(skill, manifest)
+        return request, [authorization.approval_request for authorization in authorizations]
+
+    def _refresh_integration_review(self, request: ApprovalRequest, skill: Skill) -> ApprovalRequest:
+        from app.services.integration_service import build_default_integration_service
+
+        manifest = validate_manifest_file(self.proposed_service.skill_dir_for_record(skill) / "manifest.json")
+        service = build_default_integration_service(self.db)
         reason_json = dict(request.reason_json or {})
         reason_json["integration_requirements"] = service.integration_review(skill, manifest)
         request.reason_json = reason_json
@@ -434,10 +551,28 @@ class PermissionService:
             .order_by(ApprovalRequest.created_at.desc(), ApprovalRequest.id.desc())
         ).all()
         for request in requests:
+            if request.status in {"expired", "superseded"}:
+                continue
             version_id = (request.reason_json or {}).get("version_id")
             if version_id is None or version_id == skill.active_version_id:
                 return request
         return None
+
+    @staticmethod
+    def _runtime_manifest_fingerprint(manifest: Any) -> str:
+        contract = {
+            "permissions": manifest.permissions.model_dump(mode="json"),
+            "dependencies": list(manifest.dependencies),
+        }
+        encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _runtime_request_matches_manifest(request: ApprovalRequest, manifest: Any) -> bool:
+        return (
+            request.requested_permissions_json == manifest.permissions.model_dump(mode="json")
+            and list(request.requested_dependencies_json or []) == list(manifest.dependencies)
+        )
 
     def unsupported_runtime_reasons(self, permissions: dict[str, Any]) -> list[str]:
         reasons = []

@@ -32,6 +32,8 @@ The Settings page displays the effective executable, version, source, and compat
 
 The Atlas `atlas.knowledge.node.know` integration is an additional backend-owned Codex CLI consumer. It uses strict `--output-schema`, enables live `--search`, runs in an ephemeral read-only workspace, and receives only the bounded selected-node context described in [Eidolon-Atlas integration](atlas.md). A supplied user explanation is not searched or rewritten.
 
+The optional Eidolon STDIO server is a separate direction of integration: it exposes the unified function catalog to Codex rather than invoking Codex from Eidolon. See [Codex MCP tools](codex_mcp.md).
+
 Callers may also supply an operation-specific minimum version when requesting the resolved command. This is unused by current model selection, but gives a future model/effort capability policy a preflight hook without moving executable discovery into that policy.
 
 ## Model and Reasoning-Effort Routing

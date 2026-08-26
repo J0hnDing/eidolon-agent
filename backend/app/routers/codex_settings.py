@@ -2,16 +2,49 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.schemas.codex_mcp import CodexMcpStatus, CodexMcpWrite
 from app.schemas.codex_routing import (
     CodexModelCatalogRead,
     CodexRoutingSettingsPayload,
     CodexRoutingSettingsRead,
 )
 from app.schemas.permission_policy import PermissionPolicyRead
+from app.services.codex_mcp_settings_service import CodexMcpSettingsError, CodexMcpSettingsService
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
 from app.services.default_permissions import default_permission_policy
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+
+@router.get("/codex-mcp", response_model=CodexMcpStatus)
+def get_codex_mcp_settings(db: Session = Depends(get_db)) -> CodexMcpStatus:
+    return CodexMcpSettingsService(db).status()
+
+
+@router.put("/codex-mcp", response_model=CodexMcpStatus)
+def update_codex_mcp_settings(
+    payload: CodexMcpWrite,
+    db: Session = Depends(get_db),
+) -> CodexMcpStatus:
+    service = CodexMcpSettingsService(db)
+    try:
+        return service.repair() if payload.action == "repair" else service.install()
+    except CodexMcpSettingsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"type": exc.error_type, "message": str(exc)},
+        ) from exc
+
+
+@router.delete("/codex-mcp", response_model=CodexMcpStatus)
+def delete_codex_mcp_settings(db: Session = Depends(get_db)) -> CodexMcpStatus:
+    try:
+        return CodexMcpSettingsService(db).remove()
+    except CodexMcpSettingsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"type": exc.error_type, "message": str(exc)},
+        ) from exc
 
 
 @router.get("/permission-policy", response_model=PermissionPolicyRead)

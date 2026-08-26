@@ -22,7 +22,10 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 - `/usage/codex/cli`: effective Codex CLI executable, version, source, candidates, and compatibility status.
 - `/settings/codex-models`: live account-aware model catalog and supported reasoning efforts from Codex App Server.
 - `/settings/codex-routing`: read or replace the validated single-user invocation routing settings and optional Project build workflow override.
+- `/settings/codex-mcp`: inspect, install/repair, or remove the fingerprint-owned host-level Codex MCP registration.
 - `/settings/permission-policy`: read the current checked-in permission policy, including default-allowed, approval-required, blocked, and web-application classifications.
+
+`McpFunctionService` snapshots available eligible catalog tools, produces stable typed MCP metadata, rechecks enabled state/availability/contract identity for every call, and routes to the existing trusted function registry or direct-user integration path. `CodexMcpSettingsService` performs structure-preserving atomic host-config registration with ownership fingerprints and rollback.
 
 ## Service Responsibilities
 
@@ -45,6 +48,8 @@ Workflow persistence and DAG reasoning are separate collaborators. `AgentRunArti
 Trusted workflow modules live under `backend/app/workflows/`. Each package owns its executor, Markdown instructions, and prompt composition. The common preflight uses a backend intent passthrough placeholder, while `common` owns ProductManager plausibility review, blueprint generation, permission planning, and workflow selection before dispatch. `task_dag` owns task-DAG planning prompts, Builder/Tester/repair prompts, execution, final end-to-end test authoring, and DAG resume/retry behavior while delegating structural validation and ready-batch calculation to `TaskDagService`. `single_codex` owns the prompt and executor for one Codex planning, build, and test-authoring invocation; any invocation or validation error is terminal for that run, and its resume/retry endpoints cannot invoke Builder again. A separate new single-Codex build atomically stages an obsolete proposed folder before creating a clean workspace, so sandbox-owned cache ACLs do not block replacement. Both workflows use the same deterministic backend scan/manifest/package/test validator. Unknown workflow names are rejected by the registry.
 
 `FunctionCatalogService` persists one catalog at `runtime/function_catalog.json`, seeded with checked-in backend-core definitions and refreshed from the typed integration registry plus installed user-function contracts. ProductManager receives only currently available entries as id/category/title/description/risk. The blueprint selects function ids. A Task DAG assigns those approved ids to nodes through `function_ids`; the backend resolves full schemas and invocation guidance into that node's `function_context`. The single-Codex workflow receives full context for every blueprint-selected function. Disabled user skills, invalid or stale function contracts, missing runtime approval, and disconnected integrations remain visible in the UI but are not offered to ProductManager.
+
+`BackendCoreFunctionService` owns scheduler-only trusted backend dispatch. The daily Notion Done cleanup is cataloged but permanently unavailable to ordinary callers; `SchedulerService` alone invokes it through the trusted direct-user Notion provider path. It is registered as a fixed platform APScheduler job rather than a `SkillSchedule` row, while `/schedules` exposes a read-only projection for visibility.
 
 The project-build workflow registry is backend-managed and contains only trusted checked-in executors. ProductManager selects a registered name; it cannot supply executable workflow code.
 

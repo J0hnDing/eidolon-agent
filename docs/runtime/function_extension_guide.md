@@ -15,6 +15,8 @@ ProductManager blueprint owns object input/output schemas
 
 No separate registration code is required.
 
+When Codex MCP registration is enabled, an available installed function is also discovered automatically the next time the MCP process starts. Its input/output schema and description come from the same catalog entry; no MCP-specific function registration is required.
+
 ## New Operation for an Existing Integration Provider
 
 Example: add another GitHub read operation.
@@ -46,6 +48,8 @@ Define the provider's operation contracts
 
 Do not add another provider's behavior to `github_provider.py`. Extract a shared provider registry or interface when the second provider is implemented and its common contract is known.
 
+Available typed integration operations are likewise included automatically in new MCP process snapshots. Preserve accurate `read_only`, side-effect, provider boundary, limits, and contract-version metadata because those fields drive MCP annotations and stale-contract checks.
+
 ## Backend-Core Function
 
 ```text
@@ -60,3 +64,4 @@ Design input/output and permission contract
 
 Adding only a seed entry is invalid: ProductManager could select a function that has no callable implementation.
 
+A scheduler-only backend-core function must additionally be marked unavailable in the catalog, excluded from MCP, routed through a backend dispatcher that rejects every non-scheduler source, and registered by `SchedulerService` with a stable replacement job id. It must not masquerade as an installed `Skill` or bypass user-skill approval checks through a synthetic skill record.

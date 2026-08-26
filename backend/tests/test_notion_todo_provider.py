@@ -10,6 +10,7 @@ from app.services.notion_todo_provider import NOTION_VERSION, NotionTodoProvider
 def schema() -> dict:
     types = {
         "Title": "title",
+        "Done": "checkbox",
         "Priority": "select",
         "Start At": "date",
         "Due At": "date",
@@ -35,6 +36,7 @@ def page(
     page_id: str = "page-1",
     source_id: str = "source-id",
     title: str = "Todo",
+    done: bool = False,
     priority: str | None = "High",
     start_at: str | None = "2026-08-21",
     due_at: str | None = "2026-08-22T12:30:00-04:00",
@@ -51,6 +53,7 @@ def page(
         "parent": {"type": "data_source_id", "data_source_id": source_id},
         "properties": {
             "Title": text_property("title", title),
+            "Done": {"type": "checkbox", "checkbox": done},
             "Priority": {"type": "select", "select": {"name": priority} if priority else None},
             "Start At": {"type": "date", "date": {"start": start_at} if start_at else None},
             "Due At": {"type": "date", "date": {"start": due_at} if due_at else None},
@@ -88,6 +91,13 @@ def test_validates_exact_schema_and_sanitized_identity(monkeypatch: pytest.Monke
         provider.validate_connection()
     assert mismatch.value.error_type == "schema_mismatch"
 
+    missing_done = schema()
+    missing_done["properties"].pop("Done")
+    responses["/v1/data_sources/source-id"] = missing_done
+    with pytest.raises(IntegrationProviderError) as missing:
+        provider.validate_connection()
+    assert missing.value.error_type == "schema_mismatch"
+
 
 def test_maps_nullable_properties_all_day_dates_datetimes_and_created_time(
     monkeypatch: pytest.MonkeyPatch,
@@ -113,6 +123,7 @@ def test_maps_nullable_properties_all_day_dates_datetimes_and_created_time(
             {
                 "id": "page-1",
                 "title": "Todo",
+                "done": False,
                 "priority": "high",
                 "start_at": "2026-08-21",
                 "due_at": "2026-08-22T12:30:00-04:00",
@@ -127,11 +138,75 @@ def test_maps_nullable_properties_all_day_dates_datetimes_and_created_time(
     }
     assert captured == {
         "page_size": 2,
-        "in_trash": False,
         "result_type": "page",
         "sorts": [{"timestamp": "created_time", "direction": "descending"}],
         "start_cursor": "cursor-1",
     }
+
+
+def test_list_omits_provider_rejected_in_trash_query_parameter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = NotionTodoProvider("secret-token", "source-1")
+    captured: dict[str, object] = {}
+
+    def query(_method, _path, payload, **_kwargs):
+        captured.update(payload)
+        return {"results": [], "has_more": False, "next_cursor": None}
+
+    monkeypatch.setattr(provider, "_request", query)
+
+    assert provider.list(page_size=25, start_cursor=None) == {
+        "todos": [],
+        "has_more": False,
+        "next_cursor": None,
+    }
+    assert "in_trash" not in captured
+
+
+@pytest.mark.parametrize("trash_status", [None, "false", 0])
+def test_list_rejects_missing_or_non_boolean_trash_status(
+    monkeypatch: pytest.MonkeyPatch,
+    trash_status: object,
+) -> None:
+    provider = NotionTodoProvider("secret-token", "source-1")
+    malformed = page()
+    if trash_status is None:
+        malformed.pop("in_trash")
+    else:
+        malformed["in_trash"] = trash_status
+    monkeypatch.setattr(
+        provider,
+        "_request",
+        lambda *_args, **_kwargs: {
+            "results": [malformed],
+            "has_more": False,
+            "next_cursor": None,
+        },
+    )
+
+    with pytest.raises(IntegrationProviderError) as mismatch:
+        provider.list(page_size=25, start_cursor=None)
+    assert mismatch.value.error_type == "schema_mismatch"
+
+
+def test_delete_uses_page_update_trash_field_and_requires_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = NotionTodoProvider("secret-token", "source-1")
+    calls: list[tuple[str, str, dict | None]] = []
+
+    def request(method, path, payload=None, **_kwargs):
+        calls.append((method, path, payload))
+        return page(source_id="source-1", in_trash=method == "PATCH")
+
+    monkeypatch.setattr(provider, "_request", request)
+
+    assert provider.delete("page-1") == {"id": "page-1", "removed": True}
+    assert calls == [
+        ("GET", "/v1/pages/page-1", None),
+        ("PATCH", "/v1/pages/page-1", {"in_trash": True}),
+    ]
 
 
 def test_title_only_create_and_partial_update_with_explicit_clearing(
@@ -146,11 +221,11 @@ def test_title_only_create_and_partial_update_with_explicit_clearing(
             return page()
         if path == "/v1/pages":
             return page(title="Only a title", priority=None, start_at=None, due_at=None, estimated_minutes=None, atlas_goal_id=None, notes=None)
-        return page(priority=None, notes=None)
+        return page(done=True, priority=None, notes=None)
 
     monkeypatch.setattr(provider, "_request", fake_request)
     created = provider.create({"title": "Only a title"})
-    updated = provider.update("page-1", {"priority": None, "notes": None})
+    updated = provider.update("page-1", {"done": True, "priority": None, "notes": None})
 
     assert created["title"] == "Only a title"
     assert calls[0] == (
@@ -164,8 +239,13 @@ def test_title_only_create_and_partial_update_with_explicit_clearing(
         },
     )
     assert updated["priority"] is None
+    assert updated["done"] is True
     assert calls[2][2] == {
-        "properties": {"Priority": {"select": None}, "Notes": {"rich_text": []}}
+        "properties": {
+            "Done": {"checkbox": True},
+            "Priority": {"select": None},
+            "Notes": {"rich_text": []},
+        }
     }
 
 
@@ -198,6 +278,21 @@ def test_malformed_manual_rows_fail_with_schema_mismatch(monkeypatch: pytest.Mon
         provider.list(page_size=25, start_cursor=None)
     assert mismatch.value.error_type == "schema_mismatch"
     assert "2.5" not in str(mismatch.value)
+
+
+def test_non_boolean_done_status_fails_with_schema_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = NotionTodoProvider("unused", "source-id")
+    malformed = page()
+    malformed["properties"]["Done"]["checkbox"] = "false"
+    monkeypatch.setattr(
+        provider,
+        "_request",
+        lambda *_args, **_kwargs: {"results": [malformed], "has_more": False, "next_cursor": None},
+    )
+
+    with pytest.raises(IntegrationProviderError) as mismatch:
+        provider.list(page_size=25, start_cursor=None)
+    assert mismatch.value.error_type == "schema_mismatch"
 
 
 def test_fixed_host_version_headers_redirect_bounds_and_rate_limit(
