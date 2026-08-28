@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Eidolon is a local-first control plane for reusable application skills. The assistant can chat, store explicit memory, propose skills, build them with Codex-backed agents, validate them, request approvals, install them, run bounded function skills, host persistent sandboxed web applications, schedule bounded functions, and update skills through versioned drafts.
+Eidolon is a local-first control plane for reusable application skills. The assistant can chat, store explicit memory, propose skills, build them with Codex-backed agents, validate them, request approvals, install them, run bounded function skills, host persistent sandboxed web applications, execute scheduler-only services, and update skills through versioned drafts.
 
 ## Main Parts
 
@@ -67,16 +67,17 @@ Generated skills must not modify backend/frontend app source.
 
 The manifest `runtime` discriminator selects an execution protocol:
 
-- `function`: the bounded Python JSON stdin/stdout runner, optional scheduling, and backend-owned dynamic Function registry;
+- `function`: the bounded Python JSON stdin/stdout runner and backend-owned dynamic Function registry;
+- `service`: the same bounded runner behind one required backend schedule, with no manual, registry, agent, skill, MCP, or interface exposure;
 - `web_app`: a version-pinned importable ASGI service with separate application-instance, browser-session, gateway, and bounded audit records.
 
-The backend is the control plane for both protocols. One persistent catalog describes backend-core, installed user, and integration functions and their current availability; invocation authority is still derived from active manifests, current versions, runtime eligibility, integration state, and caller-target approval. Web-app content remains on a distinct untrusted origin inside a sandboxed iframe; the React UI retains trusted navigation, lifecycle, version, permission, and function-catalog controls. See [Function registry and invocation](../runtime/functions.md) and [Sandboxed web applications](../runtime/web_applications.md).
+The backend is the control plane for all three protocols. One persistent catalog describes backend-core, installed user, and integration functions and their current availability; service skills are deliberately excluded from it. Invocation authority is still derived from active manifests, current versions, runtime eligibility, integration state, and caller-target approval. Web-app content remains on a distinct untrusted origin inside a sandboxed iframe; the React UI retains trusted navigation, lifecycle, version, permission, schedule, and function-catalog controls. See [Function registry and invocation](../runtime/functions.md), [Scheduling](../runtime/scheduling.md), and [Sandboxed web applications](../runtime/web_applications.md).
 
 An explicitly installed local STDIO MCP server snapshots the available eligible catalog for Codex Desktop, CLI, and IDE sessions. It is not part of Eidolon chat and does not start the FastAPI lifecycle. Calls still pass through the trusted function registry or integration services and recheck a shared enabled state plus current availability and contract identity. See [Codex MCP tools](../integrations/codex_mcp.md).
 
 ## Trusted Integrations
 
-GitHub, local Eidolon-Atlas, and Notion todos are trusted providers. GitHub and Notion are token-backed; Atlas uses its native API whenever it is running and unlocked, with an optional stored passphrase only for Eidolon-owned process unlock. Skills declare exact registry operations and receive provider-specific approval; GitHub retains exact repository scope, while Atlas has no caller-selected resource scope and Notion fixes the configured data source as its complete resource boundary. Function and web-application containers call one scoped relay helper, and the backend performs provider traffic and returns normalized data. Eidolon derives Atlas filtering and Knowledge navigation from Atlas's primitive APIs and never mirrors Notion todos locally. See [GitHub integration capability](../integrations/github.md), [Eidolon-Atlas integration](../integrations/atlas.md), and [Notion todo integration](../integrations/notion.md).
+GitHub, local Eidolon-Atlas, and Notion Todos/Reports are trusted providers. GitHub and Notion are token-backed; Atlas uses its native API whenever it is running and unlocked, with an optional stored passphrase only for Eidolon-owned process unlock. Skills declare exact registry operations and receive provider-specific approval; GitHub retains exact repository scope, while Atlas has no caller-selected resource scope and Notion fixes separate configured Todo and Reports data sources as complete resource boundaries under one connection. Function and web-application containers call one scoped relay helper, and the backend performs provider traffic and returns normalized data. Eidolon derives Atlas filtering and Knowledge navigation from Atlas's primitive APIs and never mirrors Notion content locally. See [GitHub integration capability](../integrations/github.md), [Eidolon-Atlas integration](../integrations/atlas.md), and [Notion integration](../integrations/notion.md).
 
 ## Current Constraints
 

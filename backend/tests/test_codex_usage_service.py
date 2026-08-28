@@ -10,8 +10,9 @@ from sqlalchemy.orm import sessionmaker
 from app.db import Base
 from app.models import AgentRun
 from app.services.agent_workflow_service import AgentWorkflowService
-from app.services.codex_service import CodexService, FakeCodexAdapter, RealCodexAdapter
+from app.services.codex_service import CodexService, RealCodexAdapter
 from app.services.codex_usage_service import CodexUsageService
+from tests.fakes.codex import DeterministicCodexStub
 
 
 @pytest.fixture
@@ -146,7 +147,7 @@ def test_finished_step_persists_invocations_and_rolls_up_tokens(db_session) -> N
     run = AgentRun(run_type="build_skill", status="running", user_request="Build it")
     db_session.add(run)
     db_session.commit()
-    codex = CodexService(db_session, adapter=FakeCodexAdapter())
+    codex = CodexService(db_session, adapter=DeterministicCodexStub())
     workflow = AgentWorkflowService(db_session, codex_service=codex)
     step = workflow._start_step(run, "builder", task_node_id="core_skill")
     codex.invocations.record_build(
@@ -171,7 +172,7 @@ def test_finished_step_persists_invocations_and_rolls_up_tokens(db_session) -> N
 
 
 def test_workflow_pauses_when_either_codex_window_is_below_five_percent(db_session, monkeypatch) -> None:
-    class QuotaAdapter(FakeCodexAdapter):
+    class QuotaAdapter(DeterministicCodexStub):
         uses_codex_account_quota = True
 
     run = AgentRun(run_type="build_skill", status="running", user_request="Build it")
@@ -228,7 +229,7 @@ def test_either_allowance_window_below_five_percent_pauses(
 
 
 def test_parallel_safe_nodes_share_a_ready_batch(db_session) -> None:
-    workflow = AgentWorkflowService(db_session, codex_service=CodexService(db_session, adapter=FakeCodexAdapter()))
+    workflow = AgentWorkflowService(db_session, codex_service=CodexService(db_session, adapter=DeterministicCodexStub()))
     task_dag = {
         "nodes": [
             {"id": "left", "depends_on": [], "parallel_safe": True},

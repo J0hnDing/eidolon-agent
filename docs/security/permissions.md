@@ -24,11 +24,11 @@ Runtime approval is based on the actual generated `manifest.json`. Installation 
 
 Declared `function_requirements` are shown during build-time and runtime review but are not permissions inherited from the target. Low-risk targets need no additional caller approval. Medium- and high-risk targets create a separate `function_access` approval tied to the caller and target. That approval is reusable only while the target risk, permissions, dependencies, and JSON callable schemas keep the same backend fingerprint. It never overrides a disabled target, missing runtime approval, unsupported permission, or blocked platform policy.
 
-Provider availability and skill authorization remain separate facts. Every actual-manifest `integration_requirements` entry creates or reuses an auditable `integration_access` record, but the user reviews it together with the base manifest permissions in one complete runtime approval. One decision applies to every pending component shown. Each integration fingerprint includes provider, operations, normalized scope, and registry contract versions. Expansion, GitHub account change, an Atlas native-contract or directory change, or a Notion bot/data-source change requires reapproval. Removing an Atlas auto-unlock passphrase does not invalidate authorization. See [GitHub integration](../integrations/github.md), [Atlas integration](../integrations/atlas.md), and [Notion todo integration](../integrations/notion.md).
+Provider availability and skill authorization remain separate facts. Every actual-manifest `integration_requirements` entry creates or reuses an auditable `integration_access` record, but the user reviews it together with the base manifest permissions in one complete runtime approval. One decision applies to every pending component shown. Each integration fingerprint includes provider, operations, normalized scope, and registry contract versions. Expansion, GitHub account change, an Atlas native-contract or directory change, or a Notion bot identity change requires reapproval. Notion Todo and Reports source changes affect operation availability without invalidating authorization. Removing an Atlas auto-unlock passphrase does not invalidate authorization. See [GitHub integration](../integrations/github.md), [Atlas integration](../integrations/atlas.md), and [Notion integration](../integrations/notion.md).
 
 ### Schedule
 
-Schedule approval activates an application schedule. It does not bypass runtime permission checks.
+A service schedule can be resumed only after the current runtime and integration permission contract is approved. There is no separate schedule approval request.
 
 ## Risk Levels
 
@@ -38,38 +38,25 @@ low, medium, high, blocked
 
 Current examples, summarized from the canonical config and deterministic enforcement:
 
-- Low: no requested permissions, own `./cache` read/write, backend-mediated Codex call/response without internet.
+- Low: no requested permissions, own `./cache` read/write, or explicitly approved backend-mediated Codex call/response without internet.
 - Medium: explicit public domains, package dependencies, web scraping, or Codex internet access.
 - High/blocked in MVP: secrets, shell, arbitrary file access, broad writes, dangerous third-party actions.
 
 ## Supported Runtime Permissions
 
-Allowed:
+Canonical manifests declare approval-gated permissions only. Backend defaults such as Python standard-library use and own-`./cache` access are merged into the effective Builder and runner contract rather than copied into `manifest.json`. Blocked capabilities are policy constraints, not manifest declarations. For example:
 
 ```json
 {
-  "build_time": {
-    "internet_research": false,
-    "dependencies": ["pytest", "requests"],
-    "project_read": ["Eidolon"]
-  },
-  "runtime": {
-    "python_standard_library": true,
-    "network": ["explicit-domain.example"],
-    "filesystem_read": ["./cache"],
-    "filesystem_write": ["./cache"],
-    "secrets": [],
-    "shell": false,
-    "codex": {
-      "call_response": true,
-      "internet_access": false
-    },
-    "dependencies": []
+  "network": ["explicit-domain.example"],
+  "codex": {
+    "call_response": true,
+    "internet_access": true
   }
 }
 ```
 
-`network` may also be empty. `filesystem_read` and `filesystem_write` may be empty.
+`network` may be omitted. An empty manifest permission object requests no approval-gated runtime capabilities.
 
 Important limitation: approved network domains currently enable container network access but are not domain-firewalled. The UI must disclose this.
 
@@ -123,4 +110,4 @@ Runtime permission review compares actual manifest permissions/dependencies agai
 
 Runtime review also resolves every declared function requirement against the current dynamic registry. Missing, disabled, schema-less legacy, permission-blocked, or otherwise unavailable targets are reported explicitly. Discovery alone never grants invocation authority.
 
-Default Codex call/response is not treated as a permission expansion. New `codex.internet_access=true` is expansion unless it was already planned through runtime network access.
+New `codex.call_response=true` or `codex.internet_access=true` is a permission expansion unless it was present in the approved plan. Codex internet access also requires approved runtime network domains.

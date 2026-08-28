@@ -7,10 +7,7 @@
     "runtime": {
       "python_standard_library": true,
       "filesystem_read": ["./cache"],
-      "filesystem_write": ["./cache"],
-      "codex": {
-        "call_response": true
-      }
+      "filesystem_write": ["./cache"]
     }
   },
   "requires_approval": {
@@ -22,6 +19,7 @@
       "dependencies": [],
       "network": [],
       "codex": {
+        "call_response": false,
         "internet_access": false
       }
     }

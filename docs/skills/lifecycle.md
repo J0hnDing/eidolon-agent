@@ -7,7 +7,7 @@ building -> proposed -> installed
 building -> failed
 ```
 
-`building` means an agent workflow is creating or repairing the package. `proposed` means generation is complete and the skill is waiting for review, runtime permission approval, installation, or rejection. `installed` is the only normal installed lifecycle status; `enabled` independently controls whether an installed function can run or an installed web application can be opened. `deleted` is retained only as a hidden legacy tombstone value, while current rejection and deletion paths hard-delete records.
+`building` means an agent workflow is creating or repairing the package. `proposed` means generation is complete and the skill is waiting for review, runtime permission approval, installation, or rejection. `installed` is the only normal installed lifecycle status; `enabled` independently controls whether an installed function can run or an installed web application can be opened. Service activation is represented only by its schedule status. `deleted` is retained only as a hidden legacy tombstone value, while current rejection and deletion paths hard-delete records.
 
 ## Proposed Skill Workflow
 
@@ -23,9 +23,9 @@ building -> failed
    - `task_dag`: ProductManager returns task DAG JSON, the backend validates it, and Builder/Tester execute its task nodes and final end-to-end loop.
 9. Runtime permission review is created from the actual generated `manifest.json`.
 10. User inspects files and approvals.
-11. User installs or rejects. If an installed function manifest declares a schedule, the backend registers it as a pending schedule record during install. Web applications cannot declare bounded-run schedules.
+11. User installs or rejects. Installing a service creates its one required schedule in paused state. Function and web-app manifests cannot declare schedules.
 
-Generated skills are not installed or run automatically. Manifest-declared schedules are not activated automatically; schedule approval is still separate from install approval.
+Generated skills are not installed or run automatically. A generated service schedule is not activated automatically; the user resumes it from Schedules after runtime approval.
 
 ## Installation
 
@@ -43,7 +43,7 @@ Installation is idempotent after success and can recover an incomplete first cop
 
 The already-provisioned runtime `.deps` folder is copied into the installed version. Build-only `.build-deps` is excluded. Installation validation verifies the existing dependency contract and never invokes `pip`.
 
-If `manifest.json` contains `schedule`, install reads the installed manifest copy and creates a pending schedule plus schedule approval request. The backend does not ask Builder to write schedules through a separate backend API.
+If a service `manifest.json` contains its required `schedule`, install reads the installed manifest copy and creates one paused schedule. Functions and web applications reject this field when non-null. The backend does not expose schedule creation to Builder or the UI.
 
 ## Rejection and Deletion
 
@@ -67,6 +67,10 @@ Installed enabled `web_app` skills are opened, not manually run. Opening require
 
 Disable stops active instances before persisting disabled state. Draft update/repair does not affect the active instance; activation stops old-version instances before switching the pointer. Delete, backend shutdown, idle cleanup, and startup recovery deterministically stop or reconcile runtime resources. See [Sandboxed web applications](../runtime/web_applications.md).
 
+## Service Runs
+
+Installed services have no manual run or enabled control. Their single schedule is active or paused. Automatic execution requires active state; Run Now may execute while paused without resuming it. Both paths recheck runtime permissions, integration authorization, input/output schemas, and operation locks. Service runs appear in ordinary run history with schedule attribution.
+
 ## Function Registry Calls
 
-Installed function targets remain visible in the dynamic registry with explicit availability state. A skill or web application may invoke a target only when its active manifest declares the exact function requirement. Low-risk targets need no extra relationship approval; medium/high-risk targets require a current caller-target approval. Every call rechecks caller and target lifecycle/version/runtime eligibility, validates input/output schemas, uses the target's operation lock and bounded runner, and records caller/source attribution on the target run. Nested calls are not supported.
+Installed function targets remain visible in the dynamic registry with explicit availability state. A function, scheduled service, or web application may invoke a target only when its active manifest declares the exact function requirement. Low-risk targets need no extra relationship approval; medium/high-risk targets require a current caller-target approval. Every call rechecks caller and target lifecycle/version/runtime eligibility, validates input/output schemas, uses the target's operation lock and bounded runner, and records caller/source attribution on the target run. Nested function-to-function calls are not supported.

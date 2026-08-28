@@ -38,7 +38,7 @@ ProductManager, Builder, and Tester are Codex-backed through `CodexService`. Pro
 
 GitHub agent context is registry-derived and selected-only. ProductManager gets a concise index, Builder and single-Codex get detail only for approved operations, and Tester gets selected detail plus a deterministic fake adapter. Credentials, headers, settings routes, secret-store data, and complete provider request construction never enter agent prompts, responses, or artifacts.
 
-Tests may use fake Codex adapters. Production workflow code should not bypass Codex for these roles except as a safe fallback when Codex output is unusable.
+Tests may inject deterministic test-only Codex stubs. Production workflow code has no fake Codex adapter and fails closed when the real CLI is unavailable or disabled. Backend sanitizers may still apply bounded fallback values to malformed structured output, but they do not synthesize a successful Codex invocation.
 
 ## Role Boundaries
 

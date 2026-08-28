@@ -11,15 +11,15 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import ApprovalRequest, Skill, SkillRun, SkillVersion
+from app.models import ApprovalRequest, Skill, SkillRun, SkillSchedule, SkillVersion
 from app.services.function_catalog_service import FunctionCatalogService
 from app.services.function_registry_service import (
     FunctionCaller,
-    FunctionRegistryError,
     FunctionRegistryService,
 )
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
+from app.services.skill_operation_guard import SkillOperationGuard
 
 
 @pytest.fixture
@@ -177,6 +177,10 @@ def test_unified_catalog_persists_categories_states_and_user_lifecycle(
         lambda _db: SimpleNamespace(
             connection_status=lambda: SimpleNamespace(connected=connection_state["github"]),
             provider_connected=lambda provider: connection_state.get(provider, False),
+            operation_available=lambda operation_id: connection_state.get(
+                "notion" if operation_id.startswith("notion.") else "github",
+                False,
+            ),
         ),
     )
     target = make_function(db_session, tmp_path, "normalize_text")
@@ -190,10 +194,7 @@ def test_unified_catalog_persists_categories_states_and_user_lifecycle(
     assert entries["backend.codex.call"]["category"] == "backend_core"
     assert entries["backend.codex.call"]["availability"] == "available"
     assert entries["backend.codex.call"]["mcp_exposed"] is False
-    cleanup = entries["backend.notion.todo.cleanup_done"]
-    assert cleanup["availability"] == "unavailable"
-    assert cleanup["availability_reasons"] == ["Scheduler-only backend function"]
-    assert cleanup["mcp_exposed"] is False
+    assert "backend.notion.todo.cleanup_done" not in entries
     assert entries["normalize_text"]["category"] == "user"
     assert entries["normalize_text"]["availability"] == "available"
     assert entries["normalize_text"]["mcp_exposed"] is True
@@ -213,6 +214,8 @@ def test_unified_catalog_persists_categories_states_and_user_lifecycle(
     assert entries["notion.todo.list"]["mcp_read_only"] is True
     assert entries["notion.todo.list"]["mcp_open_world"] is True
     assert entries["notion.todo.delete"]["mcp_destructive"] is True
+    assert entries["notion.report.list"]["mcp_read_only"] is True
+    assert entries["notion.report.delete"]["mcp_destructive"] is True
     assert entries["notion.todo.update"]["mcp_destructive"] is False
     assert entries["notion.todo.create"]["invocation"]["risk"] == "medium"
     assert "integration_test_adapter.DeterministicFakeIntegrationAdapter" in entries[
@@ -220,7 +223,6 @@ def test_unified_catalog_persists_categories_states_and_user_lifecycle(
     ]["invocation"]["test_adapter"]
     available_index = {entry["id"]: entry for entry in catalog.available_index()}
     assert available_index["backend.codex.call"]["risk_level"] == "low"
-    assert "backend.notion.todo.cleanup_done" not in available_index
     assert "input_schema" not in available_index["backend.codex.call"]
     assert "github.repository.get" not in available_index
 
@@ -436,7 +438,7 @@ def test_disabled_target_is_visible_but_unavailable(tmp_path: Path, db_session: 
     assert contract.availability_reasons == ["Function is disabled"]
 
 
-def test_nested_function_capability_is_rejected(tmp_path: Path, db_session: Session) -> None:
+def test_nested_function_capability_resolves_direct_caller(tmp_path: Path, db_session: Session) -> None:
     caller = make_function(db_session, tmp_path, "caller")
     token = "nested-token"
     run = SkillRun(
@@ -450,5 +452,133 @@ def test_nested_function_capability_is_rejected(tmp_path: Path, db_session: Sess
     db_session.add(run)
     db_session.commit()
 
-    with pytest.raises(FunctionRegistryError, match="Nested function calls"):
-        FunctionRegistryService(db_session, project_root=tmp_path).caller_from_capability(token)
+    resolved = FunctionRegistryService(db_session, project_root=tmp_path).caller_from_capability(token)
+
+    assert resolved.skill.id == caller.id
+    assert resolved.version_id == caller.active_version_id
+    assert resolved.run_id == run.id
+
+
+def test_function_capability_chain_can_continue_beyond_three_hops(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    functions = [
+        make_function(
+            db_session,
+            tmp_path,
+            f"chain_{index}",
+            requirements=[f"chain_{index + 1}"] if index < 5 else [],
+        )
+        for index in range(1, 6)
+    ]
+    token = "chain-root-token"
+    active_run = SkillRun(
+        skill_id=functions[0].id,
+        version_id=functions[0].active_version_id,
+        status="running",
+        started_at=datetime.now(UTC),
+        invocation_source="direct_user",
+        function_capability_token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+    )
+    db_session.add(active_run)
+    db_session.commit()
+    runner = FakeRunner(db_session)
+    registry = service(db_session, tmp_path, runner)
+
+    for target in functions[1:]:
+        run = registry.invoke_from_capability(token, target.name, {"value": target.name})
+        assert run.status == "succeeded"
+        context = runner.calls[-1]["context"]
+        assert context.capability_token is not None
+        token = context.capability_token
+        run.status = "running"
+        run.ended_at = None
+        db_session.commit()
+
+    assert len(runner.calls) == 4
+    assert [call["context"].caller_skill_id for call in runner.calls] == [
+        function.id for function in functions[:-1]
+    ]
+
+
+def test_function_cycle_is_rejected_by_existing_operation_lock(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    target = make_function(db_session, tmp_path, "cycle_a", requirements=["cycle_b"])
+    caller = make_function(db_session, tmp_path, "cycle_b", requirements=[target.name])
+    token = "cycle-token"
+    active_run = SkillRun(
+        skill_id=caller.id,
+        version_id=caller.active_version_id,
+        status="running",
+        started_at=datetime.now(UTC),
+        invocation_source="skill",
+        function_capability_token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+    )
+    db_session.add(active_run)
+    db_session.commit()
+    runner = FakeRunner(db_session)
+    registry = service(db_session, tmp_path, runner)
+
+    with SkillOperationGuard(db_session).locked(target, "run", reason="active ancestor"):
+        blocked = registry.invoke_from_capability(token, target.name, {"value": "again"})
+
+    assert blocked.status == "blocked"
+    assert "busy with run" in (blocked.error_message or "")
+    assert runner.calls == []
+
+
+def test_schedule_attributed_service_capability_can_invoke_declared_function(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    target = make_function(db_session, tmp_path, "normalize_text")
+    caller = make_function(db_session, tmp_path, "daily_service", requirements=[target.name])
+    manifest_path = tmp_path / caller.manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["runtime"] = "service"
+    manifest["schedule"] = {
+        "type": "daily",
+        "time": "08:00",
+        "timezone": "America/Toronto",
+        "input": {"value": "Hello"},
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    caller.runtime = "service"
+    schedule = SkillSchedule(
+        skill_id=caller.id,
+        name="Daily service",
+        status="active",
+        schedule_type="daily",
+        schedule_json=manifest["schedule"],
+        input_json={"value": "Hello"},
+        timezone="America/Toronto",
+    )
+    db_session.add(schedule)
+    db_session.flush()
+    token = "service-token"
+    caller_run = SkillRun(
+        skill_id=caller.id,
+        version_id=caller.active_version_id,
+        status="running",
+        started_at=datetime.now(UTC),
+        invocation_source="schedule",
+        source_schedule_id=schedule.id,
+        function_capability_token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+    )
+    db_session.add(caller_run)
+    db_session.commit()
+    runner = FakeRunner(db_session)
+
+    run = service(db_session, tmp_path, runner).invoke_from_capability(
+        token,
+        target.name,
+        {"value": "Hello"},
+    )
+
+    assert run.status == "succeeded"
+    assert run.caller_skill_id == caller.id
+    assert runner.calls[0]["context"].invocation_source == "skill"
+    assert runner.calls[0]["context"].capability_token is not None

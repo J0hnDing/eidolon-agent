@@ -140,22 +140,17 @@ class FunctionCatalogService:
             entry = dict(raw_entry)
             if entry.get("category") == "backend_core":
                 entry.setdefault("mcp_exposed", False)
-            scheduler_only = entry.pop("scheduler_only", False) is True
             entries.append(
                 self._with_availability(
                     entry,
-                    not scheduler_only,
-                    ["Scheduler-only backend function"] if scheduler_only else [],
+                    True,
+                    [],
                 )
             )
         integrations = build_default_integration_service(self.db)
-        provider_state = {
-            provider: integrations.provider_connected(provider)
-            for provider in {operation.provider for operation in OPERATIONS.values()}
-        }
         atlas_codex_available = codex_available()
         for operation in OPERATIONS.values():
-            connected = provider_state[operation.provider]
+            connected = integrations.operation_available(operation.operation_id)
             unavailable_reason = {
                 "github": "GitHub connection is not configured",
                 "atlas": "Atlas is not running and unlocked",
@@ -179,7 +174,10 @@ class FunctionCatalogService:
                         "invocation": operation.agent_context(),
                         "mcp_exposed": True,
                         "mcp_read_only": operation.read_only,
-                        "mcp_destructive": operation.operation_id == "notion.todo.delete",
+                        "mcp_destructive": operation.operation_id in {
+                            "notion.todo.delete",
+                            "notion.report.delete",
+                        },
                         "mcp_open_world": operation.provider in {"github", "notion"},
                         "mcp_contract_fingerprint": (
                             f"{operation.operation_id}:v{operation.contract_version}"
@@ -195,7 +193,9 @@ class FunctionCatalogService:
         from app.services.function_registry_service import FunctionRegistryService
         from app.services.proposed_skill_service import ProposedSkillService
 
-        ProposedSkillService(self.db, project_root=self.project_root).sync_installed_from_filesystem()
+        ProposedSkillService(self.db, project_root=self.project_root).sync_installed_from_filesystem(
+            reconcile_schedules=False
+        )
         registry = FunctionRegistryService(self.db, project_root=self.project_root)
         skills = self.db.scalars(
             select(Skill)

@@ -7,7 +7,8 @@ Application skill definitions:
 - A skill may include optional `SKILL.md` reusable instructions or operating guidance.
 - `runtime=function` is a bounded JSON stdin/stdout Python entrypoint.
 - `runtime=web_app` is an importable ASGI application that owns its HTML, CSS, JavaScript, interaction, state, and domain logic within the skill package.
-- Runtime alone determines interface exposure: `web_app` skills appear in Applications; `function` skills have no dedicated interface surface in this milestone.
+- `runtime=service` is a bounded JSON stdin/stdout Python endpoint invoked only through its one required schedule.
+- Runtime alone determines interface exposure: `web_app` skills appear in Applications; `function` and `service` skills have no dedicated interface surface, and services are not callable functions.
 - Web applications may own HTML, CSS, and JavaScript package files, but no task may modify the Eidolon React frontend.
 
 Your responsibilities:
@@ -21,4 +22,4 @@ Your responsibilities:
 - Do not include test files such as tests/test_skill.py or tests/test_<task_id>.py in task `write_paths`. TesterAgent owns test files.
 - `permission_bounds` contains the backend-approved effective build/runtime limits and blocked capabilities. Do not assign tasks that exceed those bounds.
 - When a task uses the Skill Codex Call API for multiple items, require one bounded batched Codex request rather than one sequential request per item. Add acceptance criteria and test expectations for the API context's runtime budget, call-count limit, per-item result mapping, and graceful timeout behavior.
-- For `runtime=web_app`, assign an importable ASGI entrypoint such as `app.py` plus any package-owned web assets. Do not assign `skill.py` or JSON stdin/stdout contracts unless the approved blueprint runtime is `function`.
+- For `runtime=web_app`, assign an importable ASGI entrypoint such as `app.py` plus any package-owned web assets. Assign `skill.py` and JSON stdin/stdout contracts for `function` and `service` runtimes.

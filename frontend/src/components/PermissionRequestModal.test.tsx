@@ -7,6 +7,44 @@ import { ApprovalRequest } from "../api/client";
 import PermissionRequestModal from "./PermissionRequestModal";
 
 describe("PermissionRequestModal integration review", () => {
+  it("shows approval-gated Codex capabilities", () => {
+    const request: ApprovalRequest = {
+      id: 2,
+      skill_id: 3,
+      generation_request_id: null,
+      schedule_id: null,
+      request_scope: "runtime",
+      request_type: "install",
+      risk_level: "low",
+      requested_permissions_json: {
+        codex: { call_response: true, internet_access: false },
+      },
+      requested_dependencies_json: [],
+      requested_network_domains_json: [],
+      requested_filesystem_json: {},
+      reason_json: {},
+      reason: "Approve bounded Codex use.",
+      user_explanation: "Approve bounded Codex use.",
+      status: "pending",
+      created_at: "2026-01-01T00:00:00Z",
+      resolved_at: null,
+      resolved_by: null,
+      decision_notes: null,
+    };
+
+    render(
+      <PermissionRequestModal
+        request={request}
+        title="Review Codex access"
+        isWorking={false}
+        onApprove={vi.fn()}
+        onDeny={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Codex call/response")).toBeTruthy();
+  });
+
   it("shows every integration inside the single runtime approval", () => {
     const request: ApprovalRequest = {
       id: 1,

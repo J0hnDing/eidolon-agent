@@ -28,7 +28,13 @@ class NotionCredentialWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     token: SecretStr
+
+
+class NotionDataSourcesWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     data_source_id: str = Field(min_length=1, max_length=256)
+    report_data_source_id: str = Field(min_length=1, max_length=256)
 
 
 class NotionConnectionStatus(BaseModel):
@@ -39,6 +45,7 @@ class NotionConnectionStatus(BaseModel):
     bot_id: str | None = None
     workspace_name: str | None = None
     data_source_id: str | None = None
+    report_data_source_id: str | None = None
     last_validated_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

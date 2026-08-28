@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -223,6 +223,7 @@ class IntegrationConnection(Base):
     account_id: Mapped[str] = mapped_column(String(128), nullable=False)
     workspace_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     configured_resource_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    configured_report_resource_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -378,11 +379,12 @@ class SkillOperationLock(Base):
 
 class SkillSchedule(Base):
     __tablename__ = "skill_schedules"
+    __table_args__ = (UniqueConstraint("skill_id", name="uq_skill_schedules_skill_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="paused", nullable=False, index=True)
     schedule_type: Mapped[str] = mapped_column(String(32), nullable=False)
     schedule_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     input_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
@@ -399,7 +401,6 @@ class SkillSchedule(Base):
     )
 
     skill: Mapped["Skill"] = relationship(back_populates="schedules")
-    approval_requests: Mapped[list["ApprovalRequest"]] = relationship(back_populates="schedule")
 
 
 class ApprovalRequest(Base):
@@ -431,7 +432,6 @@ class ApprovalRequest(Base):
 
     skill: Mapped["Skill"] = relationship(back_populates="approval_requests")
     generation_request: Mapped["SkillGenerationRequest"] = relationship(back_populates="approval_requests")
-    schedule: Mapped["SkillSchedule"] = relationship(back_populates="approval_requests")
 
 
 class SkillGenerationRequest(Base):

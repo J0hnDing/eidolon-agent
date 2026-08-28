@@ -10,6 +10,6 @@ Rules:
 - Prefer 3 to 6 focused tests.
 - Test unchanged core behavior plus the requested update behavior.
 - Test manifest validity expectations and JSON stdin/stdout behavior.
-- For `runtime=web_app`, import the declared ASGI app and test owned UI plus interactive HTTP routes in-process instead of starting a server. For `runtime=function`, test JSON stdin/stdout.
+- For `runtime=web_app`, import the declared ASGI app and test owned UI plus interactive HTTP routes in-process instead of starting a server. For `runtime=function` or `runtime=service`, test JSON stdin/stdout; service tests also verify its declared schedule input contract.
 
 Return no prose. Write files only.

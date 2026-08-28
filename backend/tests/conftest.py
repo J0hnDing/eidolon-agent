@@ -3,11 +3,24 @@ from pathlib import Path
 import pytest
 
 from app.services.agent_workflow_service import AgentWorkflowService
+from tests.fakes.codex import DeterministicCodexStub
+
+
+class _DeterministicDirectChatStub:
+    def answer(self, prompt: str, message: str) -> str:
+        return "Deterministic test chat response."
 
 
 @pytest.fixture(autouse=True)
-def force_fake_codex_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PERSONAL_AGENT_CODEX_MODE", "fake")
+def inject_test_codex_adapters(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.services.codex_service.default_codex_adapter",
+        lambda: DeterministicCodexStub(),
+    )
+    monkeypatch.setattr(
+        "app.services.direct_chat_service.default_direct_chat_adapter",
+        lambda: _DeterministicDirectChatStub(),
+    )
 
 
 @pytest.fixture(autouse=True)

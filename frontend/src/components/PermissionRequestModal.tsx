@@ -134,6 +134,10 @@ function addRuntimePermissionLabels(labels: string[], permissions: Record<string
   if (arrayLength(permissions.filesystem_write) > 0) labels.push("Filesystem write");
   if (arrayLength(permissions.secrets) > 0) labels.push("Secrets");
   if (permissions.shell === true) labels.push("Shell");
+  if (isRecord(permissions.codex)) {
+    if (permissions.codex.call_response === true) labels.push("Codex call/response");
+    if (permissions.codex.internet_access === true) labels.push("Codex internet access");
+  }
 }
 
 function filesystemSummary(value: Record<string, unknown>): string[] {

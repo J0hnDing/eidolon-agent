@@ -213,18 +213,21 @@ class FunctionRegistryService:
         )
         if run is None:
             raise FunctionRegistryError("Function caller capability is invalid or expired")
-        if run.invocation_source in {"skill", "web_app"}:
-            raise FunctionRegistryError("Nested function calls are not supported in this milestone")
         caller = self.db.get(Skill, run.skill_id)
         if caller is None or run.version_id is None:
             raise FunctionRegistryError("Function caller identity is no longer available")
+        valid_runtime = caller.runtime == "function" or (
+            caller.runtime == "service"
+            and run.invocation_source == "schedule"
+            and run.source_schedule_id is not None
+        )
         if (
             caller.status != "installed"
-            or caller.runtime != "function"
+            or not valid_runtime
             or not caller.enabled
             or caller.active_version_id != run.version_id
         ):
-            raise FunctionRegistryError("Function caller is no longer installed, enabled, and version-current")
+            raise FunctionRegistryError("Runtime caller is no longer installed, eligible, and version-current")
         permission_decision = PermissionService(self.db, project_root=self.project_root).can_run(caller)
         if not permission_decision.allowed:
             raise FunctionRegistryError(permission_decision.reason)
@@ -377,9 +380,7 @@ class FunctionRegistryService:
                 source_schedule_id=source_schedule_id,
                 initiating_action=initiating_action,
             )
-        capability_token = None
-        if source in {"direct_user", "backend", "schedule", "codex_mcp"}:
-            capability_token = secrets.token_urlsafe(32)
+        capability_token = secrets.token_urlsafe(32)
         context = FunctionRunContext(
             version_id=target.active_version_id,
             invocation_source=source,
@@ -531,7 +532,7 @@ class FunctionRegistryService:
             f"The target's backend-derived risk is {contract.risk_level}. "
             "Approving allows only this caller-to-function relationship while the target risk and callable "
             "permission contract remain materially unchanged. It does not approve blocked permissions, enable "
-            "either skill, authorize other callers, or allow nested function calls."
+            "either skill, or authorize other caller-to-function edges."
         )
         request = ApprovalRequest(
             skill_id=caller.id,
@@ -560,7 +561,7 @@ class FunctionRegistryService:
                     "other skills may invoke the target",
                     "blocked or unsupported target permissions are allowed",
                     "the target is enabled or otherwise runnable",
-                    "nested function calls are allowed",
+                    "other edges in a nested function chain are authorized",
                 ],
             },
             reason=explanation,

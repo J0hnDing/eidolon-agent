@@ -10,12 +10,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db import Base
 from app.models import ApprovalRequest, IntegrationAuthorization, Skill, SkillVersion
 from app.services.agent_workflow_service import AgentWorkflowService
-from app.services.codex_service import CodexService, FakeCodexAdapter
+from app.services.codex_service import CodexService
 from app.services.github_provider import FakeGitHubProviderAdapter
 from app.services.integration_service import IntegrationService
 from app.services.permission_service import PermissionService
 from app.services.secret_store import FakeSecretStore
 from app.services.skill_version_service import SkillVersionError, SkillVersionService
+from tests.fakes.codex import DeterministicCodexStub
 
 
 @pytest.fixture
@@ -252,7 +253,7 @@ def test_approved_changed_permissions_allow_activation(tmp_path: Path, db_sessio
 def test_pm_blocks_unrealistic_suggestion(tmp_path: Path, db_session: Session) -> None:
     skill = create_installed_skill(db_session, tmp_path)
 
-    class BlockingProductManagerAdapter(FakeCodexAdapter):
+    class BlockingProductManagerAdapter(DeterministicCodexStub):
         def generate(self, prompt: str, output_dir: Path, plan: dict):
             if plan.get("codex_task") == "product_manager_update_review":
                 payload = {
@@ -284,7 +285,7 @@ def test_pm_blocks_unrealistic_suggestion(tmp_path: Path, db_session: Session) -
 def test_pm_can_propose_better_solution_for_broad_request(tmp_path: Path, db_session: Session) -> None:
     skill = create_installed_skill(db_session, tmp_path)
 
-    class BetterSolutionProductManagerAdapter(FakeCodexAdapter):
+    class BetterSolutionProductManagerAdapter(DeterministicCodexStub):
         def generate(self, prompt: str, output_dir: Path, plan: dict):
             if plan.get("codex_task") == "product_manager_update_review":
                 payload = {
@@ -333,7 +334,7 @@ def test_update_workflow_creates_blueprint_and_builder_edits_only_new_version(
 def test_update_product_manager_review_uses_codex_adapter(tmp_path: Path, db_session: Session) -> None:
     skill = create_installed_skill(db_session, tmp_path)
 
-    class RecordingAdapter(FakeCodexAdapter):
+    class RecordingAdapter(DeterministicCodexStub):
         def __init__(self) -> None:
             self.tasks: list[str] = []
 
@@ -357,7 +358,7 @@ def test_update_product_manager_review_uses_codex_adapter(tmp_path: Path, db_ses
 def test_update_request_permission_waits_and_resumes_after_approval(tmp_path: Path, db_session: Session) -> None:
     skill = create_installed_skill(db_session, tmp_path)
 
-    class PermissionFirstAdapter(FakeCodexAdapter):
+    class PermissionFirstAdapter(DeterministicCodexStub):
         def generate(self, prompt: str, output_dir: Path, plan: dict):
             if plan.get("codex_task") == "product_manager_update_review":
                 payload = {

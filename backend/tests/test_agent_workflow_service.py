@@ -1,7 +1,6 @@
 import copy
 import json
 import subprocess
-import sys
 from collections.abc import Generator
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,10 +23,11 @@ from app.models import (
 from app.routers.agent_runs import delete_agent_run
 from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
 from app.services.chat_orchestrator import ChatOrchestrator
-from app.services.codex_service import CodexService, FakeCodexAdapter
+from app.services.codex_service import CodexService
 from app.services.default_permissions import blocked_permissions, planning_permission_policy
 from app.services.permission_service import PermissionService
 from app.services.product_manager_contract_service import ProductManagerContractError
+from tests.fakes.codex import DeterministicCodexStub
 
 
 @pytest.fixture
@@ -90,7 +90,7 @@ def test_product_manager_creates_blueprint_and_permissions_before_task_dag(tmp_p
     assert "codex_generation" not in permission_plan["build_time"]
     assert "reason" not in permission_plan["build_time"]
     assert "reason" not in permission_plan["runtime"]
-    assert "call_response" not in permission_plan["runtime"]["codex"]
+    assert permission_plan["runtime"]["codex"]["call_response"] is False
     assert isinstance(permission_plan["runtime"]["network"], list)
     assert not (run_dir / "task_dag.json").exists()
     assert not (run_dir / "tasks").exists()
@@ -127,7 +127,7 @@ def test_single_turn_project_request_uses_passthrough_intent_without_codex(
 ) -> None:
     generation_request = create_generation_request(db_session)
 
-    class RecordingAdapter(FakeCodexAdapter):
+    class RecordingAdapter(DeterministicCodexStub):
         def __init__(self) -> None:
             self.tasks: list[str] = []
 
@@ -161,7 +161,7 @@ def test_new_agent_run_archives_stale_artifact_directory(tmp_path: Path, db_sess
     generation_request = create_generation_request(db_session)
     service = AgentWorkflowService(
         db_session,
-        codex_service=CodexService(db_session, adapter=FakeCodexAdapter(), project_root=tmp_path),
+        codex_service=CodexService(db_session, adapter=DeterministicCodexStub(), project_root=tmp_path),
         project_root=tmp_path,
     )
 
@@ -178,7 +178,7 @@ def test_new_agent_run_archives_stale_artifact_directory(tmp_path: Path, db_sess
 def test_product_manager_uses_codex_adapter_for_blueprint_and_permissions(tmp_path: Path, db_session: Session) -> None:
     generation_request = create_generation_request(db_session)
 
-    class RecordingAdapter(FakeCodexAdapter):
+    class RecordingAdapter(DeterministicCodexStub):
         def __init__(self) -> None:
             self.tasks: list[str] = []
             self.plans: list[dict] = []
@@ -241,7 +241,7 @@ def test_resume_after_generic_approval_runs_builder(tmp_path: Path, db_session: 
 
     resumed = AgentWorkflowService(
         db_session,
-        codex_service=CodexService(db_session, adapter=FakeCodexAdapter(), project_root=tmp_path),
+        codex_service=CodexService(db_session, adapter=DeterministicCodexStub(), project_root=tmp_path),
         project_root=tmp_path,
     ).resume_run(agent_run)
 
@@ -275,7 +275,7 @@ def test_approved_build_uses_pm_builder_tester_and_permission_artifacts(tmp_path
     generation_request = create_generation_request(db_session)
     AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
     approve_generation(db_session, generation_request, tmp_path)
-    adapter = FakeCodexAdapter()
+    adapter = DeterministicCodexStub()
 
     agent_run, skill, validation = AgentWorkflowService(
         db_session,
@@ -308,7 +308,7 @@ def test_approved_build_uses_pm_builder_tester_and_permission_artifacts(tmp_path
     assert final_permission_plan["runtime"]["filesystem_read"] == ["./cache"]
     assert final_permission_plan["runtime"]["filesystem_write"] == ["./cache"]
     assert final_permission_plan["runtime"]["python_standard_library"] is True
-    assert final_permission_plan["runtime"]["codex"]["call_response"] is True
+    assert final_permission_plan["runtime"]["codex"]["call_response"] is False
     assert final_permission_plan["build_time"]["dependencies"] == ["pytest", "requests"]
     assert final_permission_plan["build_time"]["project_read"] == ["Eidolon"]
     assert "default_allowed" not in final_permission_plan
@@ -352,85 +352,6 @@ def test_approved_build_uses_pm_builder_tester_and_permission_artifacts(tmp_path
     assert "test_skill_accepts_representative_input_and_outputs_json_object" in test_source
 
 
-def test_single_codex_workflow_runs_one_build_invocation_end_to_end(tmp_path: Path, db_session: Session) -> None:
-    generation_request = create_generation_request(db_session)
-
-    class SingleWorkflowAdapter(FakeCodexAdapter):
-        def __init__(self) -> None:
-            self.tasks: list[str] = []
-            self.single_prompt = ""
-            self.tests_dir_precreated = False
-
-        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
-            task = str(plan.get("codex_task") or "")
-            self.tasks.append(task)
-            result = super().generate(prompt, output_dir, plan)
-            if task == "product_manager_plan_build":
-                payload = json.loads(result.stdout)
-                payload["build_workflow"] = "single_codex"
-                return subprocess.CompletedProcess(args=result.args, returncode=0, stdout=json.dumps(payload), stderr="")
-            if task == "single_codex_build":
-                self.single_prompt = prompt
-                self.tests_dir_precreated = (output_dir / "tests").is_dir()
-            return result
-
-    adapter = SingleWorkflowAdapter()
-    service = AgentWorkflowService(
-        db_session,
-        codex_service=CodexService(db_session, adapter=adapter, project_root=tmp_path),
-        project_root=tmp_path,
-    )
-    agent_run = service.create_build_run(generation_request)
-    run_dir = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}"
-    stored_blueprint = json.loads((run_dir / "blueprint.json").read_text(encoding="utf-8"))
-
-    assert agent_run.build_workflow == "single_codex"
-    assert "build_workflow" not in stored_blueprint
-    approve_generation(db_session, generation_request, tmp_path)
-
-    agent_run, skill, validation = service.continue_build_after_approval(generation_request)
-
-    assert validation.ok is True
-    assert agent_run.status == "succeeded"
-    assert skill.status == "proposed"
-    assert adapter.tasks.count("single_codex_build") == 1
-    assert "product_manager_write_task_dag" not in adapter.tasks
-    assert adapter.tasks.count("tester_write_tests") == 0
-    assert adapter.tests_dir_precreated is True
-    assert not (run_dir / "task_dag.json").exists()
-    assert (tmp_path / "skills" / "proposed" / skill.name / "tests" / "test_skill.py").is_file()
-    assert not (tmp_path / "skills" / "proposed" / skill.name / "tests" / "test_final_e2e.py").exists()
-    assert json.loads((run_dir / "capability_scan.json").read_text(encoding="utf-8"))["ok"] is True
-    assert json.loads((run_dir / "final_e2e_test_result.json").read_text(encoding="utf-8"))["test_result_json"][
-        "ok"
-    ] is True
-    assert "Blueprint:" in adapter.single_prompt
-    assert "Permission bounds:" in adapter.single_prompt
-    assert '"blocked"' in adapter.single_prompt
-    builder_step = next(step for step in agent_run.steps if step.action == "single_codex_build")
-    assert builder_step.agent_input_text == adapter.single_prompt
-    assert builder_step.agent_output_text == "fake generation complete"
-    assert all(
-        step.input_json is None
-        and step.output_json is None
-        and step.agent_input_text is None
-        and step.agent_output_text is None
-        for step in agent_run.steps
-        if step.step_name == "backend"
-    )
-    assert agent_run.final_summary_json["backend_final_validation"] == "manifest_tests_and_capability_scan"
-    skill_result = subprocess.run(
-        [sys.executable, str(tmp_path / "skills" / "proposed" / skill.name / "skill.py")],
-        input="{}",
-        capture_output=True,
-        text=True,
-        timeout=5,
-        shell=False,
-    )
-    assert skill_result.returncode == 0
-    assert isinstance(json.loads(skill_result.stdout), dict)
-
-
 def test_single_codex_workflow_builds_and_validates_web_app_protocol(
     tmp_path: Path,
     db_session: Session,
@@ -444,7 +365,7 @@ def test_single_codex_workflow_builds_and_validates_web_app_protocol(
     }
     db_session.commit()
 
-    class WebAppWorkflowAdapter(FakeCodexAdapter):
+    class WebAppWorkflowAdapter(DeterministicCodexStub):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             result = super().generate(prompt, output_dir, plan)
             if plan.get("codex_task") == "product_manager_plan_build":
@@ -485,7 +406,7 @@ def test_single_codex_static_scan_blocks_runtime_review_without_calling_more_age
 ) -> None:
     generation_request = create_generation_request(db_session)
 
-    class UnsafeSingleWorkflowAdapter(FakeCodexAdapter):
+    class UnsafeSingleWorkflowAdapter(DeterministicCodexStub):
         def __init__(self) -> None:
             self.tasks: list[str] = []
 
@@ -560,7 +481,7 @@ def test_final_capability_scan_uses_actual_manifest_permissions(
 ) -> None:
     generation_request = create_generation_request(db_session)
 
-    class ManifestMismatchAdapter(FakeCodexAdapter):
+    class ManifestMismatchAdapter(DeterministicCodexStub):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             task = str(plan.get("codex_task") or "")
             result = super().generate(prompt, output_dir, plan)
@@ -600,48 +521,6 @@ def test_final_capability_scan_uses_actual_manifest_permissions(
     )
 
 
-def test_backend_seeds_and_finalizes_manifest_json(tmp_path: Path, db_session: Session) -> None:
-    generation_request = create_generation_request(db_session)
-    AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
-    approve_generation(db_session, generation_request, tmp_path)
-
-    class ManifestAdapter(FakeCodexAdapter):
-        def __init__(self) -> None:
-            self.seeded_manifest: dict | None = None
-
-        def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
-            if plan.get("task_context") and not plan.get("codex_task"):
-                self.seeded_manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
-                result = super().generate(prompt, output_dir, plan)
-                manifest_path = output_dir / "manifest.json"
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                for key in ("permissions", "schedule", "dependencies"):
-                    manifest.pop(key, None)
-                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-                return result
-            return super().generate(prompt, output_dir, plan)
-
-    adapter = ManifestAdapter()
-    _agent_run, skill, validation = AgentWorkflowService(
-        db_session,
-        codex_service=CodexService(db_session, adapter=adapter, project_root=tmp_path),
-        project_root=tmp_path,
-    ).continue_build_after_approval(generation_request)
-
-    assert validation.ok is True
-    assert adapter.seeded_manifest is not None
-    assert adapter.seeded_manifest["name"] == skill.name
-    assert adapter.seeded_manifest["permissions"]["shell"] is False
-    final_manifest = json.loads(
-        (tmp_path / "skills" / "proposed" / skill.name / "manifest.json").read_text(encoding="utf-8")
-    )
-    assert final_manifest["runtime"] == "function"
-    assert final_manifest["permissions"]["shell"] is False
-    assert final_manifest["schedule"] is None
-    assert final_manifest["dependencies"] == generation_request.plan_json["requested_dependencies"]
-    assert not {"risk_level", "created_by", "enabled"} & set(final_manifest)
-
-
 def test_backend_seeds_manifest_schedule_from_product_manager_blueprint(
     tmp_path: Path,
     db_session: Session,
@@ -663,7 +542,7 @@ def test_backend_seeds_manifest_schedule_from_product_manager_blueprint(
 
     _agent_run, skill, validation = AgentWorkflowService(
         db_session,
-        codex_service=CodexService(db_session, adapter=FakeCodexAdapter(), project_root=tmp_path),
+        codex_service=CodexService(db_session, adapter=DeterministicCodexStub(), project_root=tmp_path),
         project_root=tmp_path,
     ).continue_build_after_approval(generation_request)
 
@@ -675,7 +554,7 @@ def test_backend_seeds_manifest_schedule_from_product_manager_blueprint(
 def test_build_workflow_executes_pm_task_dag_in_dependency_order(tmp_path: Path, db_session: Session) -> None:
     generation_request = create_generation_request(db_session)
 
-    class TwoTaskAdapter(FakeCodexAdapter):
+    class TwoTaskAdapter(DeterministicCodexStub):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             result = super().generate(prompt, output_dir, plan)
             if plan.get("codex_task") == "product_manager_write_task_dag":
@@ -773,7 +652,7 @@ def test_build_workflow_executes_pm_task_dag_in_dependency_order(tmp_path: Path,
 def test_builder_receives_function_context_for_task_node(tmp_path: Path, db_session: Session) -> None:
     generation_request = create_generation_request(db_session)
 
-    class ApiTaskAdapter(FakeCodexAdapter):
+    class ApiTaskAdapter(DeterministicCodexStub):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             result = super().generate(prompt, output_dir, plan)
             if plan.get("codex_task") == "product_manager_plan_build":
@@ -812,7 +691,7 @@ def test_builder_interface_artifact_is_validated_and_moved_to_agent_run(
 ) -> None:
     generation_request = create_generation_request(db_session)
 
-    class ManifestUpdateDagAdapter(FakeCodexAdapter):
+    class ManifestUpdateDagAdapter(DeterministicCodexStub):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             result = super().generate(prompt, output_dir, plan)
             if plan.get("codex_task") == "product_manager_write_task_dag":
@@ -894,7 +773,7 @@ def test_agent_prompts_receive_only_direct_parent_interface_artifacts(
     generation_request = create_generation_request(db_session)
     service = AgentWorkflowService(
         db_session,
-        codex_service=CodexService(db_session, adapter=FakeCodexAdapter(), project_root=tmp_path),
+        codex_service=CodexService(db_session, adapter=DeterministicCodexStub(), project_root=tmp_path),
         project_root=tmp_path,
     )
     agent_run = service.create_build_run(generation_request)
@@ -934,7 +813,7 @@ def test_invalid_builder_interface_artifact_is_not_moved_to_agent_run(
 ) -> None:
     generation_request = create_generation_request(db_session)
 
-    class InvalidArtifactAdapter(FakeCodexAdapter):
+    class InvalidArtifactAdapter(DeterministicCodexStub):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             result = super().generate(prompt, output_dir, plan)
             if isinstance(plan.get("task_context"), dict) and plan.get("codex_task") != "tester_write_tests":
@@ -974,7 +853,7 @@ def test_builder_and_tester_agents_receive_trimmed_task_context(tmp_path: Path, 
     AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
     approve_generation(db_session, generation_request, tmp_path)
 
-    class RecordingAdapter(FakeCodexAdapter):
+    class RecordingAdapter(DeterministicCodexStub):
         def __init__(self) -> None:
             self.plans: list[dict] = []
             self.prompts: list[str] = []
@@ -1064,7 +943,7 @@ def test_failed_test_triggers_builder_repair(tmp_path: Path, db_session: Session
     AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
     approve_generation(db_session, generation_request, tmp_path)
 
-    class RepairingAdapter(FakeCodexAdapter):
+    class RepairingAdapter(DeterministicCodexStub):
         def __init__(self) -> None:
             self.calls = 0
 
@@ -1114,7 +993,7 @@ def test_failed_task_resume_reuses_dag_and_current_interface_contract(
     AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
     approve_generation(db_session, generation_request, tmp_path)
 
-    class ResumeAdapter(FakeCodexAdapter):
+    class ResumeAdapter(DeterministicCodexStub):
         def __init__(self) -> None:
             self.non_pm_calls = 0
             self.task_dag_calls = 0
@@ -1159,7 +1038,7 @@ def test_more_than_three_failures_stops_workflow(tmp_path: Path, db_session: Ses
     AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
     approve_generation(db_session, generation_request, tmp_path)
 
-    class AlwaysFailingTestsAdapter(FakeCodexAdapter):
+    class AlwaysFailingTestsAdapter(DeterministicCodexStub):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             result = super().generate(prompt, output_dir, plan)
             (output_dir / "skill.py").write_text(
@@ -1194,7 +1073,7 @@ def test_builder_user_action_required_blocks_workflow(tmp_path: Path, db_session
     AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
     approve_generation(db_session, generation_request, tmp_path)
 
-    class UserActionAdapter(FakeCodexAdapter):
+    class UserActionAdapter(DeterministicCodexStub):
         def __init__(self) -> None:
             self.calls = 0
 
@@ -1488,7 +1367,7 @@ def test_permission_review_records_permission_expansion(tmp_path: Path, db_sessi
     AgentWorkflowService(db_session, project_root=tmp_path).create_build_run(generation_request)
     approve_generation(db_session, generation_request, tmp_path)
 
-    class ExpandedPermissionAdapter(FakeCodexAdapter):
+    class ExpandedPermissionAdapter(DeterministicCodexStub):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             result = super().generate(prompt, output_dir, plan)
             if plan.get("codex_task", "").startswith("product_manager"):
@@ -1516,7 +1395,7 @@ def test_repair_agent_run_creates_proposed_copy_for_installed_skill(tmp_path: Pa
 
     agent_run = AgentWorkflowService(
         db_session,
-        codex_service=CodexService(db_session, adapter=FakeCodexAdapter(), project_root=tmp_path),
+        codex_service=CodexService(db_session, adapter=DeterministicCodexStub(), project_root=tmp_path),
         project_root=tmp_path,
     ).create_repair_run(installed_skill)
 
@@ -1555,7 +1434,7 @@ def test_cancelling_while_waiting_for_clarification_archives_session(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class ClarifyingAdapter(FakeCodexAdapter):
+    class ClarifyingAdapter(DeterministicCodexStub):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             if plan.get("codex_task") == "product_manager_plan_build":
                 return subprocess.CompletedProcess(

@@ -23,7 +23,8 @@ Updates are version-safe and do not use the new skill DAG build workflow in the 
 ## Important Rules
 
 - Active version is never edited in place. A running web application remains pinned to that active version while a draft is updated or repaired.
-- Update/repair preserves the existing `function` or `web_app` execution protocol.
+- Update/repair preserves the existing `function`, `service`, or `web_app` execution protocol.
+- Service updates preserve the backend-owned schedule state. They cannot change runtime type or replace edited timing/input; activation rejects a candidate whose input schema no longer accepts the stored schedule input.
 - Activating another web-app version stops old-version instances before the pointer changes; a later open starts the new version.
 - No update auto-activates.
 - No update auto-runs.

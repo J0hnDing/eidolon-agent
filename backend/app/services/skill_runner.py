@@ -168,10 +168,14 @@ class RunnerStatus:
     mode: str
     selected_mode: str
     docker_available: bool
+    docker_daemon_available: bool
     available: bool
     detail: str
     image: str | None = None
     image_status: str | None = None
+    image_ready: bool = False
+    last_build_attempt: str | None = None
+    last_build_at: str | None = None
     image_detail: str | None = None
     image_build_log: str | None = None
     image_error: str | None = None
@@ -182,7 +186,7 @@ def is_docker_available() -> bool:
         return False
     try:
         result = subprocess.run(
-            ["docker", "--version"],
+            ["docker", "info", "--format", "{{json .ServerVersion}}"],
             capture_output=True,
             text=True,
             timeout=3,
@@ -196,14 +200,17 @@ def is_docker_available() -> bool:
 def get_runner_status(
     config: RunnerConfig | None = None,
     docker_available_checker: Callable[[], bool] = is_docker_available,
+    image_manager_factory: Callable[[str], DockerImageManager] = DockerImageManager,
 ) -> RunnerStatus:
     config = config or RunnerConfig.from_env()
     mode = config.mode
     if mode in {"local", "dev"}:
+        docker_daemon_available = docker_available_checker()
         return RunnerStatus(
             mode=mode,
             selected_mode="local",
-            docker_available=docker_available_checker(),
+            docker_available=docker_daemon_available,
+            docker_daemon_available=docker_daemon_available,
             available=True,
             detail="Local dev runner is explicitly enabled. This is not a Docker sandbox.",
             image=config.docker_image,
@@ -215,6 +222,7 @@ def get_runner_status(
             mode=mode,
             selected_mode="docker",
             docker_available=False,
+            docker_daemon_available=False,
             available=False,
             detail="Unknown runner mode. Use auto, docker, local, or dev.",
             image=config.docker_image,
@@ -225,27 +233,42 @@ def get_runner_status(
     docker_available = docker_available_checker()
     if docker_available:
         try:
-            image_status = DockerImageManager(config.docker_image).get_status()
+            image_status = image_manager_factory(config.docker_image).get_status()
         except Exception as exc:
             return RunnerStatus(
                 mode=mode,
                 selected_mode="docker",
                 docker_available=True,
+                docker_daemon_available=True,
                 available=False,
                 detail=f"Docker is available, but runner image status could not be checked: {exc}",
                 image=config.docker_image,
                 image_status="failed",
+                image_ready=False,
                 image_detail="Docker runner image status check failed.",
                 image_error=str(exc),
             )
+        image_ready = image_status.status == "built"
+        detail = (
+            f"Docker sandbox runner is ready with image {config.docker_image}."
+            if image_ready
+            else (
+                f"Docker daemon is available, but runner image {config.docker_image} is not ready. "
+                "It will be rebuilt automatically before the next run."
+            )
+        )
         return RunnerStatus(
             mode=mode,
             selected_mode="docker",
             docker_available=True,
-            available=True,
-            detail=f"Docker sandbox runner is selected with image {config.docker_image}.",
+            docker_daemon_available=True,
+            available=image_ready,
+            detail=detail,
             image=image_status.image,
             image_status=image_status.status,
+            image_ready=image_ready,
+            last_build_attempt=image_status.last_build_status,
+            last_build_at=image_status.last_build_at,
             image_detail=image_status.detail,
             image_build_log=image_status.last_build_log,
             image_error=image_status.last_error,
@@ -254,6 +277,7 @@ def get_runner_status(
         mode=mode,
         selected_mode="docker",
         docker_available=False,
+        docker_daemon_available=False,
         available=False,
         detail=(
             "Docker sandbox runner is selected, but Docker is unavailable. "
@@ -306,7 +330,7 @@ class LocalSkillRunner:
         skill_dir = skill_dir.resolve()
         try:
             manifest = self._load_manifest(skill_dir)
-            if manifest.runtime != "function":
+            if manifest.runtime not in {"function", "service"}:
                 raise UnsupportedSkillPermissionError(
                     "web_app skills must use the persistent web application runtime"
                 )
@@ -535,7 +559,7 @@ class DockerSkillRunner:
                     "Set PERSONAL_AGENT_RUNNER_MODE=local only for explicit dev fallback."
                 )
             manifest = self._load_manifest(skill_dir)
-            if manifest.runtime != "function":
+            if manifest.runtime not in {"function", "service"}:
                 raise UnsupportedSkillPermissionError(
                     "web_app skills must use the persistent web application runtime"
                 )

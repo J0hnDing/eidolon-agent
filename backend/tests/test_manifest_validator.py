@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from app.schemas.manifest import manifest_permission_requests
 from app.services.manifest_validator import (
     ManifestValidationError,
     classify_permission_risk,
@@ -21,10 +22,6 @@ def valid_manifest() -> dict:
         "instructions_path": None,
         "permissions": {
             "network": ["reuters.com", "apnews.com"],
-            "filesystem_read": [],
-            "filesystem_write": ["./cache"],
-            "secrets": [],
-            "shell": False,
         },
         "schedule": None,
     }
@@ -36,8 +33,10 @@ def test_valid_low_risk_manifest_passes() -> None:
     assert manifest.name == "ai_news_digest"
     assert manifest.runtime == "function"
     assert manifest.permissions.network == ["reuters.com", "apnews.com"]
-    assert manifest.permissions.codex.call_response is True
+    assert manifest.permissions.codex.call_response is False
     assert manifest.permissions.codex.internet_access is False
+    assert manifest.permissions.filesystem_read == ["./cache"]
+    assert manifest.permissions.filesystem_write == ["./cache"]
 
 
 def test_manifest_accepts_optional_display_name() -> None:
@@ -127,12 +126,30 @@ def test_manifest_rejects_removed_interface_fields(field: str, value: object) ->
         validate_manifest(data)
 
 
-def test_manifest_requires_explicit_permission_fields() -> None:
+def test_manifest_accepts_approval_only_permissions_and_explicit_false() -> None:
     data = valid_manifest()
-    del data["permissions"]["shell"]
+    data["permissions"] = {"codex": {"call_response": False}}
 
-    with pytest.raises(ManifestValidationError, match="shell"):
-        validate_manifest(data)
+    manifest = validate_manifest(data)
+
+    assert manifest.permissions.codex.call_response is False
+    assert manifest.permissions.filesystem_read == ["./cache"]
+    assert manifest_permission_requests(manifest.permissions) == {}
+
+
+def test_manifest_permission_contract_contains_only_approval_requests() -> None:
+    data = valid_manifest()
+    data["permissions"] = {
+        "network": ["example.com"],
+        "codex": {"call_response": True, "internet_access": False},
+    }
+
+    manifest = validate_manifest(data)
+
+    assert manifest_permission_requests(manifest.permissions) == {
+        "network": ["example.com"],
+        "codex": {"call_response": True},
+    }
 
 
 def test_manifest_rejects_wildcard_network_access() -> None:
@@ -258,7 +275,42 @@ def test_web_app_manifest_rejects_bounded_run_schedule() -> None:
         "input": {},
     }
 
-    with pytest.raises(ManifestValidationError, match="cannot declare bounded-run schedules"):
+    with pytest.raises(ManifestValidationError, match="web_app skills cannot declare schedules"):
+        validate_manifest(data)
+
+
+def test_function_manifest_rejects_schedule() -> None:
+    data = valid_manifest()
+    data["schedule"] = {
+        "type": "daily",
+        "time": "09:00",
+        "timezone": "America/Toronto",
+        "input": {},
+    }
+
+    with pytest.raises(ManifestValidationError, match="function skills cannot declare schedules"):
+        validate_manifest(data)
+
+
+def test_service_manifest_requires_object_schemas_and_schedule() -> None:
+    data = valid_manifest()
+    data["runtime"] = "service"
+    data["input_schema"] = {"type": "object", "additionalProperties": False}
+    data["output_schema"] = {"type": "object", "additionalProperties": False}
+    data["schedule"] = {
+        "type": "daily",
+        "time": "09:00",
+        "timezone": "America/Toronto",
+        "input": {},
+    }
+
+    manifest = validate_manifest(data)
+
+    assert manifest.runtime == "service"
+    assert manifest.schedule is not None
+
+    data["schedule"] = None
+    with pytest.raises(ManifestValidationError, match="service skills require a schedule"):
         validate_manifest(data)
 
 

@@ -582,3 +582,42 @@ Reworked Eidolon's shared application shell into grouped icon-led navigation; in
 ### Limitations
 
 Rendered in-app browser QA was unavailable because the browser bridge could not be established in this environment; validation used automated frontend tests, production build, and diff inspection.
+
+## 2026-08-26 01:25 — Make agent cancellation terminal and recover Run 8
+
+- Category: bugfix
+- Area: agent workflow and runtime approvals
+
+### Summary
+
+Agent-run cancellation now terminates the owned Codex process, stays terminal across concurrent workflow errors, supersedes pending build approvals, and is atomic with successful finalization. Runtime approvals are gated until validation, fingerprinted against final manifest permissions and dependencies, and separated from exact integration approval requests in Skill Detail. Run 8 was deterministically revalidated and restored to succeeded/generated/proposed without rerunning Codex.
+
+### Limitations
+
+Notion integration approval request 57 remains pending for explicit user approval. Focused backend regressions, 24 frontend tests, frontend build, Ruff, and package validation pass; the full backend suite currently has 8 unrelated failures from concurrent MCP/function-catalog changes that reference missing test manifests.
+
+## 2026-08-22 00:06 — Notion-backed todo integration
+
+- Category: feature
+- Area: integrations
+
+### Summary
+
+Added the sole-datastore Notion todo provider and domain TodoService, four generated-skill functions, fixed data-source containment, Windows Credential Manager connection lifecycle, separate approvals and audits, generated-code safeguards, connection-only Settings UI, exact setup documentation, and comprehensive backend/frontend coverage.
+
+### Limitations
+
+Requires a manually created and shared Notion data source with the documented exact schema and private connection capabilities; validation used deterministic provider tests rather than a live Notion credential.
+
+## 2026-08-26 01:36 — Catalog-driven Codex MCP tools
+
+- Category: feature
+- Area: Function catalog, integrations, and Settings
+
+### Summary
+
+Added an official Python SDK STDIO MCP server that snapshots all available eligible catalog functions as stable typed Codex tools, rechecks availability and security-contract fingerprints per call, routes installed functions and trusted direct-user integrations through existing enforcement, records sanitized MCP audits, and supports immediately revocable enabled state. Added fingerprint-owned atomic global Codex TOML Install/Repair/Remove APIs and a Settings Integrations panel, with backend/frontend coverage, documentation, and a real MCP client smoke test.
+
+### Limitations
+
+New or restarted Codex Desktop, CLI, and IDE sessions are required to discover installation or catalog changes; open sessions are not hot-refreshed. Existing provider runtime and domain-egress limitations remain unchanged.

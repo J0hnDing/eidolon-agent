@@ -40,7 +40,7 @@ class NotionTodoProvider:
         self.data_source_id = data_source_id
 
     def validate_connection(self) -> dict[str, str | None]:
-        identity = self._request("GET", "/v1/users/me", timeout=10, max_bytes=500_000)
+        normalized_identity = self.validate_identity()
         source = self._request(
             "GET",
             f"/v1/data_sources/{quote(self.data_source_id, safe='')}",
@@ -48,6 +48,10 @@ class NotionTodoProvider:
             max_bytes=MAX_PROVIDER_RESPONSE_BYTES,
         )
         self._validate_schema(source)
+        return normalized_identity
+
+    def validate_identity(self) -> dict[str, str | None]:
+        identity = self._request("GET", "/v1/users/me", timeout=10, max_bytes=500_000)
         bot_id = identity.get("id")
         bot_name = identity.get("name")
         bot = identity.get("bot") if isinstance(identity.get("bot"), dict) else {}
@@ -345,9 +349,9 @@ class NotionTodoProvider:
             if 300 <= exc.code < 400:
                 raise IntegrationProviderError("provider_unavailable", "Notion redirects are not accepted") from None
             mapping = {
-                400: ("invalid_input", "Notion rejected the todo request"),
+                400: ("invalid_input", "Notion rejected the integration request"),
                 401: ("invalid_credential", "The Notion credential is invalid or revoked"),
-                403: ("provider_forbidden", "Notion denied the requested todo operation"),
+                403: ("provider_forbidden", "Notion denied the requested integration operation"),
                 404: ("not_found", "The requested Notion resource was not found"),
                 429: ("rate_limited", "Notion rate limited the integration request"),
                 529: ("rate_limited", "Notion rate limited the integration request"),

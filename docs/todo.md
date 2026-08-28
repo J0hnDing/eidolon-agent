@@ -224,3 +224,14 @@ Shared runner lifecycle behavior has one implementation without a reuse-only inh
 
 -Acceptance Criteria:
 Each extraction has a named owner and narrow contract; Codex adapters are separated from workflow facades; UI resource state is split into focused hooks or panels; generic abstractions require concrete reuse; behavior remains tested.
+
+## TODO-025: Define transitive permission and execution semantics for unbounded function chains
+
+- Priority: medium
+- Category: research
+- Area: backend-function-composition
+- Dependencies: none
+- Rationale: Unbounded nested function calls are now enabled as a controlled exception with direct-edge authorization and target-owned permissions. This supersedes the bounded-depth assumption in TODO-013 without replacing that historical record; the remaining transitive model needs an explicit design.
+
+-Acceptance Criteria:
+Define and document permission visibility across the full chain, cumulative time and resource budgets, parent-to-child cancellation and failure propagation, deterministic cycle handling, and inspectable parent/child audit chains. Preserve independent declaration, approval, schema, availability, operation-lock, and target-owned permission enforcement at every direct edge, with focused tests for the selected semantics.

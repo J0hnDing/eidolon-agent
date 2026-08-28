@@ -86,6 +86,33 @@ def test_product_manager_contract_keeps_web_app_approval_requests() -> None:
     assert runtime["codex"] == {"internet_access": True}  # type: ignore[index]
 
 
+def test_product_manager_contract_keeps_schedules_only_for_services() -> None:
+    service = ProductManagerContractService()
+    schedule = {
+        "type": "daily",
+        "time": "08:00",
+        "timezone": "America/Toronto",
+        "input": {},
+    }
+    fallback = {
+        "goal": "Daily cleanup",
+        "runtime": "service",
+        "skill_name": "daily_cleanup",
+        "input_schema": {"type": "object"},
+        "output_schema": {"type": "object"},
+        "schedule": schedule,
+    }
+
+    service_blueprint = service.sanitize_blueprint({}, fallback)
+    function_blueprint = service.sanitize_blueprint(
+        {"runtime": "function", "schedule": schedule},
+        fallback,
+    )
+
+    assert service_blueprint["schedule"] == schedule
+    assert function_blueprint["schedule"] is None
+
+
 def test_codex_invocation_recorder_keeps_build_usage_buffer_separate() -> None:
     result = CompletedProcess(args=["codex"], returncode=0, stdout="", stderr="")
     result.codex_usage = {"input_tokens": 10, "total_tokens": 12}  # type: ignore[attr-defined]

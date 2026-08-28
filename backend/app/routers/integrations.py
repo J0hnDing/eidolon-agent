@@ -9,6 +9,7 @@ from app.schemas.integration import (
     IntegrationInvocationResponse,
     NotionConnectionStatus,
     NotionCredentialWrite,
+    NotionDataSourcesWrite,
 )
 from app.services.function_catalog_service import FunctionCatalogService
 from app.services.function_registry_service import FunctionRegistryError, FunctionRegistryService
@@ -60,10 +61,41 @@ def put_notion_connection(
     db: Session = Depends(get_db),
 ) -> NotionConnectionStatus:
     try:
-        result = build_default_integration_service(db).put_notion_connection(
+        result = build_default_integration_service(db).put_notion_credential(
             payload.token.get_secret_value(),
-            payload.data_source_id,
         )
+        FunctionCatalogService(db).refresh()
+        return result
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+
+
+@router.put(
+    "/settings/integrations/notion/data-sources",
+    response_model=NotionConnectionStatus,
+)
+def put_notion_data_sources(
+    payload: NotionDataSourcesWrite,
+    db: Session = Depends(get_db),
+) -> NotionConnectionStatus:
+    try:
+        result = build_default_integration_service(db).put_notion_data_sources(
+            payload.data_source_id,
+            payload.report_data_source_id,
+        )
+        FunctionCatalogService(db).refresh()
+        return result
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+
+
+@router.delete(
+    "/settings/integrations/notion/data-sources",
+    response_model=NotionConnectionStatus,
+)
+def remove_notion_data_sources(db: Session = Depends(get_db)) -> NotionConnectionStatus:
+    try:
+        result = build_default_integration_service(db).remove_notion_data_sources()
         FunctionCatalogService(db).refresh()
         return result
     except IntegrationError as exc:
@@ -96,7 +128,7 @@ def invoke_function_integration(
             IntegrationCaller(
                 skill_id=caller.skill.id,
                 version_id=caller.version_id,
-                runtime="function",
+                runtime=caller.skill.runtime,
                 skill_run_id=caller.run_id,
             ),
             payload.operation,

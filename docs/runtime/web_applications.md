@@ -1,6 +1,6 @@
 # Sandboxed Web Application Runtime
 
-`runtime = web_app` is a persistent execution protocol for self-rendered application skills. It is separate from `runtime = function`, which remains the bounded JSON stdin/stdout protocol. A web application package declares an importable ASGI entrypoint such as `app:app`; it does not add source to the Eidolon React frontend.
+`runtime = web_app` is a persistent execution protocol for self-rendered application skills. It is separate from the bounded JSON stdin/stdout protocols: unscheduled callable `function` skills and scheduler-only `service` skills. A web application package declares an importable ASGI entrypoint such as `app:app`; it does not add source to the Eidolon React frontend.
 
 ## Ownership Boundary
 
@@ -16,7 +16,7 @@ The platform owns installation and approval, version activation, Docker or expli
 4. After bounded readiness succeeds, the backend creates a distinct user/application session and returns an opaque `*.web-app.localhost` embedding URL.
 5. The Applications UI keeps navigation, identity, version, status, permission information, logs, and stop controls in trusted React chrome and embeds only the returned origin in a sandboxed iframe.
 
-An idle application is not represented by a long-running `SkillRun`, and it does not retain a skill operation lock. `SkillRun` remains the bounded execution/audit model for function skills.
+An idle application is not represented by a long-running `SkillRun`, and it does not retain a skill operation lock. `SkillRun` remains the bounded execution/audit model for function and service skills.
 
 ## Origin and Browser Containment
 
@@ -94,4 +94,4 @@ Configuration uses the existing `PERSONAL_AGENT_RUNNER_MODE` plus `PERSONAL_AGEN
 - `POST /web-apps/capabilities/codex`: instance-capability-authenticated server-side Codex access.
 - `POST /web-apps/capabilities/integrations/invoke`: hidden instance-capability-authenticated registry integration access.
 
-The host-routed proxy endpoint is internal and omitted from OpenAPI. A web application's server-side code may invoke manifest-declared functions through `web_runtime_capabilities.call_function` or approved GitHub operations through `call_integration`; the backend rechecks the instance and complete target contract. This does not create a hybrid runtime and the instance capability is never exposed to browser code. Public hosting, remote multi-user access, arbitrary function or integration selection, browser automation, nested capability calls, and WebSockets are outside this runtime contract.
+The host-routed proxy endpoint is internal and omitted from OpenAPI. A web application's server-side code may invoke manifest-declared functions through `web_runtime_capabilities.call_function` or approved integrations through `call_integration`; the backend rechecks the instance and complete target contract. A called function receives its own run-scoped capability and may continue through independently declared and authorized edges. This does not create a hybrid runtime and no capability is exposed to browser code. Public hosting, remote multi-user access, arbitrary function or integration selection, browser automation, and WebSockets are outside this runtime contract.

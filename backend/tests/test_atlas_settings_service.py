@@ -403,4 +403,9 @@ def test_local_schema_adds_credential_kind_and_legacy_passphrase_references(tmp_
     db_module.ensure_local_schema()
 
     columns = {column["name"] for column in inspect(legacy_engine).get_columns("integration_connections")}
-    assert {"credential_kind", "passphrase_secret_store_id", "passphrase_secret_reference"} <= columns
+    assert {
+        "credential_kind",
+        "passphrase_secret_store_id",
+        "passphrase_secret_reference",
+        "configured_report_resource_id",
+    } <= columns

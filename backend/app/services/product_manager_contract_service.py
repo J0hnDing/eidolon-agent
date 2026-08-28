@@ -51,7 +51,7 @@ class ProductManagerContractService:
             or raw_skill_name.replace("_", " ").replace("-", " ").title()
         )[:256]
         runtime = blueprint.get("runtime") or fallback.get("runtime", "function")
-        blueprint["runtime"] = runtime if runtime in {"function", "web_app"} else "function"
+        blueprint["runtime"] = runtime if runtime in {"function", "web_app", "service"} else "function"
         blueprint["input_schema"] = self._object_schema(
             blueprint.get("input_schema"),
             fallback.get("input_schema"),
@@ -60,7 +60,7 @@ class ProductManagerContractService:
             blueprint.get("output_schema"),
             fallback.get("output_schema"),
         )
-        if blueprint["runtime"] == "function" and (
+        if blueprint["runtime"] in {"function", "service"} and (
             blueprint["input_schema"] is None or blueprint["output_schema"] is None
         ):
             blueprint["input_schema"] = {"type": "object", "additionalProperties": True}
@@ -71,7 +71,7 @@ class ProductManagerContractService:
         if not isinstance(blueprint.get("schedule"), dict):
             fallback_schedule = fallback.get("schedule")
             blueprint["schedule"] = fallback_schedule if isinstance(fallback_schedule, dict) else None
-        if blueprint["runtime"] == "web_app":
+        if blueprint["runtime"] != "service":
             blueprint["schedule"] = None
         milestones = blueprint.get("milestones")
         if isinstance(milestones, list) and milestones:
@@ -284,19 +284,23 @@ class ProductManagerContractService:
             raise ProductManagerContractError("A completed ProductManager plan requires blueprint and permissions")
 
         runtime = blueprint.get("runtime")
-        if runtime == "function":
+        if runtime in {"function", "service"}:
             for field_name in ("input_schema", "output_schema"):
                 callable_schema = blueprint.get(field_name)
                 if not isinstance(callable_schema, dict) or callable_schema.get("type") != "object":
                     raise ProductManagerContractError(
-                        f"A function blueprint requires a complete object-shaped {field_name}"
+                        f"A {runtime} blueprint requires a complete object-shaped {field_name}"
                     )
                 try:
                     Draft202012Validator.check_schema(callable_schema)
                 except SchemaError as exc:
                     raise ProductManagerContractError(
-                        f"A function blueprint contains an invalid {field_name}"
+                        f"A {runtime} blueprint contains an invalid {field_name}"
                     ) from exc
+            if runtime == "function" and blueprint.get("schedule") is not None:
+                raise ProductManagerContractError("A function blueprint cannot include a schedule")
+            if runtime == "service" and not isinstance(blueprint.get("schedule"), dict):
+                raise ProductManagerContractError("A service blueprint requires a schedule")
         elif runtime == "web_app":
             if blueprint.get("input_schema") is not None or blueprint.get("output_schema") is not None:
                 raise ProductManagerContractError(
@@ -304,6 +308,8 @@ class ProductManagerContractService:
                 )
             if blueprint.get("schedule") is not None:
                 raise ProductManagerContractError("A web app blueprint cannot include a schedule")
+        else:
+            raise ProductManagerContractError("A completed ProductManager plan requires a valid runtime")
 
         sanitized_blueprint = self._sanitize_build_blueprint(blueprint)
         sanitized_permissions = self.sanitize_permission_plan(permission_plan, fallback_plan)

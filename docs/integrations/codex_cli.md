@@ -20,7 +20,9 @@ PERSONAL_AGENT_CODEX_APPROVAL_POLICY=never
 PERSONAL_AGENT_CODEX_ENABLE_SEARCH=auto
 ```
 
-`auto` uses real Codex when a compatible executable is discovered, otherwise fake/dev adapters are used.
+`auto` uses real Codex when a compatible executable is discovered. If none is available, Codex-backed operations fail closed with the CLI discovery error; Eidolon never substitutes synthetic production output. `disabled` and `off` explicitly disable Codex-backed operations. The former `fake`, `dev`, `stub`, and `local` modes are rejected with a migration error.
+
+Backend tests inject deterministic test-only stubs directly into service constructors or fixtures. Those stubs live under `backend/tests/fakes` and are not importable through the production adapter-selection path. Focused contract and orchestration tests replace the former full-workflow E2E fixture.
 
 ## Executable Resolution and Compatibility
 
@@ -118,6 +120,8 @@ Skills must not shell out to the Codex CLI. Installed enabled function skills us
 ```text
 function_runtime_capabilities.call_codex(...)
 ```
+
+To run Eidolon without Codex-backed operations, set `PERSONAL_AGENT_CODEX_MODE=disabled`.
 
 The helper authenticates `POST /functions/capabilities/codex` with the ephemeral function-run token. The backend derives the caller skill and active version from that token, then validates runtime approval and manifest `permissions.codex` before invoking Codex. `codex_permissions.internet_access=true` is accepted only when runtime `network` entries were approved for the skill. The older `POST /skills/{skill_id}/codex` route remains a trusted local compatibility surface and is not the sandbox transport.
 

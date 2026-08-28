@@ -1,5 +1,6 @@
 import json
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from app.services.atlas_provider import FakeAtlasProviderAdapter
 from app.services.github_provider import FakeGitHubProviderAdapter
 from app.services.integration_service import IntegrationCaller, IntegrationError, IntegrationService
 from app.services.permission_service import PermissionService
+from app.services.report_service import FakeReportProvider
 from app.services.secret_store import FakeSecretStore
 from app.services.todo_service import FakeTodoProvider
 
@@ -301,6 +303,7 @@ def test_notion_connection_is_atomic_secret_free_and_coexists_with_github_and_at
         secret_store=store,
         github=FakeGitHubProviderAdapter(),
         notion_provider_factory=lambda _token, _source: notion,
+        notion_report_provider_factory=lambda _token, _source: FakeReportProvider(),
     )
     service.put_github_connection(SENTINEL)
     db.add(
@@ -317,12 +320,13 @@ def test_notion_connection_is_atomic_secret_free_and_coexists_with_github_and_at
     )
     db.commit()
 
-    status = service.put_notion_connection(NOTION_SENTINEL, "source-id")
+    status = service.put_notion_connection(NOTION_SENTINEL, "source-id", "report-source-id")
 
     assert status.connected is True
     assert status.bot_name == "Fake Notion bot"
     assert status.workspace_name == "Fake workspace"
     assert status.data_source_id == "source-id"
+    assert status.report_data_source_id == "report-source-id"
     connections = db.scalars(select(IntegrationConnection).order_by(IntegrationConnection.provider)).all()
     assert [item.provider for item in connections] == ["atlas", "github", "notion"]
     notion_row = next(item for item in connections if item.provider == "notion")
@@ -348,7 +352,7 @@ def test_notion_connection_is_atomic_secret_free_and_coexists_with_github_and_at
 
     service.notion_provider_factory = lambda _token, _source: RejectedProvider()
     with pytest.raises(IntegrationError) as rejected:
-        service.put_notion_connection("failed-replacement", "other-source")
+        service.put_notion_connection("failed-replacement", "other-source", "other-report-source")
     assert rejected.value.error_type == "invalid_credential"
     db.refresh(notion_row)
     assert notion_row.secret_reference == old_reference
@@ -360,11 +364,9 @@ def test_notion_connection_is_atomic_secret_free_and_coexists_with_github_and_at
     assert old_reference not in store.values
 
 
-@pytest.mark.parametrize("change_kind", ["identity", "data_source"])
-def test_notion_identity_or_data_source_change_invalidates_authorization(
+def test_notion_identity_change_invalidates_authorization(
     db: Session,
     tmp_path: Path,
-    change_kind: str,
 ) -> None:
     requirement = integration_requirement(provider="notion", operations=["notion.todo.list"])
     skill, manifest = create_installed_skill(db, tmp_path, requirement=requirement)
@@ -375,21 +377,126 @@ def test_notion_identity_or_data_source_change_invalidates_authorization(
         project_root=tmp_path,
         secret_store=store,
         notion_provider_factory=lambda _token, _source: notion,
+        notion_report_provider_factory=lambda _token, _source: FakeReportProvider(bot_id=notion.bot_id),
     )
-    service.put_notion_connection(NOTION_SENTINEL, "source-id")
+    service.put_notion_connection(NOTION_SENTINEL, "source-id", "report-source-id")
     authorization = authorize(service, skill, manifest)
     assert authorization.approval_request.risk_level == "low"
 
-    if change_kind == "identity":
-        notion.bot_id = "second-bot"
+    notion.bot_id = "second-bot"
     service.put_notion_connection(
         "replacement",
-        "other-source" if change_kind == "data_source" else "source-id",
+        "source-id",
+        "report-source-id",
     )
 
     db.refresh(authorization)
     assert authorization.invalidated_at is not None
     assert authorization.approval_request.status == "superseded"
+
+
+def test_notion_data_source_changes_preserve_authorization(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    requirement = integration_requirement(provider="notion", operations=["notion.todo.list"])
+    skill, manifest = create_installed_skill(db, tmp_path, requirement=requirement)
+    store = FakeSecretStore()
+    notion = FakeTodoProvider(bot_id="shared-bot")
+    service = IntegrationService(
+        db,
+        project_root=tmp_path,
+        secret_store=store,
+        notion_provider_factory=lambda _token, _source: notion,
+        notion_report_provider_factory=lambda _token, _source: FakeReportProvider(bot_id=notion.bot_id),
+    )
+    service.put_notion_connection(NOTION_SENTINEL, "source-id", "report-source-id")
+    authorization = authorize(service, skill, manifest)
+
+    service.put_notion_data_sources("other-source", "other-report-source")
+    service.remove_notion_data_sources()
+    assert service.operation_available("notion.todo.list") is False
+    service.put_notion_data_sources("restored-source", "restored-report-source")
+
+    db.refresh(authorization)
+    assert authorization.invalidated_at is None
+    assert authorization.approval_request.status == "approved"
+    assert service.operation_available("notion.todo.list") is True
+
+
+def test_notion_credential_and_data_sources_are_saved_and_removed_separately(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    store = FakeSecretStore()
+    notion = FakeTodoProvider(bot_id="shared-bot")
+    reports = FakeReportProvider(bot_id="shared-bot")
+    service = IntegrationService(
+        db,
+        project_root=tmp_path,
+        secret_store=store,
+        notion_provider_factory=lambda _token, _source: notion,
+        notion_report_provider_factory=lambda _token, _source: reports,
+    )
+
+    connected = service.put_notion_credential(NOTION_SENTINEL)
+    assert connected.connected is True
+    assert connected.data_source_id is None
+    assert connected.report_data_source_id is None
+    assert notion.calls == [("validate_identity", {})]
+
+    configured = service.put_notion_data_sources("todo-source", "report-source")
+    assert configured.data_source_id == "todo-source"
+    assert configured.report_data_source_id == "report-source"
+    reference = service._connection("notion").secret_reference  # noqa: SLF001
+
+    replaced = service.put_notion_credential("replacement-token")
+    assert replaced.data_source_id == "todo-source"
+    assert replaced.report_data_source_id == "report-source"
+    assert service._connection("notion").secret_reference != reference  # noqa: SLF001
+
+    cleared = service.remove_notion_data_sources()
+    assert cleared.connected is True
+    assert cleared.data_source_id is None
+    assert cleared.report_data_source_id is None
+    assert service.operation_available("notion.todo.list") is False
+    assert service.operation_available("notion.report.list") is False
+
+
+def test_failed_separate_data_source_validation_preserves_both_existing_ids(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    store = FakeSecretStore()
+    service = IntegrationService(
+        db,
+        project_root=tmp_path,
+        secret_store=store,
+        notion_provider_factory=lambda _token, _source: FakeTodoProvider(),
+        notion_report_provider_factory=lambda _token, _source: FakeReportProvider(),
+    )
+    service.put_notion_credential(NOTION_SENTINEL)
+    service.put_notion_data_sources("todo-source", "report-source")
+
+    class RejectedReportProvider(FakeReportProvider):
+        def validate_connection(self):
+            from app.services.github_provider import IntegrationProviderError
+
+            raise IntegrationProviderError("not_found", "missing report source")
+
+    service.notion_report_provider_factory = lambda _token, _source: RejectedReportProvider()
+    with pytest.raises(IntegrationError) as rejected:
+        service.put_notion_data_sources("other-todo", "other-report")
+
+    assert rejected.value.error_type == "not_found"
+    message = str(rejected.value)
+    assert "Reports data source" in message
+    assert "Copy its data source ID" in message
+    assert "share the original database" in message
+    assert "todo" not in message.lower()
+    status = service.notion_connection_status()
+    assert status.data_source_id == "todo-source"
+    assert status.report_data_source_id == "report-source"
 
 
 def test_notion_todo_operations_use_existing_authorization_audit_and_fake_provider(
@@ -408,8 +515,9 @@ def test_notion_todo_operations_use_existing_authorization_audit_and_fake_provid
         project_root=tmp_path,
         secret_store=store,
         notion_provider_factory=lambda _token, _source: notion,
+        notion_report_provider_factory=lambda _token, _source: FakeReportProvider(),
     )
-    service.put_notion_connection(NOTION_SENTINEL, "source-id")
+    service.put_notion_connection(NOTION_SENTINEL, "source-id", "report-source-id")
     authorization = authorize(service, skill, manifest)
     assert authorization.approval_request.risk_level == "medium"
     caller = IntegrationCaller(skill_id=skill.id, version_id=skill.active_version_id, runtime="function")
@@ -437,6 +545,107 @@ def test_notion_todo_operations_use_existing_authorization_audit_and_fake_provid
     ]
     assert audits[1].resource == f"notion-page:{created['id']}"
     assert NOTION_SENTINEL not in repr([(audit.resource, audit.error_type) for audit in audits])
+
+
+def test_notion_report_operations_use_separate_contained_source_and_raw_blocks(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    requirement = integration_requirement(
+        provider="notion",
+        operations=[
+            "notion.report.list",
+            "notion.report.get",
+            "notion.report.create",
+            "notion.report.delete",
+        ],
+    )
+    skill, manifest = create_installed_skill(db, tmp_path, requirement=requirement)
+    store = FakeSecretStore()
+    reports = FakeReportProvider()
+    report_sources: list[str] = []
+
+    def report_factory(_token: str, source: str) -> FakeReportProvider:
+        report_sources.append(source)
+        return reports
+
+    service = IntegrationService(
+        db,
+        project_root=tmp_path,
+        secret_store=store,
+        notion_provider_factory=lambda _token, _source: FakeTodoProvider(),
+        notion_report_provider_factory=report_factory,
+    )
+    service.put_notion_connection(NOTION_SENTINEL, "todo-source", "report-source")
+    authorization = authorize(service, skill, manifest)
+    assert authorization.approval_request.risk_level == "medium"
+    caller = IntegrationCaller(skill_id=skill.id, version_id=skill.active_version_id, runtime="function")
+    children = [{"type": "divider", "divider": {}}]
+
+    created = service.invoke(
+        caller,
+        "notion.report.create",
+        {"name": "Weekly report", "select": "GitHub Projects", "children": children},
+    )
+    listed = service.invoke(caller, "notion.report.list", {"page_size": 10})
+    fetched = service.invoke(caller, "notion.report.get", {"id": created["id"]})
+    removed = service.invoke(caller, "notion.report.delete", {"id": created["id"]})
+
+    assert listed["reports"] == [created]
+    assert fetched["report"] == created
+    assert fetched["blocks"] == children
+    assert removed == {"id": created["id"], "removed": True}
+    assert report_sources and set(report_sources) == {"report-source"}
+    audits = db.scalars(select(IntegrationAuditRecord).order_by(IntegrationAuditRecord.id)).all()
+    assert [audit.operation_id for audit in audits] == [
+        "notion.report.create",
+        "notion.report.list",
+        "notion.report.get",
+        "notion.report.delete",
+    ]
+    assert audits[2].resource == f"notion-page:{created['id']}"
+
+
+def test_legacy_todo_only_notion_connection_leaves_report_operations_unavailable(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    store = FakeSecretStore()
+    service = IntegrationService(db, project_root=tmp_path, secret_store=store)
+    reference = store.put(NOTION_SENTINEL, namespace="notion")
+    db.add(
+        IntegrationConnection(
+            provider="notion",
+            secret_store_id=store.implementation_id,
+            secret_reference=reference,
+            status="connected",
+            account_login="Notion bot",
+            account_id="bot-id",
+            configured_resource_id="todo-source",
+            configured_report_resource_id=None,
+            last_validated_at=datetime.now(UTC),
+        )
+    )
+    db.commit()
+
+    status = service.notion_connection_status()
+
+    assert status.connected is True
+    assert status.data_source_id == "todo-source"
+    assert status.report_data_source_id is None
+    assert service.operation_available("notion.todo.list") is True
+    assert service.operation_available("notion.report.list") is False
+
+    skill, manifest = create_installed_skill(
+        db,
+        tmp_path,
+        requirement=integration_requirement(
+            provider="notion",
+            operations=["notion.report.create"],
+        ),
+    )
+    authorization = service.ensure_authorization_requests(skill, manifest)[0]
+    assert authorization.approval_request.reason_json["connection_available"] is False
 
 
 def test_declared_approved_call_is_normalized_audited_and_secret_free(
@@ -751,8 +960,13 @@ def test_direct_user_notion_and_atlas_calls_reuse_configured_containment(
         github=FakeGitHubProviderAdapter(),
         atlas=atlas,
         notion_provider_factory=notion_factory,
+        notion_report_provider_factory=lambda _token, _source: FakeReportProvider(),
     )
-    service.put_notion_connection(NOTION_SENTINEL, "only-configured-source")
+    service.put_notion_connection(
+        NOTION_SENTINEL,
+        "only-configured-source",
+        "only-configured-report-source",
+    )
     service.provider_connected = lambda provider: provider == "atlas"  # type: ignore[method-assign]
 
     notion_output = service.invoke_direct("notion.todo.list", {"page_size": 10})

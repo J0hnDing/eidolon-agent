@@ -4,12 +4,10 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import AgentRun, ApprovalRequest
-from app.routers.schedules import get_scheduler_service
 from app.schemas.approval_request import ApprovalDecision, ApprovalRequestRead
 from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
 from app.services.codex_service import CodexGenerationError
 from app.services.permission_service import PermissionError, PermissionService
-from app.services.scheduler_service import ScheduleError
 
 router = APIRouter(prefix="/permission-requests", tags=["permission_requests"])
 
@@ -45,7 +43,7 @@ def get_permission_request(request_id: int, db: Session = Depends(get_db)) -> Ap
 @router.post("/{request_id}/approve", response_model=ApprovalRequestRead)
 def approve_permission_request(
     request_id: int,
-    request_context: Request,
+    _request_context: Request,
     payload: ApprovalDecision | None = None,
     db: Session = Depends(get_db),
 ) -> ApprovalRequest:
@@ -53,11 +51,6 @@ def approve_permission_request(
     if request is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Permission request not found")
     try:
-        if request.request_type == "schedule" and request.schedule is not None:
-            scheduler_service = get_scheduler_service(request_context, db)
-            scheduler_service.approve_schedule(request.schedule)
-            db.refresh(request)
-            return request
         request = PermissionService(db).approve_request(request, payload.decision_notes if payload else None)
         if request.request_scope == "build_time" and request.generation_request_id is not None:
             agent_run = db.scalar(
@@ -73,14 +66,14 @@ def approve_permission_request(
                 AgentWorkflowService(db).resume_run(agent_run)
                 db.refresh(request)
         return request
-    except (AgentWorkflowError, CodexGenerationError, PermissionError, ScheduleError) as exc:
+    except (AgentWorkflowError, CodexGenerationError, PermissionError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.post("/{request_id}/deny", response_model=ApprovalRequestRead)
 def deny_permission_request(
     request_id: int,
-    request_context: Request,
+    _request_context: Request,
     payload: ApprovalDecision | None = None,
     db: Session = Depends(get_db),
 ) -> ApprovalRequest:
@@ -88,11 +81,6 @@ def deny_permission_request(
     if request is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Permission request not found")
     try:
-        if request.request_type == "schedule" and request.schedule is not None:
-            scheduler_service = get_scheduler_service(request_context, db)
-            scheduler_service.deny_schedule(request.schedule)
-            db.refresh(request)
-            return request
         return PermissionService(db).deny_request(request, payload.decision_notes if payload else None)
-    except (PermissionError, ScheduleError) as exc:
+    except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

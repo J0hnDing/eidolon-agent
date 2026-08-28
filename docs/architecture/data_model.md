@@ -26,7 +26,7 @@ The central skill record. Important fields:
 
 - `name`
 - `description`
-- `runtime`: `function` or `web_app`
+- `runtime`: `function`, `service`, or `web_app`
 - `status`: `building`, `proposed`, `installed`, `failed`, or legacy tombstone `deleted`
 - `risk_level`
 - manifest/instructions/installed paths
@@ -44,7 +44,7 @@ Tracks versioned installed skill folders. Active installed skills point to an ac
 
 ### skill_runs
 
-Stores manual or scheduled function-run results:
+Stores bounded function or service-run results:
 
 - input/output JSON
 - stdout/stderr
@@ -66,7 +66,7 @@ Links one caller skill, one target function, the user-facing approval request, a
 
 ### integration_connections
 
-Stores one sanitized connection row per provider. GitHub stores validated account identity. Notion additionally stores sanitized bot/workspace identity and its non-secret configured data-source ID. Atlas may use the row for its optional owned-process passphrase lifecycle. Every secret-bearing provider stores only the operating-system secret-store implementation id and opaque reference; credential plaintext, authorization headers, provider responses, and todos are never stored.
+Stores one sanitized connection row per provider. GitHub stores validated account identity. Notion additionally stores sanitized bot/workspace identity plus separate non-secret configured Todo and Reports data-source IDs under one credential reference. The Reports ID is nullable for compatibility with legacy Todo-only connections. Atlas may use the row for its optional owned-process passphrase lifecycle. Every secret-bearing provider stores only the operating-system secret-store implementation id and opaque reference; credential plaintext, authorization headers, provider responses, todos, and reports are never stored.
 
 ### integration_authorizations
 
@@ -98,11 +98,11 @@ Backend-enforced local locks for per-skill operation safety. These prevent overl
 
 ### skill_schedules
 
-Stores schedule definitions for installed skills. Canonical statuses are `pending`, `active`, `paused`, and `denied`. Deletion removes the row; it is not a persisted schedule status.
+Stores exactly one schedule definition for each installed generated service. `skill_id` is unique. Canonical statuses are `active` and `paused`; installed services begin paused. Functions and web applications have no schedule rows. The manifest seeds initial state, while later edits remain backend runtime state across version activation.
 
 ### approval_requests
 
-Stores build-time, runtime, schedule, update, caller-target function-access, and skill-specific integration-access approval requests. The approval request is the durable record of what was requested, why, risk level, and user decision.
+Stores build-time, runtime, update, caller-target function-access, and skill-specific integration-access approval requests. The approval request is the durable record of what was requested, why, risk level, and user decision. The nullable physical `schedule_id` column may remain in older local databases for compatibility, but service schedules do not use an approval request.
 
 ### skill_generation_requests
 

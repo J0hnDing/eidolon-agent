@@ -9,7 +9,7 @@ Rules:
 - Do not install packages.
 - Do not run the skill task automatically.
 - Do not modify backend, frontend, project metadata, git files, or any app source code.
-- Preserve the manifest runtime protocol: JSON stdin/stdout for `function`, or the declared importable ASGI application and package-owned assets for `web_app`.
+- Preserve the manifest runtime protocol: JSON stdin/stdout for `function` and schedule-only `service`, or the declared importable ASGI application and package-owned assets for `web_app`.
 - Web-app repairs must not edit Eidolon frontend source.
 - For a task repair, write a complete replacement `interface_artifact.json` at the skill-folder root using this exact top-level shape: `{"created_paths":[],"updated_paths":[],"interfaces":{},"contracts_for_children":[],"known_limitations":[]}`. Preserve the task's created-versus-updated contract, not merely the files changed during this repair attempt.
 - `current_interface_artifact` is the last backend-validated contract for this task. Preserve its complete `created_paths` and `updated_paths` unless the repair intentionally changes the task interface; do not reduce them to only files edited during this repair.

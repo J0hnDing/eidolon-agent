@@ -1770,7 +1770,7 @@ class AgentWorkflowService:
             ],
             "secrets": list(runtime.get("secrets", []) or []),
             "shell": bool(runtime.get("shell", False)),
-            "codex": runtime.get("codex", {"call_response": True, "internet_access": bool(runtime.get("network"))}),
+            "codex": runtime.get("codex", {"call_response": False, "internet_access": False}),
         }
         dependencies = list(runtime.get("dependencies", []) or [])
         build_time = value.get("build_time") if isinstance(value.get("build_time"), dict) else {}
@@ -1890,7 +1890,7 @@ class AgentWorkflowService:
             "filesystem_write": list(runtime.get("filesystem_write", []) or []),
             "secrets": list(runtime.get("secrets", []) or []),
             "shell": bool(runtime.get("shell", False)),
-            "codex": runtime.get("codex", {"call_response": True, "internet_access": bool(runtime.get("network"))}),
+            "codex": runtime.get("codex", {"call_response": False, "internet_access": False}),
         }
 
     def _finalize_build_permission_plan(

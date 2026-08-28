@@ -141,7 +141,7 @@ describe("GitHub Settings connection", () => {
 });
 
 describe("Notion Settings connection", () => {
-  it("submits write-only connection data and renders no todo management UI", async () => {
+  it("saves the credential first and manages both data-source IDs together", async () => {
     const sentinel = "EIDOLON_NOTION_UI_SENTINEL_b411";
     const choice = { model: null, reasoning_effort: null };
     vi.spyOn(api, "getCodexUsage").mockResolvedValue({
@@ -215,6 +215,7 @@ describe("Notion Settings connection", () => {
       bot_id: null,
       workspace_name: null,
       data_source_id: null,
+      report_data_source_id: null,
       last_validated_at: null,
       created_at: null,
       updated_at: null,
@@ -227,7 +228,36 @@ describe("Notion Settings connection", () => {
       bot_name: "Eidolon Todo",
       bot_id: "bot-id",
       workspace_name: "Private workspace",
+      data_source_id: null,
+      report_data_source_id: null,
+      last_validated_at: "2026-01-01T00:00:00Z",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      error_type: null,
+    });
+    const putDataSources = vi.spyOn(api, "putNotionDataSources").mockResolvedValue({
+      provider: "notion",
+      connected: true,
+      status: "connected",
+      bot_name: "Eidolon Todo",
+      bot_id: "bot-id",
+      workspace_name: "Private workspace",
       data_source_id: "source-id",
+      report_data_source_id: "report-source-id",
+      last_validated_at: "2026-01-01T00:00:00Z",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      error_type: null,
+    });
+    const removeDataSources = vi.spyOn(api, "removeNotionDataSources").mockResolvedValue({
+      provider: "notion",
+      connected: true,
+      status: "connected",
+      bot_name: "Eidolon Todo",
+      bot_id: "bot-id",
+      workspace_name: "Private workspace",
+      data_source_id: null,
+      report_data_source_id: null,
       last_validated_at: "2026-01-01T00:00:00Z",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
@@ -236,13 +266,25 @@ describe("Notion Settings connection", () => {
 
     renderSettings("integrations");
     const token = await screen.findByLabelText("Notion token");
-    fireEvent.change(screen.getByLabelText("Notion data-source ID"), { target: { value: "source-id" } });
+    const todoSource = screen.getByLabelText("Notion Todo data-source ID") as HTMLInputElement;
+    expect(todoSource.disabled).toBe(true);
+    expect(token.compareDocumentPosition(todoSource) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.change(token, { target: { value: sentinel } });
     fireEvent.click(screen.getByRole("button", { name: "Add Notion connection" }));
 
-    await waitFor(() => expect(put).toHaveBeenCalledWith(sentinel, "source-id"));
+    await waitFor(() => expect(put).toHaveBeenCalledWith(sentinel));
     await waitFor(() => expect(screen.getByText("Private workspace")).toBeTruthy());
     expect((screen.getByLabelText("Replacement Notion token") as HTMLInputElement).value).toBe("");
+    fireEvent.change(screen.getByLabelText("Notion Todo data-source ID"), {
+      target: { value: "source-id" },
+    });
+    fireEvent.change(screen.getByLabelText("Notion Reports data-source ID"), {
+      target: { value: "report-source-id" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save data-source IDs" }));
+    await waitFor(() => expect(putDataSources).toHaveBeenCalledWith("source-id", "report-source-id"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete data-source IDs" }));
+    await waitFor(() => expect(removeDataSources).toHaveBeenCalledOnce());
     expect(document.body.textContent).not.toContain(sentinel);
     expect(screen.queryByRole("button", { name: /create todo/i })).toBeNull();
     expect(screen.getByText(/Eidolon does not keep a todo copy/)).toBeTruthy();

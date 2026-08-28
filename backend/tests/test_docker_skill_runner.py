@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db import Base
 from app.models import Skill
 from app.services.docker_image_manager import DockerImageBuildError, DockerImageStatus
-from app.services.skill_runner import DockerSkillRunner, RunnerConfig, get_runner_status
+from app.services.skill_runner import DockerSkillRunner, RunnerConfig, get_runner_status, is_docker_available
 
 
 @pytest.fixture
@@ -373,3 +373,52 @@ def test_runner_status_requires_explicit_local_fallback() -> None:
     assert auto_status.available is False
     assert local_status.selected_mode == "local"
     assert local_status.available is True
+
+
+def test_docker_availability_checks_daemon_connectivity(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import skill_runner
+
+    commands: list[list[str]] = []
+    monkeypatch.setattr(skill_runner.shutil, "which", lambda _name: "C:/Docker/docker.exe")
+
+    def unavailable_daemon(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return completed(stderr="daemon unavailable", returncode=1)
+
+    monkeypatch.setattr(skill_runner.subprocess, "run", unavailable_daemon)
+
+    assert is_docker_available() is False
+    assert commands == [["docker", "info", "--format", "{{json .ServerVersion}}"]]
+
+
+@pytest.mark.parametrize(
+    ("image_status", "expected_available", "expected_ready"),
+    [("built", True, True), ("failed", False, False), ("unverified", False, False)],
+)
+def test_runner_status_requires_current_trusted_image(
+    image_status: str,
+    expected_available: bool,
+    expected_ready: bool,
+) -> None:
+    class FakeImageManager:
+        def get_status(self) -> DockerImageStatus:
+            return DockerImageStatus(
+                image="personal-agent-skill-runner:test",
+                status=image_status,
+                dockerfile_hash="current",
+                last_successful_hash="current" if image_status == "built" else None,
+                detail="Image status for test.",
+                last_build_status="failed" if image_status != "built" else "built",
+                last_build_at="2026-08-28T00:00:00Z",
+            )
+
+    status = get_runner_status(
+        config=RunnerConfig(mode="auto", docker_image="personal-agent-skill-runner:test"),
+        docker_available_checker=lambda: True,
+        image_manager_factory=lambda _image: FakeImageManager(),
+    )
+
+    assert status.docker_daemon_available is True
+    assert status.available is expected_available
+    assert status.image_ready is expected_ready
+    assert status.last_build_attempt == ("built" if image_status == "built" else "failed")

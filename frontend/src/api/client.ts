@@ -11,14 +11,14 @@ export type MemoryCategory =
   | "risk_tolerance";
 
 export type RiskLevel = "low" | "medium" | "high" | "blocked";
-export type SkillRuntime = "function" | "web_app";
+export type SkillRuntime = "function" | "web_app" | "service";
 export type SkillStatus = "building" | "proposed" | "installed" | "failed" | "deleted";
 export type FunctionCategory = "backend_core" | "user" | "integration";
 export type FunctionAvailability = "available" | "disabled" | "unavailable";
 export type ChatMode = "chat" | "project";
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired" | "superseded";
 export type PermissionRequestScope = "build_time" | "runtime";
-export type ScheduleStatus = "pending" | "active" | "paused" | "denied";
+export type ScheduleStatus = "active" | "paused";
 export type ScheduleType = "daily" | "weekly" | "interval";
 export type AgentRunStatus =
   | "pending"
@@ -427,6 +427,7 @@ export interface NotionConnectionStatus {
   bot_id: string | null;
   workspace_name: string | null;
   data_source_id: string | null;
+  report_data_source_id: string | null;
   last_validated_at: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -453,10 +454,14 @@ export interface RunnerStatus {
   mode: string;
   selected_mode: string;
   docker_available: boolean;
+  docker_daemon_available: boolean;
   available: boolean;
   detail: string;
   image: string | null;
   image_status: string | null;
+  image_ready: boolean;
+  last_build_attempt: string | null;
+  last_build_at: string | null;
   image_detail: string | null;
   image_build_log: string | null;
   image_error: string | null;
@@ -479,8 +484,8 @@ export interface SchedulePayload {
 
 export interface SkillSchedule {
   id: number;
-  schedule_kind: "skill" | "platform";
-  function_id: string | null;
+  schedule_kind: "service" | "platform";
+  service_id: string | null;
   read_only: boolean;
   skill_id: number | null;
   skill_name: string | null;
@@ -495,11 +500,6 @@ export interface SkillSchedule {
   last_run_status: string | null;
   created_at: string;
   updated_at: string;
-}
-
-export interface ScheduleCreateResponse {
-  schedule: SkillSchedule;
-  approval_request_id: number | null;
 }
 
 export interface ProposedSkillValidation {
@@ -756,10 +756,22 @@ export const api = {
   removeGitHubConnection: () =>
     request<void>("/settings/integrations/github", { method: "DELETE" }),
   getNotionConnection: () => request<NotionConnectionStatus>("/settings/integrations/notion"),
-  putNotionConnection: (token: string, dataSourceId: string) =>
+  putNotionConnection: (token: string) =>
     request<NotionConnectionStatus>("/settings/integrations/notion", {
       method: "PUT",
-      body: JSON.stringify({ token, data_source_id: dataSourceId }),
+      body: JSON.stringify({ token }),
+    }),
+  putNotionDataSources: (dataSourceId: string, reportDataSourceId: string) =>
+    request<NotionConnectionStatus>("/settings/integrations/notion/data-sources", {
+      method: "PUT",
+      body: JSON.stringify({
+        data_source_id: dataSourceId,
+        report_data_source_id: reportDataSourceId,
+      }),
+    }),
+  removeNotionDataSources: () =>
+    request<NotionConnectionStatus>("/settings/integrations/notion/data-sources", {
+      method: "DELETE",
     }),
   removeNotionConnection: () =>
     request<void>("/settings/integrations/notion", { method: "DELETE" }),
@@ -823,22 +835,10 @@ export const api = {
     request<SkillVersionComparison>(`/skills/${skillId}/versions/${versionId}/compare`),
   listSchedules: (skillId?: number) =>
     request<SkillSchedule[]>(`/schedules${skillId ? `?skill_id=${skillId}` : ""}`),
-  createSchedule: (skillId: number, payload: { name: string; schedule: SchedulePayload }) =>
-    request<ScheduleCreateResponse>(`/skills/${skillId}/schedules`, {
-      method: "POST",
+  updateSchedule: (id: number, payload: { name: string; schedule: SchedulePayload }) =>
+    request<SkillSchedule>(`/schedules/${id}`, {
+      method: "PUT",
       body: JSON.stringify(payload),
-    }),
-  createManifestSchedule: (skillId: number) =>
-    request<ScheduleCreateResponse>(`/skills/${skillId}/schedules/from-manifest`, {
-      method: "POST",
-    }),
-  approveSchedule: (id: number) =>
-    request<SkillSchedule>(`/schedules/${id}/approve`, {
-      method: "POST",
-    }),
-  denySchedule: (id: number) =>
-    request<SkillSchedule>(`/schedules/${id}/deny`, {
-      method: "POST",
     }),
   pauseSchedule: (id: number) =>
     request<SkillSchedule>(`/schedules/${id}/pause`, {
@@ -847,10 +847,6 @@ export const api = {
   resumeSchedule: (id: number) =>
     request<SkillSchedule>(`/schedules/${id}/resume`, {
       method: "POST",
-    }),
-  deleteSchedule: (id: number) =>
-    request<void>(`/schedules/${id}`, {
-      method: "DELETE",
     }),
   runScheduleNow: (id: number) =>
     request<SkillRun>(`/schedules/${id}/run-now`, {

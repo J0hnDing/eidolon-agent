@@ -112,6 +112,48 @@ def test_build_failure_records_metadata_and_blocks(tmp_path: Path) -> None:
     assert "build failed" in metadata["last_build_log"]
 
 
+def test_failed_legacy_metadata_with_existing_image_is_unverified_and_rebuilt(tmp_path: Path) -> None:
+    fake_docker = FakeDocker(image_exists=True)
+    image_manager = manager(tmp_path, fake_docker)
+    write_metadata(
+        tmp_path / "docker_runner_build.json",
+        {
+            "status": "failed",
+            "image": "personal-agent-skill-runner:test",
+            "dockerfile_hash": image_manager._dockerfile_hash(),
+            "last_error": "Trusted Docker runner image build failed.",
+        },
+    )
+
+    before = image_manager.get_status()
+    after = image_manager.ensure_image()
+
+    assert before.status == "unverified"
+    assert before.last_build_status == "failed"
+    assert after.status == "built"
+    assert any(command[:2] == ["docker", "build"] for command in fake_docker.commands)
+
+
+def test_failed_rebuild_preserves_last_successful_image_hash(tmp_path: Path) -> None:
+    fake_docker = FakeDocker(image_exists=True, build_returncode=1)
+    image_manager = manager(tmp_path, fake_docker)
+    write_metadata(
+        tmp_path / "docker_runner_build.json",
+        {
+            "status": "built",
+            "image": "personal-agent-skill-runner:test",
+            "dockerfile_hash": "previous-trusted-hash",
+        },
+    )
+
+    with pytest.raises(DockerImageBuildError):
+        image_manager.ensure_image()
+
+    metadata = json.loads((tmp_path / "docker_runner_build.json").read_text(encoding="utf-8"))
+    assert metadata["last_successful_hash"] == "previous-trusted-hash"
+    assert image_manager.get_status().status == "outdated"
+
+
 def test_build_command_uses_only_trusted_inputs(tmp_path: Path) -> None:
     fake_docker = FakeDocker(image_exists=False)
     image_manager = manager(tmp_path, fake_docker)

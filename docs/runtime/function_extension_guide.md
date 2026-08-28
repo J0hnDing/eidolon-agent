@@ -63,5 +63,3 @@ Design input/output and permission contract
 ```
 
 Adding only a seed entry is invalid: ProductManager could select a function that has no callable implementation.
-
-A scheduler-only backend-core function must additionally be marked unavailable in the catalog, excluded from MCP, routed through a backend dispatcher that rejects every non-scheduler source, and registered by `SchedulerService` with a stable replacement job id. It must not masquerade as an installed `Skill` or bypass user-skill approval checks through a synthetic skill record.

@@ -39,7 +39,7 @@ def validate_manifest_package(skill_dir: Path, manifest: SkillManifest) -> None:
         raise ManifestValidationError("skills require tests/")
     entrypoint_path = (
         manifest.entrypoint
-        if manifest.runtime == "function"
+        if manifest.runtime in {"function", "service"}
         else _web_app_entrypoint_path(skill_dir, manifest.entrypoint)
     )
     for relative_path in (entrypoint_path, manifest.instructions_path):

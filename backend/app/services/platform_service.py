@@ -11,13 +11,13 @@ from app.services.integration_service import (
     build_default_integration_service,
 )
 
-NOTION_DONE_CLEANUP_FUNCTION_ID = "backend.notion.todo.cleanup_done"
+NOTION_DONE_CLEANUP_SERVICE_ID = "backend.notion.todo.cleanup_done"
 MAX_CLEANUP_PAGES = 100
 PAGE_SIZE = 100
 MAX_REPORTED_ITEMS = 100
 
 
-class BackendCoreFunctionError(ValueError):
+class PlatformServiceError(ValueError):
     pass
 
 
@@ -143,22 +143,12 @@ class NotionDoneCleanupService:
 
 
 @dataclass
-class BackendCoreFunctionService:
+class PlatformServiceDispatcher:
     db: Session
     integrations: IntegrationService | None = None
 
-    def invoke(
-        self,
-        function_id: str,
-        input_json: dict[str, Any],
-        *,
-        source: str,
-    ) -> dict[str, Any]:
-        if source != "scheduler":
-            raise BackendCoreFunctionError("This backend-core function is scheduler-only")
-        if function_id != NOTION_DONE_CLEANUP_FUNCTION_ID:
-            raise BackendCoreFunctionError("Unknown scheduler-owned backend-core function")
-        if input_json:
-            raise BackendCoreFunctionError("The Notion done cleanup function does not accept input")
+    def invoke(self, service_id: str) -> dict[str, Any]:
+        if service_id != NOTION_DONE_CLEANUP_SERVICE_ID:
+            raise PlatformServiceError("Unknown platform service")
         integrations = self.integrations or build_default_integration_service(self.db)
         return NotionDoneCleanupService(integrations).run()

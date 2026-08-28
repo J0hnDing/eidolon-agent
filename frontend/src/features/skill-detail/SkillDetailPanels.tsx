@@ -4,7 +4,6 @@ import {
   ApprovalRequest,
   ProposedSkillValidation,
   SkillRun,
-  SkillSchedule,
   SkillUpdateResponse,
   SkillVersion,
   SkillVersionComparison,
@@ -223,57 +222,6 @@ export function VersionComparisonPanel({ comparison }: { comparison: SkillVersio
       ))}
     </div>
   );
-}
-
-export function ScheduleList({
-  schedules,
-  isWorking,
-  onApprove,
-  onDeny,
-  onPause,
-  onResume,
-  onDelete,
-  onRunNow,
-}: {
-  schedules: SkillSchedule[];
-  isWorking: boolean;
-  onApprove: (id: number) => void;
-  onDeny: (id: number) => void;
-  onPause: (id: number) => void;
-  onResume: (id: number) => void;
-  onDelete: (id: number) => void;
-  onRunNow: (id: number) => void;
-}) {
-  if (schedules.length === 0) return <p className="muted">No schedules for this skill yet.</p>;
-  return (
-    <div className="run-list">
-      {schedules.map((schedule) => (
-        <article key={schedule.id} className="run-row">
-          <div>
-            <strong>{schedule.name}</strong>
-            <span>{humanSchedule(schedule)}</span>
-            <span>Last: {formatTimestamp(schedule.last_run_at, "never")}{schedule.last_run_status ? ` (${schedule.last_run_status})` : ""}</span>
-          </div>
-          <div className="button-row">
-            <span className={`badge status-${schedule.status}`}>{schedule.status}</span>
-            {schedule.status === "pending" && <><button type="button" onClick={() => onApprove(schedule.id)} disabled={isWorking}>Approve</button><button type="button" className="secondary" onClick={() => onDeny(schedule.id)} disabled={isWorking}>Deny</button></>}
-            {schedule.status === "active" && <button type="button" className="secondary" onClick={() => onPause(schedule.id)} disabled={isWorking}>Pause</button>}
-            {schedule.status === "paused" && <button type="button" onClick={() => onResume(schedule.id)} disabled={isWorking}>Resume</button>}
-            <button type="button" className="secondary" onClick={() => onRunNow(schedule.id)} disabled={isWorking || schedule.status !== "active"}>Run Now</button>
-            <button type="button" className="danger" onClick={() => onDelete(schedule.id)} disabled={isWorking}>Delete</button>
-          </div>
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function humanSchedule(schedule: SkillSchedule): string {
-  const data = schedule.schedule_json;
-  if (schedule.schedule_type === "daily") return `Daily at ${data.time} ${schedule.timezone}`;
-  if (schedule.schedule_type === "weekly") return `Weekly on ${data.day} at ${data.time} ${schedule.timezone}`;
-  if (schedule.schedule_type === "interval") return `Every ${data.every} ${data.unit}`;
-  return schedule.schedule_type;
 }
 
 export function formatTimestamp(value: string | null, fallback: string): string {

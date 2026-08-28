@@ -114,7 +114,7 @@ def effective_permission_plan(
     filesystem_write = list(runtime.get("filesystem_write", []) or [])
     codex = runtime.get("codex") if isinstance(runtime.get("codex"), dict) else {}
     effective_codex = {
-        "call_response": bool(codex.get("call_response", default_runtime.get("codex", {}).get("call_response", True))),
+        "call_response": bool(codex.get("call_response", False)),
         "internet_access": bool(codex.get("internet_access", False)),
     }
     for key, value in codex.items():

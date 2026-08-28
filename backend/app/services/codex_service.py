@@ -14,14 +14,14 @@ from sqlalchemy.orm import Session
 
 from app.models import Skill, SkillGenerationRequest, SkillVersion
 from app.schemas.codex_routing import ResolvedInvocationSettings
+from app.schemas.manifest import ManifestPermissions, manifest_permission_requests
 from app.schemas.skill_codex import SkillCodexRequest
-from app.services.codex_cli_service import codex_cli_service, should_use_real_codex
+from app.services.codex_cli_service import codex_cli_service
 from app.services.codex_invocation_recorder import CodexInvocationRecorder
 from app.services.codex_output_schema import output_schema_for_action, write_temporary_output_schema
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
 from app.services.default_permissions import (
     agent_permission_bounds,
-    default_build_time_dependencies,
     planning_permission_policy,
 )
 from app.services.dependency_environment import build_dependency_environment
@@ -34,7 +34,6 @@ from app.services.product_manager_contract_service import (
 )
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
 from app.services.skill_package_files import snapshot_skill_files
-from app.workflows.base import DEFAULT_BUILD_WORKFLOW
 from app.workflows.common.prompts import build_product_manager_prompt as build_common_product_manager_prompt
 from app.workflows.single_codex.prompts import build_prompt as build_single_codex_prompt
 from app.workflows.task_dag.prompts import (
@@ -421,555 +420,30 @@ class RealCodexAdapter:
         )
 
 
-class FakeCodexAdapter:
+class UnavailableCodexAdapter:
+    """Fail-closed adapter used when local Codex execution is unavailable."""
+
+    uses_codex_account_quota = False
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
     def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        task = plan.get("codex_task")
-        if task == "product_manager_plan_build":
-            blueprint = self._build_blueprint_from_request(plan, str(plan.get("user_message", "")))
-            permission_plan = self._permission_plan_from_generation_plan(plan.get("generation_plan", {}))
-            return subprocess.CompletedProcess(
-                args=["fake-codex-product-manager-plan-build"],
-                returncode=0,
-                stdout=json.dumps(
-                    {
-                        "decision": "proceed_to_approval",
-                        "user_prompt": None,
-                        "build_workflow": DEFAULT_BUILD_WORKFLOW,
-                        "blueprint": blueprint,
-                        "permission_plan": permission_plan,
-                    }
-                ),
-                stderr="",
-            )
-        if task == "product_manager_write_task_dag":
-            dag = self._build_task_dag_from_plan(plan.get("blueprint_json", {}), plan.get("generation_plan", {}))
-            return subprocess.CompletedProcess(
-                args=["fake-codex-product-manager-task-dag"],
-                returncode=0,
-                stdout=json.dumps({"task_dag": dag}),
-                stderr="",
-            )
-        if task == "product_manager_repair_blueprint":
-            blueprint = {
-                "goal": plan.get("user_request") or f"Repair {plan['skill_name']}.",
-                "skill_name": plan["skill_name"],
-                "runtime": plan.get("runtime", "function"),
-                "milestones": [
-                    {
-                        "name": "repair_skill",
-                        "summary": "Repair the proposed skill package and confirm tests pass.",
-                        "acceptance_criteria": [
-                            "manifest.json is valid",
-                            "tests pass",
-                            "permissions do not expand silently",
-                        ],
-                    }
-                ],
-            }
-            return subprocess.CompletedProcess(
-                args=["fake-codex-product-manager"],
-                returncode=0,
-                stdout=json.dumps({"blueprint": blueprint}),
-                stderr="",
-            )
-        if task == "product_manager_update_review":
-            decision = self._product_manager_update_decision(plan)
-            return subprocess.CompletedProcess(
-                args=["fake-codex-product-manager"],
-                returncode=0,
-                stdout=json.dumps(decision),
-                stderr="",
-            )
-        if task == "product_manager_summary":
-            return subprocess.CompletedProcess(
-                args=["fake-codex-product-manager"],
-                returncode=0,
-                stdout=json.dumps({"summary": plan.get("fallback_summary", "ProductManager completed the review.")}),
-                stderr="",
-            )
-        if task == "tester_write_tests":
-            self._write_tester_tests(output_dir, plan)
-            return subprocess.CompletedProcess(
-                args=["fake-codex-tester"],
-                returncode=0,
-                stdout="fake tester wrote tests",
-                stderr="",
-            )
-        if task == "skill_update":
-            readme_path = output_dir / "README.md"
-            existing = readme_path.read_text(encoding="utf-8") if readme_path.is_file() else f"# {plan['skill_name']}\n"
-            readme_path.write_text(
-                existing.rstrip()
-                + "\n\n## Proposed Update\n\n"
-                + str(plan.get("suggestion", "Improve this skill.")).strip()
-                + "\n",
-                encoding="utf-8",
-            )
-            manifest_path = output_dir / "manifest.json"
-            if manifest_path.is_file():
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                manifest["description"] = manifest.get("description") or plan.get("goal") or plan["skill_name"]
-                manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-            return subprocess.CompletedProcess(
-                args=["fake-codex-update"],
-                returncode=0,
-                stdout="fake update complete",
-                stderr="",
-            )
-        if task == "skill_update_repair":
-            return subprocess.CompletedProcess(
-                args=["fake-codex-update-repair"],
-                returncode=0,
-                stdout="fake update repair complete",
-                stderr="",
-            )
-        if task == "skill_runtime_codex":
-            return subprocess.CompletedProcess(
-                args=["fake-codex-skill-runtime"],
-                returncode=0,
-                stdout=json.dumps({"response": "Fake Codex response.", "notes": []}),
-                stderr="",
-            )
-        if task in {"atlas_knowledge_expand", "atlas_knowledge_explain_expand"}:
-            payload = {
-                "terms": [
-                    {
-                        "id": "core-concept",
-                        "label": "Core concept",
-                        "definition": "A deterministic fake term for local Atlas integration tests.",
-                    }
-                ],
-                "children": ["Immediate subtopic"],
-            }
-            if task == "atlas_knowledge_explain_expand":
-                payload["explanation"] = "A deterministic fake explanation for local Atlas integration tests."
-            return subprocess.CompletedProcess(
-                args=["fake-codex-atlas-knowledge"],
-                returncode=0,
-                stdout=json.dumps(payload),
-                stderr="",
-            )
-        permissions = plan["requested_permissions"]
-        runtime = str(plan.get("runtime") or "function")
-        entrypoint = "app:app" if runtime == "web_app" else "skill.py"
-        manifest = {
-            "manifest_version": 1,
-            "name": plan["skill_name"],
-            "description": plan.get("description") or plan.get("goal") or plan["skill_name"],
-            "runtime": runtime,
-            "entrypoint": entrypoint,
-            "instructions_path": self._instructions_path_for_plan(plan),
-            "input_schema": plan.get("input_schema"),
-            "output_schema": plan.get("output_schema"),
-            "function_requirements": list(plan.get("function_requirements", []) or []),
-            "integration_requirements": list(plan.get("integration_requirements", []) or []),
-            "dependencies": plan.get("requested_dependencies", []),
-            "permissions": permissions,
-            "schedule": plan.get("schedule"),
-        }
-        (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        description = plan.get("description") or plan.get("goal") or plan["skill_name"]
-        (output_dir / "README.md").write_text(
-            f"# {plan['display_name']}\n\n{description}\n",
-            encoding="utf-8",
-        )
-        if manifest["instructions_path"]:
-            (output_dir / "SKILL.md").write_text(
-                "# Instructions\n\nUse this reusable capability with care. Do not perform unsafe actions.\n",
-                encoding="utf-8",
-            )
-        implementation_path = output_dir / ("app.py" if runtime == "web_app" else "skill.py")
-        implementation_source = (
-            "from fastapi import FastAPI\n"
-            "from fastapi.responses import HTMLResponse\n\n"
-            "app = FastAPI()\n\n"
-            "@app.get('/', response_class=HTMLResponse)\n"
-            "def index():\n"
-            "    return '''<!doctype html><html><head><meta charset=\"utf-8\"><title>Generated Web App</title>"
-            "<style>body{font-family:system-ui;margin:2rem}button{padding:.6rem 1rem}</style></head>"
-            "<body><h1>Generated Web Application</h1><p id=\"state\">Ready</p>"
-            "<button onclick=\"document.getElementById('state').textContent='Updated by the app'\">Interact</button>"
-            "</body></html>'''\n"
-            if runtime == "web_app"
-            else (
-                "import json\n"
-                "import sys\n\n"
-                "def main():\n"
-                "    payload = json.loads(sys.stdin.read() or '{}')\n"
-                "    print(json.dumps({'title': 'Generated Proposed Skill', 'items': [], 'input': payload, 'warnings': []}))\n\n"
-                "if __name__ == '__main__':\n"
-                "    main()\n"
-            )
-        )
-        implementation_path.write_text(implementation_source, encoding="utf-8")
-        if plan.get("builder_writes_tests", True):
-            tests_dir = output_dir / "tests"
-            test_path = tests_dir / ("test_app.py" if runtime == "web_app" else "test_skill.py")
-            test_source = (
-                _web_app_smoke_test_source("Generated Web Application")
-                if runtime == "web_app"
-                else (
-                    "import json\n"
-                    "import subprocess\n"
-                    "import sys\n"
-                    "from pathlib import Path\n\n"
-                    "def test_generated_skill_outputs_json():\n"
-                    "    skill_path = Path(__file__).resolve().parents[1] / 'skill.py'\n"
-                    "    result = subprocess.run([sys.executable, str(skill_path)], input='{}', capture_output=True, text=True, timeout=5, shell=False)\n"
-                    "    assert result.returncode == 0\n"
-                    "    assert isinstance(json.loads(result.stdout), dict)\n"
-                )
-            )
-            test_path.write_text(test_source, encoding="utf-8")
-        self._write_interface_artifact(output_dir, plan)
-        return subprocess.CompletedProcess(args=["fake-codex"], returncode=0, stdout="fake generation complete", stderr="")
-
-    def _write_interface_artifact(self, output_dir: Path, plan: dict) -> None:
-        context = plan.get("task_context")
-        if not isinstance(context, dict):
-            return
-        task_node = context.get("task_node")
-        if not isinstance(task_node, dict):
-            return
-        expected_paths = [
-            str(path).replace("\\", "/").removeprefix("./")
-            for path in task_node.get("write_paths", []) or []
-            if (output_dir / str(path)).is_file()
-        ]
-        parent_paths: set[str] = set()
-        for parent in context.get("parent_interface_artifacts", []) or []:
-            if not isinstance(parent, dict):
-                continue
-            for key in ("created_paths", "updated_paths"):
-                parent_paths.update(str(path) for path in parent.get(key, []) or [])
-        update_paths = parent_paths | {"manifest.json"}
-        declared_entrypoint = None
-        manifest_path = output_dir / "manifest.json"
-        if manifest_path.is_file():
-            try:
-                manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-                if isinstance(manifest_payload, dict):
-                    declared_entrypoint = manifest_payload.get("entrypoint")
-            except json.JSONDecodeError:
-                declared_entrypoint = None
-        artifact = {
-            "created_paths": [path for path in expected_paths if path not in update_paths],
-            "updated_paths": [path for path in expected_paths if path in update_paths],
-            "interfaces": {
-                "entrypoint": (
-                    declared_entrypoint
-                    or ("app:app" if (output_dir / "app.py").is_file() else None)
-                    or ("skill.py" if (output_dir / "skill.py").is_file() else None)
-                ),
-                "input_schema": plan.get("input_schema") or {},
-                "output_schema": plan.get("output_schema") or {},
-            },
-            "contracts_for_children": ["Child tasks may rely on the interfaces declared in this artifact."],
-            "known_limitations": [],
-        }
-        (output_dir / "interface_artifact.json").write_text(json.dumps(artifact, indent=2), encoding="utf-8")
-
-    def _permission_plan_from_generation_plan(self, plan: dict) -> dict:
-        runtime_dependencies = list(plan.get("requested_dependencies", []) or [])
-        build_time_dependencies = [
-            dependency
-            for dependency in runtime_dependencies
-            if str(dependency).lower() not in default_build_time_dependencies()
-        ]
-        return {
-            "build_time": {
-                "internet_research": bool(plan.get("requested_network_domains") or plan.get("requested_dependencies")),
-                "dependencies": build_time_dependencies,
-            },
-            "runtime": {
-                "dependencies": runtime_dependencies,
-                "network": list(plan.get("requested_network_domains", []) or []),
-                "codex": {
-                    "internet_access": bool(
-                        (
-                            (plan.get("requested_permissions") or {}).get("codex", {})
-                            if isinstance(plan.get("requested_permissions"), dict)
-                            else {}
-                        ).get("internet_access", False)
-                    ),
-                },
-            },
-        }
-
-    def _flat_runtime_permissions(self, plan: dict) -> dict:
-        permissions = plan.get(
-            "requested_permissions",
-            {"network": [], "filesystem_read": [], "filesystem_write": [], "secrets": [], "shell": False},
-        )
-        if not isinstance(permissions, dict):
-            permissions = {"network": [], "filesystem_read": [], "filesystem_write": [], "secrets": [], "shell": False}
-        network = list(permissions.get("network", plan.get("requested_network_domains", [])) or [])
-        if not network:
-            network = list(plan.get("requested_network_domains", []) or [])
-        return {
-            "network": network,
-            "filesystem_read": [
-                path
-                for path in list(permissions.get("filesystem_read", []) or [])
-                if str(path).replace("\\", "/").removeprefix("./").rstrip("/") != "cache"
-            ],
-            "filesystem_write": [
-                path
-                for path in list(permissions.get("filesystem_write", []) or [])
-                if str(path).replace("\\", "/").removeprefix("./").rstrip("/") != "cache"
-            ],
-            "secrets": list(permissions.get("secrets", []) or []),
-            "shell": bool(permissions.get("shell", False)),
-            "codex": self._fake_codex_permissions(permissions, network),
-        }
-
-    def _fake_codex_permissions(self, permissions: dict, network: list[str]) -> dict[str, bool]:
-        raw_codex = permissions.get("codex")
-        if not isinstance(raw_codex, dict):
-            raw_codex = {}
-        return {
-            "call_response": bool(raw_codex.get("call_response", True)),
-            "internet_access": bool(raw_codex.get("internet_access", bool(network))),
-        }
-
-    def _build_blueprint_from_request(self, plan: dict, user_message: str) -> dict:
-        identity = _fallback_skill_identity(user_message)
-        runtime = _fallback_runtime(user_message)
-        available_ids = {
-            str(entry.get("id"))
-            for entry in plan.get("function_catalog_index", []) or []
-            if isinstance(entry, dict)
-        }
-        functions = []
-        if "github" in user_message.lower() and "trending" in user_message.lower():
-            if "github.repository.trending.list" in available_ids:
-                functions.append("github.repository.trending.list")
-        return {
-            "name": identity["skill_name"],
-            "description": user_message,
-            "runtime": runtime,
-            "input_schema": {"type": "object", "additionalProperties": True} if runtime == "function" else None,
-            "output_schema": {"type": "object", "additionalProperties": True} if runtime == "function" else None,
-            "expected_behavior": ["Implement the requested reusable capability."],
-            "functions": functions,
-            "schedule": _fallback_schedule(user_message) if runtime == "function" else None,
-        }
-
-    def _build_task_dag_from_plan(self, blueprint: dict, plan: dict) -> dict:
-        expected_files = self._skill_package_files(plan.get("files_to_generate") or ["manifest.json"])
-        if "manifest.json" not in expected_files:
-            expected_files.insert(0, "manifest.json")
-        node = {
-            "id": "core_skill",
-            "task_prompt": "Create the core proposed skill package.",
-            "depends_on": [],
-            "difficulty": "easy",
-            "requires_tests": True,
-            "parallel_safe": True,
-            "write_paths": [path for path in expected_files if path != "manifest.json"],
-            "acceptance_criteria": list(
-                blueprint.get("expected_behavior")
-                or [
-                    "manifest.json is valid",
-                    "required skill files exist",
-                    "skill tests pass",
-                    (
-                        "web application exposes its declared ASGI entrypoint"
-                        if plan.get("runtime") == "web_app"
-                        else "function skill uses JSON stdin/stdout"
-                    ),
-                ]
-            ),
-            "test_expectations": ["validate manifest and generated skill behavior"],
-            "function_ids": list(blueprint.get("functions", []) or []),
-        }
-        return {"schema_version": 1, "nodes": [node]}
-
-    def _skill_package_files(self, value: object) -> list[str]:
-        raw_files = value if isinstance(value, list) else []
-        blocked_names = {"intent_prompt.json", "decision.json", "blueprint.json", "permissions.json", "task_dag.json"}
-        files: list[str] = []
-        for item in raw_files:
-            path = str(item).replace("\\", "/").strip()
-            if not path:
-                continue
-            if path in blocked_names or path.startswith("tasks/") or path.startswith("milestones/"):
-                continue
-            if path.startswith("tests/") or "/test_" in path or path.endswith("_test.py"):
-                continue
-            if path not in files:
-                files.append(path)
-        return files
-
-    def _instructions_path_for_plan(self, plan: dict) -> str | None:
-        files = plan.get("files_to_generate")
-        if isinstance(files, list) and any(str(path).replace("\\", "/") == "SKILL.md" for path in files):
-            return "SKILL.md"
-        return None
-
-    def _product_manager_update_decision(self, plan: dict) -> dict:
-        suggestion = str(plan.get("suggestion", "")).strip()
-        requested_network_domains: list[str] = []
-        requested_dependencies: list[str] = []
-        decision = {
-            "decision": "build_next_milestone",
-            "summary": f"Update {plan['skill_name']} with this improvement: {suggestion}",
-        }
-        decision["blueprint"] = {
-            "goal": decision["summary"],
-            "skill_name": plan["skill_name"],
-            "runtime": plan.get("runtime", "function"),
-            "suggestion": suggestion,
-            "permission_plan": {
-                "build_time": {
-                    "internet_research": bool(requested_network_domains or requested_dependencies),
-                    "dependencies": requested_dependencies,
-                },
-                "runtime": {
-                    "network": requested_network_domains,
-                    "filesystem_read": [],
-                    "filesystem_write": ["./cache"] if requested_network_domains else [],
-                    "secrets": [],
-                    "shell": False,
-                    "codex": {"call_response": True, "internet_access": bool(requested_network_domains)},
-                    "dependencies": requested_dependencies,
-                },
-            },
-            "requested_network_domains": requested_network_domains,
-            "requested_dependencies": requested_dependencies,
-            "milestones": [
-                {
-                    "name": "update_version",
-                    "summary": "Copy the active version, implement the requested improvement, and validate the draft.",
-                    "acceptance_criteria": [
-                        "active version folder is not modified",
-                        "draft version manifest is valid",
-                        "draft version tests pass when executable",
-                        "runtime permission changes are detected before activation",
-                    ],
-                }
-            ],
-        }
-        return decision
-
-    def _write_tester_tests(self, output_dir: Path, plan: dict) -> None:
-        input_schema = plan.get("input_schema")
-        output_schema = plan.get("output_schema")
-        sample_input = self._sample_input_from_schema(input_schema)
-        required_output_fields = []
-        if isinstance(output_schema, dict) and isinstance(output_schema.get("required"), list):
-            required_output_fields = [item for item in output_schema["required"] if isinstance(item, str)]
-
-        tests_dir = output_dir / "tests"
-        task_id = str(plan.get("task_id") or (plan.get("task_node") or {}).get("id") or "").strip()
-        requested_test_file = str(plan.get("test_file") or "").strip()
-        if requested_test_file:
-            test_relative_path = requested_test_file
-        elif task_id:
-            test_relative_path = f"tests/test_{task_id}.py"
-        else:
-            test_relative_path = "tests/test_app.py" if plan.get("runtime") == "web_app" else "tests/test_skill.py"
-        test_path = output_dir / test_relative_path
-        if not tests_dir.is_dir() or test_path.parent != tests_dir:
-            raise CodexGenerationError("Tester requires the backend-created tests/ directory")
-        if plan.get("runtime") == "web_app":
-            test_path.write_text(
-                _web_app_smoke_test_source(),
-                encoding="utf-8",
-            )
-            return
-        test_path.write_text(
-            "import json\n"
-            "import subprocess\n"
-            "import sys\n"
-            "from pathlib import Path\n\n"
-            f"EXPECTED_NAME = {json.dumps(plan.get('skill_name'))}\n"
-            f"SAMPLE_INPUT_JSON = {json.dumps(json.dumps(sample_input))}\n"
-            f"REQUIRED_OUTPUT_FIELDS = {json.dumps(required_output_fields)}\n\n"
-            "ROOT = Path(__file__).resolve().parents[1]\n\n"
-            "def run_skill(raw_input):\n"
-            "    skill_path = ROOT / 'skill.py'\n"
-            "    return subprocess.run(\n"
-            "        [sys.executable, str(skill_path)],\n"
-            "        input=raw_input,\n"
-            "        capture_output=True,\n"
-            "        text=True,\n"
-            "        timeout=5,\n"
-            "        shell=False,\n"
-            "    )\n\n"
-            "def parse_stdout(stdout):\n"
-            "    parsed = json.loads(stdout)\n"
-            "    assert isinstance(parsed, dict)\n"
-            "    return parsed\n\n"
-            "def test_manifest_matches_blueprint_and_safe_contract():\n"
-            "    manifest = json.loads((ROOT / 'manifest.json').read_text(encoding='utf-8'))\n"
-            "    assert manifest['name'] == EXPECTED_NAME\n"
-            "    assert manifest['permissions']['shell'] is False\n"
-            "    assert manifest['permissions']['secrets'] == []\n"
-            "    assert isinstance(manifest.get('dependencies', []), list)\n"
-            "\n"
-            "def test_skill_accepts_representative_input_and_outputs_json_object():\n"
-            "    result = run_skill(SAMPLE_INPUT_JSON)\n"
-            "    assert result.returncode == 0, result.stderr\n"
-            "    output = parse_stdout(result.stdout)\n"
-            "    for field in REQUIRED_OUTPUT_FIELDS:\n"
-            "        assert field in output\n\n"
-            "def test_skill_handles_empty_input_without_traceback():\n"
-            "    result = run_skill('{}')\n"
-            "    assert result.returncode == 0, result.stderr\n"
-            "    parse_stdout(result.stdout)\n",
-            encoding="utf-8",
-        )
-
-    def _sample_input_from_schema(self, schema: object) -> dict:
-        if not isinstance(schema, dict) or schema.get("type") != "object":
-            return {}
-        properties = schema.get("properties")
-        if not isinstance(properties, dict):
-            return {}
-        required = schema.get("required")
-        field_names = required if isinstance(required, list) and required else list(properties.keys())
-        sample = {}
-        for raw_name in field_names:
-            if not isinstance(raw_name, str):
-                continue
-            sample[raw_name] = self._sample_value_for_schema(properties.get(raw_name, {}))
-        return sample
-
-    def _sample_value_for_schema(self, schema: object) -> object:
-        if not isinstance(schema, dict):
-            return "sample"
-        if "default" in schema:
-            return schema["default"]
-        enum_values = schema.get("enum")
-        if isinstance(enum_values, list) and enum_values:
-            return enum_values[0]
-        schema_type = schema.get("type")
-        if schema_type == "string":
-            min_length = int(schema.get("minLength") or schema.get("min_length") or 1)
-            max_length = schema.get("maxLength") or schema.get("max_length")
-            value = "sample"
-            if len(value) < min_length:
-                value = "a" * min_length
-            if isinstance(max_length, int) and len(value) > max_length:
-                value = value[:max_length]
-            return value
-        if schema_type in {"integer", "number"}:
-            return 1
-        if schema_type == "boolean":
-            return False
-        if schema_type == "array":
-            return []
-        if schema_type == "object":
-            return self._sample_input_from_schema(schema)
-        return "sample"
+        raise CodexGenerationError(self.reason)
 
 
 def default_codex_adapter() -> CodexAdapter:
-    if should_use_real_codex():
-        return RealCodexAdapter()
-    return FakeCodexAdapter()
+    mode = os.getenv("PERSONAL_AGENT_CODEX_MODE", "auto").strip().lower()
+    if mode in {"disabled", "off"}:
+        return UnavailableCodexAdapter("Codex is disabled by PERSONAL_AGENT_CODEX_MODE.")
+    if mode in {"fake", "dev", "stub", "local"}:
+        return UnavailableCodexAdapter(
+            "Production fake Codex modes were removed. Configure a compatible Codex CLI or disable Codex explicitly."
+        )
+    status = codex_cli_service.resolve()
+    if status.available and status.compatible and status.resolved_path:
+        return RealCodexAdapter(command=status.resolved_path)
+    return UnavailableCodexAdapter(status.error or "A compatible Codex CLI is unavailable.")
 
 
 def _fallback_skill_identity(message: str) -> dict[str, str]:
@@ -1017,8 +491,11 @@ def _fallback_skill_identity(message: str) -> dict[str, str]:
 
 def _fallback_runtime(message: str) -> str:
     lowered = message.lower()
-    markers = ("web app", "web application", "interactive dashboard", "browser application")
-    return "web_app" if any(marker in lowered for marker in markers) else "function"
+    web_markers = ("web app", "web application", "interactive dashboard", "browser application")
+    if any(marker in lowered for marker in web_markers):
+        return "web_app"
+    service_markers = ("schedule", "scheduled", "recurring", "daily", "weekly", "every day")
+    return "service" if any(marker in lowered for marker in service_markers) else "function"
 
 
 def _fallback_schedule(message: str) -> dict[str, object] | None:
@@ -1038,7 +515,12 @@ def _fallback_schedule(message: str) -> dict[str, object] | None:
             "timezone": "America/Toronto",
             "input": {},
         }
-    return None
+    return {
+        "type": "daily",
+        "time": "09:00",
+        "timezone": "America/Toronto",
+        "input": {},
+    }
 
 
 @dataclass
@@ -1301,9 +783,9 @@ class CodexService:
         latest_reply = self._latest_project_user_reply(generation_request)
         session_schema_note = (
             "\n\nStructured-output transport note: keep blueprint as the structured object defined "
-            "by the output schema. For a function blueprint, encode input_schema and output_schema "
-            "as compact JSON strings. For a web_app blueprint, use null for both. When schedule is "
-            "not null, encode only schedule.input as a compact JSON string."
+            "by the output schema. For a function or service blueprint, encode input_schema and "
+            "output_schema as compact JSON strings. For a web_app blueprint, use null for both. "
+            "When schedule is not null, encode only schedule.input as a compact JSON string."
         )
         turn_input = initial_prompt + session_schema_note
         try:
@@ -1867,6 +1349,7 @@ class CodexService:
         result = self._generate_builder_with_test_guard(prompt, skill_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex repair failed")
+        self.finalize_manifest(skill_dir, plan, failure_context)
         return result
 
     def repair_skill_version(
@@ -1890,6 +1373,7 @@ class CodexService:
         result = self._generate_builder_with_test_guard(prompt, version_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex draft-version repair failed")
+        self.finalize_manifest(version_dir, plan, failure_context)
         return result
 
     def update_skill_version(
@@ -1916,6 +1400,11 @@ class CodexService:
         result = self._generate_builder_with_test_guard(prompt, version_dir, plan)
         if result.returncode != 0:
             raise CodexGenerationError(result.stderr or "Codex update failed")
+        self.finalize_manifest(
+            version_dir,
+            plan,
+            {"blueprint_json": blueprint, "permission_plan": permission_bounds},
+        )
         return result
 
     def write_tests_for_skill(
@@ -2103,8 +1592,14 @@ class CodexService:
             if not isinstance(permissions, dict):
                 manifest["permissions"] = skeleton["permissions"]
             else:
-                for key, value in skeleton["permissions"].items():
-                    permissions.setdefault(key, value)
+                try:
+                    parsed_permissions = ManifestPermissions.model_validate(permissions)
+                except ValueError:
+                    # Preserve invalid declarations so authoritative manifest
+                    # validation reports the exact generated contract error.
+                    pass
+                else:
+                    manifest["permissions"] = manifest_permission_requests(parsed_permissions)
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     def _manifest_skeleton(
@@ -2120,7 +1615,7 @@ class CodexService:
             {"runtime": {**permissions, "dependencies": runtime_plan.get("dependencies", [])}},
             plan,
         )
-        sanitized_permissions = self._runtime_permissions(sanitized_permission_plan["runtime"])
+        sanitized_permissions = self._manifest_permissions(sanitized_permission_plan["runtime"])
         runtime = str(blueprint.get("runtime") or plan.get("runtime") or "function")
         dependencies = list(
             runtime_plan.get("dependencies")
@@ -2167,7 +1662,7 @@ class CodexService:
         if not isinstance(raw_codex, dict):
             raw_codex = {}
         sanitized = {
-            "call_response": bool(raw_codex.get("call_response", True)),
+            "call_response": bool(raw_codex.get("call_response", False)),
             "internet_access": bool(raw_codex.get("internet_access", bool(network))),
         }
         for key, value in raw_codex.items():
@@ -2182,8 +1677,26 @@ class CodexService:
             "filesystem_write": list(runtime.get("filesystem_write", []) or []),
             "secrets": list(runtime.get("secrets", []) or []),
             "shell": bool(runtime.get("shell", False)),
-            "codex": runtime.get("codex", {"call_response": True, "internet_access": bool(runtime.get("network"))}),
+            "codex": runtime.get("codex", {"call_response": False, "internet_access": False}),
         }
+
+    @staticmethod
+    def _manifest_permissions(runtime: dict[str, object]) -> dict[str, object]:
+        """Serialize approval-gated runtime requests into manifest form."""
+
+        requested: dict[str, object] = {}
+        network = list(runtime.get("network", []) or [])
+        if network:
+            requested["network"] = network
+        raw_codex = runtime.get("codex") if isinstance(runtime.get("codex"), dict) else {}
+        codex = {
+            key: True
+            for key in ("call_response", "internet_access")
+            if raw_codex.get(key) is True
+        }
+        if codex:
+            requested["codex"] = codex
+        return requested
 
     def _flat_runtime_permissions(self, plan: dict[str, object]) -> dict[str, object]:
         permissions = plan.get(
@@ -2377,11 +1890,11 @@ Payload:
             "name": identity["skill_name"],
             "description": generation_request.user_message,
             "runtime": runtime,
-            "input_schema": {"type": "object", "additionalProperties": True} if runtime == "function" else None,
-            "output_schema": {"type": "object", "additionalProperties": True} if runtime == "function" else None,
+            "input_schema": {"type": "object", "additionalProperties": True} if runtime in {"function", "service"} else None,
+            "output_schema": {"type": "object", "additionalProperties": True} if runtime in {"function", "service"} else None,
             "expected_behavior": ["Implement the requested reusable capability."],
             "functions": [],
-            "schedule": _fallback_schedule(generation_request.user_message) if runtime == "function" else None,
+            "schedule": _fallback_schedule(generation_request.user_message) if runtime == "service" else None,
         }
 
     def _fallback_task_dag(
@@ -2465,7 +1978,7 @@ Payload:
                     "filesystem_write": ["./cache"] if requested_network_domains else [],
                     "secrets": [],
                     "shell": False,
-                    "codex": {"call_response": True, "internet_access": bool(requested_network_domains)},
+                    "codex": {"call_response": False, "internet_access": bool(requested_network_domains)},
                     "dependencies": requested_dependencies,
                 },
             },

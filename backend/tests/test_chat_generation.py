@@ -23,17 +23,23 @@ from app.services.codex_service import (
     DEFAULT_CODEX_ACTION_TIMEOUT_SECONDS,
     CodexGenerationError,
     CodexService,
-    FakeCodexAdapter,
     RealCodexAdapter,
+    UnavailableCodexAdapter,
     codex_action_timeout_seconds,
     codex_process_registry,
     default_codex_adapter,
 )
-from app.services.direct_chat_service import DirectChatService, RealDirectChatAdapter
+from app.services.direct_chat_service import (
+    DirectChatService,
+    RealDirectChatAdapter,
+    UnavailableDirectChatAdapter,
+    default_direct_chat_adapter,
+)
 from app.services.permission_service import PermissionService
 from app.services.product_manager_contract_service import ProductManagerContractError
 from app.services.product_manager_session_service import ProductManagerTurnResult
 from app.services.proposed_skill_service import ProposedSkillService
+from tests.fakes.codex import DeterministicCodexStub
 
 
 @pytest.fixture
@@ -47,11 +53,6 @@ def db_session() -> Generator[Session, None, None]:
     finally:
         session.close()
         Base.metadata.drop_all(bind=engine)
-
-
-@pytest.fixture(autouse=True)
-def use_fake_codex_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PERSONAL_AGENT_CODEX_MODE", "fake")
 
 
 class RecordingCodexAdapter:
@@ -99,7 +100,7 @@ class RecordingCodexAdapter:
         return subprocess.CompletedProcess(args=["recording-codex"], returncode=0, stdout="ok", stderr="")
 
 
-class FixedBlueprintAdapter(FakeCodexAdapter):
+class FixedBlueprintAdapter(DeterministicCodexStub):
     def __init__(self, plan: dict | None = None) -> None:
         self.plan = plan or skill_plan()
         self.called = False
@@ -119,7 +120,12 @@ class FixedBlueprintAdapter(FakeCodexAdapter):
             "runtime": {
                 "dependencies": list(source.get("requested_dependencies", [])),
                 "network": list(source.get("requested_network_domains", [])),
-                "codex": {"internet_access": False},
+                "codex": {
+                    "call_response": bool(
+                        (source.get("requested_permissions") or {}).get("codex", {}).get("call_response", False)
+                    ),
+                    "internet_access": False,
+                },
             },
         }
         blueprint = {
@@ -196,6 +202,7 @@ def skill_plan(**overrides) -> dict:
             "filesystem_write": ["./cache"],
             "secrets": [],
             "shell": False,
+            "codex": {"call_response": False, "internet_access": False},
         },
         "requested_network_domains": [],
         "requested_dependencies": [],
@@ -301,11 +308,11 @@ def test_chat_response_model_serializes_generation_request_fields(db_session: Se
 
 
 def test_project_mode_uses_one_product_manager_planning_action(db_session: Session) -> None:
-    codex_adapter = FakeCodexAdapter()
+    codex_adapter = DeterministicCodexStub()
     tasks: list[str] = []
     prompts: dict[str, str] = {}
 
-    class RecordingAdapter(FakeCodexAdapter):
+    class RecordingAdapter(DeterministicCodexStub):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             task = str(plan.get("codex_task"))
             tasks.append(task)
@@ -360,7 +367,7 @@ def test_project_build_instructions_are_colocated_with_workflow_packages() -> No
 
 
 def test_unsupported_project_reports_pm_reason_without_artifacts(db_session: Session, tmp_path: Path) -> None:
-    class UnsupportedAdapter(FakeCodexAdapter):
+    class UnsupportedAdapter(DeterministicCodexStub):
         def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
             if plan.get("codex_task") == "product_manager_plan_build":
                 return subprocess.CompletedProcess(
@@ -398,7 +405,7 @@ def test_unclear_project_asks_for_input_then_same_chat_reply_builds_plan(
     db_session: Session,
     tmp_path: Path,
 ) -> None:
-    class ClarifyingAdapter(FakeCodexAdapter):
+    class ClarifyingAdapter(DeterministicCodexStub):
         def __init__(self) -> None:
             self.plan_calls = 0
 
@@ -505,7 +512,7 @@ def test_product_manager_can_reject_after_clarification_without_creating_artifac
     db_session: Session,
     tmp_path: Path,
 ) -> None:
-    class RejectAfterClarificationAdapter(FakeCodexAdapter):
+    class RejectAfterClarificationAdapter(DeterministicCodexStub):
         def __init__(self) -> None:
             self.plan_calls = 0
 
@@ -828,6 +835,32 @@ def test_permission_expansion_from_plan_to_manifest_is_detected(
     assert runtime_request.reason_json["permission_expansion"] == {"network": ["example.com"]}
 
 
+def test_codex_call_response_expansion_requires_runtime_approval(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    generation_request = ChatOrchestrator(db_session).create_generation_request(
+        "Create a reusable local workflow skill."
+    )
+    approve_build_time_permissions(db_session, generation_request)
+    skill, _validation = CodexService(
+        db_session,
+        adapter=RecordingCodexAdapter(),
+        project_root=tmp_path,
+    ).generate_from_request(generation_request)
+    manifest_path = tmp_path / skill.manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["permissions"] = {"codex": {"call_response": True}}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    runtime_request = PermissionService(db_session, project_root=tmp_path).create_runtime_request(skill)
+
+    assert runtime_request.requested_permissions_json == {"codex": {"call_response": True}}
+    assert runtime_request.reason_json["permission_expansion"] == {
+        "codex": {"call_response": True}
+    }
+
+
 def test_empty_runtime_permissions_do_not_create_permission_expansion(
     tmp_path: Path,
     db_session: Session,
@@ -844,6 +877,9 @@ def test_empty_runtime_permissions_do_not_create_permission_expansion(
     ).generate_from_request(generation_request)
 
     runtime_request = PermissionService(db_session, project_root=tmp_path).create_runtime_request(skill)
+    assert runtime_request.requested_permissions_json == {}
+    assert runtime_request.risk_level == "low"
+    assert runtime_request.reason_json["runner_unsupported"] == []
     assert runtime_request.reason_json["permission_expansion"] == {}
     assert "Permission expansion detected" not in runtime_request.user_explanation
 
@@ -895,6 +931,12 @@ def test_install_decision_blocks_denied_runtime_permissions(
     assert decision.allowed is False
     assert decision.reason == "Runtime permission request is denied"
 
+    replacement = permission_service.create_runtime_request(skill)
+    assert replacement.id != request.id
+    assert replacement.status == "pending"
+    db_session.refresh(request)
+    assert request.status == "denied"
+
 
 def test_runtime_approval_is_superseded_when_manifest_permissions_change(
     tmp_path: Path,
@@ -916,7 +958,7 @@ def test_runtime_approval_is_superseded_when_manifest_permissions_change(
     manifest_path = tmp_path / skill.manifest_path
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["permissions"]["network"] = ["example.com"]
-    manifest["permissions"]["codex"]["internet_access"] = True
+    manifest["permissions"]["codex"] = {"call_response": True, "internet_access": True}
     manifest["risk_level"] = "medium"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
@@ -1410,7 +1452,7 @@ def test_product_manager_session_reuses_thread_and_sends_only_latest_answer(
                         "runtime": {
                             "dependencies": [],
                             "network": [],
-                            "codex": {"internet_access": False},
+                            "codex": {"call_response": False, "internet_access": False},
                         },
                     },
                 }
@@ -1669,7 +1711,7 @@ def test_builder_repair_rejects_non_proposed_skill_workspace(tmp_path: Path, db_
     db_session.add(skill)
     db_session.commit()
 
-    service = CodexService(db_session, adapter=FakeCodexAdapter(), project_root=tmp_path)
+    service = CodexService(db_session, adapter=DeterministicCodexStub(), project_root=tmp_path)
 
     with pytest.raises(CodexGenerationError, match="skills/proposed"):
         service.repair_skill(skill, {"failure_log": "failed"})
@@ -1708,6 +1750,32 @@ def test_builder_repair_restores_tester_owned_files(tmp_path: Path, db_session: 
 
     assert existing_test.read_text(encoding="utf-8") == "def test_original():\n    assert True\n"
     assert not (tests_dir / "test_replacement.py").exists()
+
+
+def test_builder_repair_canonicalizes_manifest_permissions(tmp_path: Path, db_session: Session) -> None:
+    skill_dir = tmp_path / "skills" / "proposed" / "repair_permissions"
+    skill_dir.mkdir(parents=True)
+    skill = Skill(
+        name="repair_permissions",
+        description="Canonicalize repaired manifests.",
+        runtime="function",
+        risk_level="low",
+        manifest_path="skills/proposed/repair_permissions/manifest.json",
+        status="building",
+        input_schema_json={"type": "object", "additionalProperties": True},
+        output_schema_json={"type": "object", "additionalProperties": True},
+    )
+    db_session.add(skill)
+    db_session.commit()
+
+    CodexService(
+        db_session,
+        adapter=DeterministicCodexStub(),
+        project_root=tmp_path,
+    ).repair_skill(skill, {"failure_log": "retry"})
+
+    manifest = json.loads((skill_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["permissions"] == {}
 
 
 def test_real_codex_adapter_auto_enables_search_for_network_plans(
@@ -1850,7 +1918,20 @@ def test_default_codex_mode_uses_real_when_cli_is_available(
     assert isinstance(default_codex_adapter(), RealCodexAdapter)
 
 
-def test_default_codex_mode_can_be_forced_fake(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_removed_fake_mode_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PERSONAL_AGENT_CODEX_MODE", "fake")
 
-    assert isinstance(default_codex_adapter(), FakeCodexAdapter)
+    adapter = default_codex_adapter()
+
+    assert isinstance(adapter, UnavailableCodexAdapter)
+    with pytest.raises(CodexGenerationError, match="fake Codex modes were removed"):
+        adapter.generate("prompt", Path.cwd(), {})
+
+
+def test_removed_fake_chat_mode_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PERSONAL_AGENT_CODEX_MODE", "fake")
+
+    adapter = default_direct_chat_adapter()
+
+    assert isinstance(adapter, UnavailableDirectChatAdapter)
+    assert "fake Codex modes were removed" in adapter.answer("prompt", "message")

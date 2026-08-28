@@ -10,6 +10,8 @@ Weekday = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "satur
 
 
 class SchedulePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     type: ScheduleType
     timezone: str = "America/Toronto"
     input: dict[str, Any] = Field(default_factory=dict)
@@ -33,20 +35,28 @@ class SchedulePayload(BaseModel):
 
     @model_validator(mode="after")
     def validate_schedule(self) -> "SchedulePayload":
-        if self.type == "daily" and not self.time:
-            raise ValueError("daily schedules require time")
-        if self.type == "weekly" and (not self.day or not self.time):
-            raise ValueError("weekly schedules require day and time")
+        if self.type == "daily":
+            if not self.time:
+                raise ValueError("daily schedules require time")
+            if self.day is not None or self.every is not None or self.unit is not None:
+                raise ValueError("daily schedules only support time, timezone, and input")
+        if self.type == "weekly":
+            if not self.day or not self.time:
+                raise ValueError("weekly schedules require day and time")
+            if self.every is not None or self.unit is not None:
+                raise ValueError("weekly schedules only support day, time, timezone, and input")
         if self.type == "interval":
             if self.every is None or self.unit is None:
                 raise ValueError("interval schedules require every and unit")
             if self.every < 1:
                 raise ValueError("interval every must be at least 1")
+            if self.time is not None or self.day is not None:
+                raise ValueError("interval schedules only support every, unit, timezone, and input")
         return self
 
 
-class ScheduleCreate(BaseModel):
-    name: str = Field(default="Skill schedule", min_length=1, max_length=128)
+class ScheduleUpdate(BaseModel):
+    name: str = Field(default="Service schedule", min_length=1, max_length=128)
     schedule: SchedulePayload
 
 
@@ -54,8 +64,8 @@ class ScheduleRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    schedule_kind: Literal["skill", "platform"] = "skill"
-    function_id: str | None = None
+    schedule_kind: Literal["service", "platform"] = "service"
+    service_id: str | None = None
     read_only: bool = False
     skill_id: int | None
     skill_name: str | None = None
@@ -70,8 +80,3 @@ class ScheduleRead(BaseModel):
     last_run_status: str | None
     created_at: datetime
     updated_at: datetime
-
-
-class ScheduleWithApproval(BaseModel):
-    schedule: ScheduleRead
-    approval_request_id: int | None = None

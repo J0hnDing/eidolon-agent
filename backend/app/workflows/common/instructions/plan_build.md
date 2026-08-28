@@ -14,6 +14,7 @@ Decision contract:
 Application skill definitions:
 - `runtime=function` is bounded one-shot Python execution through JSON stdin/stdout and has no dedicated interface surface.
 - `runtime=web_app` is a persistent importable ASGI application, such as `app:app`, that owns its interface and domain logic inside the skill package and appears in Applications.
+- `runtime=service` is a bounded JSON stdin/stdout Python endpoint that must have one recurring schedule. It has no dedicated interface, cannot be run manually, and is never exposed as a function to agents, skills, or MCP.
 - `function_catalog_index` is the backend-owned list of currently available backend-core, installed-user, and integration functions. Select functions only by exact `id`; selection does not grant runtime authorization.
 - Integration providers and operations are derived by the backend from selected function ids. Credentials, endpoints, secret-store details, and provider-specific authorization scopes do not belong in the blueprint.
 - A web application may create HTML, CSS, and JavaScript only inside its skill package and must not modify Eidolon frontend source.
@@ -22,14 +23,14 @@ Planning responsibilities for `proceed_to_approval`:
 - Write a concise blueprint without task nodes, task dependencies, generated files, or tests.
 - Choose top-level `build_workflow=single_codex` for a small or medium self-contained build, or `task_dag` when independently retryable tasks, explicit dependency boundaries, or staged integration are needed.
 - Keep `build_workflow` outside `blueprint` because it is backend routing state.
-- Use `runtime=web_app` only for a self-rendered interactive application; otherwise use `runtime=function`.
+- Use `runtime=web_app` only for a self-rendered interactive application. Use `runtime=service` for a recurring headless endpoint, and `runtime=function` for an unscheduled callable capability.
 - Use one filesystem-safe `name` and one concise `description`; do not return separate goal, skill-name, or display-name fields.
-- For a function, define complete object-shaped input and output JSON Schemas. For a web application, both schemas are `null`.
+- For a function or service, define complete object-shaped input and output JSON Schemas. For a web application, both schemas are `null`.
 - Describe concrete user-visible requirements in `expected_behavior`; do not return blueprint-level acceptance criteria. Task-specific acceptance criteria are created later only for the task-DAG workflow.
 - Put every needed catalog function id in `blueprint.functions` with no reason fields.
-- Include recurring schedule metadata only for a function. A web application always uses `schedule: null`.
+- A service requires recurring schedule metadata. Functions and web applications always use `schedule: null`.
 - Treat `permission_policy` as authoritative. Omit `default_allowed`, return only the exact `requires_approval` shape, and never request a blocked capability.
 
 Schedule intent:
-- Use `schedule: null` when recurrence was not requested or the runtime is `web_app`.
-- Otherwise derive time, day, timezone, and input from the request; use conservative defaults only when needed and disclose the assumption in the blueprint.
+- Use `schedule: null` for `function` and `web_app`.
+- For `service`, derive time, day, timezone, and input from the request; use conservative defaults only when needed and disclose the assumption in the blueprint.

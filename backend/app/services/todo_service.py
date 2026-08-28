@@ -5,6 +5,8 @@ from typing import Any, Protocol
 
 
 class TodoProvider(Protocol):
+    def validate_identity(self) -> dict[str, str | None]: ...
+
     def validate_connection(self) -> dict[str, str | None]: ...
 
     def list(self, *, page_size: int, start_cursor: str | None) -> dict[str, Any]: ...
@@ -57,6 +59,13 @@ class FakeTodoProvider:
 
     def validate_connection(self) -> dict[str, str]:
         self.calls.append(("validate_connection", {}))
+        return self._identity()
+
+    def validate_identity(self) -> dict[str, str]:
+        self.calls.append(("validate_identity", {}))
+        return self._identity()
+
+    def _identity(self) -> dict[str, str]:
         return {
             "bot_id": self.bot_id,
             "bot_name": self.bot_name,

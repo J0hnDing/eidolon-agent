@@ -34,6 +34,8 @@ class DockerImageStatus:
     detail: str
     last_build_log: str | None = None
     last_error: str | None = None
+    last_build_status: str | None = None
+    last_build_at: str | None = None
 
 
 class DockerImageManager:
@@ -63,12 +65,16 @@ class DockerImageManager:
     def get_status(self) -> DockerImageStatus:
         dockerfile_hash = self._dockerfile_hash()
         metadata = self._read_metadata()
-        last_successful_hash = metadata.get("dockerfile_hash") if metadata.get("status") == "built" else None
+        metadata_status = metadata.get("status")
+        last_successful_hash = metadata.get("last_successful_hash")
+        if last_successful_hash is None and metadata_status == "built":
+            last_successful_hash = metadata.get("dockerfile_hash")
         image_exists = self._image_exists()
         last_build_log = metadata.get("last_build_log")
         last_error = metadata.get("last_error")
+        last_build_at = metadata.get("finished_at") or metadata.get("started_at")
 
-        if metadata.get("status") == "failed":
+        if not image_exists and metadata_status == "failed":
             return DockerImageStatus(
                 image=self.image_name,
                 status="failed",
@@ -77,6 +83,8 @@ class DockerImageManager:
                 detail="The last trusted Docker runner image build failed.",
                 last_build_log=last_build_log,
                 last_error=last_error,
+                last_build_status=metadata_status,
+                last_build_at=last_build_at,
             )
         if not image_exists:
             return DockerImageStatus(
@@ -87,6 +95,23 @@ class DockerImageManager:
                 detail="Docker runner image is missing and will be built automatically before the next run.",
                 last_build_log=last_build_log,
                 last_error=last_error,
+                last_build_status=metadata_status,
+                last_build_at=last_build_at,
+            )
+        if last_successful_hash is None:
+            return DockerImageStatus(
+                image=self.image_name,
+                status="unverified",
+                dockerfile_hash=dockerfile_hash,
+                last_successful_hash=None,
+                detail=(
+                    "Docker runner image exists, but no successful build of the current trusted inputs is recorded. "
+                    "It will be rebuilt automatically before the next run."
+                ),
+                last_build_log=last_build_log,
+                last_error=last_error,
+                last_build_status=metadata_status,
+                last_build_at=last_build_at,
             )
         if last_successful_hash != dockerfile_hash:
             return DockerImageStatus(
@@ -97,15 +122,22 @@ class DockerImageManager:
                 detail="Docker runner image exists, but the trusted Dockerfile changed since the last recorded build.",
                 last_build_log=last_build_log,
                 last_error=last_error,
+                last_build_status=metadata_status,
+                last_build_at=last_build_at,
             )
+        detail = "Docker runner image is built from the current trusted Dockerfile."
+        if metadata_status == "failed":
+            detail += " A later rebuild attempt failed, but the current trusted image remains available."
         return DockerImageStatus(
             image=self.image_name,
             status="built",
             dockerfile_hash=dockerfile_hash,
             last_successful_hash=last_successful_hash,
-            detail="Docker runner image is built from the current trusted Dockerfile.",
+            detail=detail,
             last_build_log=last_build_log,
             last_error=last_error,
+            last_build_status=metadata_status,
+            last_build_at=last_build_at,
         )
 
     def build_command(self) -> list[str]:
@@ -131,7 +163,9 @@ class DockerImageManager:
                 "dockerfile": str(self.dockerfile),
                 "build_context": str(self.project_root),
                 "dockerfile_hash": dockerfile_hash,
+                "last_successful_hash": previous_status.last_successful_hash,
                 "started_at": datetime.now(UTC).isoformat(),
+                "finished_at": None,
                 "last_build_log": previous_status.last_build_log,
                 "last_error": None,
             }
@@ -154,6 +188,7 @@ class DockerImageManager:
                     "dockerfile": str(self.dockerfile),
                     "build_context": str(self.project_root),
                     "dockerfile_hash": dockerfile_hash,
+                    "last_successful_hash": previous_status.last_successful_hash,
                     "started_at": None,
                     "finished_at": finished_at,
                     "last_build_log": combined_log,
@@ -169,6 +204,7 @@ class DockerImageManager:
                 "dockerfile": str(self.dockerfile),
                 "build_context": str(self.project_root),
                 "dockerfile_hash": dockerfile_hash,
+                "last_successful_hash": dockerfile_hash,
                 "started_at": None,
                 "finished_at": finished_at,
                 "last_build_log": combined_log,

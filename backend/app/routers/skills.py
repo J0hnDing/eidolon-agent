@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import ApprovalRequest, Skill, SkillRun, SkillSchedule, SkillVersion
-from app.routers.schedules import create_manifest_schedule, create_skill_schedule, get_scheduler_service
+from app.routers.schedules import get_scheduler_service
 from app.schemas.agent_run import AgentRunRead
 from app.schemas.approval_request import ApprovalRequestRead
 from app.schemas.proposed_skill import (
@@ -14,7 +14,6 @@ from app.schemas.proposed_skill import (
     SkillFileRead,
 )
 from app.schemas.runner import RunnerStatusRead
-from app.schemas.schedule import ScheduleCreate, ScheduleWithApproval
 from app.schemas.skill import SkillRead, SkillUpdate
 from app.schemas.skill_codex import SkillCodexRequest, SkillCodexResponse
 from app.schemas.skill_run import SkillRunRead, SkillRunRequest
@@ -85,9 +84,14 @@ def run_skill(
     if skill.status != "installed":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only installed skills can be run")
     if skill.runtime != "function":
+        detail = (
+            "service skills run only through their required schedule"
+            if skill.runtime == "service"
+            else "web_app skills are opened as persistent application sessions, not bounded runs"
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="web_app skills are opened as persistent application sessions, not bounded runs",
+            detail=detail,
         )
     if not skill.enabled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Skill is disabled")
@@ -227,23 +231,6 @@ def compare_skill_version(skill_id: int, version_id: int, db: Session = Depends(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
-@router.post("/{skill_id}/schedules", response_model=ScheduleWithApproval, status_code=status.HTTP_201_CREATED)
-def create_schedule_for_skill(
-    skill_id: int,
-    payload: ScheduleCreate,
-    scheduler_service: SchedulerService = Depends(get_scheduler_service),
-) -> ScheduleWithApproval:
-    return create_skill_schedule(skill_id, payload, scheduler_service)
-
-
-@router.post("/{skill_id}/schedules/from-manifest", response_model=ScheduleWithApproval, status_code=status.HTTP_201_CREATED)
-def create_manifest_schedule_for_skill(
-    skill_id: int,
-    scheduler_service: SchedulerService = Depends(get_scheduler_service),
-) -> ScheduleWithApproval:
-    return create_manifest_schedule(skill_id, scheduler_service)
-
-
 @router.post("/{skill_id}/repair", response_model=AgentRunRead, status_code=status.HTTP_201_CREATED)
 def repair_skill_with_agents(skill_id: int, db: Session = Depends(get_db)) -> AgentRunRead:
     skill = db.get(Skill, skill_id)
@@ -346,6 +333,11 @@ def update_skill(skill_id: int, payload: SkillUpdate, db: Session = Depends(get_
     if skill.status != "installed":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only installed skills can be enabled or disabled")
     if payload.enabled is not None:
+        if skill.runtime == "service":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Service activation is controlled by its schedule",
+            )
         if skill.enabled and not payload.enabled:
             from app.services.web_app_runtime_service import WebAppRuntimeService
 

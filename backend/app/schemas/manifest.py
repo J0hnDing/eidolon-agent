@@ -5,7 +5,7 @@ from jsonschema import Draft202012Validator, SchemaError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 RiskLevel = Literal["low", "medium", "high"]
-SkillRuntime = Literal["function", "web_app"]
+SkillRuntime = Literal["function", "web_app", "service"]
 ScheduleType = Literal["daily", "weekly", "interval"]
 IntervalUnit = Literal["minutes", "hours", "days"]
 Weekday = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -23,18 +23,20 @@ KNOWN_TIMEZONES = {
 class ManifestCodexPermissions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    call_response: bool = True
+    call_response: bool = False
     internet_access: bool = False
 
 
 class ManifestPermissions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    network: list[str]
-    filesystem_read: list[str]
-    filesystem_write: list[str]
-    secrets: list[str]
-    shell: bool
+    # Canonical manifests contain approval-gated requests only. Defaults keep
+    # older explicit manifests readable and provide the effective runner view.
+    network: list[str] = Field(default_factory=list)
+    filesystem_read: list[str] = Field(default_factory=lambda: ["./cache"])
+    filesystem_write: list[str] = Field(default_factory=lambda: ["./cache"])
+    secrets: list[str] = Field(default_factory=list)
+    shell: bool = False
     codex: ManifestCodexPermissions = Field(default_factory=ManifestCodexPermissions)
 
     @field_validator("network")
@@ -59,6 +61,40 @@ class ManifestPermissions(BaseModel):
             if normalized == ".." or normalized.startswith("../") or "/../" in normalized:
                 raise ValueError("filesystem permissions cannot traverse parent directories")
         return paths
+
+
+def manifest_permission_requests(permissions: ManifestPermissions) -> dict[str, Any]:
+    """Return only non-default permission requests declared by a manifest."""
+
+    requested: dict[str, Any] = {}
+    if permissions.network:
+        requested["network"] = list(permissions.network)
+    non_default_reads = [
+        path
+        for path in permissions.filesystem_read
+        if path.replace("\\", "/").removeprefix("./").rstrip("/") != "cache"
+    ]
+    non_default_writes = [
+        path
+        for path in permissions.filesystem_write
+        if path.replace("\\", "/").removeprefix("./").rstrip("/") != "cache"
+    ]
+    if non_default_reads:
+        requested["filesystem_read"] = non_default_reads
+    if non_default_writes:
+        requested["filesystem_write"] = non_default_writes
+    if permissions.secrets:
+        requested["secrets"] = list(permissions.secrets)
+    if permissions.shell:
+        requested["shell"] = True
+    codex = {
+        key: True
+        for key in ("call_response", "internet_access")
+        if getattr(permissions.codex, key)
+    }
+    if codex:
+        requested["codex"] = codex
+    return requested
 
 
 class ManifestSchedule(BaseModel):
@@ -263,20 +299,26 @@ class SkillManifest(BaseModel):
         providers = [requirement.provider for requirement in self.integration_requirements]
         if len(providers) != len(set(providers)):
             raise ValueError("integration_requirements cannot contain duplicate providers")
-        if self.runtime == "function":
+        if self.runtime in {"function", "service"}:
             normalized = self.entrypoint.replace("\\", "/")
             if normalized.startswith("/") or normalized.startswith("~") or ":" in normalized:
-                raise ValueError("function entrypoint must be a relative Python file")
+                raise ValueError(f"{self.runtime} entrypoint must be a relative Python file")
             if normalized == ".." or normalized.startswith("../") or "/../" in normalized:
-                raise ValueError("function entrypoint cannot traverse parent directories")
+                raise ValueError(f"{self.runtime} entrypoint cannot traverse parent directories")
             if not normalized.endswith(".py"):
-                raise ValueError("function entrypoint must point to a Python file")
+                raise ValueError(f"{self.runtime} entrypoint must point to a Python file")
             for schema_name, schema in (
                 ("input_schema", self.input_schema),
                 ("output_schema", self.output_schema),
             ):
+                if self.runtime == "service" and schema is None:
+                    raise ValueError(f"service {schema_name} is required")
                 if schema is not None and schema.get("type") != "object":
-                    raise ValueError(f"function {schema_name} must declare type object")
+                    raise ValueError(f"{self.runtime} {schema_name} must declare type object")
+            if self.runtime == "function" and self.schedule is not None:
+                raise ValueError("function skills cannot declare schedules")
+            if self.runtime == "service" and self.schedule is None:
+                raise ValueError("service skills require a schedule")
         else:
             module, separator, attribute = self.entrypoint.partition(":")
             module_parts = module.split(".")
@@ -288,7 +330,7 @@ class SkillManifest(BaseModel):
             ):
                 raise ValueError("web_app entrypoint must use importable module:attribute syntax")
             if self.schedule is not None:
-                raise ValueError("web_app skills cannot declare bounded-run schedules")
+                raise ValueError("web_app skills cannot declare schedules")
         return self
 
 

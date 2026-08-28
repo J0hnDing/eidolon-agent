@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import AgentRun, AgentRunStep, ApprovalRequest, Skill, SkillGenerationRequest
+from app.schemas.manifest import manifest_permission_requests
 from app.services.manifest_validator import validate_manifest_file
 from app.services.proposed_skill_service import ProposedSkillService
 
@@ -243,7 +244,7 @@ class PermissionService:
         manifest = validate_manifest_file(skill_dir / "manifest.json")
         manifest_fingerprint = self._runtime_manifest_fingerprint(manifest)
         existing = self._latest_request(skill_id=skill.id, scope="runtime", request_type="install")
-        if existing and existing.status in {"pending", "approved", "denied"}:
+        if existing and existing.status in {"pending", "approved"}:
             reason_json = dict(existing.reason_json or {})
             existing_fingerprint = reason_json.get("manifest_permission_fingerprint")
             if existing_fingerprint is None and self._runtime_request_matches_manifest(existing, manifest):
@@ -261,7 +262,7 @@ class PermissionService:
             existing.decision_notes = "The final manifest permission or dependency contract changed."
             self.db.commit()
 
-        permissions = manifest.permissions.model_dump()
+        permissions = manifest_permission_requests(manifest.permissions)
         dependencies = list(manifest.dependencies)
         risk_level, blocked_reasons = self._risk_for_permissions(permissions, dependencies=dependencies)
         expansion = self.detect_permission_expansion(skill, permissions)
@@ -329,14 +330,21 @@ class PermissionService:
             expansion["shell"] = True
         actual_codex = actual_permissions.get("codex")
         planned_codex = planned.get("codex") if isinstance(planned, dict) else None
+        actual_codex_call = bool(actual_codex.get("call_response")) if isinstance(actual_codex, dict) else False
+        planned_codex_call = bool(planned_codex.get("call_response")) if isinstance(planned_codex, dict) else False
         actual_codex_internet = bool(actual_codex.get("internet_access")) if isinstance(actual_codex, dict) else False
         planned_codex_internet = (
             bool(planned_codex.get("internet_access"))
             if isinstance(planned_codex, dict)
             else bool(planned.get("network"))
         )
+        codex_expansion = {}
+        if actual_codex_call and not planned_codex_call:
+            codex_expansion["call_response"] = True
         if actual_codex_internet and not planned_codex_internet:
-            expansion["codex"] = {"internet_access": True}
+            codex_expansion["internet_access"] = True
+        if codex_expansion:
+            expansion["codex"] = codex_expansion
         return expansion
 
     def detect_dependency_expansion(self, skill: Skill, actual_dependencies: list[str]) -> list[str]:
@@ -561,7 +569,7 @@ class PermissionService:
     @staticmethod
     def _runtime_manifest_fingerprint(manifest: Any) -> str:
         contract = {
-            "permissions": manifest.permissions.model_dump(mode="json"),
+            "permissions": manifest_permission_requests(manifest.permissions),
             "dependencies": list(manifest.dependencies),
         }
         encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -570,7 +578,7 @@ class PermissionService:
     @staticmethod
     def _runtime_request_matches_manifest(request: ApprovalRequest, manifest: Any) -> bool:
         return (
-            request.requested_permissions_json == manifest.permissions.model_dump(mode="json")
+            request.requested_permissions_json == manifest_permission_requests(manifest.permissions)
             and list(request.requested_dependencies_json or []) == list(manifest.dependencies)
         )
 
@@ -586,15 +594,13 @@ class PermissionService:
         writes = [path for path in permissions.get("filesystem_write", []) if self._normalize_path(path) != "./cache"]
         if writes:
             reasons.append("Filesystem writes outside ./cache are not supported.")
-        codex_permissions = permissions.get("codex", {"call_response": True, "internet_access": bool(permissions.get("network"))})
+        codex_permissions = permissions.get("codex", {"call_response": False, "internet_access": False})
         if not isinstance(codex_permissions, dict):
             reasons.append("Codex permissions must be an object.")
         else:
             unsupported_codex_keys = sorted(set(codex_permissions) - {"call_response", "internet_access"})
             if unsupported_codex_keys:
                 reasons.append("Codex permissions other than call_response and internet_access are not supported.")
-            if codex_permissions.get("call_response") is False:
-                reasons.append("Codex call/response permission is required.")
             if codex_permissions.get("internet_access") and not permissions.get("network"):
                 reasons.append("Codex internet access requires runtime network permission.")
         return reasons
@@ -608,7 +614,7 @@ class PermissionService:
         if not isinstance(raw_codex, dict):
             raw_codex = {}
         normalized = {
-            "call_response": bool(raw_codex.get("call_response", True)),
+            "call_response": bool(raw_codex.get("call_response", False)),
             "internet_access": bool(raw_codex.get("internet_access", bool(network))),
         }
         for key, value in raw_codex.items():
@@ -690,7 +696,7 @@ class PermissionService:
             "shell": bool(runtime_plan.get("shell", False)),
             "codex": runtime_plan.get(
                 "codex",
-                {"call_response": True, "internet_access": bool(runtime_plan.get("network"))},
+                {"call_response": False, "internet_access": False},
             ),
         }
 
@@ -738,7 +744,7 @@ class PermissionService:
             blocked.append("Secrets access is blocked in this milestone.")
         if permissions.get("shell"):
             blocked.append("Shell access is blocked in this milestone.")
-        codex_permissions = permissions.get("codex", {"call_response": True, "internet_access": bool(network)})
+        codex_permissions = permissions.get("codex", {"call_response": False, "internet_access": False})
         if not isinstance(codex_permissions, dict):
             blocked.append("Codex permissions must be an object.")
             codex_permissions = {}
@@ -748,8 +754,6 @@ class PermissionService:
                 "Codex permissions other than call_response and internet_access are blocked: "
                 + ", ".join(unsupported_codex_keys)
             )
-        if codex_permissions.get("call_response") is False:
-            blocked.append("Codex call/response cannot be disabled for generated skills in this milestone.")
         if codex_permissions.get("internet_access") and not network:
             blocked.append("Codex internet access requires approved runtime network domains.")
         if blocked:

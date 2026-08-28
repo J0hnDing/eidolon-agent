@@ -45,7 +45,7 @@ ProductManager does not write these files directly; the backend validates its JS
    - Codex App Server receives the complete structured blueprint object in its output schema. Only free-form nested JSON values (`input_schema`, `output_schema`, and scheduled input) are transported as JSON strings, decoded to objects, and then checked against the canonical backend schema.
    - Decisions are `ask_user_for_input`, `stop_inplausible`, or `proceed_to_approval`. Clarification and rejection contain no planning fields; approval handoff requires a complete workflow, blueprint, and permission plan.
    - No blueprint, permission, DAG, or generated skill artifacts are created until `proceed_to_approval`.
-   - Purpose: choose `single_codex` or `task_dag`; provide one safe skill `name` and concise `description`; select the `function` or `web_app` execution protocol; define the complete function input/output schemas; describe expected user behavior and function-only schedule intent; select catalog functions; and draft both build-time needs and expected runtime permissions/dependencies.
+   - Purpose: choose `single_codex` or `task_dag`; provide one safe skill `name` and concise `description`; select the `function`, `service`, or `web_app` execution protocol; define complete function/service input/output schemas; describe expected user behavior and service-only schedule intent; select catalog functions; and draft both build-time needs and expected runtime permissions/dependencies.
    - ProductManager receives only available catalog ids, titles, descriptions, categories, and risks, never detailed schemas, endpoints, credential management, or secret-store details.
    - `build_workflow` is backend routing state stored on the agent run. It must not appear inside `blueprint` or in `blueprint.json` because downstream DAG, Builder, and Tester inputs do not need it.
    - Must not enumerate generated package files. Required Builder-owned paths are defined later by each task node's `write_paths` in `task_dag.json`.
@@ -154,7 +154,7 @@ Backend validation must reject the graph when:
 
 Task `write_paths` are Builder-owned skill package paths only. They must not include Tester-owned files such as `tests/test_skill.py` or `tests/test_<task_id>.py`; the backend sanitizes those paths out of ProductManager DAG output before validation.
 
-Function tasks normally claim a Python file entrypoint such as `skill.py`. Web-application tasks claim an importable ASGI module such as `app.py` and may claim skill-owned HTML/CSS/JavaScript assets. Neither runtime may claim Eidolon frontend files, custom Dockerfiles, or startup commands.
+Function and service tasks normally claim a Python file entrypoint such as `skill.py`; services preserve scheduler-only exposure. Web-application tasks claim an importable ASGI module such as `app.py` and may claim skill-owned HTML/CSS/JavaScript assets. No runtime may claim Eidolon frontend files, custom Dockerfiles, or startup commands.
 
 The blueprint does not define package file paths. ProductManager assigns Builder-owned paths directly to task nodes in `task_dag.json`; the backend does not invent omitted task outputs. `README.md` and `SKILL.md` are not universal package requirements; `manifest.json` remains backend-owned and is always validated, including any entrypoint or instructions file it declares.
 

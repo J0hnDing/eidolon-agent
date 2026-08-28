@@ -59,7 +59,7 @@ class IntegrationOperation:
             "normalized_errors": list(self.normalized_errors),
             "usage_example": self.usage_example,
             "helper": (
-                "integration_runtime_capabilities.call(operation=..., input=...) for function code; "
+                "integration_runtime_capabilities.call(operation=..., input=...) for function or service code; "
                 "web_runtime_capabilities.call_integration(operation=..., input=...) for web-app server code"
             ),
             "test_adapter": (
@@ -722,6 +722,29 @@ _TODO_UPDATE_INPUT = _object_schema(
 )
 _TODO_UPDATE_INPUT["minProperties"] = 2
 
+_REPORT_SELECT = {
+    "type": "string",
+    "enum": ["GitHub Projects", "AI News", "AI Research", "Macro", "Personal Feed"],
+}
+_REPORT_OUTPUT = _object_schema(
+    {
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "name": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "created_time": {"type": "string", "minLength": 1, "maxLength": 64},
+        "select": _REPORT_SELECT,
+    },
+    ["id", "name", "created_time", "select"],
+)
+_REPORT_PAGE_INPUT_PROPERTIES = {
+    "page_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
+    "start_cursor": {"type": "string", "minLength": 1, "maxLength": 2048},
+}
+_NOTION_BLOCKS = {
+    "type": "array",
+    "maxItems": 100,
+    "items": {"type": "object"},
+}
+
 _NOTION_OPERATIONS = (
     IntegrationOperation(
         operation_id="notion.todo.list",
@@ -798,6 +821,102 @@ _NOTION_OPERATIONS = (
         max_provider_response_bytes=2_000_000, normalized_errors=_NOTION_ERRORS,
         audit_resource_fields=("id",), fake_behavior="notion_todo_delete",
         usage_example={"operation": "notion.todo.delete", "input": {"id": "page-id"}},
+    ),
+    IntegrationOperation(
+        operation_id="notion.report.list",
+        title="List Notion reports",
+        description="List one bounded page of reports from the configured Notion Reports data source, newest-created first.",
+        provider="notion",
+        input_schema=_object_schema(dict(_REPORT_PAGE_INPUT_PROPERTIES), []),
+        output_schema=_object_schema(
+            {
+                "reports": {"type": "array", "maxItems": 100, "items": _REPORT_OUTPUT},
+                "has_more": {"type": "boolean"},
+                "next_cursor": {"type": ["string", "null"], "maxLength": 2048},
+            },
+            ["reports", "has_more", "next_cursor"],
+        ),
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="POST",
+        endpoint_template="/v1/data_sources/{configured_report_data_source_id}/query",
+        timeout_seconds=15, allow_redirects=False, max_pages=1, max_results=100,
+        max_provider_response_bytes=2_000_000, normalized_errors=_NOTION_ERRORS,
+        audit_resource_fields=(), fake_behavior="notion_report_list",
+        usage_example={"operation": "notion.report.list", "input": {"page_size": 25}},
+    ),
+    IntegrationOperation(
+        operation_id="notion.report.get",
+        title="Get Notion report",
+        description="Get one contained Notion report and one raw paginated page of its top-level blocks.",
+        provider="notion",
+        input_schema=_object_schema(
+            {
+                "id": {"type": "string", "minLength": 1, "maxLength": 128},
+                **_REPORT_PAGE_INPUT_PROPERTIES,
+            },
+            ["id"],
+        ),
+        output_schema=_object_schema(
+            {
+                "report": _REPORT_OUTPUT,
+                "blocks": _NOTION_BLOCKS,
+                "has_more": {"type": "boolean"},
+                "next_cursor": {"type": ["string", "null"], "maxLength": 2048},
+            },
+            ["report", "blocks", "has_more", "next_cursor"],
+        ),
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="GET",
+        endpoint_template="/v1/pages/{id} plus /v1/blocks/{id}/children after configured Reports containment check",
+        timeout_seconds=15, allow_redirects=False, max_pages=1, max_results=100,
+        max_provider_response_bytes=2_000_000, normalized_errors=_NOTION_ERRORS,
+        audit_resource_fields=("id",), fake_behavior="notion_report_get",
+        usage_example={"operation": "notion.report.get", "input": {"id": "page-id"}},
+    ),
+    IntegrationOperation(
+        operation_id="notion.report.create",
+        title="Create Notion report",
+        description="Create one report with raw Notion children in the configured Notion Reports data source.",
+        provider="notion",
+        input_schema=_object_schema(
+            {
+                "name": {"type": "string", "minLength": 1, "maxLength": 2000},
+                "select": _REPORT_SELECT,
+                "children": _NOTION_BLOCKS,
+            },
+            ["name", "select", "children"],
+        ),
+        output_schema=_REPORT_OUTPUT,
+        read_only=False, side_effect="write", risk="medium", resource_scope="none", method="POST",
+        endpoint_template="/v1/pages with fixed configured Reports data-source parent",
+        timeout_seconds=15, allow_redirects=False, max_pages=1, max_results=1,
+        max_provider_response_bytes=2_000_000, normalized_errors=_NOTION_ERRORS,
+        audit_resource_fields=(), fake_behavior="notion_report_create",
+        usage_example={
+            "operation": "notion.report.create",
+            "input": {"name": "Weekly report", "select": "GitHub Projects", "children": []},
+        },
+    ),
+    IntegrationOperation(
+        operation_id="notion.report.delete",
+        title="Delete Notion report",
+        description="Move one contained Notion report page to trash; Notion does not support permanent API deletion.",
+        provider="notion",
+        input_schema=_object_schema(
+            {"id": {"type": "string", "minLength": 1, "maxLength": 128}},
+            ["id"],
+        ),
+        output_schema=_object_schema(
+            {
+                "id": {"type": "string", "minLength": 1, "maxLength": 128},
+                "removed": {"type": "boolean", "const": True},
+            },
+            ["id", "removed"],
+        ),
+        read_only=False, side_effect="write", risk="medium", resource_scope="none", method="PATCH",
+        endpoint_template="/v1/pages/{id} with in_trash=true after configured Reports containment check",
+        timeout_seconds=15, allow_redirects=False, max_pages=1, max_results=1,
+        max_provider_response_bytes=2_000_000, normalized_errors=_NOTION_ERRORS,
+        audit_resource_fields=("id",), fake_behavior="notion_report_delete",
+        usage_example={"operation": "notion.report.delete", "input": {"id": "page-id"}},
     ),
 )
 

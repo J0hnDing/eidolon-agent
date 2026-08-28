@@ -14,7 +14,7 @@ Rules:
 - Integration tests use only the backend-provided deterministic fake adapter described in Tester context. Verify literal declared operation use, normalized output handling, and normalized failure handling without a token, secret store, Settings route, or live GitHub request.
 - Use subprocess inside pytest only for executable JSON stdin/stdout checks.
 - For `runtime=web_app`, import the declared ASGI application and test it in-process. Verify owned UI rendering and interactive HTTP routes without starting a persistent server or requiring a browser.
-- For `runtime=function`, retain bounded JSON stdin/stdout contract tests.
+- For `runtime=function` or `runtime=service`, retain bounded JSON stdin/stdout contract tests. Service tests must also verify the declared schedule input contract and must not start an HTTP server.
 - After writing the requested file, run at most one focused pytest command for that file. Fix only test-owned syntax, import, fixture, or assertion-shape mistakes; never weaken a behavioral requirement or edit implementation to make a test pass. Backend owns authoritative validation and any Builder repair loop.
 
 Return no prose. Write files only.

@@ -8,10 +8,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from jsonschema import Draft202012Validator, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import ApprovalRequest, Skill, SkillVersion
+from app.models import ApprovalRequest, Skill, SkillSchedule, SkillVersion
 from app.schemas.manifest import SkillManifest
 from app.schemas.proposed_skill import ProposedSkillValidationRead
 from app.services.manifest_validator import classify_permission_risk, validate_manifest_file
@@ -162,6 +163,7 @@ class SkillVersionService:
     def create_runtime_request_if_needed(self, skill: Skill, version: SkillVersion) -> ApprovalRequest | None:
         active = self.ensure_active_version(skill)
         candidate_manifest = SkillManifest.model_validate(version.manifest_json)
+        self._validate_candidate_runtime(skill, candidate_manifest)
         if candidate_manifest.integration_requirements:
             from app.services.integration_service import build_default_integration_service
 
@@ -238,6 +240,7 @@ class SkillVersionService:
                 self.create_runtime_request_if_needed(skill, version)
                 raise SkillVersionError("Runtime permission approval is required before activating this version")
         candidate_manifest = SkillManifest.model_validate(version.manifest_json)
+        self._validate_candidate_runtime(skill, candidate_manifest)
         if candidate_manifest.integration_requirements:
             from app.services.integration_service import build_default_integration_service
 
@@ -313,6 +316,23 @@ class SkillVersionService:
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
+
+    def _validate_candidate_runtime(self, skill: Skill, manifest: SkillManifest) -> None:
+        if manifest.runtime != skill.runtime:
+            raise SkillVersionError("Skill updates cannot change runtime type")
+        if manifest.runtime != "service":
+            return
+        schedule = self.db.scalar(
+            select(SkillSchedule).where(SkillSchedule.skill_id == skill.id)
+        )
+        if schedule is None:
+            raise SkillVersionError("Service is missing its required runtime schedule")
+        try:
+            Draft202012Validator(manifest.input_schema or {}).validate(schedule.input_json)
+        except ValidationError as exc:
+            raise SkillVersionError(
+                f"Existing service schedule input is incompatible with this version: {exc.message}"
+            ) from exc
 
     def _create_initial_version_from_folder(self, skill: Skill, source_dir: Path) -> SkillVersion:
         destination = self._versions_root(skill) / "v1"

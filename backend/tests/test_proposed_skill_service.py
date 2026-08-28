@@ -192,6 +192,14 @@ def test_install_registers_manifest_declared_schedule(
     skill_dir = service.proposed_dir("install_scheduled")
     manifest_path = skill_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["runtime"] = "service"
+    manifest["input_schema"] = {
+        "type": "object",
+        "properties": {"limit": {"type": "integer"}},
+        "required": ["limit"],
+        "additionalProperties": False,
+    }
+    manifest["output_schema"] = {"type": "object", "additionalProperties": True}
     manifest["schedule"] = {
         "type": "weekly",
         "day": "monday",
@@ -205,18 +213,16 @@ def test_install_registers_manifest_declared_schedule(
 
     schedule = db_session.scalar(select(SkillSchedule).where(SkillSchedule.skill_id == installed.id))
     assert schedule is not None
-    assert schedule.status == "pending"
+    assert installed.runtime == "service"
+    assert installed.enabled is True
+    assert schedule.status == "paused"
     assert schedule.schedule_type == "weekly"
     assert schedule.schedule_json["day"] == "monday"
     assert schedule.input_json == {"limit": 10}
-    approval = db_session.scalar(
-        select(ApprovalRequest)
-        .where(ApprovalRequest.skill_id == installed.id)
-        .where(ApprovalRequest.schedule_id == schedule.id)
-        .where(ApprovalRequest.request_type == "schedule")
-    )
-    assert approval is not None
-    assert approval.status == "pending"
+    approvals = db_session.scalars(
+        select(ApprovalRequest).where(ApprovalRequest.skill_id == installed.id)
+    ).all()
+    assert approvals == []
 
 
 def test_refuses_to_install_invalid_manifest(service: ProposedSkillService) -> None:

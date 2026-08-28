@@ -329,6 +329,16 @@ textarea {
   gap: 10px;
 }
 
+.settings-subsection + .settings-subsection {
+  border-top: 1px solid #e1e6ee;
+  margin-top: 6px;
+  padding-top: 18px;
+}
+
+.settings-subsection h3 {
+  margin: 0;
+}
+
 .error-text {
   border: 1px solid #efb5ae;
   border-radius: 6px;

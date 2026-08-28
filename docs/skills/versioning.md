@@ -18,7 +18,7 @@ active, draft, proposed_update, archived, discarded
 
 ## Update Rule
 
-Updates copy the active version into a new draft/proposed version folder. Builder modifies only the copied draft and preserves its `function` or `web_app` execution protocol. Tester validates the draft. Active function behavior and a running active-version web application remain unchanged during update or repair. Activation stops any old-version web application instance, then switches `active_version_id`, `installed_path`, and `manifest_path` after requirements pass. The next open lazily starts the newly active version.
+Updates copy the active version into a new draft/proposed version folder. Builder modifies only the copied draft and preserves its `function`, `service`, or `web_app` execution protocol. Tester validates the draft. Active function behavior, service schedule state, and a running active-version web application remain unchanged during update or repair. Service activation requires the stored schedule input to validate against the candidate schema and never overwrites edited schedule state. Web-app activation stops any old-version instance, then switches `active_version_id`, `installed_path`, and `manifest_path` after requirements pass. The next open lazily starts the newly active version.
 
 ## Maximum Versions
 

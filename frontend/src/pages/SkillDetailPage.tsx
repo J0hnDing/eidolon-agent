@@ -5,7 +5,6 @@ import PermissionRequestModal from "../components/PermissionRequestModal";
 import {
   RunHistory,
   RunOutput,
-  ScheduleList,
   UpdateChatMessage,
   UpdateSuggestionChat,
   ValidationResult,
@@ -22,13 +21,13 @@ import {
   runtimePermissionStatus,
   runtimePermissionsApproved,
 } from "../features/skill-detail/runtimePermissions";
+import { runnerBadgeLabel, sandboxStatusLabel } from "../features/skill-detail/runnerStatus";
 import { usePolling } from "../lib/usePolling";
 import {
   AgentRun,
   ApprovalRequest,
   ProposedSkillValidation,
   RunnerStatus,
-  ScheduleType,
   Skill,
   SkillFile,
   SkillRun,
@@ -60,14 +59,6 @@ export default function SkillDetailPage() {
   const [updateMessages, setUpdateMessages] = useState<UpdateChatMessage[]>([]);
   const [showRuntimeModal, setShowRuntimeModal] = useState(false);
   const [runInput, setRunInput] = useState('{\n  "hello": "world"\n}');
-  const [scheduleName, setScheduleName] = useState("Daily run");
-  const [scheduleType, setScheduleType] = useState<ScheduleType>("daily");
-  const [scheduleTime, setScheduleTime] = useState("08:00");
-  const [scheduleDay, setScheduleDay] = useState("monday");
-  const [scheduleEvery, setScheduleEvery] = useState(60);
-  const [scheduleUnit, setScheduleUnit] = useState<"minutes" | "hours" | "days">("minutes");
-  const [scheduleTimezone, setScheduleTimezone] = useState("America/Toronto");
-  const [scheduleInput, setScheduleInput] = useState("{}");
   const [isLoading, setIsLoading] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
@@ -469,62 +460,6 @@ export default function SkillDetailPage() {
     }
   }
 
-  async function refreshSchedules() {
-    if (!skill) return;
-    setSchedules(await api.listSchedules(skill.id));
-  }
-
-  async function handleCreateSchedule(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!skill) return;
-    setIsWorking(true);
-    setError(null);
-    try {
-      const input = parseRunInput(scheduleInput);
-      const schedule = {
-        type: scheduleType,
-        timezone: scheduleTimezone,
-        input,
-        ...(scheduleType === "daily" ? { time: scheduleTime } : {}),
-        ...(scheduleType === "weekly" ? { day: scheduleDay, time: scheduleTime } : {}),
-        ...(scheduleType === "interval" ? { every: scheduleEvery, unit: scheduleUnit } : {}),
-      };
-      await api.createSchedule(skill.id, { name: scheduleName, schedule });
-      await refreshSchedules();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create schedule");
-    } finally {
-      setIsWorking(false);
-    }
-  }
-
-  async function handleCreateManifestSchedule() {
-    if (!skill) return;
-    setIsWorking(true);
-    setError(null);
-    try {
-      await api.createManifestSchedule(skill.id);
-      await refreshSchedules();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create schedule from manifest");
-    } finally {
-      setIsWorking(false);
-    }
-  }
-
-  async function handleScheduleAction(action: () => Promise<unknown>) {
-    setIsWorking(true);
-    setError(null);
-    try {
-      await action();
-      await refreshSchedules();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Schedule action failed");
-    } finally {
-      setIsWorking(false);
-    }
-  }
-
   if (isLoading) {
     return <p className="muted">Loading skill...</p>;
   }
@@ -540,6 +475,9 @@ export default function SkillDetailPage() {
 
   const isInstalled = skill.status === "installed";
   const isFunction = skill.runtime === "function";
+  const isWebApp = skill.runtime === "web_app";
+  const isService = skill.runtime === "service";
+  const serviceSchedule = schedules[0] ?? null;
   const runtimeStatus = runtimePermissionStatus(runtimePermission);
   const runtimeApproved = runtimePermissionsApproved(runtimePermission);
   const canRun = isFunction && isInstalled && skill.enabled && runtimeApproved;
@@ -570,10 +508,10 @@ export default function SkillDetailPage() {
             <dt>Risk Level</dt>
             <dd>{skill.risk_level}</dd>
           </div>
-          <div>
+          {!isService && <div>
             <dt>Enabled</dt>
             <dd>{skill.enabled ? "enabled" : "disabled"}</dd>
-          </div>
+          </div>}
           <div>
             <dt>Manifest Path</dt>
             <dd>{skill.manifest_path}</dd>
@@ -682,7 +620,7 @@ export default function SkillDetailPage() {
             </p>
           </div>
           <span className={`badge ${runnerStatus?.available ? "run-succeeded" : "run-blocked"}`}>
-            {runnerStatus?.available ? "available" : "blocked"}
+            {runnerBadgeLabel(runnerStatus)}
           </span>
         </header>
         <dl className="detail-grid">
@@ -695,8 +633,8 @@ export default function SkillDetailPage() {
             <dd>{runnerStatus?.selected_mode ?? "unknown"}</dd>
           </div>
           <div>
-            <dt>Docker</dt>
-            <dd>{runnerStatus?.docker_available ? "available" : "unavailable"}</dd>
+            <dt>Docker Daemon</dt>
+            <dd>{runnerStatus?.docker_daemon_available ? "available" : "unavailable"}</dd>
           </div>
           <div>
             <dt>Image</dt>
@@ -707,20 +645,22 @@ export default function SkillDetailPage() {
             <dd>{runnerStatus?.image_status ?? "unknown"}</dd>
           </div>
           <div>
+            <dt>Image Ready</dt>
+            <dd>{runnerStatus?.image_ready ? "yes" : "no"}</dd>
+          </div>
+          <div>
+            <dt>Last Build Attempt</dt>
+            <dd>{runnerStatus?.last_build_attempt ?? "none recorded"}</dd>
+          </div>
+          <div>
             <dt>Sandbox Status</dt>
-            <dd>
-              {runnerStatus?.selected_mode === "docker" && runnerStatus.available
-                ? "Docker sandbox active"
-                : runnerStatus?.selected_mode === "local"
-                  ? "Local dev runner"
-                  : "Docker sandbox unavailable"}
-            </dd>
+            <dd>{sandboxStatusLabel(runnerStatus)}</dd>
           </div>
         </dl>
         {runnerStatus?.image_detail && <p className="muted">{runnerStatus.image_detail}</p>}
         {runnerStatus?.image_error && (
           <div className="run-detail">
-            <h3>Image Build Error</h3>
+            <h3>Last Image Build Error</h3>
             <pre>{runnerStatus.image_error}</pre>
           </div>
         )}
@@ -749,22 +689,22 @@ export default function SkillDetailPage() {
         </div>
       ) : (
         <div className="button-row">
-          {!isFunction && isInstalled && skill.enabled && runtimeApproved && (
+          {isWebApp && isInstalled && skill.enabled && runtimeApproved && (
             <Link className="button-link" to={`/apps/${skill.id}`}>Open Application</Link>
           )}
           {isInstalled && skill.enabled && !runtimeApproved && (
             <button type="button" onClick={() => handleReviewRuntimePermissions(true)} disabled={isWorking}>
-              Review Before Run
+              {isService ? "Review Before Activation" : "Review Before Run"}
             </button>
           )}
-          {isInstalled && !skill.enabled && (
+          {isInstalled && !isService && !skill.enabled && (
             <button type="button" disabled>
               Run Disabled
             </button>
           )}
-          <button type="button" onClick={handleToggleEnabled} disabled={isWorking}>
+          {!isService && <button type="button" onClick={handleToggleEnabled} disabled={isWorking}>
             {skill.enabled ? "Disable" : "Enable"}
-          </button>
+          </button>}
           <button type="button" className="secondary" onClick={handleRepair} disabled={isWorking}>
             Ask Agents to Repair
           </button>
@@ -827,90 +767,25 @@ export default function SkillDetailPage() {
         )}
       </section>
 
-      {isFunction && <section className="detail-panel">
+      {isService && <section className="detail-panel">
         <header className="page-header">
           <div>
-            <h2>Schedules</h2>
-            <p className="muted">Schedules require approval and still use the same runtime permission checks as manual runs.</p>
+            <h2>Service Schedule</h2>
+            <p className="muted">This service runs only through its required schedule. Manage timing, input, activation, and Run Now from Schedules.</p>
           </div>
-          <Link to="/schedules">All schedules</Link>
+          <Link to="/schedules">Manage Schedule</Link>
         </header>
-        <ScheduleList
-          schedules={schedules}
-          isWorking={isWorking}
-          onApprove={(id) => handleScheduleAction(() => api.approveSchedule(id))}
-          onDeny={(id) => handleScheduleAction(() => api.denySchedule(id))}
-          onPause={(id) => handleScheduleAction(() => api.pauseSchedule(id))}
-          onResume={(id) => handleScheduleAction(() => api.resumeSchedule(id))}
-          onDelete={(id) => handleScheduleAction(() => api.deleteSchedule(id))}
-          onRunNow={(id) => handleScheduleAction(() => api.runScheduleNow(id))}
-        />
-        {isInstalled ? (
-          <form className="form-panel" onSubmit={handleCreateSchedule}>
-            <h3>Create Schedule Request</h3>
-            <div className="form-grid">
-              <label>
-                Name
-                <input value={scheduleName} onChange={(event) => setScheduleName(event.target.value)} required />
-              </label>
-              <label>
-                Type
-                <select value={scheduleType} onChange={(event) => setScheduleType(event.target.value as ScheduleType)}>
-                  <option value="daily">daily</option>
-                  <option value="weekly">weekly</option>
-                  <option value="interval">interval</option>
-                </select>
-              </label>
-              {(scheduleType === "daily" || scheduleType === "weekly") && (
-                <label>
-                  Time
-                  <input type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} />
-                </label>
-              )}
-              {scheduleType === "weekly" && (
-                <label>
-                  Day
-                  <select value={scheduleDay} onChange={(event) => setScheduleDay(event.target.value)}>
-                    {["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].map((day) => (
-                      <option key={day} value={day}>{day}</option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {scheduleType === "interval" && (
-                <>
-                  <label>
-                    Every
-                    <input type="number" min="1" value={scheduleEvery} onChange={(event) => setScheduleEvery(Number(event.target.value))} />
-                  </label>
-                  <label>
-                    Unit
-                    <select value={scheduleUnit} onChange={(event) => setScheduleUnit(event.target.value as "minutes" | "hours" | "days")}>
-                      <option value="minutes">minutes</option>
-                      <option value="hours">hours</option>
-                      <option value="days">days</option>
-                    </select>
-                  </label>
-                </>
-              )}
-              <label>
-                Timezone
-                <input value={scheduleTimezone} onChange={(event) => setScheduleTimezone(event.target.value)} />
-              </label>
-            </div>
-            <label>
-              Input JSON
-              <textarea value={scheduleInput} onChange={(event) => setScheduleInput(event.target.value)} rows={6} />
-            </label>
-            <div className="button-row">
-              <button type="submit" disabled={isWorking}>Create Schedule Request</button>
-              <button type="button" className="secondary" onClick={handleCreateManifestSchedule} disabled={isWorking}>
-                Use Manifest Schedule
-              </button>
-            </div>
-          </form>
+        {serviceSchedule ? (
+          <dl className="detail-grid">
+            <div><dt>Name</dt><dd>{serviceSchedule.name}</dd></div>
+            <div><dt>Status</dt><dd>{serviceSchedule.status}</dd></div>
+            <div><dt>Type</dt><dd>{serviceSchedule.schedule_type}</dd></div>
+            <div><dt>Timezone</dt><dd>{serviceSchedule.timezone}</dd></div>
+            <div><dt>Next Run</dt><dd>{serviceSchedule.next_run_at ?? "not scheduled"}</dd></div>
+            <div><dt>Last Result</dt><dd>{serviceSchedule.last_run_status ?? "never run"}</dd></div>
+          </dl>
         ) : (
-          <p className="muted">Only installed skills can request schedules.</p>
+          <p className="error-text">This service is missing its required schedule.</p>
         )}
       </section>}
 

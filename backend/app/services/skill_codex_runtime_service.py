@@ -38,7 +38,7 @@ class SkillCodexRuntimeService:
         if not skill.enabled:
             raise SkillCodexUnavailable("Skill is disabled")
         if expected_version_id is not None and skill.active_version_id != expected_version_id:
-            raise SkillCodexUnavailable("Function caller version is no longer active")
+            raise SkillCodexUnavailable("Runtime caller version is no longer active")
 
         permission_decision = PermissionService(
             self.db,
@@ -56,9 +56,13 @@ class SkillCodexRuntimeService:
         except (FileNotFoundError, ProposedSkillError, ValueError) as exc:
             raise SkillCodexInvalidRequest(str(exc)) from exc
 
-        if manifest.runtime != "function":
+        if manifest.runtime not in {"function", "service"}:
             raise SkillCodexUnavailable(
                 "web_app skills must use a scoped instance capability for privileged backend calls"
+            )
+        if manifest.runtime == "service" and expected_version_id is None:
+            raise SkillCodexUnavailable(
+                "Services can call Codex only during a schedule-attributed run"
             )
         if payload.codex_permissions.call_response is False:
             raise SkillCodexInvalidRequest("Codex call_response permission is required")

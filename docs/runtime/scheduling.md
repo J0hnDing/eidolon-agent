@@ -1,44 +1,43 @@
 # Scheduling
 
-Scheduling uses APScheduler through `SchedulerService`.
+Scheduling uses APScheduler through `SchedulerService` and is exclusive to services.
 
-In addition to user-approved `SkillSchedule` jobs, `SchedulerService` registers the platform-owned `backend.notion.todo.cleanup_done` backend-core function every time the backend starts. It runs daily at 03:00 `America/Toronto`, uses a stable replacement job id, coalesces missed runs, and permits only one concurrent instance. `GET /schedules` includes a read-only platform-schedule projection with its next and last run state; it is not a mutable `SkillSchedule` row and remains outside schedule approval and mutation flows.
+Generated `service` skills are bounded JSON stdin/stdout endpoints with exactly one required `SkillSchedule`. Functions and web applications cannot declare or create schedules. A service is not a function-catalog entry, an MCP tool, or a callable target for another agent or skill.
+
+The backend also registers the platform-owned `backend.notion.todo.cleanup_done` service every time it starts. It runs daily at 03:00 `America/Toronto`, uses a stable replacement job id, coalesces missed runs, and permits only one concurrent instance. `GET /schedules` includes a read-only platform projection with next/last state. It is not a skill, a function-catalog entry, or a mutable `SkillSchedule` row.
+
+Startup also reconciles checked-in installed skill packages before loading scheduler rows. The installed `weekly_report_service` therefore reliably appears with its one initially paused schedule: Monday at 08:00 `America/Toronto`. It deterministically calls `github_atlas_project_scout` with `{limit: 10, period: "weekly", atlas_keywords: []}`, validates the exact repository output, formats native Notion blocks, and calls `notion.report.create`. It never calls Codex directly; any bounded analysis remains owned by the Scout function. Scout, validation, or Notion failures fail the service run rather than falling back to model-generated content.
 
 ## Schedule Types
 
-Supported schedule forms:
+Supported forms are:
 
 - daily at HH:MM;
-- weekly on day plus HH:MM;
-- interval every N minutes/hours/days.
+- weekly on a weekday plus HH:MM;
+- interval every N minutes, hours, or days.
 
-## Schedule Creation
+Each schedule also stores one JSON object input that must validate against the active service input schema.
 
-Schedules can be created for `function` skills from the UI or from manifest-declared schedule intent. Skills do not register schedules by executing code. BuilderAgent does not receive a Scheduling API. ProductManager expresses recurring function intent in the manifest schedule field, Builder preserves that field, and the backend registers it during install. `web_app` manifests reject schedules because a persistent service is not a bounded scheduled run.
+## Creation and State
 
-Manifest-declared schedules are created as pending schedule records, even if a skill is installed disabled by default. The schedule does not become active until approved, and scheduled execution still requires the skill to be enabled.
+ProductManager includes required initial schedule intent only when `runtime = service`. During installation, the backend creates one paused schedule from the installed manifest. Installation never activates it automatically.
 
-Schedule records use four statuses: `pending`, `active`, `paused`, and `denied`. Deleting a schedule unregisters it and removes its database row rather than assigning a `deleted` status.
+The schedule row becomes backend-owned runtime state after installation. Users edit timing, timezone, and input on the shared Schedules page. Version updates do not replace those edits; activation fails if the existing input is incompatible with the candidate service schema.
 
-## Approval
+Canonical statuses are `active` and `paused`. There is no separate enabled state or schedule-approval lifecycle for services. Runtime permission and integration approvals remain independent and are checked before a paused schedule can be resumed.
 
-Schedule approval shows:
+## Execution
 
-- skill name;
-- when it will run;
-- input JSON;
-- permissions required by the skill;
-- reminder that schedule approval does not bypass runtime approval.
+Automatic execution occurs only while the schedule is active. Run Now is allowed for either active or paused generated-service schedules and does not resume a paused schedule.
 
-## Execution Checks
+Every run rechecks that:
 
-A scheduled run may execute only if:
+- the skill is installed and still uses `runtime = service`;
+- the schedule input matches the active manifest schema;
+- runtime permissions and declared integration authorizations are current;
+- the active service version is available to the bounded runner;
+- no overlapping operation is active for that skill.
 
-- skill is installed;
-- skill runtime is `function`;
-- skill is enabled;
-- runtime permissions are approved;
-- runtime permissions are supported by the runner;
-- schedule is active and approved.
+The runner creates an attributed `skill_runs` row with `invocation_source = schedule` and `source_schedule_id`. Its ephemeral runtime capability may call only functions, integrations, and Codex declared by the active manifest. The service itself remains unavailable as a callable endpoint outside the scheduler.
 
-Scheduled runs are stored in `skill_runs` and update schedule last/next run fields. A skill that returns top-level `status: "partial"` or `status: "failed"` records that outcome instead of being marked succeeded merely because its process exited with code zero and emitted valid JSON.
+Top-level `status: "partial"` or `status: "failed"` output remains a matching backend run result instead of being treated as success merely because the process exited with valid JSON.

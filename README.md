@@ -39,7 +39,7 @@ The long-term goal is a personal agent whose usefulness grows with you while its
 | Self-built skills | ✅ Implemented | Project mode can plan, generate, test, permission-review, and propose Python skill packages. |
 | Skill use | ✅ Implemented | Installed skills can run as bounded functions or open as sandboxed ASGI web applications. |
 | Skill composition | 🟡 Partial | Declared one-hop function calls are supported; nested invocation is not. |
-| Scheduling | ✅ Implemented | Approved bounded functions can run on interval, cron, or one-time schedules. |
+| Scheduling | ✅ Implemented | Scheduler-only services have one required daily, weekly, or interval schedule. |
 | Safe versioned evolution | ✅ Implemented | Updates are built as drafts and activated only after validation and approval. |
 | Long-term adaptation | 🧭 Planned | Outcome capture, user feedback, adaptation proposals, and controlled promotion are not built yet. |
 | Domain-level egress filtering | 🧭 Planned | Network domains are declared and approved, but Docker egress is not yet filtered per domain. |
@@ -60,11 +60,11 @@ flowchart LR
     F --> G{"Runtime approval"}
     G -->|approved| H["Install a versioned skill"]
     G -->|denied| X
-    H --> I["Run a function, open an app, or approve a schedule"]
+    H --> I["Run a function, open an app, or manage a service schedule"]
     I --> J["Inspect runs, logs, versions, and usage"]
 ```
 
-Generation is not installation. Installation is not permission to run automatically. Schedule approval is separate again. Those distinctions are core product behavior, not ceremony.
+Generation is not installation. Installation is not permission to run automatically. A generated service installs with its required schedule paused until the user resumes it. Those distinctions are core product behavior, not ceremony.
 
 ## Permission boundaries
 

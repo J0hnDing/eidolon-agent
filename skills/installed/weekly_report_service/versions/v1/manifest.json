@@ -1,0 +1,60 @@
+{
+  "manifest_version": 1,
+  "name": "weekly_report_service",
+  "display_name": "Weekly Report Service",
+  "description": "Create a deterministic weekly Notion report from the installed GitHub Atlas Project Scout output.",
+  "runtime": "service",
+  "entrypoint": "skill.py",
+  "instructions_path": null,
+  "input_schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "report": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "name": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "created_time": {"type": "string", "minLength": 1, "maxLength": 64},
+          "select": {"type": "string", "const": "GitHub Projects"}
+        },
+        "required": ["id", "name", "created_time", "select"],
+        "additionalProperties": false
+      },
+      "repository_count": {"type": "integer", "minimum": 0, "maximum": 10}
+    },
+    "required": ["report", "repository_count"],
+    "additionalProperties": false
+  },
+  "function_requirements": ["github_atlas_project_scout"],
+  "integration_requirements": [
+    {
+      "provider": "notion",
+      "operations": ["notion.report.create"],
+      "resource_scope": {}
+    }
+  ],
+  "dependencies": [],
+  "permissions": {
+    "network": [],
+    "filesystem_read": [],
+    "filesystem_write": [],
+    "secrets": [],
+    "shell": false,
+    "codex": {
+      "call_response": false,
+      "internet_access": false
+    }
+  },
+  "schedule": {
+    "type": "weekly",
+    "day": "monday",
+    "time": "08:00",
+    "timezone": "America/Toronto",
+    "input": {}
+  }
+}

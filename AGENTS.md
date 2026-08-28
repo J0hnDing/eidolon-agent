@@ -4,18 +4,19 @@
 
 Eidolon: a local-first, self-extending personal AI assistant.
 
-This repository builds a local-first assistant that can chat with the user, store explicit editable memory, and turn repeated needs into safe reusable application skills. A skill is a reusable capability package that can be proposed, inspected, validated, installed, enabled, disabled, updated, scheduled, run, or deleted by the user.
+This repository builds a local-first assistant that can chat with the user, store explicit editable memory, and turn repeated needs into safe reusable application skills. A skill is a reusable capability package that can be proposed, inspected, validated, installed, updated, run according to its runtime contract, or deleted by the user.
 
 All skills contain executable Python code and tests. A skill may optionally include `SKILL.md` reusable instructions or operating guidance.
 
 Runtime determines interface exposure. A `web_app` skill is an importable ASGI runtime opened through the sandboxed Applications surface. A `function` skill is a bounded JSON capability and has no dedicated interface surface in the current milestone.
+A `service` skill is a scheduler-only bounded JSON endpoint with exactly one required schedule and no dedicated interface surface. Services may consume declared functions, integrations, and Codex, but are never callable as functions by agents, skills, or MCP.
 
 ## Current Stack
 
 - Backend: FastAPI, SQLite, SQLAlchemy, Pydantic schemas, pytest, Ruff.
 - Frontend: React, Vite, TypeScript, plain CSS.
 - Skill language: Python.
-- Skill execution: bounded `function` runs and persistent `web_app` instances, with Docker sandboxing by default and explicit local/dev fallback.
+- Skill execution: bounded `function` runs, scheduler-only bounded `service` runs, and persistent `web_app` instances, with Docker sandboxing by default and explicit local/dev fallback.
 - Scheduling: APScheduler.
 - Skill generation and agents: Codex CLI through backend service adapters.
 
@@ -110,7 +111,7 @@ skills/installed/<skill_name>/versions/vN/
 
 ### Approval Boundaries
 
-Approval to generate is not approval to install. Approval to install is not approval to run automatically. Schedule approval is not runtime permission approval. Runtime approval must be based on the generated manifest, not only the initial plan.
+Approval to generate is not approval to install. Approval to install is not approval to run automatically. Installed services begin with their required schedule paused; resuming it still requires current runtime approval. Runtime approval must be based on the generated manifest, not only the initial plan.
 
 Approval prompts should be clear about:
 

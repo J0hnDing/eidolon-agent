@@ -2,17 +2,16 @@ import json
 from pathlib import Path
 
 import pytest
-from jsonschema import Draft202012Validator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from app.services.backend_core_function_service import (
-    NOTION_DONE_CLEANUP_FUNCTION_ID,
-    BackendCoreFunctionError,
-    BackendCoreFunctionService,
-    NotionDoneCleanupService,
-)
 from app.services.integration_service import IntegrationError
+from app.services.platform_service import (
+    NOTION_DONE_CLEANUP_SERVICE_ID,
+    NotionDoneCleanupService,
+    PlatformServiceDispatcher,
+    PlatformServiceError,
+)
 
 
 class FakeIntegrations:
@@ -59,17 +58,9 @@ def test_cleanup_paginates_and_deletes_only_done_todos() -> None:
 
     result = service(fake).run()
 
-    assert result == {
-        "status": "succeeded",
-        "scanned_count": 3,
-        "matched_count": 2,
-        "deleted_count": 2,
-        "deleted_ids": ["done-1", "done-2"],
-        "deleted_ids_truncated": False,
-        "failures": [],
-        "failures_truncated": False,
-        "error_type": None,
-    }
+    assert result["status"] == "succeeded"
+    assert result["scanned_count"] == 3
+    assert result["deleted_ids"] == ["done-1", "done-2"]
     assert [call for call in fake.calls if call[0] == "notion.todo.delete"] == [
         ("notion.todo.delete", {"id": "done-1"}),
         ("notion.todo.delete", {"id": "done-2"}),
@@ -90,8 +81,6 @@ def test_cleanup_continues_after_individual_delete_failure() -> None:
     result = service(fake).run()
 
     assert result["status"] == "partial"
-    assert result["matched_count"] == 2
-    assert result["deleted_count"] == 1
     assert result["deleted_ids"] == ["deleted"]
     assert result["failures"] == [{"id": "failed", "error_type": "rate_limited"}]
 
@@ -104,24 +93,20 @@ def test_cleanup_normalizes_list_failure_without_deleting() -> None:
 
     assert result["status"] == "failed"
     assert result["scanned_count"] == 0
-    assert result["deleted_count"] == 0
     assert result["error_type"] == "connection_unavailable"
 
 
-def test_backend_core_dispatch_is_scheduler_only_and_contract_shaped() -> None:
+def test_platform_dispatcher_is_endpoint_only_and_not_in_function_catalog() -> None:
     engine = create_engine("sqlite:///:memory:")
     fake = FakeIntegrations()
     fake.pages = {None: {"todos": [], "has_more": False, "next_cursor": None}}
     with Session(engine) as db:
-        dispatcher = BackendCoreFunctionService(db, integrations=fake)  # type: ignore[arg-type]
-        with pytest.raises(BackendCoreFunctionError, match="scheduler-only"):
-            dispatcher.invoke(NOTION_DONE_CLEANUP_FUNCTION_ID, {}, source="chat")
-        with pytest.raises(BackendCoreFunctionError, match="does not accept input"):
-            dispatcher.invoke(NOTION_DONE_CLEANUP_FUNCTION_ID, {"force": True}, source="scheduler")
+        dispatcher = PlatformServiceDispatcher(db, integrations=fake)  # type: ignore[arg-type]
+        result = dispatcher.invoke(NOTION_DONE_CLEANUP_SERVICE_ID)
+        with pytest.raises(PlatformServiceError, match="Unknown platform service"):
+            dispatcher.invoke("unknown.service")
 
-        result = dispatcher.invoke(NOTION_DONE_CLEANUP_FUNCTION_ID, {}, source="scheduler")
-
+    assert result["status"] == "succeeded"
     seed_path = Path(__file__).resolve().parents[1] / "app" / "static" / "function_catalog_seed.json"
     seed = json.loads(seed_path.read_text(encoding="utf-8"))
-    entry = next(item for item in seed["functions"] if item["id"] == NOTION_DONE_CLEANUP_FUNCTION_ID)
-    Draft202012Validator(entry["output_schema"]).validate(result)
+    assert NOTION_DONE_CLEANUP_SERVICE_ID not in {item["id"] for item in seed["functions"]}

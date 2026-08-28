@@ -6,19 +6,16 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import Skill, SkillRun, SkillSchedule
-from app.routers.permission_requests import approve_permission_request
-from app.routers.schedules import list_schedules, run_schedule_now
-from app.schemas.schedule import ScheduleCreate, SchedulePayload
-from app.services.permission_service import PermissionService
+from app.models import Skill, SkillRun, SkillVersion
+from app.routers.schedules import list_schedules
+from app.schemas.schedule import SchedulePayload, ScheduleUpdate
 from app.services.scheduler_service import (
-    NOTION_DONE_CLEANUP_FUNCTION_ID,
     NOTION_DONE_CLEANUP_JOB_ID,
+    NOTION_DONE_CLEANUP_SERVICE_ID,
     NOTION_DONE_CLEANUP_TIMEZONE,
     ScheduleError,
     SchedulerService,
@@ -66,8 +63,7 @@ class FakeScheduler:
 def db_session() -> Generator[Session, None, None]:
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
     Base.metadata.create_all(bind=engine)
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    session = session_factory()
+    session = Session(engine)
     try:
         yield session
     finally:
@@ -75,85 +71,96 @@ def db_session() -> Generator[Session, None, None]:
         Base.metadata.drop_all(bind=engine)
 
 
-def write_installed_skill(
-    project_root: Path,
-    name: str,
-    *,
-    enabled: bool = True,
-    permissions: dict[str, Any] | None = None,
-    schedule: dict[str, Any] | None = None,
-) -> Path:
-    skill_dir = project_root / "skills" / "installed" / name
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "tests").mkdir()
-    manifest = {
+def manifest(name: str, runtime: str = "service", schedule: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "manifest_version": 1,
         "name": name,
-        "description": "Scheduled test skill",
-        "entrypoint": "skill.py",
+        "description": "Scheduled test service",
+        "runtime": runtime,
+        "entrypoint": "skill.py" if runtime != "web_app" else "app:app",
         "instructions_path": None,
-        "risk_level": "low",
-        "permissions": permissions
-        or {
+        "input_schema": {"type": "object", "properties": {"hello": {"type": "string"}}, "additionalProperties": False} if runtime != "web_app" else None,
+        "output_schema": {"type": "object", "additionalProperties": True} if runtime != "web_app" else None,
+        "function_requirements": [],
+        "integration_requirements": [],
+        "dependencies": [],
+        "permissions": {
             "network": [],
             "filesystem_read": [],
             "filesystem_write": ["./cache"],
             "secrets": [],
             "shell": False,
         },
-        "schedule": schedule,
-        "created_by": "codex",
-        "enabled": enabled,
+        "schedule": schedule if runtime == "service" else None,
     }
-    if permissions and permissions.get("network"):
-        manifest["risk_level"] = "medium"
-    (skill_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def create_skill(
+    db: Session,
+    project_root: Path,
+    name: str = "scheduled_service",
+    *,
+    runtime: str = "service",
+    schedule: dict[str, Any] | None = None,
+) -> Skill:
+    schedule = schedule or {
+        "type": "daily",
+        "time": "08:00",
+        "timezone": "America/Toronto",
+        "input": {"hello": "world"},
+    }
+    skill_dir = project_root / "skills" / "installed" / name / "versions" / "v1"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "tests").mkdir()
+    manifest_json = manifest(name, runtime, schedule)
+    (skill_dir / "manifest.json").write_text(json.dumps(manifest_json), encoding="utf-8")
     (skill_dir / "skill.py").write_text("print('{\"ok\": true}')\n", encoding="utf-8")
+    if runtime == "web_app":
+        (skill_dir / "app.py").write_text("app = object()\n", encoding="utf-8")
     (skill_dir / "tests" / "test_skill.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
-    return skill_dir
-
-
-def create_skill(db: Session, project_root: Path, name: str = "scheduled_skill", **kwargs: Any) -> Skill:
-    file_kwargs = {key: value for key, value in kwargs.items() if key in {"enabled", "permissions", "schedule"}}
-    skill_dir = write_installed_skill(project_root, name, **file_kwargs)
     skill = Skill(
         name=name,
-        description="Scheduled test skill",
-        status=kwargs.get("status", "installed"),
-        risk_level="medium" if kwargs.get("permissions", {}).get("network") else "low",
-        manifest_path=skill_dir.relative_to(project_root).as_posix() + "/manifest.json",
+        description="Scheduled test service",
+        runtime=runtime,
+        status="installed",
+        risk_level="low",
+        manifest_path=(skill_dir / "manifest.json").relative_to(project_root).as_posix(),
         installed_path=skill_dir.relative_to(project_root).as_posix(),
-        enabled=kwargs.get("enabled", True),
+        input_schema_json=manifest_json["input_schema"],
+        output_schema_json=manifest_json["output_schema"],
+        enabled=True,
     )
     db.add(skill)
+    db.flush()
+    version = SkillVersion(
+        skill_id=skill.id,
+        version="v1",
+        status="active",
+        folder_path=skill.installed_path,
+        code_snapshot_path=skill.installed_path,
+        manifest_json=manifest_json,
+        permission_fingerprint="test",
+        validation_status="passed",
+        test_status="passed",
+    )
+    db.add(version)
+    db.flush()
+    skill.active_version_id = version.id
     db.commit()
     db.refresh(skill)
     return skill
 
 
 def service(db: Session, project_root: Path, fake_scheduler: FakeScheduler | None = None) -> SchedulerService:
-    session_factory = sessionmaker(bind=db.bind, autoflush=False, autocommit=False)
     return SchedulerService(
         db,
         scheduler=fake_scheduler or FakeScheduler(),
         project_root=project_root,
-        session_factory=session_factory,
+        session_factory=sessionmaker(bind=db.bind, autoflush=False, autocommit=False),
     )
 
 
-def daily_payload() -> ScheduleCreate:
-    return ScheduleCreate(
-        name="Morning run",
-        schedule=SchedulePayload(type="daily", time="08:00", timezone="America/Toronto", input={"hello": "world"}),
-    )
-
-
-def approve_runtime(db: Session, skill: Skill, project_root: Path) -> None:
-    permission_service = PermissionService(db, project_root=project_root)
-    request = permission_service.create_runtime_request(skill)
-    permission_service.approve_request(request)
-
-
-def test_start_automatically_registers_scheduler_only_notion_cleanup(
+def test_start_registers_backend_owned_notion_service(
     tmp_path: Path,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -167,316 +174,151 @@ def test_start_automatically_registers_scheduler_only_notion_cleanup(
     scheduler.start()
 
     job = fake_scheduler.jobs[NOTION_DONE_CLEANUP_JOB_ID]
-    assert job["args"] == [NOTION_DONE_CLEANUP_FUNCTION_ID]
-    assert job["trigger"] == {
-        "type": "daily",
-        "hour": 3,
-        "minute": 0,
-        "timezone": NOTION_DONE_CLEANUP_TIMEZONE,
-    }
+    assert job["args"] == [NOTION_DONE_CLEANUP_SERVICE_ID]
+    assert job["trigger"]["timezone"] == NOTION_DONE_CLEANUP_TIMEZONE
     assert job["max_instances"] == 1
     assert job["coalesce"] is True
-    platform_schedule = scheduler.serialize_notion_done_cleanup_schedule()
-    assert platform_schedule["schedule_kind"] == "platform"
-    assert platform_schedule["read_only"] is True
-    assert platform_schedule["skill_id"] is None
-    assert platform_schedule["status"] == "active"
-    assert platform_schedule["next_run_at"] == FakeJob.next_run_time
-
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(scheduler_service=scheduler)))
-    listed = list_schedules(request, db=db_session)  # type: ignore[arg-type]
-    assert listed[0]["function_id"] == NOTION_DONE_CLEANUP_FUNCTION_ID
+    listed = list_schedules(request, skill_id=None, db=db_session)  # type: ignore[arg-type]
+    assert listed[0]["schedule_kind"] == "platform"
+    assert listed[0]["service_id"] == NOTION_DONE_CLEANUP_SERVICE_ID
+    assert listed[0]["read_only"] is True
 
 
-def test_scheduler_dispatches_backend_core_cleanup_with_scheduler_source(
+def test_manifest_creates_exactly_one_paused_service_schedule(tmp_path: Path, db_session: Session) -> None:
+    skill = create_skill(db_session, tmp_path)
+    scheduler = service(db_session, tmp_path)
+
+    schedule = scheduler.create_from_manifest(skill)
+
+    assert schedule.status == "paused"
+    assert schedule.input_json == {"hello": "world"}
+    assert schedule.schedule_type == "daily"
+    with pytest.raises(ScheduleError, match="already has"):
+        scheduler.create_from_manifest(skill)
+
+
+@pytest.mark.parametrize("runtime", ["function", "web_app"])
+def test_functions_and_web_apps_cannot_be_scheduled(
+    tmp_path: Path,
+    db_session: Session,
+    runtime: str,
+) -> None:
+    skill = create_skill(db_session, tmp_path, f"not_{runtime}", runtime=runtime)
+
+    with pytest.raises(ScheduleError, match="Only service skills"):
+        service(db_session, tmp_path).create_from_manifest(skill)
+
+
+def test_service_schedule_input_must_match_manifest_schema(tmp_path: Path, db_session: Session) -> None:
+    skill = create_skill(
+        db_session,
+        tmp_path,
+        schedule={
+            "type": "daily",
+            "time": "08:00",
+            "timezone": "America/Toronto",
+            "input": {"unexpected": True},
+        },
+    )
+
+    with pytest.raises(ScheduleError, match="does not match its schema"):
+        service(db_session, tmp_path).create_from_manifest(skill)
+
+
+def test_pause_resume_and_edit_manage_one_service_job(
     tmp_path: Path,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.services import scheduler_service
-
-    calls: list[tuple[str, dict, str]] = []
-
-    class FakeBackendCoreFunctions:
-        def __init__(self, _db: Session) -> None:
-            pass
-
-        def invoke(self, function_id: str, input_json: dict, *, source: str) -> dict:
-            calls.append((function_id, input_json, source))
-            return {"status": "succeeded", "scanned_count": 2, "deleted_count": 1}
-
-    monkeypatch.setattr(scheduler_service, "BackendCoreFunctionService", FakeBackendCoreFunctions)
-    scheduler = service(db_session, tmp_path)
-
-    result = scheduler.execute_backend_core_function(NOTION_DONE_CLEANUP_FUNCTION_ID)
-
-    assert result == {"status": "succeeded", "scanned_count": 2, "deleted_count": 1}
-    assert calls == [(NOTION_DONE_CLEANUP_FUNCTION_ID, {}, "scheduler")]
-
-
-def test_creates_daily_weekly_and_interval_schedules(tmp_path: Path, db_session: Session) -> None:
-    skill = create_skill(db_session, tmp_path)
-    scheduler = service(db_session, tmp_path)
-
-    daily, _ = scheduler.create_schedule(skill, daily_payload())
-    weekly, _ = scheduler.create_schedule(
-        skill,
-        ScheduleCreate(
-            name="Weekly run",
-            schedule=SchedulePayload(type="weekly", day="monday", time="09:30", timezone="America/Toronto"),
-        ),
-    )
-    interval, _ = scheduler.create_schedule(
-        skill,
-        ScheduleCreate(
-            name="Interval run",
-            schedule=SchedulePayload(type="interval", every=2, unit="hours", timezone="America/Toronto"),
-        ),
-    )
-
-    assert daily.schedule_type == "daily"
-    assert weekly.schedule_json["day"] == "monday"
-    assert interval.schedule_json["every"] == 2
-    assert daily.status == "pending"
-
-
-def test_invalid_schedule_rejected(tmp_path: Path, db_session: Session) -> None:
-    skill = create_skill(db_session, tmp_path)
-
-    with pytest.raises(ValueError, match="daily schedules require time"):
-        ScheduleCreate(name="Bad", schedule={"type": "daily", "timezone": "America/Toronto"})
-
-    with pytest.raises(ScheduleError, match="supported IANA timezone"):
-        service(db_session, tmp_path).create_schedule(
-            skill,
-            ScheduleCreate(
-                name="Bad timezone",
-                schedule=SchedulePayload(type="daily", time="08:00", timezone="Nope/Nope"),
-            ),
-        )
-
-
-def test_proposed_and_disabled_skills_cannot_be_scheduled(tmp_path: Path, db_session: Session) -> None:
-    proposed = create_skill(db_session, tmp_path, "proposed_skill", status="proposed")
-    disabled = create_skill(db_session, tmp_path, "disabled_skill", enabled=False)
-    scheduler = service(db_session, tmp_path)
-
-    for skill, message in [
-        (proposed, "Only installed skills can be scheduled"),
-        (disabled, "Disabled skills cannot be scheduled"),
-    ]:
-        with pytest.raises(ScheduleError, match=message):
-            scheduler.create_schedule(skill, daily_payload())
-
-
-def test_schedule_requires_approval_before_activation(tmp_path: Path, db_session: Session) -> None:
     skill = create_skill(db_session, tmp_path)
     fake_scheduler = FakeScheduler()
     scheduler = service(db_session, tmp_path, fake_scheduler)
-
-    schedule, approval = scheduler.create_schedule(skill, daily_payload())
-
-    assert schedule.status == "pending"
-    assert approval.status == "pending"
-    assert fake_scheduler.jobs == {}
-
-
-def test_approved_schedule_registers_job_and_denied_does_not(tmp_path: Path, db_session: Session) -> None:
-    skill = create_skill(db_session, tmp_path)
-    fake_scheduler = FakeScheduler()
-    scheduler = service(db_session, tmp_path, fake_scheduler)
-    schedule, _ = scheduler.create_schedule(skill, daily_payload())
-
-    approved = scheduler.approve_schedule(schedule)
-
-    assert approved.status == "active"
-    assert fake_scheduler.jobs[scheduler.job_id(schedule.id)]["args"] == [schedule.id]
-    assert approved.next_run_at == FakeJob.next_run_time.replace(tzinfo=None)
-
-    denied_schedule, _ = scheduler.create_schedule(
-        skill,
-        ScheduleCreate(name="Deny me", schedule=SchedulePayload(type="daily", time="09:00")),
-    )
-    denied = scheduler.deny_schedule(denied_schedule)
-
-    assert denied.status == "denied"
-    assert scheduler.job_id(denied.id) not in fake_scheduler.jobs
-
-
-def test_global_approval_endpoint_activates_schedule_on_shared_scheduler(
-    tmp_path: Path,
-    db_session: Session,
-) -> None:
-    skill = create_skill(db_session, tmp_path)
-    fake_scheduler = FakeScheduler()
-    scheduler = service(db_session, tmp_path, fake_scheduler)
-    schedule, approval = scheduler.create_schedule(skill, daily_payload())
-    request_context = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(scheduler_service=scheduler))
-    )
-
-    updated = approve_permission_request(approval.id, request_context, db=db_session)
-
-    assert updated.status == "approved"
-    assert schedule.status == "active"
-    assert scheduler.job_id(schedule.id) in fake_scheduler.jobs
-
-
-def test_run_now_rejects_schedule_that_is_not_active(tmp_path: Path, db_session: Session) -> None:
-    skill = create_skill(db_session, tmp_path)
-    scheduler = service(db_session, tmp_path)
-    schedule, _ = scheduler.create_schedule(skill, daily_payload())
-
-    with pytest.raises(HTTPException, match="Only active approved schedules can run") as exc_info:
-        run_schedule_now(schedule.id, db_session, scheduler)
-
-    assert exc_info.value.status_code == 409
-
-
-def test_pause_resume_and_delete_schedule_jobs(tmp_path: Path, db_session: Session) -> None:
-    skill = create_skill(db_session, tmp_path)
-    fake_scheduler = FakeScheduler()
-    scheduler = service(db_session, tmp_path, fake_scheduler)
-    schedule, _ = scheduler.create_schedule(skill, daily_payload())
-    scheduler.approve_schedule(schedule)
-
-    paused = scheduler.pause_schedule(schedule)
-    assert paused.status == "paused"
-    assert scheduler.job_id(schedule.id) not in fake_scheduler.jobs
+    schedule = scheduler.create_from_manifest(skill)
+    db_session.commit()
+    monkeypatch.setattr(scheduler, "_validate_service_ready", lambda *_args: None)
 
     resumed = scheduler.resume_schedule(schedule)
     assert resumed.status == "active"
     assert scheduler.job_id(schedule.id) in fake_scheduler.jobs
 
-    historical_run = SkillRun(
-        skill_id=skill.id,
-        status="succeeded",
-        source_schedule_id=schedule.id,
-        invocation_source="schedule",
+    updated = scheduler.update_schedule(
+        schedule,
+        ScheduleUpdate(
+            name="Weekly cleanup",
+            schedule=SchedulePayload(
+                type="weekly",
+                day="friday",
+                time="09:30",
+                timezone="America/Toronto",
+                input={"hello": "updated"},
+            ),
+        ),
     )
-    db_session.add(historical_run)
-    db_session.commit()
-    run_id = historical_run.id
-    schedule_id = schedule.id
-    scheduler.delete_schedule(schedule)
-    assert db_session.get(SkillSchedule, schedule_id) is None
-    assert db_session.get(SkillRun, run_id).source_schedule_id is None
-    assert scheduler.job_id(schedule_id) not in fake_scheduler.jobs
+    assert updated.status == "active"
+    assert updated.schedule_json["day"] == "friday"
+    assert scheduler.job_id(schedule.id) in fake_scheduler.jobs
+
+    paused = scheduler.pause_schedule(schedule)
+    assert paused.status == "paused"
+    assert scheduler.job_id(schedule.id) not in fake_scheduler.jobs
 
 
-def test_scheduled_execution_uses_runtime_permission_checks(tmp_path: Path, db_session: Session) -> None:
-    skill = create_skill(db_session, tmp_path)
-    scheduler = service(db_session, tmp_path)
-    schedule, _ = scheduler.create_schedule(skill, daily_payload())
-    scheduler.approve_schedule(schedule)
-
-    run = scheduler.run_scheduled_skill(schedule)
-
-    assert run.status == "blocked"
-    assert run.error_message == "Runtime permission request is pending"
-    assert schedule.last_run_status == "blocked"
-
-
-def test_network_requesting_skill_runs_after_runtime_approval(
+def test_run_now_works_while_service_schedule_is_paused(
     tmp_path: Path,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    skill = create_skill(
-        db_session,
-        tmp_path,
-        permissions={
-            "network": ["example.com"],
-            "filesystem_read": [],
-            "filesystem_write": ["./cache"],
-            "secrets": [],
-            "shell": False,
-        },
-    )
-    approve_runtime(db_session, skill, tmp_path)
-    scheduler = service(db_session, tmp_path)
-    schedule, _ = scheduler.create_schedule(skill, daily_payload())
-    scheduler.approve_schedule(schedule)
-
-    from app.models import SkillRun
-    from app.services import scheduler_service
-
-    class FakeRunner:
-        def __init__(self, db: Session) -> None:
-            self.db = db
-
-        def run(self, skill_id: int, skill_dir: Path, input_json: dict[str, Any]):
-            run = SkillRun(
-                skill_id=skill_id,
-                status="succeeded",
-                input_json=input_json,
-                output_json={"network": "approved"},
-                started_at=datetime.now(UTC),
-                ended_at=datetime.now(UTC),
-                exit_code=0,
-            )
-            self.db.add(run)
-            self.db.commit()
-            self.db.refresh(run)
-            return run
-
-    monkeypatch.setattr(scheduler_service, "get_skill_runner", lambda db: FakeRunner(db))
-
-    run = scheduler.run_scheduled_skill(schedule)
-
-    assert run.status == "succeeded"
-    assert run.output_json == {"network": "approved"}
-
-
-def test_scheduled_run_stores_result_with_schedule_marker(tmp_path: Path, db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     skill = create_skill(db_session, tmp_path)
-    approve_runtime(db_session, skill, tmp_path)
     scheduler = service(db_session, tmp_path)
-    schedule, _ = scheduler.create_schedule(skill, daily_payload())
-    scheduler.approve_schedule(schedule)
+    schedule = scheduler.create_from_manifest(skill)
+    db_session.commit()
 
-    from app.services import scheduler_service
+    def fake_run(_skill: Skill, input_json: dict[str, Any], schedule_id: int) -> SkillRun:
+        run = SkillRun(
+            skill_id=skill.id,
+            version_id=skill.active_version_id,
+            status="succeeded",
+            input_json=input_json,
+            output_json={"ok": True},
+            started_at=datetime.now(UTC),
+            ended_at=datetime.now(UTC),
+            invocation_source="schedule",
+            source_schedule_id=schedule_id,
+        )
+        db_session.add(run)
+        db_session.commit()
+        db_session.refresh(run)
+        return run
 
-    class FakeRunner:
-        def __init__(self, db: Session) -> None:
-            self.db = db
+    monkeypatch.setattr(scheduler, "_run_service_with_checks", fake_run)
+    run = scheduler.run_scheduled_service(schedule)
 
-        def run(self, skill_id: int, skill_dir: Path, input_json: dict[str, Any]):
-            from app.models import SkillRun
-
-            run = SkillRun(
-                skill_id=skill_id,
-                status="succeeded",
-                input_json=input_json,
-                output_json={"ok": True},
-                started_at=datetime.now(UTC),
-                ended_at=datetime.now(UTC),
-                exit_code=0,
-            )
-            self.db.add(run)
-            self.db.commit()
-            self.db.refresh(run)
-            return run
-
-    monkeypatch.setattr(scheduler_service, "get_skill_runner", lambda db: FakeRunner(db))
-
-    run = scheduler.run_scheduled_skill(schedule)
-
+    assert schedule.status == "paused"
     assert run.status == "succeeded"
-    assert run.input_json["_schedule"]["schedule_id"] == schedule.id
+    assert run.source_schedule_id == schedule.id
     assert schedule.last_run_status == "succeeded"
 
 
-def test_scheduler_failure_does_not_crash_app(tmp_path: Path, db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_automatic_execution_ignores_paused_schedule(tmp_path: Path, db_session: Session) -> None:
     skill = create_skill(db_session, tmp_path)
     scheduler = service(db_session, tmp_path)
-    schedule, _ = scheduler.create_schedule(skill, daily_payload())
-    scheduler.approve_schedule(schedule)
+    schedule = scheduler.create_from_manifest(skill)
+    db_session.commit()
 
-    monkeypatch.setattr(SchedulerService, "run_scheduled_skill", lambda self, schedule: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert scheduler.execute_schedule(schedule.id) is None
 
-    result = scheduler.execute_schedule(schedule.id)
 
-    db_session.refresh(schedule)
-    assert result is None
-    assert schedule.last_run_status == "failed"
+def test_serialize_generated_schedule_uses_service_identity(tmp_path: Path, db_session: Session) -> None:
+    skill = create_skill(db_session, tmp_path)
+    scheduler = service(db_session, tmp_path)
+    scheduler.create_from_manifest(skill)
+    db_session.commit()
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(scheduler_service=scheduler)))
+
+    listed = list_schedules(request, skill_id=skill.id, db=db_session)  # type: ignore[arg-type]
+
+    assert len(listed) == 1
+    assert listed[0]["schedule_kind"] == "service"
+    assert listed[0]["service_id"] == skill.name
+    assert listed[0]["read_only"] is False

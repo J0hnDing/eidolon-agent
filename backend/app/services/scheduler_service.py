@@ -7,16 +7,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import SessionLocal
-from app.models import ApprovalRequest, Skill, SkillRun, SkillSchedule
-from app.schemas.schedule import ScheduleCreate, SchedulePayload
-from app.services.backend_core_function_service import (
-    NOTION_DONE_CLEANUP_FUNCTION_ID,
-    BackendCoreFunctionService,
-)
-from app.services.function_registry_service import FunctionRegistryService
+from app.models import Skill, SkillRun, SkillSchedule
+from app.schemas.schedule import SchedulePayload, ScheduleUpdate
 from app.services.permission_service import PermissionService
+from app.services.platform_service import (
+    NOTION_DONE_CLEANUP_SERVICE_ID,
+    PlatformServiceDispatcher,
+)
 from app.services.proposed_skill_service import ProposedSkillService
-from app.services.skill_runner import get_skill_runner
+from app.services.service_runtime_service import ServiceRuntimeService
 
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
@@ -81,17 +80,28 @@ class SchedulerService:
         if not getattr(self.scheduler, "running", False):
             self.scheduler.start()
         self.load_active_schedules()
-        self.register_backend_core_jobs()
+        self.register_platform_services()
 
     def shutdown(self) -> None:
         if self.scheduler is not None and getattr(self.scheduler, "running", False):
             self.scheduler.shutdown(wait=False)
 
     def load_active_schedules(self) -> None:
-        for schedule in self.db.scalars(select(SkillSchedule).where(SkillSchedule.status == "active")).all():
-            self.register_job(schedule)
+        schedules = self.db.scalars(
+            select(SkillSchedule)
+            .join(Skill, Skill.id == SkillSchedule.skill_id)
+            .where(SkillSchedule.status == "active")
+            .where(Skill.runtime == "service")
+        ).all()
+        for schedule in schedules:
+            try:
+                self.register_job(schedule)
+            except Exception:
+                schedule.status = "paused"
+                schedule.next_run_at = None
+                self.db.commit()
 
-    def register_backend_core_jobs(self) -> None:
+    def register_platform_services(self) -> None:
         if self.scheduler is None:
             return
         hour, minute = self._parse_time(NOTION_DONE_CLEANUP_TIME)
@@ -106,28 +116,28 @@ class SchedulerService:
         else:
             trigger = CronTrigger(hour=hour, minute=minute, timezone=NOTION_DONE_CLEANUP_TIMEZONE)
         self.scheduler.add_job(
-            self.execute_backend_core_function,
+            self.execute_platform_service,
             trigger=trigger,
             id=NOTION_DONE_CLEANUP_JOB_ID,
-            args=[NOTION_DONE_CLEANUP_FUNCTION_ID],
+            args=[NOTION_DONE_CLEANUP_SERVICE_ID],
             replace_existing=True,
             max_instances=1,
             coalesce=True,
         )
 
-    def execute_backend_core_function(self, function_id: str) -> dict[str, Any] | None:
+    def execute_platform_service(self, service_id: str) -> dict[str, Any] | None:
         with self.session_factory() as db:
             try:
-                result = BackendCoreFunctionService(db).invoke(function_id, {}, source="scheduler")
+                result = PlatformServiceDispatcher(db).invoke(service_id)
             except Exception as exc:
                 self.platform_last_run_at = utc_now()
                 self.platform_last_run_status = "failed"
-                print(f"Scheduled backend function {function_id} failed safely: {type(exc).__name__}")
+                print(f"Scheduled platform service {service_id} failed safely: {type(exc).__name__}")
                 return None
             self.platform_last_run_at = utc_now()
             self.platform_last_run_status = str(result["status"])
             print(
-                f"Scheduled backend function {function_id} completed with status {result['status']}; "
+                f"Scheduled platform service {service_id} completed with status {result['status']}; "
                 f"scanned={result['scanned_count']}; deleted={result['deleted_count']}"
             )
             return result
@@ -142,7 +152,7 @@ class SchedulerService:
         return {
             "id": NOTION_DONE_CLEANUP_SCHEDULE_ID,
             "schedule_kind": "platform",
-            "function_id": NOTION_DONE_CLEANUP_FUNCTION_ID,
+            "service_id": NOTION_DONE_CLEANUP_SERVICE_ID,
             "read_only": True,
             "skill_id": None,
             "skill_name": None,
@@ -164,122 +174,116 @@ class SchedulerService:
             "updated_at": self.platform_last_run_at or self.platform_started_at,
         }
 
-    def create_schedule(
-        self,
-        skill: Skill,
-        payload: ScheduleCreate,
-        *,
-        allow_disabled: bool = False,
-    ) -> tuple[SkillSchedule, ApprovalRequest]:
-        self._validate_skill_can_be_scheduled(skill, allow_disabled=allow_disabled)
+    def create_from_manifest(self, skill: Skill) -> SkillSchedule:
+        self._validate_service(skill)
+        existing = self.db.scalar(select(SkillSchedule).where(SkillSchedule.skill_id == skill.id))
+        if existing is not None:
+            raise ScheduleError("Service already has its required schedule")
+        from app.services.manifest_validator import validate_manifest_file
+
+        manifest = validate_manifest_file(
+            self.proposed_service.skill_dir_for_record(skill) / "manifest.json"
+        )
+        if manifest.runtime != "service" or manifest.schedule is None:
+            raise ScheduleError("Service manifest must declare a schedule")
+        payload = ScheduleUpdate(
+            name=f"{skill.name} schedule",
+            schedule=SchedulePayload(**manifest.schedule.model_dump()),
+        )
         schedule_data = self._validated_schedule(payload.schedule)
+        self._validate_input(skill, schedule_data.input)
         schedule = SkillSchedule(
             skill_id=skill.id,
             name=payload.name,
-            status="pending",
+            status="paused",
             schedule_type=schedule_data.type,
             schedule_json=schedule_data.model_dump(exclude_none=True),
             input_json=schedule_data.input,
             timezone=schedule_data.timezone,
         )
         self.db.add(schedule)
-        self.db.commit()
-        self.db.refresh(schedule)
-
-        approval = self._create_schedule_approval(skill, schedule)
-        return schedule, approval
-
-    def create_from_manifest_if_present(self, skill: Skill) -> tuple[SkillSchedule, ApprovalRequest] | None:
-        skill_dir = self.proposed_service.skill_dir_for_record(skill)
-        from app.services.manifest_validator import validate_manifest_file
-
-        manifest = validate_manifest_file(skill_dir / "manifest.json")
-        if manifest.schedule is None:
-            return None
-        self._validate_skill_can_be_scheduled(skill, allow_disabled=True)
-        payload = ScheduleCreate(
-            name=f"{skill.name} declared schedule",
-            schedule=SchedulePayload(**manifest.schedule.model_dump()),
-        )
-        return self.create_schedule(skill, payload, allow_disabled=True)
-
-    def approve_schedule(self, schedule: SkillSchedule) -> SkillSchedule:
-        approval = self._latest_schedule_approval(schedule)
-        if approval is None:
-            approval = self._create_schedule_approval(schedule.skill, schedule)
-        if approval.risk_level == "blocked":
-            raise ScheduleError("Blocked schedule approvals cannot be activated")
-        approval.status = "approved"
-        approval.resolved_at = utc_now()
-        approval.resolved_by = "local_user"
-        schedule.status = "active"
-        self.db.commit()
-        self.db.refresh(schedule)
-        self.register_job(schedule)
+        self.db.flush()
         return schedule
 
-    def deny_schedule(self, schedule: SkillSchedule) -> SkillSchedule:
-        approval = self._latest_schedule_approval(schedule)
-        if approval is None:
-            approval = self._create_schedule_approval(schedule.skill, schedule)
-        if approval.status != "approved":
-            approval.status = "denied"
-            approval.resolved_at = utc_now()
-            approval.resolved_by = "local_user"
-        schedule.status = "denied"
-        self.remove_job(schedule.id)
-        self.db.commit()
-        self.db.refresh(schedule)
-        return schedule
+    def update_schedule(self, schedule: SkillSchedule, payload: ScheduleUpdate) -> SkillSchedule:
+        self._validate_service(schedule.skill)
+        schedule_data = self._validated_schedule(payload.schedule)
+        if schedule.status == "active":
+            self._validate_service_ready(schedule.skill, schedule_data.input)
+
+        previous = {
+            "name": schedule.name,
+            "schedule_type": schedule.schedule_type,
+            "schedule_json": dict(schedule.schedule_json),
+            "input_json": dict(schedule.input_json),
+            "timezone": schedule.timezone,
+            "next_run_at": schedule.next_run_at,
+        }
+        schedule.name = payload.name
+        schedule.schedule_type = schedule_data.type
+        schedule.schedule_json = schedule_data.model_dump(exclude_none=True)
+        schedule.input_json = schedule_data.input
+        schedule.timezone = schedule_data.timezone
+        try:
+            if schedule.status == "active":
+                self.register_job(schedule, commit=False)
+            self.db.commit()
+            self.db.refresh(schedule)
+            return schedule
+        except Exception as exc:
+            self.db.rollback()
+            for key, value in previous.items():
+                setattr(schedule, key, value)
+            if schedule.status == "active":
+                try:
+                    self.register_job(schedule)
+                except Exception:
+                    pass
+            raise ScheduleError(f"Schedule could not be updated: {exc}") from exc
 
     def pause_schedule(self, schedule: SkillSchedule) -> SkillSchedule:
+        self._validate_service(schedule.skill)
         if schedule.status != "active":
-            raise ScheduleError("Only active schedules can be paused")
-        schedule.status = "paused"
+            raise ScheduleError("Only active service schedules can be paused")
         self.remove_job(schedule.id)
+        schedule.status = "paused"
+        schedule.next_run_at = None
         self.db.commit()
         self.db.refresh(schedule)
         return schedule
 
     def resume_schedule(self, schedule: SkillSchedule) -> SkillSchedule:
-        approval = self._latest_schedule_approval(schedule)
-        if approval is None or approval.status != "approved":
-            raise ScheduleError("Schedule approval is required before resume")
+        self._validate_service(schedule.skill)
+        if schedule.status != "paused":
+            raise ScheduleError("Only paused service schedules can be resumed")
+        self._validate_service_ready(schedule.skill, schedule.input_json)
         schedule.status = "active"
-        self.db.commit()
+        try:
+            self.register_job(schedule)
+        except Exception as exc:
+            self.db.rollback()
+            raise ScheduleError(f"Service schedule could not be activated: {exc}") from exc
         self.db.refresh(schedule)
-        self.register_job(schedule)
         return schedule
 
-    def delete_schedule(self, schedule: SkillSchedule) -> None:
-        self.remove_job(schedule.id)
-        self.db.query(SkillRun).filter(SkillRun.source_schedule_id == schedule.id).update(
-            {SkillRun.source_schedule_id: None},
-            synchronize_session=False,
-        )
-        self.db.query(ApprovalRequest).filter(ApprovalRequest.schedule_id == schedule.id).delete(
-            synchronize_session=False
-        )
-        self.db.delete(schedule)
-        self.db.commit()
-
-    def register_job(self, schedule: SkillSchedule) -> None:
+    def register_job(self, schedule: SkillSchedule, *, commit: bool = True) -> None:
+        self._validate_service(schedule.skill)
+        trigger = self.build_trigger(schedule)
         if self.scheduler is None:
             schedule.next_run_at = None
+        else:
+            job = self.scheduler.add_job(
+                self.execute_schedule,
+                trigger=trigger,
+                id=self.job_id(schedule.id),
+                args=[schedule.id],
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            schedule.next_run_at = getattr(job, "next_run_time", None)
+        if commit:
             self.db.commit()
-            return
-        trigger = self.build_trigger(schedule)
-        job = self.scheduler.add_job(
-            self.execute_schedule,
-            trigger=trigger,
-            id=self.job_id(schedule.id),
-            args=[schedule.id],
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-        )
-        schedule.next_run_at = getattr(job, "next_run_time", None)
-        self.db.commit()
 
     def remove_job(self, schedule_id: int) -> None:
         if self.scheduler is None:
@@ -317,129 +321,99 @@ class SchedulerService:
 
     def execute_schedule(self, schedule_id: int) -> SkillRun | None:
         with self.session_factory() as db:
-            service = SchedulerService(db, scheduler=self.scheduler, session_factory=self.session_factory)
+            service = SchedulerService(
+                db,
+                scheduler=self.scheduler,
+                session_factory=self.session_factory,
+                project_root=self.project_root,
+            )
             schedule = db.get(SkillSchedule, schedule_id)
             if schedule is None or schedule.status != "active":
                 return None
             try:
-                run = service.run_scheduled_skill(schedule)
+                return service.run_scheduled_service(schedule)
             except Exception as exc:
                 schedule.last_run_at = utc_now()
                 schedule.last_run_status = "failed"
                 db.commit()
-                print(f"Scheduled skill run failed for schedule {schedule_id}: {exc}")
+                print(f"Scheduled service run failed for schedule {schedule_id}: {exc}")
                 return None
-            return run
 
-    def run_scheduled_skill(self, schedule: SkillSchedule) -> SkillRun:
-        skill = schedule.skill
-        run = self._run_skill_with_checks(skill, schedule.input_json, source_schedule_id=schedule.id)
+    def run_scheduled_service(self, schedule: SkillSchedule) -> SkillRun:
+        self._validate_service(schedule.skill)
+        run = self._run_service_with_checks(schedule.skill, schedule.input_json, schedule.id)
         schedule.last_run_at = run.ended_at or run.started_at or utc_now()
         schedule.last_run_status = run.status
         self.db.commit()
         self.db.refresh(schedule)
         return run
 
-    def _run_skill_with_checks(
+    def _run_service_with_checks(
         self,
         skill: Skill,
         input_json: dict[str, Any],
-        *,
-        source_schedule_id: int,
+        schedule_id: int,
     ) -> SkillRun:
         if skill.status != "installed":
-            return self._blocked_run(skill.id, input_json, "Only installed skills can be run by a schedule")
-        if skill.runtime != "function":
-            return self._blocked_run(skill.id, input_json, "Persistent web_app skills cannot use bounded schedules")
-        if not skill.enabled:
-            return self._blocked_run(skill.id, input_json, "Skill is disabled")
-        approval = self._latest_schedule_approval_by_id(source_schedule_id)
-        if approval is None or approval.status != "approved":
-            return self._blocked_run(skill.id, input_json, "Schedule approval is required before scheduled execution")
+            return self._blocked_run(skill, input_json, schedule_id, "Only installed services can run")
+        if skill.runtime != "service":
+            return self._blocked_run(skill, input_json, schedule_id, "Only services can run from schedules")
         permission_decision = PermissionService(self.db, project_root=self.project_root).can_run(skill)
         if not permission_decision.allowed:
-            return self._blocked_run(skill.id, input_json, permission_decision.reason)
-        scheduled_input = {"_schedule": {"schedule_id": source_schedule_id}, **input_json}
-        return FunctionRegistryService(
-            self.db,
-            project_root=self.project_root,
-            runner_factory=get_skill_runner,
-        ).invoke_direct(
+            return self._blocked_run(skill, input_json, schedule_id, permission_decision.reason)
+        return ServiceRuntimeService(self.db, project_root=self.project_root).run(
             skill,
-            scheduled_input,
-            source="schedule",
-            source_schedule_id=source_schedule_id,
-            initiating_action=f"Scheduled run {source_schedule_id}",
+            input_json,
+            schedule_id=schedule_id,
         )
 
-    def _blocked_run(self, skill_id: int, input_json: dict[str, Any], reason: str) -> SkillRun:
+    def _blocked_run(
+        self,
+        skill: Skill,
+        input_json: dict[str, Any],
+        schedule_id: int,
+        reason: str,
+    ) -> SkillRun:
         run = SkillRun(
-            skill_id=skill_id,
+            skill_id=skill.id,
+            version_id=skill.active_version_id,
             status="blocked",
             input_json=input_json,
             started_at=utc_now(),
             ended_at=utc_now(),
             error_message=reason,
+            invocation_source="schedule",
+            source_schedule_id=schedule_id,
+            initiating_action=f"Scheduled service run {schedule_id}",
         )
         self.db.add(run)
         self.db.commit()
         self.db.refresh(run)
         return run
 
-    def _validate_skill_can_be_scheduled(self, skill: Skill, *, allow_disabled: bool = False) -> None:
+    def _validate_service(self, skill: Skill) -> None:
         if skill.status != "installed":
-            raise ScheduleError("Only installed skills can be scheduled")
-        if skill.runtime != "function":
-            raise ScheduleError("Persistent web_app skills cannot be scheduled as bounded runs")
-        if not skill.enabled and not allow_disabled:
-            raise ScheduleError("Disabled skills cannot be scheduled")
+            raise ScheduleError("Only installed services can be scheduled")
+        if skill.runtime != "service":
+            raise ScheduleError("Only service skills can be scheduled")
+
+    def _validate_service_ready(self, skill: Skill, input_json: dict[str, Any]) -> None:
+        self._validate_service(skill)
+        permission_decision = PermissionService(self.db, project_root=self.project_root).can_run(skill)
+        if not permission_decision.allowed:
+            raise ScheduleError(permission_decision.reason)
+        self._validate_input(skill, input_json)
+
+    def _validate_input(self, skill: Skill, input_json: dict[str, Any]) -> None:
+        try:
+            ServiceRuntimeService(self.db, project_root=self.project_root).validate_input(skill, input_json)
+        except (FileNotFoundError, ValueError) as exc:
+            raise ScheduleError(str(exc)) from exc
 
     def _validated_schedule(self, payload: SchedulePayload) -> SchedulePayload:
         if payload.timezone not in KNOWN_TIMEZONES:
             raise ScheduleError("Schedule timezone must be a supported IANA timezone")
         return payload
-
-    def _create_schedule_approval(self, skill: Skill, schedule: SkillSchedule) -> ApprovalRequest:
-        existing = self._latest_schedule_approval(schedule)
-        if existing and existing.status in {"pending", "approved", "denied"}:
-            return existing
-        runtime_request = PermissionService(self.db, project_root=self.project_root).create_runtime_request(skill)
-        explanation = (
-            f"Approve schedule '{schedule.name}' for skill {skill.name}. "
-            f"It will run {self.human_schedule(schedule)} with input JSON {schedule.input_json}. "
-            "Approving this schedule does not bypass runtime permission checks; every scheduled run must still pass "
-            "installed/enabled/runtime-permission/runner support checks."
-        )
-        request = ApprovalRequest(
-            skill_id=skill.id,
-            schedule_id=schedule.id,
-            request_scope="runtime",
-            request_type="schedule",
-            risk_level=runtime_request.risk_level,
-            requested_permissions_json=runtime_request.requested_permissions_json,
-            requested_dependencies_json=runtime_request.requested_dependencies_json,
-            requested_network_domains_json=runtime_request.requested_network_domains_json,
-            requested_filesystem_json=runtime_request.requested_filesystem_json,
-            reason_json={"schedule": schedule.schedule_json, "input": schedule.input_json},
-            reason=explanation,
-            user_explanation=explanation,
-            status="pending",
-        )
-        self.db.add(request)
-        self.db.commit()
-        self.db.refresh(request)
-        return request
-
-    def _latest_schedule_approval(self, schedule: SkillSchedule) -> ApprovalRequest | None:
-        return self._latest_schedule_approval_by_id(schedule.id)
-
-    def _latest_schedule_approval_by_id(self, schedule_id: int) -> ApprovalRequest | None:
-        return self.db.scalar(
-            select(ApprovalRequest)
-            .where(ApprovalRequest.schedule_id == schedule_id)
-            .where(ApprovalRequest.request_type == "schedule")
-            .order_by(ApprovalRequest.created_at.desc(), ApprovalRequest.id.desc())
-        )
 
     def human_schedule(self, schedule: SkillSchedule) -> str:
         data = schedule.schedule_json
@@ -456,14 +430,14 @@ class SchedulerService:
         return int(hour), int(minute)
 
     def job_id(self, schedule_id: int) -> str:
-        return f"skill_schedule_{schedule_id}"
+        return f"service_schedule_{schedule_id}"
 
 
 def serialize_schedule(schedule: SkillSchedule) -> dict[str, Any]:
     return {
         "id": schedule.id,
-        "schedule_kind": "skill",
-        "function_id": None,
+        "schedule_kind": "service",
+        "service_id": schedule.skill.name if schedule.skill else None,
         "read_only": False,
         "skill_id": schedule.skill_id,
         "skill_name": schedule.skill.name if schedule.skill else None,

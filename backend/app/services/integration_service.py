@@ -29,8 +29,10 @@ from app.services.github_provider import (
 )
 from app.services.integration_registry import OPERATIONS, registry_contract_identity
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
+from app.services.notion_report_provider import NotionReportProvider
 from app.services.notion_todo_provider import NotionTodoProvider
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
+from app.services.report_service import ReportProvider, ReportService
 from app.services.secret_store import SecretStore, SecretStoreError, default_secret_store
 from app.services.todo_service import TodoProvider, TodoService
 
@@ -70,9 +72,9 @@ ATLAS_PROVIDER_ERROR_MESSAGES = {
 }
 NOTION_PROVIDER_ERROR_MESSAGES = {
     "invalid_credential": "The Notion credential is invalid or revoked",
-    "not_found": "The requested Notion todo was not found",
-    "schema_mismatch": "The Notion todo data source or row does not match the required schema",
-    "provider_forbidden": "Notion denied the requested todo operation",
+    "not_found": "The requested Notion resource was not found",
+    "schema_mismatch": "The Notion data source or row does not match the required schema",
+    "provider_forbidden": "Notion denied the requested operation",
     "rate_limited": "Notion rate limited the integration request",
     "provider_timeout": "Notion did not respond before the timeout",
     "response_too_large": "Notion response exceeded the operation limit",
@@ -113,6 +115,7 @@ class IntegrationService:
     github: GitHubProviderAdapter | None = None
     atlas: AtlasProviderAdapter | None = None
     notion_provider_factory: Callable[[str, str], TodoProvider] | None = None
+    notion_report_provider_factory: Callable[[str, str], ReportProvider] | None = None
     codex_adapter: Any | None = None
 
     def __post_init__(self) -> None:
@@ -124,6 +127,8 @@ class IntegrationService:
             self.atlas = UrllibAtlasProviderAdapter()
         if self.notion_provider_factory is None:
             self.notion_provider_factory = NotionTodoProvider
+        if self.notion_report_provider_factory is None:
+            self.notion_report_provider_factory = NotionReportProvider
 
     def connection_status(self) -> GitHubConnectionStatus:
         connection = self._connection()
@@ -221,22 +226,207 @@ class IntegrationService:
             bot_id=connection.account_id or None,
             workspace_name=connection.workspace_name,
             data_source_id=connection.configured_resource_id,
+            report_data_source_id=connection.configured_report_resource_id,
             last_validated_at=connection.last_validated_at,
             created_at=connection.created_at,
             updated_at=connection.updated_at,
             error_type=connection.error_type if status != "connected" else None,
         )
 
-    def put_notion_connection(self, credential: str, data_source_id: str) -> NotionConnectionStatus:
-        normalized_source = data_source_id.strip()
-        if not credential or len(credential) > 4096 or not normalized_source or len(normalized_source) > 256:
-            raise IntegrationError("invalid_input", "Notion token and data-source ID must be non-empty bounded strings")
+    def put_notion_credential(self, credential: str) -> NotionConnectionStatus:
+        if not credential or len(credential) > 4096:
+            raise IntegrationError("invalid_input", "Notion token must be a non-empty bounded string")
         if self.secret_store is None:
             raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
         assert self.notion_provider_factory is not None
+        assert self.notion_report_provider_factory is not None
+        previous = self._connection("notion")
+        todo_source = previous.configured_resource_id if previous is not None else None
+        report_source = previous.configured_report_resource_id if previous is not None else None
+        todo_provider = self.notion_provider_factory(credential, todo_source or "identity-only")
+        validation_target = "connection"
+        try:
+            validation_target = "Todo data source" if todo_source else "connection"
+            identity = (
+                todo_provider.validate_connection()
+                if todo_source
+                else todo_provider.validate_identity()
+            )
+            if report_source:
+                validation_target = "Reports data source"
+                report_identity = self.notion_report_provider_factory(
+                    credential,
+                    report_source,
+                ).validate_connection()
+                report_bot_id, _report_bot_name, _report_workspace = (
+                    self._validated_notion_identity(report_identity)
+                )
+                if report_bot_id != identity.get("bot_id"):
+                    raise IntegrationError(
+                        "provider_unavailable",
+                        "Notion data sources resolved to different bot identities",
+                    )
+        except IntegrationProviderError as exc:
+            raise self._notion_validation_error(validation_target, exc) from None
+        bot_id, bot_name, workspace_name = self._validated_notion_identity(identity)
+        try:
+            new_reference = self.secret_store.put(credential, namespace="notion")
+        except SecretStoreError:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable") from None
+        finally:
+            credential = ""
+
+        previous_reference = previous.secret_reference if previous is not None else None
+        identity_changed = previous is not None and previous.account_id != bot_id
+        now = utc_now()
+        try:
+            if previous is None:
+                connection = IntegrationConnection(
+                    provider="notion",
+                    secret_store_id=self.secret_store.implementation_id,
+                    secret_reference=new_reference,
+                    status="connected",
+                    account_login=bot_name,
+                    account_id=bot_id,
+                    workspace_name=workspace_name,
+                    configured_resource_id=None,
+                    configured_report_resource_id=None,
+                    created_at=now,
+                    updated_at=now,
+                    last_validated_at=now,
+                )
+                self.db.add(connection)
+            else:
+                previous.secret_store_id = self.secret_store.implementation_id
+                previous.secret_reference = new_reference
+                previous.status = "connected"
+                previous.account_login = bot_name
+                previous.account_id = bot_id
+                previous.workspace_name = workspace_name
+                previous.error_type = None
+                previous.updated_at = now
+                previous.last_validated_at = now
+            if identity_changed:
+                self.invalidate_provider_authorizations("notion", "Notion identity changed")
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            try:
+                self.secret_store.delete(new_reference, namespace="notion")
+            except SecretStoreError:
+                pass
+            raise IntegrationError("internal_failure", "Notion connection could not be saved safely") from None
+        if previous_reference and previous_reference != new_reference:
+            try:
+                self.secret_store.delete(previous_reference, namespace="notion")
+            except SecretStoreError:
+                pass
+        return self.notion_connection_status()
+
+    def put_notion_data_sources(
+        self,
+        data_source_id: str,
+        report_data_source_id: str,
+    ) -> NotionConnectionStatus:
+        normalized_source = data_source_id.strip()
+        normalized_report_source = report_data_source_id.strip()
+        if (
+            not normalized_source
+            or len(normalized_source) > 256
+            or not normalized_report_source
+            or len(normalized_report_source) > 256
+        ):
+            raise IntegrationError(
+                "invalid_input",
+                "Both Notion data-source IDs must be non-empty bounded strings",
+            )
+        connection = self._connected_notion_connection()
+        assert self.secret_store is not None
+        try:
+            credential = self.secret_store.get(connection.secret_reference, namespace="notion")
+        except (SecretStoreError, RuntimeError):
+            raise IntegrationError("connection_unavailable", "Stored Notion credential is unavailable") from None
+        assert self.notion_provider_factory is not None
+        assert self.notion_report_provider_factory is not None
+        validation_target = "Todo data source"
+        try:
+            identity = self.notion_provider_factory(
+                credential,
+                normalized_source,
+            ).validate_connection()
+            validation_target = "Reports data source"
+            report_identity = self.notion_report_provider_factory(
+                credential,
+                normalized_report_source,
+            ).validate_connection()
+        except IntegrationProviderError as exc:
+            raise self._notion_validation_error(validation_target, exc) from None
+        finally:
+            credential = ""
+        bot_id, _bot_name, _workspace_name = self._validated_notion_identity(identity)
+        report_bot_id, _report_bot_name, _report_workspace = self._validated_notion_identity(
+            report_identity
+        )
+        if report_bot_id != bot_id or connection.account_id != bot_id:
+            raise IntegrationError(
+                "provider_unavailable",
+                "Notion data sources do not match the connected bot identity",
+            )
+        try:
+            connection.configured_resource_id = normalized_source
+            connection.configured_report_resource_id = normalized_report_source
+            connection.error_type = None
+            connection.updated_at = utc_now()
+            connection.last_validated_at = connection.updated_at
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise IntegrationError("internal_failure", "Notion data sources could not be saved safely") from None
+        return self.notion_connection_status()
+
+    def remove_notion_data_sources(self) -> NotionConnectionStatus:
+        connection = self._connection("notion")
+        if connection is None:
+            return NotionConnectionStatus(connected=False, status="disconnected")
+        try:
+            connection.configured_resource_id = None
+            connection.configured_report_resource_id = None
+            connection.updated_at = utc_now()
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise IntegrationError("internal_failure", "Notion data sources could not be removed safely") from None
+        return self.notion_connection_status()
+
+    def put_notion_connection(
+        self,
+        credential: str,
+        data_source_id: str,
+        report_data_source_id: str,
+    ) -> NotionConnectionStatus:
+        normalized_source = data_source_id.strip()
+        normalized_report_source = report_data_source_id.strip()
+        if (
+            not credential
+            or len(credential) > 4096
+            or not normalized_source
+            or len(normalized_source) > 256
+            or not normalized_report_source
+            or len(normalized_report_source) > 256
+        ):
+            raise IntegrationError(
+                "invalid_input",
+                "Notion token and both data-source IDs must be non-empty bounded strings",
+            )
+        if self.secret_store is None:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        assert self.notion_provider_factory is not None
+        assert self.notion_report_provider_factory is not None
         provider = self.notion_provider_factory(credential, normalized_source)
+        report_provider = self.notion_report_provider_factory(credential, normalized_report_source)
         try:
             identity = provider.validate_connection()
+            report_identity = report_provider.validate_connection()
         except IntegrationProviderError as exc:
             raise IntegrationError(
                 exc.error_type,
@@ -244,8 +434,11 @@ class IntegrationService:
                 retry_after_seconds=exc.retry_after_seconds,
             ) from None
         bot_id = str(identity.get("bot_id") or "")
+        report_bot_id = str(report_identity.get("bot_id") or "")
         if not bot_id or len(bot_id) > 128:
             raise IntegrationError("provider_unavailable", "Notion returned an invalid bot identity")
+        if report_bot_id != bot_id:
+            raise IntegrationError("provider_unavailable", "Notion data sources resolved to different bot identities")
         bot_name = self._sanitized_identity(identity.get("bot_name"), 128) or "Notion bot"
         workspace_name = self._sanitized_identity(identity.get("workspace_name"), 256)
         try:
@@ -258,7 +451,6 @@ class IntegrationService:
         previous = self._connection("notion")
         previous_reference = previous.secret_reference if previous is not None else None
         identity_changed = previous is not None and previous.account_id != bot_id
-        source_changed = previous is not None and previous.configured_resource_id != normalized_source
         now = utc_now()
         try:
             if previous is None:
@@ -271,6 +463,7 @@ class IntegrationService:
                     account_id=bot_id,
                     workspace_name=workspace_name,
                     configured_resource_id=normalized_source,
+                    configured_report_resource_id=normalized_report_source,
                     created_at=now,
                     updated_at=now,
                     last_validated_at=now,
@@ -285,12 +478,12 @@ class IntegrationService:
                 connection.account_id = bot_id
                 connection.workspace_name = workspace_name
                 connection.configured_resource_id = normalized_source
+                connection.configured_report_resource_id = normalized_report_source
                 connection.error_type = None
                 connection.updated_at = now
                 connection.last_validated_at = now
-            if identity_changed or source_changed:
-                reason = "Notion identity changed" if identity_changed else "Notion data source changed"
-                self.invalidate_provider_authorizations("notion", reason)
+            if identity_changed:
+                self.invalidate_provider_authorizations("notion", "Notion identity changed")
             self.db.commit()
         except Exception:
             self.db.rollback()
@@ -367,7 +560,10 @@ class IntegrationService:
                     authorizations.append(current)
                     continue
                 self._invalidate_authorization(current, "A new decision was requested for this integration contract")
-            connection_available = self.provider_connected(requirement.provider)
+            connection_available = all(
+                self.operation_available(operation_id)
+                for operation_id in requirement.operations
+            )
             operations = [OPERATIONS[operation_id] for operation_id in requirement.operations]
             repositories = list(requirement.resource_scope.repositories)
             read_only = all(operation.read_only for operation in operations)
@@ -455,7 +651,10 @@ class IntegrationService:
                     "contract_fingerprint": self.contract_fingerprint(requirement),
                     "read_only": all(OPERATIONS[operation_id].read_only for operation_id in requirement.operations),
                 "resource_scope": requirement.resource_scope.model_dump(mode="json"),
-                "connection_available": self.provider_connected(requirement.provider),
+                "connection_available": all(
+                    self.operation_available(operation_id)
+                    for operation_id in requirement.operations
+                ),
                 "authorization_state": self.authorization_state(skill, requirement),
             }
             for requirement in manifest.integration_requirements
@@ -532,7 +731,7 @@ class IntegrationService:
         # caller, manifest, approval, connection, scope, and schema check passes.
         if skill.status != "installed" or not skill.enabled:
             raise IntegrationError("authorization_missing_or_stale", "Integration caller is not installed and enabled")
-        if skill.runtime != caller.runtime or caller.runtime not in {"function", "web_app"}:
+        if skill.runtime != caller.runtime or caller.runtime not in {"function", "web_app", "service"}:
             raise IntegrationError("authorization_missing_or_stale", "Integration caller runtime is not eligible")
         try:
             manifest = validate_manifest_file(self.proposed_service.skill_dir_for_record(skill) / "manifest.json")
@@ -587,6 +786,11 @@ class IntegrationService:
         elif connection is None or connection.status != "connected":
             provider_name = PROVIDER_DISPLAY_NAMES.get(operation.provider, operation.provider.title())
             raise IntegrationError("connection_unavailable", f"{provider_name} connection is unavailable")
+        if not self.operation_available(operation_id):
+            raise IntegrationError(
+                "connection_unavailable",
+                "The configured resource for this integration operation is unavailable",
+            )
         scoped_resource = self._resource(operation.resource_scope, input_json)
         resource = scoped_resource
         if resource is None and "node_id" in operation.audit_resource_fields:
@@ -594,9 +798,9 @@ class IntegrationService:
             if isinstance(node_id, int) and not isinstance(node_id, bool):
                 resource = f"node:{node_id}"
         if resource is None and operation.provider == "notion" and "id" in operation.audit_resource_fields:
-            todo_id = input_json.get("id")
-            if isinstance(todo_id, str):
-                resource = f"notion-page:{todo_id}"
+            page_id = input_json.get("id")
+            if isinstance(page_id, str):
+                resource = f"notion-page:{page_id}"
         if audit_record is not None:
             audit_record.resource = resource
         if (
@@ -643,11 +847,21 @@ class IntegrationService:
                     output = self.atlas.execute(operation, input_json)
                 elif operation.provider == "notion":
                     assert connection is not None
-                    assert connection.configured_resource_id is not None
-                    assert self.notion_provider_factory is not None
-                    output = TodoService(
-                        self.notion_provider_factory(credential, connection.configured_resource_id)
-                    ).invoke(operation.operation_id, input_json)
+                    if operation.operation_id.startswith("notion.report."):
+                        assert connection.configured_report_resource_id is not None
+                        assert self.notion_report_provider_factory is not None
+                        output = ReportService(
+                            self.notion_report_provider_factory(
+                                credential,
+                                connection.configured_report_resource_id,
+                            )
+                        ).invoke(operation.operation_id, input_json)
+                    else:
+                        assert connection.configured_resource_id is not None
+                        assert self.notion_provider_factory is not None
+                        output = TodoService(
+                            self.notion_provider_factory(credential, connection.configured_resource_id)
+                        ).invoke(operation.operation_id, input_json)
                 else:
                     output = self.github.execute(operation, input_json, credential)
             except IntegrationProviderError as exc:
@@ -702,6 +916,50 @@ class IntegrationService:
         for authorization in authorizations:
             self._invalidate_authorization(authorization, reason, commit=False)
 
+    def _connected_notion_connection(self) -> IntegrationConnection:
+        connection = self._connection("notion")
+        if (
+            connection is None
+            or connection.status != "connected"
+            or self.secret_store is None
+            or self.secret_store.implementation_id != connection.secret_store_id
+        ):
+            raise IntegrationError("connection_unavailable", "Notion connection is unavailable")
+        return connection
+
+    def _validated_notion_identity(
+        self,
+        identity: dict[str, str | None],
+    ) -> tuple[str, str, str | None]:
+        bot_id = str(identity.get("bot_id") or "")
+        if not bot_id or len(bot_id) > 128:
+            raise IntegrationError("provider_unavailable", "Notion returned an invalid bot identity")
+        bot_name = self._sanitized_identity(identity.get("bot_name"), 128) or "Notion bot"
+        workspace_name = self._sanitized_identity(identity.get("workspace_name"), 256)
+        return bot_id, bot_name, workspace_name
+
+    @staticmethod
+    def _notion_validation_error(
+        target: str,
+        error: IntegrationProviderError,
+    ) -> IntegrationError:
+        if error.error_type == "not_found":
+            message = (
+                f"The Notion {target} was not found. Copy its data source ID from Manage data sources "
+                "and share the original database with this Notion connection."
+            )
+        elif error.error_type == "schema_mismatch":
+            message = f"The Notion {target} does not match the required schema"
+        elif error.error_type == "provider_forbidden":
+            message = f"Notion denied access to the {target}"
+        else:
+            message = provider_error_message("notion", error.error_type)
+        return IntegrationError(
+            error.error_type,
+            message,
+            retry_after_seconds=error.retry_after_seconds,
+        )
+
     def _connection(self, provider: str = "github") -> IntegrationConnection | None:
         return self.db.scalar(
             select(IntegrationConnection).where(IntegrationConnection.provider == provider)
@@ -724,6 +982,24 @@ class IntegrationService:
         if self.secret_store is None or self.secret_store.implementation_id != connection.secret_store_id:
             return False
         return True
+
+    def operation_available(self, operation_id: str) -> bool:
+        operation = OPERATIONS.get(operation_id)
+        if operation is None:
+            return False
+        if operation.provider != "notion":
+            return self.provider_connected(operation.provider)
+        connection = self._connection("notion")
+        if (
+            connection is None
+            or connection.status != "connected"
+            or self.secret_store is None
+            or self.secret_store.implementation_id != connection.secret_store_id
+        ):
+            return False
+        if operation_id.startswith("notion.report."):
+            return bool(connection.configured_report_resource_id)
+        return bool(connection.configured_resource_id)
 
     def _authorization_for_fingerprint(
         self,

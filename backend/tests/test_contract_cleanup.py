@@ -40,7 +40,7 @@ def test_status_contracts_do_not_advertise_non_persisted_states() -> None:
 
 
 def test_runtime_is_the_only_interface_discriminator() -> None:
-    assert set(get_args(SkillRuntime)) == {"function", "web_app"}
+    assert set(get_args(SkillRuntime)) == {"function", "service", "web_app"}
     for schema in (SkillManifest, SkillRead):
         assert "interface_type" not in schema.model_fields
         assert "tool_ui_schema" not in schema.model_fields
@@ -84,6 +84,8 @@ def test_permission_config_drives_agent_policy_and_output_schema() -> None:
     assert set(permission_schema["properties"]["runtime"]["properties"]) == set(
         approval_required_permissions()["runtime"]
     )
+    assert "call_response" not in default_allowed_permissions()["runtime"].get("codex", {})
+    assert approval_required_permissions()["runtime"]["codex"]["call_response"] is False
     mutable_copy = default_permission_policy()
     mutable_copy["blocked"].clear()
     assert blocked_permissions()

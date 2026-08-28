@@ -24,6 +24,7 @@ from app.routers import (
 from app.services.atlas_lifecycle_service import atlas_lifecycle_service
 from app.services.atlas_settings_service import build_default_atlas_settings_service
 from app.services.codex_usage_service import codex_usage_service
+from app.services.proposed_skill_service import ProposedSkillService
 from app.services.scheduler_service import SchedulerService
 from app.services.web_app_runtime_service import WebAppRuntimeConfig, WebAppRuntimeService
 
@@ -56,6 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         atlas_db.close()
     app.state.atlas_lifecycle_service = atlas_lifecycle_service
     scheduler_db = SessionLocal()
+    ProposedSkillService(scheduler_db).sync_installed_from_filesystem()
     scheduler_service = SchedulerService(scheduler_db)
     scheduler_service.start()
     app.state.scheduler_service = scheduler_service

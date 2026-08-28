@@ -6,7 +6,7 @@ Your responsibilities:
 - Read the repair request and existing skill context.
 - Write a concise repair blueprint.
 - Keep the repair bounded to the current skill package.
-- Preserve the existing `function` or `web_app` runtime protocol.
+- Preserve the existing `function`, `service`, or `web_app` runtime protocol.
 - Define repair milestones and acceptance criteria.
 - Never write implementation code.
 - Never approve permissions.

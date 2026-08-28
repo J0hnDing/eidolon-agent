@@ -80,7 +80,7 @@ class ProposedSkillService:
             ).all()
         )
 
-    def sync_installed_from_filesystem(self) -> None:
+    def sync_installed_from_filesystem(self, *, reconcile_schedules: bool = True) -> None:
         if not self.installed_root.exists():
             return
         changed = False
@@ -128,8 +128,14 @@ class ProposedSkillService:
                         item.model_dump(mode="json") for item in manifest.integration_requirements
                     ]
                     skill.installed_path = self._relative_path(active_dir)
+                    if manifest.runtime == "service":
+                        skill.enabled = True
                     if self._ensure_synced_active_version(skill, active_dir, manifest):
                         changed = True
+                    if reconcile_schedules and manifest.runtime == "service" and self.db.scalar(
+                        select(SkillSchedule).where(SkillSchedule.skill_id == skill.id)
+                    ) is None:
+                        self._register_manifest_schedule(skill)
                     changed = True
                 continue
             skill = Skill(
@@ -147,11 +153,13 @@ class ProposedSkillService:
                     item.model_dump(mode="json") for item in manifest.integration_requirements
                 ],
                 installed_path=self._relative_path(active_dir),
-                enabled=False,
+                enabled=manifest.runtime == "service",
             )
             self.db.add(skill)
             self.db.flush()
             self._ensure_synced_active_version(skill, active_dir, manifest)
+            if reconcile_schedules:
+                self._register_manifest_schedule(skill)
             changed = True
         if changed:
             self.db.commit()
@@ -322,7 +330,7 @@ class ProposedSkillService:
         ]
         skill.installed_path = self._relative_path(version_dir)
         skill.active_version_id = version.id
-        skill.enabled = False
+        skill.enabled = manifest.runtime == "service"
         try:
             self._register_manifest_schedule(skill)
             self.db.commit()
@@ -511,7 +519,8 @@ class ProposedSkillService:
     def _register_manifest_schedule(self, skill: Skill) -> None:
         from app.services.scheduler_service import SchedulerService
 
-        SchedulerService(self.db, project_root=self.project_root).create_from_manifest_if_present(skill)
+        if skill.runtime == "service":
+            SchedulerService(self.db, project_root=self.project_root).create_from_manifest(skill)
 
     def _run_tests(self, skill_dir: Path) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory(prefix=f"personal-agent-pytest-{skill_dir.name}-") as basetemp:

@@ -68,6 +68,13 @@ def ensure_local_schema() -> None:
                 connection.execute(
                     text("ALTER TABLE integration_connections ADD COLUMN configured_resource_id VARCHAR(256)")
                 )
+            if "configured_report_resource_id" not in columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE integration_connections "
+                        "ADD COLUMN configured_report_resource_id VARCHAR(256)"
+                    )
+                )
         if "skills" in table_names:
             columns = {column["name"] for column in inspector.get_columns("skills")}
             if "runtime" not in columns:
@@ -104,7 +111,63 @@ def ensure_local_schema() -> None:
             if "proposed_skill_type" in columns:
                 connection.execute(text("ALTER TABLE skill_generation_requests DROP COLUMN proposed_skill_type"))
         if "skill_schedules" in table_names:
-            connection.execute(text("DELETE FROM skill_schedules WHERE status = 'deleted'"))
+            schedule_columns = {
+                column["name"] for column in inspector.get_columns("skill_schedules")
+            }
+            if "status" in schedule_columns:
+                connection.execute(text("DELETE FROM skill_schedules WHERE status = 'deleted'"))
+                connection.execute(
+                    text(
+                        "UPDATE skill_schedules SET status = 'paused' "
+                        "WHERE status NOT IN ('active', 'paused')"
+                    )
+                )
+            if "skill_id" in schedule_columns and "skills" in table_names:
+                skill_columns = {column["name"] for column in inspector.get_columns("skills")}
+                if "runtime" in skill_columns:
+                    retired_schedule_ids = (
+                        "SELECT skill_schedules.id FROM skill_schedules "
+                        "JOIN skills ON skills.id = skill_schedules.skill_id "
+                        "WHERE skills.runtime <> 'service'"
+                    )
+                    if "skill_runs" in table_names:
+                        run_columns = {
+                            column["name"] for column in inspector.get_columns("skill_runs")
+                        }
+                        if "source_schedule_id" in run_columns:
+                            connection.execute(
+                                text(
+                                    "UPDATE skill_runs SET source_schedule_id = NULL "
+                                    f"WHERE source_schedule_id IN ({retired_schedule_ids})"
+                                )
+                            )
+                    if "approval_requests" in table_names:
+                        approval_columns = {
+                            column["name"] for column in inspector.get_columns("approval_requests")
+                        }
+                        if "schedule_id" in approval_columns:
+                            connection.execute(
+                                text(
+                                    "DELETE FROM approval_requests "
+                                    f"WHERE schedule_id IN ({retired_schedule_ids})"
+                                )
+                            )
+                        if "request_type" in approval_columns:
+                            connection.execute(
+                                text("DELETE FROM approval_requests WHERE request_type = 'schedule'")
+                            )
+                    connection.execute(
+                        text(
+                            "DELETE FROM skill_schedules WHERE skill_id IN "
+                            "(SELECT id FROM skills WHERE runtime <> 'service')"
+                        )
+                    )
+                connection.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_skill_schedules_skill_id "
+                        "ON skill_schedules (skill_id)"
+                    )
+                )
         if "skill_versions" in table_names:
             columns = {column["name"] for column in inspector.get_columns("skill_versions")}
             if "status" not in columns:

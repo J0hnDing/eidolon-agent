@@ -11,12 +11,12 @@ ProductManagerAgent owns project judgment, build-workflow selection, blueprintin
 - If the request is infeasible or unsupported, explain why and stop without creating blueprint, permission, or task DAG artifacts.
 - Write a concise blueprint without tasks or milestones.
 - Use one filesystem-safe `name` and one concise `description`; the backend derives presentation labels.
-- Select `runtime = function` for bounded JSON stdin/stdout execution or `runtime = web_app` for a self-rendered interactive ASGI application.
-- For function skills, define the complete object-shaped input and output JSON Schemas in the blueprint.
+- Select `runtime = function` for an unscheduled callable JSON capability, `runtime = service` for a recurring scheduler-only JSON endpoint, or `runtime = web_app` for a self-rendered interactive ASGI application.
+- For function and service skills, define the complete object-shaped input and output JSON Schemas in the blueprint.
 - Select every needed backend-core, user, or integration function by exact id from the backend-provided available catalog. Function selection has no reason field.
 - Describe concrete user-visible requirements in `expected_behavior`. Blueprint-level acceptance criteria are not part of the contract; task-specific criteria are created later for Task DAG nodes.
 - Do not return integration scope objects. The backend derives providers and operations from selected function ids, while generated-manifest runtime approval owns provider-specific resource authorization.
-- Include intended recurring schedule metadata only for function skills. Web applications use `schedule = null` because their service lifetime is not a scheduled bounded run.
+- Include exactly one recurring schedule only for service skills. Functions and web applications use `schedule = null`.
 - Draft build-time and expected runtime permission intent in a separate permission file.
 - During blueprint or update planning, use the complete config-derived `permission_policy`: omit `default_allowed`, return the exact `requires_approval` shape, and reject needs listed in `blocked`.
 - Return one top-level `build_workflow` value: `single_codex` for a self-contained small or medium build, or `task_dag` when explicit dependency boundaries and independently retryable tasks are needed.
@@ -63,7 +63,7 @@ Backend state enforces this split:
 - Task-DAG planning receives compact backend-approved permission bounds, including config-derived `blocked`, rather than duplicated policy prose.
 - Backend derives the initial package `manifest.json` from `blueprint.json` and `permissions.json`; ProductManager does not write generated skill files directly. If ProductManager included schedule intent in the blueprint, the manifest skeleton carries it into `manifest.json`.
 
-Schedule intent in `blueprint.json` uses the manifest schedule shape. Use `null` when the user did not request recurrence. For recurrence, use one of:
+Service schedule intent in `blueprint.json` uses the manifest schedule shape. It is required for `runtime = service`; functions and web applications use `null`. Use one of:
 
 - daily: `{"type": "daily", "time": "09:00", "timezone": "America/Toronto", "input": {}}`;
 - weekly: `{"type": "weekly", "day": "monday", "time": "09:00", "timezone": "America/Toronto", "input": {}}`;
@@ -73,9 +73,9 @@ Task node files describe product work only. They should not contain backend book
 
 The backend automatically supplies ProductManager with the available function-catalog index. ProductManager does not call a discovery endpoint. The index contains only the exact id, title, description, category, and risk needed for selection; it omits schemas, endpoints, authentication behavior, settings routes, credential state, and secret-store details.
 
-The blueprint's `functions` list is the authoritative selection. For a Task DAG, every node's `function_ids` must be a subset of that list and every selected function must be assigned to at least one node. The backend resolves each node's ids into full Builder context. For `single_codex`, it supplies full context for every blueprint-selected function. Scheduling is manifest metadata, not a catalog function.
+The blueprint's `functions` list is the authoritative selection. For a Task DAG, every node's `function_ids` must be a subset of that list and every selected function must be assigned to at least one node. The backend resolves each node's ids into full Builder context. For `single_codex`, it supplies full context for every blueprint-selected function. A service may consume selected functions while scheduled, but is never itself a catalog function. Scheduling is service manifest metadata, not a catalog function.
 
-For a web application, ProductManager may assign package-owned Python/HTML/CSS/JavaScript work but must never assign Eidolon frontend files, custom Dockerfiles, or startup commands. Function skills keep the bounded JSON protocol and do not receive interface-specific task nodes.
+For a web application, ProductManager may assign package-owned Python/HTML/CSS/JavaScript work but must never assign Eidolon frontend files, custom Dockerfiles, or startup commands. Function and service skills keep the bounded JSON protocol and do not receive interface-specific task nodes; service tasks preserve scheduler-only exposure.
 
 ## Decisions
 

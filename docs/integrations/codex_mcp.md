@@ -11,7 +11,7 @@ The MCP process initializes the database without starting FastAPI, schedulers, A
 - `backend.codex.call` has `mcp_exposed: false` and is excluded to prevent recursive Codex invocation;
 - future backend-core entries remain excluded until they have an explicit trusted direct handler.
 
-Tool names are stable and have the form `<category>_<normalized-id>_<8-character-id-hash>`. Each tool preserves the catalog title, description, input schema, output schema, and risk-derived safety context. Integration read-only status comes from `IntegrationOperation.read_only`; only `notion.todo.delete` is currently destructive. User functions default to write-capable because their metadata does not prove semantic purity. GitHub, Notion, and networked user functions are marked open-world.
+Tool names are stable and have the form `<category>_<normalized-id>_<8-character-id-hash>`. Each tool preserves the catalog title, description, input schema, output schema, and risk-derived safety context. Integration read-only status comes from `IntegrationOperation.read_only`; `notion.todo.delete` and `notion.report.delete` are destructive. User functions default to write-capable because their metadata does not prove semantic purity. GitHub, Notion, and networked user functions are marked open-world.
 
 There is no generic function-id dispatcher tool. Catalog additions appear when a new Codex session starts; an already-running session keeps its snapshot. Every call rechecks the enabled-state row, current availability, and the snapshotted callable contract. A changed contract fails with a bounded restart-required error instead of running against stale metadata.
 
@@ -19,7 +19,7 @@ There is no generic function-id dispatcher tool. Catalog additions appear when a
 
 Installed user functions call `FunctionRegistryService.invoke_direct` with `invocation_source="codex_mcp"`. Runtime approval, input/output validation, per-skill operation locking, run history, active-version checks, and declared nested integration/function capabilities remain enforced.
 
-Integration tools use the trusted direct-user path in `IntegrationService`. It omits only skill-specific manifest authorization. Provider connection checks, schema validation, GitHub and Atlas boundaries, Notion data-source containment, credential isolation, timeouts, provider response limits, output validation, and normalized errors remain in the existing trusted provider services. GitHub direct tools may use any repository allowed by the configured token; generated skills keep their manifest repository scopes.
+Integration tools use the trusted direct-user path in `IntegrationService`. It omits only skill-specific manifest authorization. Provider connection checks, schema validation, GitHub and Atlas boundaries, separate Notion Todo/Reports data-source containment, credential isolation, timeouts, provider response limits, output validation, and normalized errors remain in the existing trusted provider services. GitHub direct tools may use any repository allowed by the configured token; generated skills keep their manifest repository scopes.
 
 Provider credentials stay in Windows Credential Manager. MCP results return exact validated object output as `structuredContent` plus a short non-sensitive text summary. Generic MCP request and response bounds apply in addition to provider/runtime bounds.
 

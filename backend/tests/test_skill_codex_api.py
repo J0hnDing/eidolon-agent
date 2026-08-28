@@ -61,6 +61,27 @@ def write_installed_skill(project_root: Path, *, network: list[str] | None = Non
     return skill_dir
 
 
+def write_installed_service(project_root: Path) -> Path:
+    skill_dir = write_installed_skill(project_root)
+    manifest_path = skill_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update(
+        {
+            "runtime": "service",
+            "input_schema": {"type": "object", "additionalProperties": False},
+            "output_schema": {"type": "object", "additionalProperties": True},
+            "schedule": {
+                "type": "daily",
+                "time": "08:00",
+                "timezone": "America/Toronto",
+                "input": {},
+            },
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return skill_dir
+
+
 def create_skill(db: Session) -> Skill:
     skill = Skill(
         name="codex_skill",
@@ -148,6 +169,31 @@ def test_skill_codex_internet_requires_runtime_network(
 
     assert exc_info.value.status_code == 409
     assert exc_info.value.detail == "Codex internet access requires approved runtime network permission"
+
+
+def test_service_codex_call_requires_schedule_runtime_capability(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_installed_service(tmp_path)
+    monkeypatch.setattr(skills_router, "PROJECT_ROOT", tmp_path)
+    skill = create_skill(db_session)
+    skill.runtime = "service"
+    db_session.commit()
+    approve_runtime(db_session, skill, tmp_path)
+
+    with pytest.raises(HTTPException) as exc_info:
+        call_codex_for_skill(
+            skill.id,
+            SkillCodexRequest(prompt="Summarize this."),
+            db_session,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == (
+        "Services can call Codex only during a schedule-attributed run"
+    )
 
 
 def test_function_codex_capability_resolves_caller_from_ephemeral_token(

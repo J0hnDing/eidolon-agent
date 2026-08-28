@@ -62,6 +62,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
   const [notion, setNotion] = useState<NotionConnectionStatus | null>(null);
   const [notionToken, setNotionToken] = useState("");
   const [notionDataSourceId, setNotionDataSourceId] = useState("");
+  const [notionReportDataSourceId, setNotionReportDataSourceId] = useState("");
   const [atlas, setAtlas] = useState<AtlasIntegrationStatus | null>(null);
   const [atlasDirectory, setAtlasDirectory] = useState("");
   const [atlasPassphrase, setAtlasPassphrase] = useState("");
@@ -105,6 +106,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setAtlasDirectory(atlasDirectoryForStatus(nextAtlas));
         setNotion(nextNotion);
         setNotionDataSourceId(nextNotion.data_source_id ?? "");
+        setNotionReportDataSourceId(nextNotion.report_data_source_id ?? "");
         setCodexMcp(nextCodexMcp);
       } else {
         setPermissionPolicy(await api.getPermissionPolicy());
@@ -188,19 +190,59 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
   }
 
   async function saveNotionConnection() {
-    if (!notionToken || !notionDataSourceId.trim()) return;
+    if (!notionToken) return;
     setError(null);
     setSaved(null);
     setLoading(true);
     try {
-      const next = await api.putNotionConnection(notionToken, notionDataSourceId.trim());
+      const next = await api.putNotionConnection(notionToken);
       setNotion(next);
       setNotionToken("");
       setNotionDataSourceId(next.data_source_id ?? "");
-      setSaved("Notion connection and todo data source validated and saved.");
+      setNotionReportDataSourceId(next.report_data_source_id ?? "");
+      setSaved("Notion connection validated and saved.");
     } catch (err) {
       setNotionToken("");
       setError(err instanceof Error ? err.message : "Could not save Notion connection");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveNotionDataSources() {
+    if (!notion?.connected || !notionDataSourceId.trim() || !notionReportDataSourceId.trim()) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const next = await api.putNotionDataSources(
+        notionDataSourceId.trim(),
+        notionReportDataSourceId.trim(),
+      );
+      setNotion(next);
+      setNotionDataSourceId(next.data_source_id ?? "");
+      setNotionReportDataSourceId(next.report_data_source_id ?? "");
+      setSaved("Notion Todo and Reports data-source IDs validated and saved.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save Notion data-source IDs");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function removeNotionDataSources() {
+    if (!notion?.connected) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const next = await api.removeNotionDataSources();
+      setNotion(next);
+      setNotionDataSourceId("");
+      setNotionReportDataSourceId("");
+      setSaved("Notion Todo and Reports data-source IDs removed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove Notion data-source IDs");
     } finally {
       setLoading(false);
     }
@@ -216,6 +258,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
       setNotion(next);
       setNotionToken("");
       setNotionDataSourceId("");
+      setNotionReportDataSourceId("");
       setSaved("Notion connection removed.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not remove Notion connection");
@@ -473,9 +516,9 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
       {section === "integrations" && notion && (
         <section className="detail-panel stack">
           <div>
-            <h2>Notion todo connection</h2>
+            <h2>Notion connection</h2>
             <p className="muted">
-              Eidolon validates one manually created Todo data source. The private connection token is stored only in Windows Credential Manager and is never shown to skills.
+              Eidolon validates manually created Todo and Reports data sources under one private connection. The token is stored only in Windows Credential Manager and is never shown to skills.
             </p>
             <p className="muted">
               Todo management stays in Notion, including the Notion iOS app. Eidolon does not keep a todo copy, cache, sync process, or todo page.
@@ -485,42 +528,89 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
             <div><dt>Status</dt><dd>{notion.connected ? "Connected" : notion.status}</dd></div>
             <div><dt>Workspace</dt><dd>{notion.workspace_name ?? "None"}</dd></div>
             <div><dt>Connection bot</dt><dd>{notion.bot_name ?? "None"}</dd></div>
-            <div><dt>Data-source ID</dt><dd><code>{notion.data_source_id ?? "None"}</code></dd></div>
+            <div><dt>Todo data-source ID</dt><dd><code>{notion.data_source_id ?? "None"}</code></dd></div>
+            <div><dt>Reports data-source ID</dt><dd><code>{notion.report_data_source_id ?? "None"}</code></dd></div>
             <div><dt>Last validated</dt><dd>{formatDate(notion.last_validated_at)}</dd></div>
           </dl>
           {notion.error_type && <p className="error-text">Connection status: {notion.error_type.replace(/_/g, " ")}</p>}
-          <label>
-            Notion data-source ID
-            <input
-              type="text"
-              value={notionDataSourceId}
-              onChange={(event) => setNotionDataSourceId(event.target.value)}
-              placeholder="Copy from Manage data sources in Notion"
-            />
-          </label>
-          <label>
-            {notion.connected ? "Replacement Notion token" : "Notion token"}
-            <input
-              type="password"
-              autoComplete="new-password"
-              value={notionToken}
-              onChange={(event) => setNotionToken(event.target.value)}
-              placeholder="Token is never displayed after submission"
-            />
-          </label>
-          <div className="button-row">
-            <button
-              type="button"
-              onClick={() => void saveNotionConnection()}
-              disabled={loading || !notionToken || !notionDataSourceId.trim()}
-            >
-              {notion.connected ? "Replace Notion connection" : "Add Notion connection"}
-            </button>
-            {notion.connected && (
-              <button type="button" className="secondary" onClick={() => void removeNotionConnection()} disabled={loading}>
-                Remove Notion connection
+          <div className="settings-subsection stack">
+            <h3>Notion credential</h3>
+            <label>
+              {notion.connected ? "Replacement Notion token" : "Notion token"}
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={notionToken}
+                onChange={(event) => setNotionToken(event.target.value)}
+                placeholder="Token is never displayed after submission"
+              />
+            </label>
+            <div className="button-row">
+              <button
+                type="button"
+                onClick={() => void saveNotionConnection()}
+                disabled={loading || !notionToken}
+              >
+                {notion.connected ? "Replace Notion connection" : "Add Notion connection"}
               </button>
-            )}
+              {notion.connected && (
+                <button type="button" className="secondary" onClick={() => void removeNotionConnection()} disabled={loading}>
+                  Remove Notion connection
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="settings-subsection stack">
+            <div>
+              <h3>Notion data sources</h3>
+              <p className="muted">Save or delete the Todo and Reports IDs together.</p>
+            </div>
+            <label>
+              Notion Todo data-source ID
+              <input
+                type="text"
+                value={notionDataSourceId}
+                onChange={(event) => setNotionDataSourceId(event.target.value)}
+                placeholder="Copy from Manage data sources in Notion"
+                disabled={!notion.connected}
+              />
+            </label>
+            <label>
+              Notion Reports data-source ID
+              <input
+                type="text"
+                value={notionReportDataSourceId}
+                onChange={(event) => setNotionReportDataSourceId(event.target.value)}
+                placeholder="Copy the Reports source from Manage data sources in Notion"
+                disabled={!notion.connected}
+              />
+            </label>
+            <div className="button-row">
+              <button
+                type="button"
+                onClick={() => void saveNotionDataSources()}
+                disabled={
+                  loading
+                  || !notion.connected
+                  || !notionDataSourceId.trim()
+                  || !notionReportDataSourceId.trim()
+                }
+              >
+                Save data-source IDs
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => void removeNotionDataSources()}
+                disabled={
+                  loading
+                  || !notion.connected
+                  || (!notion.data_source_id && !notion.report_data_source_id)
+                }
+              >
+                Delete data-source IDs
+              </button>
+            </div>
           </div>
         </section>
       )}
@@ -745,6 +835,7 @@ function notionUnavailableStatus(err: unknown): NotionConnectionStatus {
     bot_id: null,
     workspace_name: null,
     data_source_id: null,
+    report_data_source_id: null,
     last_validated_at: null,
     created_at: null,
     updated_at: null,

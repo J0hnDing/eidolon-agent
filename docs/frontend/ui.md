@@ -55,7 +55,7 @@ Approving a Project build-time request from either its inline chat card or the g
 
 ## Skills Page
 
-Lists skills in one list with their `function` or `web_app` runtime. Installed enabled web applications expose an Open Application action. User-facing creation goes through the proposed-skill workflow, not bare database record creation.
+Lists skills in one list with their `function`, `service`, or `web_app` runtime. Installed enabled web applications expose an Open Application action. Services show schedule-managed availability rather than an enable/disable control. User-facing creation goes through the proposed-skill workflow, not bare database record creation.
 
 ## Functions Page
 
@@ -63,7 +63,7 @@ Lists skills in one list with their `function` or `web_app` runtime. Installed e
 
 ## Schedules Page
 
-The top-level Schedules page includes both mutable approved skill schedules and read-only platform schedules. The daily Notion Done cleanup appears as an active Backend Core row with next/last run state and “Managed by Eidolon” instead of approval, pause, run-now, delete, or Skill navigation controls.
+The top-level Schedules page is the only schedule management surface. It includes mutable generated-service schedules and read-only platform services. Generated services support edit, pause/resume, and Run Now; Run Now also works while paused and does not resume the schedule. There are no create, delete, or schedule-approval controls because every generated service owns exactly one required schedule. The daily Notion Done cleanup appears as an Eidolon backend row with next/last state and “Managed by Eidolon.”
 
 ## Skill Detail Page
 
@@ -80,9 +80,9 @@ Shows:
 - update suggestion chat;
 - schedules.
 
-Installed function skills show a bounded JSON run-input panel and may be run manually only when backend checks pass. The returned result appears in a separate Output panel. Run History has no separate latest-run view: every stored run displays its output, status, error summary, token breakdown, and Codex call count inline. Web application details replace bounded-run input, output, history, and schedule controls with an Open Application action while retaining files, validation, permission, version, update, and agent-run controls. Skill Detail presents one complete runtime approval containing the base manifest permissions, dependencies, and every current provider integration operation. One approve or deny action applies to all pending components of that displayed contract. Installation and execution require the complete current runtime contract to be approved.
+Installed function skills show a bounded JSON run-input panel and may be run manually only when backend checks pass. The returned result appears in a separate Output panel. Run History has no separate latest-run view: every stored run displays its output, status, error summary, token breakdown, and Codex call count inline. Service detail keeps the ordinary files, validation, permission, version, update, agent-run, and run-history panels, removes manual run and enable controls, and shows a concise required-schedule summary linking to Schedules. Web application details replace bounded-run input, output, history, and schedule controls with an Open Application action. Skill Detail presents one complete runtime approval containing the base manifest permissions, dependencies, and every current provider integration operation. One approve or deny action applies to all pending components of that displayed contract. Installation and execution require the complete current runtime contract to be approved.
 
-`SkillDetailPage` retains route loading, polling, and mutation orchestration. Cohesive update-chat, version, comparison, schedule, validation, and run-detail presentation lives under `features/skill-detail/SkillDetailPanels.tsx`. Feature tests cover conversation state transitions, chat workspace interactions, schedule delegation, version empty state, and run-input validation; `npm test` is the frontend regression command and `npm run build` remains the production type/build check.
+`SkillDetailPage` retains route loading, polling, and mutation orchestration. Cohesive update-chat, version, comparison, validation, and run-detail presentation lives under `features/skill-detail/SkillDetailPanels.tsx`; service schedule editing belongs only to `SchedulesPage`. Feature tests cover conversation state transitions, chat workspace interactions, service/platform schedule visibility, version empty state, and run-input validation; `npm test` is the frontend regression command and `npm run build` remains the production type/build check.
 
 ## Applications Pages
 
@@ -108,7 +108,7 @@ Settings uses a shared section navigation so each concern has a focused URL and 
 
 `/settings/integrations` includes the single GitHub connection. It shows connected/disconnected/unavailable state, validated account identity, last validation time, and sanitized errors, with add, replace, and remove actions. The token input is password-style, is cleared after submission, and is never returned or redisplayed.
 
-The Integrations subpage also includes one connection-only Notion todo panel. It accepts the write-only private-connection token and non-secret data-source ID, then shows sanitized bot/workspace identity, configured source, status, and validation time. It explicitly states that Notion and its iOS app remain the only todo UI and that Eidolon has no todo page, local copy, cache, or sync controls. The token is cleared after every submission and never redisplayed.
+The Integrations subpage also includes one shared Notion connection panel. The credential subsection comes first and adds or replaces the write-only private-connection token. A separate data-source subsection follows with Todo and Reports ID fields plus one Save and one Delete action that apply to both IDs. Source Save validates both exact schemas with the stored token before replacing either ID; source Delete clears both IDs but preserves the credential. The panel shows sanitized bot/workspace identity, both configured sources, status, and validation time. It explicitly states that Notion remains the Todo and Report UI and that Eidolon has no local copy, cache, or sync controls. The token is cleared after every submission and never redisplayed.
 
 The Integrations subpage also includes local Eidolon-Atlas lifecycle and passphrase controls. It shows the selected directory, owned/external process state, initialized/locked state, saved-passphrase state, and bounded errors. Directory save restarts immediately. The write-only passphrase and **Unlock now** controls are enabled only for an Eidolon-owned process; an external process is explicitly directed to unlock through Atlas itself. The UI discloses that storing the passphrase shifts practical at-rest protection to the Windows account. Submitted passphrases are cleared and never redisplayed.
 
@@ -116,7 +116,7 @@ The Integrations subpage includes a compact **Codex tools** panel. It shows enab
 
 `/settings/permissions` shows the read-only current permission policy loaded from `/settings/permission-policy`: default-allowed capabilities, the exact approval-required template, blocked capabilities, the web-application policy, and the checked-in source path. The frontend does not embed a second policy copy.
 
-Runtime approval uses the existing `PermissionRequestModal`. Its single review shows each provider, operation id, read/write behavior, normalized scope, current authorization state, and connection availability alongside the base manifest permissions. Notion has no caller-selected scope; list is low risk while create, update, and trash-delete are medium-risk writes. Connection state alone never marks a skill approved.
+Runtime approval uses the existing `PermissionRequestModal`. Its single review shows each provider, operation id, read/write behavior, normalized scope, current authorization state, and per-operation connection availability alongside the base manifest permissions. Notion has no caller-selected scope; Todo list and Report list/get are low-risk reads while Todo create/update/delete and Report create/delete are medium-risk writes. Connection state alone never marks a skill approved.
 
 Atlas reviews use the same modal with empty resource scope. Reads are low risk; `atlas.knowledge.node.know` is medium risk and describes its internet-enabled Codex call and bounded Knowledge write.
 

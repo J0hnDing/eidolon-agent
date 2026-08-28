@@ -68,6 +68,10 @@ def test_registry_is_authoritative_and_context_is_selected_only() -> None:
         "notion.todo.create",
         "notion.todo.update",
         "notion.todo.delete",
+        "notion.report.list",
+        "notion.report.get",
+        "notion.report.create",
+        "notion.report.delete",
     }
     context = OPERATIONS["github.repository.file.read"].agent_context()
     assert context["operation"] == "github.repository.file.read"

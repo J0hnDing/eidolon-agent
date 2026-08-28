@@ -147,16 +147,16 @@ _BUILD_BLUEPRINT_SCHEMA = _object_schema(
         },
         "runtime": {
             "type": "string",
-            "enum": ["function", "web_app"],
+            "enum": ["function", "web_app", "service"],
             "description": "Skill execution protocol.",
         },
         "input_schema": _described(
             _CALLABLE_JSON_SCHEMA,
-            "Function input JSON Schema; null for a web app.",
+            "Function or service input JSON Schema; null for a web app.",
         ),
         "output_schema": _described(
             _CALLABLE_JSON_SCHEMA,
-            "Function output JSON Schema; null for a web app.",
+            "Function or service output JSON Schema; null for a web app.",
         ),
         "expected_behavior": _described(
             _string_array_schema(min_items=1),
@@ -196,7 +196,7 @@ _REPAIR_BLUEPRINT_SCHEMA = _object_schema(
         },
         "runtime": {
             "type": "string",
-            "enum": ["function", "web_app"],
+            "enum": ["function", "web_app", "service"],
             "description": "Existing skill execution protocol.",
         },
         "input_schema": _described(_CALLABLE_JSON_SCHEMA, "Current callable input contract."),
@@ -239,7 +239,7 @@ _UPDATE_BLUEPRINT_SCHEMA = _object_schema(
         },
         "runtime": {
             "type": "string",
-            "enum": ["function", "web_app"],
+            "enum": ["function", "web_app", "service"],
             "description": "Existing skill execution protocol.",
         },
         "suggestion": {

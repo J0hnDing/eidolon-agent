@@ -278,17 +278,3 @@ class CodexCliService:
 
 
 codex_cli_service = CodexCliService()
-
-
-def should_use_real_codex() -> bool:
-    mode = os.getenv("PERSONAL_AGENT_CODEX_MODE", "auto").strip().lower()
-    if mode in {"fake", "dev", "stub", "local"}:
-        return False
-    status = codex_cli_service.resolve()
-    if status.available:
-        if not status.compatible:
-            raise CodexCliCompatibilityError(status.error or "The resolved Codex CLI is incompatible.")
-        return True
-    if mode == "real":
-        raise CodexCliCompatibilityError(status.error or "Codex real mode requires an installed Codex CLI.")
-    return False

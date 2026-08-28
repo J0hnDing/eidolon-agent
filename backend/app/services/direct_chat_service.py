@@ -7,7 +7,7 @@ from typing import Protocol
 from sqlalchemy.orm import Session
 
 from app.schemas.codex_routing import ResolvedInvocationSettings
-from app.services.codex_cli_service import codex_cli_service, should_use_real_codex
+from app.services.codex_cli_service import codex_cli_service
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
 
 
@@ -16,9 +16,12 @@ class DirectChatAdapter(Protocol):
         pass
 
 
-class FakeDirectChatAdapter:
+class UnavailableDirectChatAdapter:
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
     def answer(self, prompt: str, message: str) -> str:
-        return "This is a normal chat response. Enable real Codex mode to answer through the Codex CLI."
+        return f"Codex could not answer this chat request: {self.reason}"
 
 
 class RealDirectChatAdapter:
@@ -92,9 +95,17 @@ class RealDirectChatAdapter:
 
 
 def default_direct_chat_adapter() -> DirectChatAdapter:
-    if should_use_real_codex():
-        return RealDirectChatAdapter(workdir=Path(__file__).resolve().parents[3])
-    return FakeDirectChatAdapter()
+    mode = os.getenv("PERSONAL_AGENT_CODEX_MODE", "auto").strip().lower()
+    if mode in {"disabled", "off"}:
+        return UnavailableDirectChatAdapter("Codex is disabled by PERSONAL_AGENT_CODEX_MODE.")
+    if mode in {"fake", "dev", "stub", "local"}:
+        return UnavailableDirectChatAdapter(
+            "Production fake Codex modes were removed. Configure a compatible Codex CLI or disable Codex explicitly."
+        )
+    status = codex_cli_service.resolve()
+    if status.available and status.compatible and status.resolved_path:
+        return RealDirectChatAdapter(command=status.resolved_path, workdir=Path(__file__).resolve().parents[3])
+    return UnavailableDirectChatAdapter(status.error or "A compatible Codex CLI is unavailable.")
 
 
 @dataclass

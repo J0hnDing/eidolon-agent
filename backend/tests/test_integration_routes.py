@@ -8,9 +8,14 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base
 from app.routers import integrations
-from app.schemas.integration import GitHubCredentialWrite, NotionCredentialWrite
+from app.schemas.integration import (
+    GitHubCredentialWrite,
+    NotionCredentialWrite,
+    NotionDataSourcesWrite,
+)
 from app.services.github_provider import FakeGitHubProviderAdapter
 from app.services.integration_service import IntegrationService
+from app.services.report_service import FakeReportProvider
 from app.services.secret_store import FakeSecretStore
 from app.services.todo_service import FakeTodoProvider
 
@@ -76,13 +81,28 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
 
     notion_sentinel = "EIDOLON_NOTION_ROUTE_SENTINEL_71a4"
     service.notion_provider_factory = lambda _token, _source: FakeTodoProvider()
+    service.notion_report_provider_factory = lambda _token, _source: FakeReportProvider()
     notion_created = integrations.put_notion_connection(
-        NotionCredentialWrite(token=notion_sentinel, data_source_id="source-id"),
+        NotionCredentialWrite(token=notion_sentinel),
         db,
     )
     assert notion_created.connected is True
-    assert notion_created.data_source_id == "source-id"
+    assert notion_created.data_source_id is None
+    assert notion_created.report_data_source_id is None
     assert notion_sentinel not in notion_created.model_dump_json()
+    data_sources = integrations.put_notion_data_sources(
+        NotionDataSourcesWrite(
+            data_source_id="source-id",
+            report_data_source_id="report-source-id",
+        ),
+        db,
+    )
+    assert data_sources.data_source_id == "source-id"
+    assert data_sources.report_data_source_id == "report-source-id"
+    cleared = integrations.remove_notion_data_sources(db)
+    assert cleared.connected is True
+    assert cleared.data_source_id is None
+    assert cleared.report_data_source_id is None
     notion_removed = integrations.remove_notion_connection(db)
     assert notion_removed.status_code == 204
     assert integrations.notion_connection_status(db).status == "disconnected"
@@ -90,5 +110,6 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
     paths = app.openapi()["paths"]
     assert "/settings/integrations/github" in paths
     assert "/settings/integrations/notion" in paths
+    assert "/settings/integrations/notion/data-sources" in paths
     assert "/integrations/capabilities/invoke" not in paths
     assert all("github.repository." not in path for path in paths)

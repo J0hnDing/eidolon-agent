@@ -12,6 +12,8 @@ auto, docker, local, dev
 
 `auto` and `docker` prefer Docker. If Docker is unavailable, runs are blocked unless local/dev mode is explicitly configured.
 
+Runner status checks Docker daemon connectivity, not only CLI presence. It reports daemon availability, current-image readiness, and the last build attempt separately. The UI calls the Docker sandbox ready only when the trusted image is recorded as built from the current Dockerfile and trusted runtime inputs. A missing, outdated, or unverified image is rebuilt automatically before the next run.
+
 ## Docker Runner
 
 The trusted Docker image supports both protocols. Bounded function runs use a disposable container. Web applications use a named persistent container until stop, failure, idle cleanup, version invalidation, or backend shutdown. The platform:
