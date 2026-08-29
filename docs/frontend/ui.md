@@ -55,7 +55,9 @@ Approving a Project build-time request from either its inline chat card or the g
 
 ## Skills Page
 
-Lists skills in one list with their `function`, `service`, or `web_app` runtime. Installed enabled web applications expose an Open Application action. Services show schedule-managed availability rather than an enable/disable control. User-facing creation goes through the proposed-skill workflow, not bare database record creation.
+Skill, function, application, and schedule names are displayed from their canonical names by replacing underscores with spaces and capitalizing each word. Manifests do not carry a separate UI display name.
+
+Lists skills in one list with their `function`, `service`, or `web_app` runtime. Each row opens Skill Detail, including web application rows; application launch remains on the Applications and Skill Detail pages. Services show schedule-managed availability rather than an enable/disable control. User-facing creation goes through the proposed-skill workflow, not bare database record creation.
 
 ## Functions Page
 
@@ -63,7 +65,7 @@ Lists skills in one list with their `function`, `service`, or `web_app` runtime.
 
 ## Schedules Page
 
-The top-level Schedules page is the only schedule management surface. It includes mutable generated-service schedules and read-only platform services. Generated services support edit, pause/resume, and Run Now; Run Now also works while paused and does not resume the schedule. There are no create, delete, or schedule-approval controls because every generated service owns exactly one required schedule. The daily Notion Done cleanup appears as an Eidolon backend row with next/last state and “Managed by Eidolon.”
+The top-level Schedules page is the only schedule management surface. It includes mutable generated-service schedules and read-only platform services. The Service column shows the service name and links generated services to Skill Detail; the Schedule column contains only the human-readable recurrence. Generated services support edit, pause/resume, and Run Now; Run Now also works while paused and does not resume the schedule. There are no create, delete, or schedule-approval controls because every generated service owns exactly one required schedule. The daily Notion Done cleanup appears with next/last state and “Managed by Eidolon.”
 
 ## Skill Detail Page
 
@@ -86,7 +88,7 @@ Installed function skills show a bounded JSON run-input panel and may be run man
 
 ## Applications Pages
 
-`ApplicationsPage` lists only `runtime = web_app` skills. Function skills do not appear there and have no separate interface page in the current milestone. Installed enabled web applications open through `/apps/:skillId`.
+`ApplicationsPage` lists only `runtime = web_app` skills. Function skills do not appear there and have no separate interface page in the current milestone. Each application card links separately to Open Application and Open Skill Details. Installed enabled web applications open through `/apps/:skillId`; the opened application chrome does not repeat the Skill Detail control.
 
 `WebAppPage` asks the backend for a ready, version-pinned application session and keeps trusted identity, version, lifecycle status, containment disclosures, stop control, logs, and bounded audit status outside the frame. It embeds only an HTTP(S) hostname under the configured `*.web-app.localhost` gateway domain; ordinary external or credential-bearing URLs are rejected. The iframe uses `sandbox="allow-scripts allow-forms allow-same-origin allow-modals"`, an empty browser-feature allowlist, and `no-referrer`. The page coalesces Strict Mode mount replays into one session-open request. The backend supplies the complementary CSP and Permissions Policy. The page polls diagnostics while the application is healthy and displays readiness/failure details without trusting application-rendered status.
 

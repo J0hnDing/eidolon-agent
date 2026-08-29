@@ -13,7 +13,7 @@ describe("FunctionTable", () => {
       {
         id: "normalize_text",
         category: "user",
-        title: "Normalize text",
+        title: "normalize_text",
         description: "Normalizes whitespace.",
         risk_level: "low",
         input_schema: { type: "object" },
@@ -50,7 +50,7 @@ describe("FunctionTable", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("link", { name: "Normalize text" }).getAttribute("href")).toBe("/skills/12");
+    expect(screen.getByRole("link", { name: "Normalize Text" }).getAttribute("href")).toBe("/skills/12");
     expect(screen.getByText("User")).toBeTruthy();
     expect(screen.getByText("Integration")).toBeTruthy();
     expect(screen.getByText("Skill is disabled")).toBeTruthy();

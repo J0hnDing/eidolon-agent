@@ -9,17 +9,6 @@
 -Acceptance Criteria:
 A backend adapter reads only the selected path and relevant context, invokes the configured local model, validates its output, and writes only the corresponding backend-controlled artifacts.
 
-## TODO-005: First-Class Schedule Approval Scope
-
-- Priority: medium
-- Category: refactor
-- Area: backend-approval-contracts
-- Dependencies: none
-- Rationale: Schedule approvals are currently identified by `request_scope = runtime` plus `request_type = schedule`. A first-class schedule scope would make validation, querying, and documentation more precise.
-
--Acceptance Criteria:
-Schedule approvals use one canonical scope contract; existing local rows are migrated safely; permission approval behavior remains separate; and backend, frontend, tests, and documentation agree on the new values.
-
 ## TODO-006: Resolve Backend Message Storage Boundary
 
 - Priority: low
@@ -136,17 +125,6 @@ Memory retrieval uses an inspectable backend-owned selection policy and includes
 
 -Acceptance Criteria:
 Resolve only explicitly bounded, high-confidence cases such as single-assignment literal aliases; retain passive behavior for ambiguous data flow; continue checking resolved literal operations against the actual manifest and approved build context; document limitations; and add positive and negative regression tests proving valid generated code is not blocked.
-
-## TODO-017: Fail closed when the real Codex CLI is unavailable
-
-- Priority: high
-- Category: bugfix
-- Area: Codex runtime
-- Dependencies: none
-- Rationale: Automatic mode currently selects the production FakeCodexAdapter when no compatible CLI is available, allowing synthetic chat and build results to appear real.
-
--Acceptance Criteria:
-Normal runtime fails explicitly when the real CLI is unavailable or incompatible; FakeCodexAdapter requires an explicit test or development setting; adapter ownership is documented and covered by tests.
 
 ## TODO-018: Consolidate Task DAG execution, resume, and retry ownership
 

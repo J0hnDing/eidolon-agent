@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { SchedulePayload, ScheduleType, SkillSchedule, api } from "../api/client";
+import { formatDisplayName } from "../lib/displayName";
 import { usePolling } from "../lib/usePolling";
 
 export default function SchedulesPage() {
@@ -79,15 +80,14 @@ export default function SchedulesPage() {
                 <tr key={`${schedule.schedule_kind}-${schedule.id}`}>
                   <td>
                     <strong>
-                      {schedule.schedule_kind === "platform"
-                        ? "Eidolon backend"
-                        : schedule.skill_name ?? schedule.service_id ?? `Service #${schedule.skill_id}`}
+                      {schedule.skill_id !== null ? (
+                        <Link className="table-title-link" to={`/skills/${schedule.skill_id}`}>
+                          {formatDisplayName(schedule.skill_name ?? `Service #${schedule.skill_id}`)}
+                        </Link>
+                      ) : formatDisplayName(schedule.name)}
                     </strong>
                   </td>
-                  <td>
-                    <strong>{schedule.name}</strong>
-                    <span className="table-subtitle">{humanSchedule(schedule)}</span>
-                  </td>
+                  <td>{humanSchedule(schedule)}</td>
                   <td><span className={`badge status-${schedule.status}`}>{schedule.status}</span></td>
                   <td>{formatTimestamp(schedule.next_run_at, "not scheduled")}</td>
                   <td>
@@ -100,7 +100,7 @@ export default function SchedulesPage() {
                     {schedule.read_only ? (
                       <span className="muted">Managed by Eidolon</span>
                     ) : (
-                      <div className="button-row">
+                      <div className="button-row schedule-actions">
                         {schedule.status === "active" ? (
                           <button type="button" className="secondary" onClick={() => act(() => api.pauseSchedule(schedule.id))} disabled={isWorking}>
                             Pause
@@ -116,7 +116,6 @@ export default function SchedulesPage() {
                         <button type="button" className="secondary" onClick={() => setEditingId(schedule.id)} disabled={isWorking}>
                           Edit
                         </button>
-                        {schedule.skill_id !== null && <Link to={`/skills/${schedule.skill_id}`}>Skill</Link>}
                       </div>
                     )}
                   </td>
@@ -245,10 +244,28 @@ function ScheduleEditor({ schedule, isWorking, onCancel, onSave }: {
 
 function humanSchedule(schedule: SkillSchedule): string {
   const data = schedule.schedule_json;
-  if (schedule.schedule_type === "daily") return `Daily at ${data.time} ${schedule.timezone}`;
-  if (schedule.schedule_type === "weekly") return `Weekly on ${data.day} at ${data.time} ${schedule.timezone}`;
+  const timezone = timeZoneAbbreviation(schedule);
+  if (schedule.schedule_type === "daily") return `Daily at ${data.time} ${timezone}`;
+  if (schedule.schedule_type === "weekly") return `Weekly on ${capitalize(data.day)} at ${data.time} ${timezone}`;
   if (schedule.schedule_type === "interval") return `Every ${data.every} ${data.unit}`;
   return schedule.schedule_type;
+}
+
+function timeZoneAbbreviation(schedule: SkillSchedule): string {
+  try {
+    const date = schedule.next_run_at ? new Date(schedule.next_run_at) : new Date();
+    const part = new Intl.DateTimeFormat("en-US", {
+      timeZone: schedule.timezone,
+      timeZoneName: "short",
+    }).formatToParts(date).find(({ type }) => type === "timeZoneName");
+    return part?.value ?? schedule.timezone;
+  } catch {
+    return schedule.timezone;
+  }
+}
+
+function capitalize(value: string | null | undefined): string {
+  return value ? `${value.charAt(0).toUpperCase()}${value.slice(1)}` : "";
 }
 
 function formatTimestamp(value: string | null, fallback: string): string {

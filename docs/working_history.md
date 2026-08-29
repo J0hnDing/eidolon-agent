@@ -621,3 +621,42 @@ Added an official Python SDK STDIO MCP server that snapshots all available eligi
 ### Limitations
 
 New or restarted Codex Desktop, CLI, and IDE sessions are required to discover installation or catalog changes; open sessions are not hot-refreshed. Existing provider runtime and domain-egress limitations remain unchanged.
+
+## 2026-08-28 13:12 — Fail closed when the real Codex CLI is unavailable
+
+- Category: bugfix
+- Area: Codex runtime
+
+### Summary
+
+Removed production FakeCodexAdapter and fake direct-chat fallback, made unavailable or disabled Codex fail closed, moved deterministic stubs under backend/tests/fakes, and replaced explicit full-workflow E2E coverage with focused adapter and manifest-repair tests.
+
+### Limitations
+
+Existing broader workflow component tests remain; no real Codex invocation test is part of pytest.
+
+## 2026-08-27 21:57 — Notion Reports integration and deterministic weekly report service
+
+- Category: feature
+- Area: integrations-and-service-runtime
+
+### Summary
+
+Added separate Notion Reports source configuration and exact report list/get/create/delete contracts, raw native block handling, per-operation availability and MCP metadata, and a deterministic weekly GitHub Projects report service scheduled Monday 08:00 America/Toronto. Enabled unbounded declared function chains with new run-scoped child capabilities and direct-edge/target-owned checks, added regression coverage and documentation, and reconciled the installed service as paused.
+
+### Limitations
+
+The local Notion connection has no Reports data-source ID, so no live create/list/get/delete smoke write was performed. The weekly schedule remains paused and requires current runtime, function-edge, and Notion integration approval before resume. Cumulative transitive permission, budget, cancellation, cycle, and audit semantics remain tracked in TODO-025.
+
+## 2026-08-27 16:16 — First-Class Schedule Approval Scope
+
+- Category: refactor
+- Area: backend-approval-contracts
+
+### Summary
+
+Completed by replacing function/web-app schedule approvals with the service-only scheduling contract. Generated services now own one required active/paused schedule, legacy schedule approvals are retired, and backend, frontend, tests, and documentation use the new contract.
+
+### Limitations
+
+The nullable physical approval_requests.schedule_id column remains for local database compatibility but is no longer used by application behavior.

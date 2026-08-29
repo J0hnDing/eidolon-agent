@@ -309,6 +309,7 @@ def ensure_local_schema() -> None:
             connection.execute(text("UPDATE agent_run_steps SET step_name = 'builder' WHERE step_name = 'repairer'"))
         _remove_retired_product_manager_routing(connection, table_names)
         _remove_retired_skill_contract_json(connection, table_names)
+        _remove_retired_manifest_display_name(connection, table_names)
 
 
 def _remove_retired_product_manager_routing(connection, table_names: set[str]) -> None:
@@ -369,6 +370,30 @@ def _remove_retired_skill_contract_json(connection, table_names: set[str]) -> No
                         text(f"UPDATE {table_name} SET {column_name} = :value WHERE id = :row_id"),
                         {"value": json.dumps(cleaned), "row_id": row_id},
                     )
+
+
+def _remove_retired_manifest_display_name(connection, table_names: set[str]) -> None:
+    if "skill_versions" not in table_names:
+        return
+    columns = {column["name"] for column in inspect(engine).get_columns("skill_versions")}
+    if "manifest_json" not in columns:
+        return
+    rows = connection.execute(
+        text("SELECT id, manifest_json FROM skill_versions WHERE manifest_json IS NOT NULL")
+    ).all()
+    for row_id, raw_value in rows:
+        try:
+            value = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(value, dict) or "display_name" not in value:
+            continue
+        cleaned = dict(value)
+        cleaned.pop("display_name")
+        connection.execute(
+            text("UPDATE skill_versions SET manifest_json = :value WHERE id = :row_id"),
+            {"value": json.dumps(cleaned), "row_id": row_id},
+        )
 
 
 def _without_retired_skill_fields(value):

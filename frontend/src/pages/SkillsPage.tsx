@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 import { Skill, api } from "../api/client";
+import { formatDisplayName } from "../lib/displayName";
 import { usePolling } from "../lib/usePolling";
 
 export default function SkillsPage() {
@@ -48,6 +49,8 @@ export default function SkillsPage() {
 }
 
 function SkillTable({ skills }: { skills: Skill[] }) {
+  const navigate = useNavigate();
+
   return (
     <section className="skill-section">
       <div className="table-wrap">
@@ -59,14 +62,26 @@ function SkillTable({ skills }: { skills: Skill[] }) {
               <th>Runtime</th>
               <th>Risk</th>
               <th>Availability</th>
-              <th>Detail</th>
             </tr>
           </thead>
           <tbody>
             {skills.map((skill) => (
-              <tr key={skill.id}>
+              <tr
+                className="clickable-table-row"
+                key={skill.id}
+                role="link"
+                tabIndex={0}
+                aria-label={`Open ${formatDisplayName(skill.name)} skill details`}
+                onClick={() => navigate(`/skills/${skill.id}`)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") navigate(`/skills/${skill.id}`);
+                }}
+              >
                 <td>
-                  <strong>{skill.name}</strong>
+                  <strong className="clickable-row-title">
+                    {formatDisplayName(skill.name)}
+                    <span aria-hidden="true">→</span>
+                  </strong>
                   <span className="table-subtitle">{skill.description}</span>
                 </td>
                 <td>
@@ -77,18 +92,11 @@ function SkillTable({ skills }: { skills: Skill[] }) {
                   <span className={`badge risk-${skill.risk_level}`}>{skill.risk_level}</span>
                 </td>
                 <td>{skill.runtime === "service" ? "schedule-managed" : skill.enabled ? "enabled" : "disabled"}</td>
-                <td>
-                  {skill.runtime === "web_app" && skill.status === "installed" && skill.enabled ? (
-                    <Link to={`/apps/${skill.id}`}>Open App</Link>
-                  ) : (
-                    <Link to={`/skills/${skill.id}`}>Open</Link>
-                  )}
-                </td>
               </tr>
             ))}
             {skills.length === 0 && (
               <tr>
-                <td colSpan={6} className="muted">
+                <td colSpan={5} className="muted">
                   Nothing here yet.
                 </td>
               </tr>

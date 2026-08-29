@@ -1,7 +1,6 @@
 {
   "manifest_version": 1,
   "name": "github_atlas_project_scout",
-  "display_name": "Github Atlas Project Scout",
   "description": "Enrich GitHub's actual trending repositories with concise Codex analysis grounded in their READMEs and local Atlas projects.",
   "runtime": "function",
   "entrypoint": "skill.py",
@@ -127,6 +126,7 @@
     "secrets": [],
     "shell": false,
     "codex": {
+      "call_response": true,
       "internet_access": false
     }
   },

@@ -45,6 +45,19 @@ def test_local_schema_migrates_legacy_statuses_task_columns_and_retired_skill_fi
                 "\"nested\": {\"skill_type\": \"automation\", \"tool_ui_schema\": {\"fields\": []}}}')"
             )
         )
+        connection.execute(
+            text(
+                "CREATE TABLE skill_versions ("
+                "id INTEGER PRIMARY KEY, manifest_json JSON, code_snapshot_path VARCHAR(512))"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO skill_versions (id, manifest_json, code_snapshot_path) VALUES "
+                "(1, '{\"name\": \"legacy_skill\", \"display_name\": \"Legacy Skill\"}', "
+                "'skills/installed/legacy_skill/versions/v1')"
+            )
+        )
         connection.execute(text("CREATE TABLE skill_schedules (id INTEGER PRIMARY KEY, status VARCHAR(32))"))
         connection.execute(text("INSERT INTO skill_schedules (id, status) VALUES (1, 'deleted')"))
         connection.execute(text("CREATE TABLE codex_routing_settings (id INTEGER PRIMARY KEY, settings_json JSON)"))
@@ -126,3 +139,7 @@ def test_local_schema_migrates_legacy_statuses_task_columns_and_retired_skill_fi
             text("SELECT plan_json FROM skill_generation_requests WHERE id = 1")
         ).scalar_one()
         assert json.loads(plan_json) == {"nested": {}}
+        manifest_json = connection.execute(
+            text("SELECT manifest_json FROM skill_versions WHERE id = 1")
+        ).scalar_one()
+        assert json.loads(manifest_json) == {"name": "legacy_skill"}

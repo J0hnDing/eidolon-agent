@@ -1,7 +1,6 @@
 {
   "manifest_version": 1,
   "name": "notion_todo_manager",
-  "display_name": "Notion Todo Manager",
   "description": "A simple web application for managing todos in the configured Notion data source.",
   "runtime": "web_app",
   "entrypoint": "app:app",

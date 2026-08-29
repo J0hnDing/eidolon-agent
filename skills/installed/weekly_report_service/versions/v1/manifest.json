@@ -1,7 +1,6 @@
 {
   "manifest_version": 1,
   "name": "weekly_report_service",
-  "display_name": "Weekly Report Service",
   "description": "Create a deterministic weekly Notion report from the installed GitHub Atlas Project Scout output.",
   "runtime": "service",
   "entrypoint": "skill.py",

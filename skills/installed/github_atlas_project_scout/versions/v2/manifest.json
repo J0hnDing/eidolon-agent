@@ -1,7 +1,6 @@
 {
   "manifest_version": 1,
   "name": "github_atlas_project_scout",
-  "display_name": "Github Atlas Project Scout",
   "description": "Compare GitHub's actual trending repositories and their READMEs with Atlas projects and produce a Codex-generated learning report.",
   "runtime": "function",
   "entrypoint": "skill.py",

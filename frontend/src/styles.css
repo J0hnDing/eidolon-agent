@@ -1313,6 +1313,18 @@ button.danger {
   transform: translateY(-1px);
 }
 
+.button-link.secondary {
+  border-color: var(--line-strong);
+  background: var(--surface);
+  color: #26322f;
+}
+
+.button-link.secondary:hover {
+  border-color: #9eaca5;
+  background: #f7faf8;
+  color: #26322f;
+}
+
 a {
   color: #246e5b;
   font-weight: 620;
@@ -1756,6 +1768,51 @@ tbody tr {
 
 tbody tr:hover {
   background: #f7faf8;
+}
+
+.clickable-table-row {
+  cursor: pointer;
+}
+
+.clickable-table-row:hover,
+.clickable-table-row:focus-visible {
+  background: #eef6f2;
+}
+
+.clickable-table-row:focus-visible {
+  outline: 2px solid #3d8d70;
+  outline-offset: -2px;
+}
+
+.clickable-row-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #246e5b;
+}
+
+.table-title-link {
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+}
+
+.schedule-actions {
+  flex-wrap: nowrap;
+  min-width: max-content;
+}
+
+.clickable-row-title span {
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.clickable-table-row:hover .clickable-row-title span,
+.clickable-table-row:focus-visible .clickable-row-title span {
+  opacity: 1;
+  transform: translateX(0);
 }
 
 tbody tr:last-child td {

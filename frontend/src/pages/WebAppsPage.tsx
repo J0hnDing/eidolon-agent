@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Skill, api } from "../api/client";
+import { formatDisplayName } from "../lib/displayName";
 import { usePolling } from "../lib/usePolling";
 
 export function applicationSkills(skills: Skill[]) {
@@ -52,18 +53,17 @@ export default function WebAppsPage() {
             <article className="item-card" key={skill.id}>
               <div className="item-card-header">
                 <div>
-                  <h3>{skill.name}</h3>
+                  <h3>{formatDisplayName(skill.name)}</h3>
                   <p>{skill.description}</p>
                 </div>
                 <span className={`badge status-${skill.status}`}>{skill.status}</span>
               </div>
               <p className="muted">{skill.enabled ? "Enabled and available for lazy startup." : "Disabled."}</p>
               <div className="button-row">
-                {skill.status === "installed" && skill.enabled ? (
+                {skill.status === "installed" && skill.enabled && (
                   <Link className="button-link" to={`/apps/${skill.id}`}>Open Application</Link>
-                ) : (
-                  <Link to={`/skills/${skill.id}`}>Review skill</Link>
                 )}
+                <Link className="button-link secondary" to={`/skills/${skill.id}`}>Open Skill Details</Link>
               </div>
             </article>
           ))}

@@ -1,7 +1,6 @@
 {
   "manifest_version": 1,
   "name": "notes_web_app",
-  "display_name": "Notes Web App",
   "description": "Build a reusable local-first notes web application skill for basic notes management with browser-based create, view, edit, and delete workflows.",
   "runtime": "web_app",
   "entrypoint": "app:app",

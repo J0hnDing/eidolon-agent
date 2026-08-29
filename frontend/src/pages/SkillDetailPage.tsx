@@ -22,6 +22,7 @@ import {
   runtimePermissionsApproved,
 } from "../features/skill-detail/runtimePermissions";
 import { runnerBadgeLabel, sandboxStatusLabel } from "../features/skill-detail/runnerStatus";
+import { formatDisplayName } from "../lib/displayName";
 import { usePolling } from "../lib/usePolling";
 import {
   AgentRun,
@@ -249,13 +250,13 @@ export default function SkillDetailPage() {
       {
         id: requestMessageId,
         role: "user",
-        content: `Suggest an update for ${skill.name}: ${suggestion}`,
+        content: `Suggest an update for ${formatDisplayName(skill.name)}: ${suggestion}`,
       },
       {
         id: requestMessageId + 1,
         role: "assistant",
         kind: "thinking",
-        content: `ProductManager is reviewing the update suggestion for ${skill.name}...`,
+        content: `ProductManager is reviewing the update suggestion for ${formatDisplayName(skill.name)}...`,
       },
     ]);
     setIsWorking(true);
@@ -271,7 +272,7 @@ export default function SkillDetailPage() {
           id: Date.now(),
           role: "assistant",
           kind: response.permission_request ? "build_approval" : "text",
-          content: updateResponseText(skill.name, response),
+          content: updateResponseText(formatDisplayName(skill.name), response),
           permissionRequest: response.permission_request ?? undefined,
           actionStatus: response.permission_request?.status === "pending" ? "pending" : undefined,
           agentRunId: response.agent_run_id,
@@ -288,7 +289,7 @@ export default function SkillDetailPage() {
         {
           id: Date.now(),
           role: "assistant",
-          content: `ProductManager could not start the update workflow for ${skill.name}.\n\n${message}`,
+          content: `ProductManager could not start the update workflow for ${formatDisplayName(skill.name)}.\n\n${message}`,
         },
         ]),
       );
@@ -482,13 +483,14 @@ export default function SkillDetailPage() {
   const runtimeApproved = runtimePermissionsApproved(runtimePermission);
   const canRun = isFunction && isInstalled && skill.enabled && runtimeApproved;
   const isProposed = skill.status === "proposed";
+  const displayName = formatDisplayName(skill.name);
 
   return (
     <section className="page stack">
       <header className="page-header">
         <div>
           <p className="eyebrow">Skill Detail</p>
-          <h1>{skill.name}</h1>
+          <h1>{displayName}</h1>
         </div>
         <Link to="/skills">Back to skills</Link>
       </header>
@@ -719,7 +721,7 @@ export default function SkillDetailPage() {
       {runtimePermission && showRuntimeModal && (
         <PermissionRequestModal
           request={runtimePermission}
-          title={`${skill.name} runtime permissions`}
+          title={`${displayName} runtime permissions`}
           subject="Approve these manifest permissions before installing or running this skill."
           isWorking={isWorking}
           approveLabel="Approve Runtime Permissions"
@@ -777,7 +779,7 @@ export default function SkillDetailPage() {
         </header>
         {serviceSchedule ? (
           <dl className="detail-grid">
-            <div><dt>Name</dt><dd>{serviceSchedule.name}</dd></div>
+            <div><dt>Name</dt><dd>{formatDisplayName(serviceSchedule.name)}</dd></div>
             <div><dt>Status</dt><dd>{serviceSchedule.status}</dd></div>
             <div><dt>Type</dt><dd>{serviceSchedule.schedule_type}</dd></div>
             <div><dt>Timezone</dt><dd>{serviceSchedule.timezone}</dd></div>

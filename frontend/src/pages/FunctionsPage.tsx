@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { FunctionCatalogEntry, api } from "../api/client";
+import { formatDisplayName } from "../lib/displayName";
 import { usePolling } from "../lib/usePolling";
 
 const categoryLabels: Record<FunctionCatalogEntry["category"], string> = {
@@ -69,7 +70,9 @@ export function FunctionTable({ functions }: { functions: FunctionCatalogEntry[]
             <tr key={entry.id}>
               <td>
                 <strong>
-                  {entry.skill_id ? <Link to={`/skills/${entry.skill_id}`}>{entry.title}</Link> : entry.title}
+                  {entry.skill_id ? (
+                    <Link to={`/skills/${entry.skill_id}`}>{formatDisplayName(entry.title)}</Link>
+                  ) : formatDisplayName(entry.title)}
                 </strong>
                 <span className="table-subtitle">{entry.id}</span>
                 <span className="table-subtitle">{entry.description}</span>

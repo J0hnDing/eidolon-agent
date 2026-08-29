@@ -39,13 +39,12 @@ def test_valid_low_risk_manifest_passes() -> None:
     assert manifest.permissions.filesystem_write == ["./cache"]
 
 
-def test_manifest_accepts_optional_display_name() -> None:
+def test_manifest_rejects_display_name() -> None:
     data = valid_manifest()
     data["display_name"] = "Simple Calculator"
 
-    manifest = validate_manifest(data)
-
-    assert manifest.display_name == "Simple Calculator"
+    with pytest.raises(ManifestValidationError, match="display_name"):
+        validate_manifest(data)
 
 
 def test_manifest_accepts_simple_dependencies() -> None:

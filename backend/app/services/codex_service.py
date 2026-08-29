@@ -1625,7 +1625,6 @@ class CodexService:
         manifest = {
             "manifest_version": 1,
             "name": str(blueprint.get("name") or plan.get("skill_name")),
-            "display_name": plan.get("display_name"),
             "description": str(
                 blueprint.get("description")
                 or plan.get("description")
@@ -1647,8 +1646,6 @@ class CodexService:
                 else blueprint.get("schedule") if isinstance(blueprint.get("schedule"), dict) else plan.get("schedule")
             ),
         }
-        if manifest["display_name"] is None:
-            manifest.pop("display_name")
         return manifest
 
     def _planned_instructions_path(self, plan: dict) -> str | None:

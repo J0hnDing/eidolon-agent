@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 
 import {
   Skill,
@@ -8,6 +8,7 @@ import {
   WebAppOpenResponse,
   api,
 } from "../api/client";
+import { formatDisplayName } from "../lib/displayName";
 import { usePolling } from "../lib/usePolling";
 
 export const WEB_APP_IFRAME_SANDBOX = "allow-scripts allow-forms allow-same-origin allow-modals";
@@ -114,14 +115,13 @@ export default function WebAppPage() {
       <header className="web-app-trusted-chrome">
         <div>
           <p className="eyebrow">Trusted Eidolon application chrome</p>
-          <h1>{skill?.name ?? "Web application"}</h1>
+          <h1>{skill ? formatDisplayName(skill.name) : "Web application"}</h1>
           <p>{skill?.description}</p>
         </div>
         <div className="button-row">
           <span className={`badge status-${currentInstance?.status ?? "pending"}`}>
             {currentInstance?.status ?? (isWorking ? "starting" : "stopped")}
           </span>
-          <Link to={skill ? `/skills/${skill.id}` : "/apps"}>Skill controls</Link>
           {openedApp ? (
             <button type="button" className="secondary" onClick={stopApplication} disabled={isWorking}>Stop</button>
           ) : (
@@ -142,7 +142,10 @@ export default function WebAppPage() {
             <span>Runtime permissions approved - {skill?.risk_level ?? "unknown"} risk</span>
             <span>Browser network: same origin only</span>
           </section>
-          <WebAppFrame app={openedApp} title={`${skill?.name ?? "Skill"} application`} />
+          <WebAppFrame
+            app={openedApp}
+            title={`${skill ? formatDisplayName(skill.name) : "Skill"} application`}
+          />
           <details className="detail-panel">
             <summary>Containment and lifecycle details</summary>
             <dl className="detail-grid">

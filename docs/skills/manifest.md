@@ -38,6 +38,8 @@ For new Project-mode builds, the backend derives an initial skeleton from the ap
 
 Installation state, enabled state, active version, provenance, and risk level are backend-owned. They are not canonical manifest fields. The validator reads older packages that still contain `risk_level`, `created_by`, or `enabled` for compatibility, but canonical serialization and new generation omit them. Risk is derived deterministically from permissions and dependencies when the backend updates the skill record.
 
+`name` is the only skill-name field. Manifests do not accept `display_name`; user interfaces derive readable labels from `name` by replacing underscores with spaces and capitalizing each word.
+
 `permissions` contains approval-gated requests only. New manifests omit backend defaults such as the Python standard library and the skill's own `./cache` access, and they never repeat blocked capabilities such as shell or secrets. An empty object means the skill requests no approval-gated runtime capability. Older safe manifests that explicitly list default values remain readable. Explicit `codex.call_response: false` is also valid and is equivalent to omitting that request.
 
 The ProductManager blueprint declares object-shaped `input_schema` and `output_schema` JSON Schemas for new function and service skills. Builder implements that contract but does not redefine it. Service schemas are required. The backend validates the schemas themselves and validates every registry function input/output and every scheduled service input/output against them. Older installed functions with missing schemas remain directly runnable, but appear unavailable for cross-skill registry invocation until updated with explicit contracts.

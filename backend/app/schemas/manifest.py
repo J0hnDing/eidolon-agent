@@ -211,7 +211,6 @@ class SkillManifest(BaseModel):
 
     manifest_version: Literal[1] = 1
     name: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
-    display_name: str | None = Field(default=None, min_length=1, max_length=256)
     description: str = Field(min_length=1)
     runtime: SkillRuntime = "function"
     entrypoint: str = Field(min_length=1)
