@@ -660,3 +660,16 @@ Completed by replacing function/web-app schedule approvals with the service-only
 ### Limitations
 
 The nullable physical approval_requests.schedule_id column remains for local database compatibility but is no longer used by application behavior.
+
+## 2026-08-29 00:57 — Google Calendar OAuth integration
+
+- Category: feature
+- Area: integrations
+
+### Summary
+
+Added one trusted Google Calendar OAuth connection with exactly five typed primary-calendar event functions: create, list, get, update, and delete. OAuth uses bounded single-use state, write-only client credentials, Windows Credential Manager refresh-token storage, verified account identity, sanitized callbacks and access-log redaction. Added the Settings connection panel, catalog and manifest integration, provider containment, focused backend and frontend tests, and integration/backend/frontend/security/function-extension documentation.
+
+### Limitations
+
+No live Google OAuth or Calendar API E2E test was run; provider behavior is covered by deterministic focused tests. The integration intentionally excludes secondary calendars, event storage, synchronization, webhooks, schedules, calendar UI, and token revocation.
