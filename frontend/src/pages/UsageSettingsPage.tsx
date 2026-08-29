@@ -12,6 +12,7 @@ import {
   CodexRoutingSettingsPayload,
   CodexUsageWindow,
   GitHubConnectionStatus,
+  GoogleCalendarConnectionStatus,
   NotionConnectionStatus,
   PermissionPolicy,
   api,
@@ -63,6 +64,9 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
   const [notionToken, setNotionToken] = useState("");
   const [notionDataSourceId, setNotionDataSourceId] = useState("");
   const [notionReportDataSourceId, setNotionReportDataSourceId] = useState("");
+  const [googleCalendar, setGoogleCalendar] = useState<GoogleCalendarConnectionStatus | null>(null);
+  const [googleClientId, setGoogleClientId] = useState("");
+  const [googleClientSecret, setGoogleClientSecret] = useState("");
   const [atlas, setAtlas] = useState<AtlasIntegrationStatus | null>(null);
   const [atlasDirectory, setAtlasDirectory] = useState("");
   const [atlasPassphrase, setAtlasPassphrase] = useState("");
@@ -95,10 +99,11 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setRouting(nextRouting);
         setRoutingDirty(false);
       } else if (section === "integrations") {
-        const [nextGitHub, nextAtlas, nextNotion, nextCodexMcp] = await Promise.all([
+        const [nextGitHub, nextAtlas, nextNotion, nextGoogleCalendar, nextCodexMcp] = await Promise.all([
           api.getGitHubConnection(),
           api.getAtlasStatus().catch((err) => atlasUnavailableStatus(err)),
           api.getNotionConnection().catch((err) => notionUnavailableStatus(err)),
+          api.getGoogleCalendarConnection().catch((err) => googleCalendarUnavailableStatus(err)),
           api.getCodexMcpStatus().catch((err) => codexMcpUnavailableStatus(err)),
         ]);
         setGitHub(nextGitHub);
@@ -107,6 +112,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setNotion(nextNotion);
         setNotionDataSourceId(nextNotion.data_source_id ?? "");
         setNotionReportDataSourceId(nextNotion.report_data_source_id ?? "");
+        setGoogleCalendar(nextGoogleCalendar);
         setCodexMcp(nextCodexMcp);
       } else {
         setPermissionPolicy(await api.getPermissionPolicy());
@@ -120,6 +126,18 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
 
   useEffect(() => {
     void loadSettings();
+  }, [section]);
+
+  useEffect(() => {
+    if (section !== "integrations") return;
+    const url = new URL(window.location.href);
+    const result = url.searchParams.get("google_calendar");
+    if (!result) return;
+    if (result === "connected") setSaved("Google Calendar connected.");
+    else if (result === "denied") setError("Google Calendar authorization was denied.");
+    else setError("Google Calendar authorization failed or expired. Try connecting again.");
+    url.searchParams.delete("google_calendar");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   }, [section]);
 
   function updateChoice(
@@ -262,6 +280,41 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
       setSaved("Notion connection removed.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not remove Notion connection");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function startGoogleCalendarOAuth() {
+    if (!googleClientId || !googleClientSecret) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const result = await api.startGoogleCalendarOAuth(googleClientId, googleClientSecret);
+      setGoogleClientId("");
+      setGoogleClientSecret("");
+      window.location.assign(result.authorization_url);
+    } catch (err) {
+      setGoogleClientId("");
+      setGoogleClientSecret("");
+      setError(err instanceof Error ? err.message : "Could not start Google Calendar authorization");
+      setLoading(false);
+    }
+  }
+
+  async function removeGoogleCalendarConnection() {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      await api.removeGoogleCalendarConnection();
+      setGoogleCalendar(await api.getGoogleCalendarConnection());
+      setGoogleClientId("");
+      setGoogleClientSecret("");
+      setSaved("Google Calendar connection removed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove Google Calendar connection");
     } finally {
       setLoading(false);
     }
@@ -469,6 +522,72 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
                 Remove connection
               </button>
             )}
+          </div>
+        </section>
+      )}
+      {section === "integrations" && googleCalendar && (
+        <section className="detail-panel stack">
+          <div>
+            <h2>Google Calendar connection</h2>
+            <p className="muted">
+              OAuth grants Eidolon access only to events on calendars you own. The five event functions always use your primary calendar; Eidolon keeps no event copy, sync process, or calendar UI.
+            </p>
+          </div>
+          <dl className="detail-grid">
+            <div><dt>Status</dt><dd>{googleCalendar.connected ? "Connected" : googleCalendar.status}</dd></div>
+            <div><dt>Account</dt><dd>{googleCalendar.account_email ?? "None"}</dd></div>
+            <div><dt>Last validated</dt><dd>{formatDate(googleCalendar.last_validated_at)}</dd></div>
+          </dl>
+          {googleCalendar.error_type && (
+            <p className="error-text">Connection status: {googleCalendar.error_type.replace(/_/g, " ")}</p>
+          )}
+          <div className="settings-subsection stack">
+            <div>
+              <h3>OAuth client</h3>
+              <p className="muted">
+                Enable Google Calendar API, create a Web application OAuth client, and register this exact redirect URI:
+              </p>
+              <p><code>{googleCalendar.oauth_redirect_uri}</code></p>
+            </div>
+            <label>
+              {googleCalendar.connected ? "Replacement Google OAuth client ID" : "Google OAuth client ID"}
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={googleClientId}
+                onChange={(event) => setGoogleClientId(event.target.value)}
+                placeholder="Client ID is never displayed after submission"
+              />
+            </label>
+            <label>
+              {googleCalendar.connected ? "Replacement Google OAuth client secret" : "Google OAuth client secret"}
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={googleClientSecret}
+                onChange={(event) => setGoogleClientSecret(event.target.value)}
+                placeholder="Client secret is never displayed after submission"
+              />
+            </label>
+            <div className="button-row">
+              <button
+                type="button"
+                onClick={() => void startGoogleCalendarOAuth()}
+                disabled={loading || !googleClientId || !googleClientSecret}
+              >
+                {googleCalendar.connected ? "Replace Google Calendar connection" : "Connect Google Calendar"}
+              </button>
+              {googleCalendar.connected && (
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => void removeGoogleCalendarConnection()}
+                  disabled={loading}
+                >
+                  Remove Google Calendar connection
+                </button>
+              )}
+            </div>
           </div>
         </section>
       )}
@@ -840,6 +959,20 @@ function notionUnavailableStatus(err: unknown): NotionConnectionStatus {
     created_at: null,
     updated_at: null,
     error_type: err instanceof Error ? err.message : "unavailable",
+  };
+}
+
+function googleCalendarUnavailableStatus(err: unknown): GoogleCalendarConnectionStatus {
+  return {
+    provider: "google_calendar",
+    connected: false,
+    status: "unavailable",
+    account_email: null,
+    last_validated_at: null,
+    created_at: null,
+    updated_at: null,
+    error_type: err instanceof Error ? err.message : "unavailable",
+    oauth_redirect_uri: "http://localhost:8000/settings/integrations/google-calendar/oauth/callback",
   };
 }
 

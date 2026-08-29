@@ -1,10 +1,14 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.schemas.integration import (
     GitHubConnectionStatus,
     GitHubCredentialWrite,
+    GoogleCalendarConnectionStatus,
+    GoogleCalendarOAuthStart,
+    GoogleCalendarOAuthStartResponse,
     IntegrationInvocationRequest,
     IntegrationInvocationResponse,
     NotionConnectionStatus,
@@ -13,6 +17,7 @@ from app.schemas.integration import (
 )
 from app.services.function_catalog_service import FunctionCatalogService
 from app.services.function_registry_service import FunctionRegistryError, FunctionRegistryService
+from app.services.google_calendar_provider import GOOGLE_OAUTH_RETURN_URL
 from app.services.integration_service import (
     IntegrationCaller,
     IntegrationError,
@@ -106,6 +111,75 @@ def remove_notion_data_sources(db: Session = Depends(get_db)) -> NotionConnectio
 def remove_notion_connection(db: Session = Depends(get_db)) -> Response:
     try:
         build_default_integration_service(db).remove_notion_connection()
+        FunctionCatalogService(db).refresh()
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/settings/integrations/google-calendar",
+    response_model=GoogleCalendarConnectionStatus,
+)
+def google_calendar_connection_status(db: Session = Depends(get_db)) -> GoogleCalendarConnectionStatus:
+    return build_default_integration_service(db).google_calendar_connection_status()
+
+
+@router.post(
+    "/settings/integrations/google-calendar/oauth/start",
+    response_model=GoogleCalendarOAuthStartResponse,
+)
+def start_google_calendar_oauth(
+    payload: GoogleCalendarOAuthStart,
+    db: Session = Depends(get_db),
+) -> GoogleCalendarOAuthStartResponse:
+    try:
+        authorization_url = build_default_integration_service(db).start_google_calendar_oauth(
+            payload.client_id.get_secret_value(),
+            payload.client_secret.get_secret_value(),
+        )
+        return GoogleCalendarOAuthStartResponse(authorization_url=authorization_url)
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+
+
+@router.get(
+    "/settings/integrations/google-calendar/oauth/callback",
+    response_class=RedirectResponse,
+    include_in_schema=False,
+)
+def complete_google_calendar_oauth(
+    state_value: str = Query(default="", alias="state"),
+    code_value: str = Query(default="", alias="code"),
+    error: str = Query(default=""),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    service = build_default_integration_service(db)
+    if error:
+        try:
+            service.discard_google_calendar_oauth(state_value)
+        except IntegrationError:
+            result = "failed"
+        else:
+            result = "denied" if error == "access_denied" else "failed"
+        return RedirectResponse(f"{GOOGLE_OAUTH_RETURN_URL}?google_calendar={result}", status_code=303)
+    try:
+        service.complete_google_calendar_oauth(state_value, code_value)
+        FunctionCatalogService(db).refresh()
+    except IntegrationError:
+        return RedirectResponse(f"{GOOGLE_OAUTH_RETURN_URL}?google_calendar=failed", status_code=303)
+    finally:
+        code_value = ""
+    return RedirectResponse(f"{GOOGLE_OAUTH_RETURN_URL}?google_calendar=connected", status_code=303)
+
+
+@router.delete(
+    "/settings/integrations/google-calendar",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def remove_google_calendar_connection(db: Session = Depends(get_db)) -> Response:
+    try:
+        build_default_integration_service(db).remove_google_calendar_connection()
         FunctionCatalogService(db).refresh()
     except IntegrationError as exc:
         raise _http_error(exc) from None

@@ -64,4 +64,4 @@ Builder modifies only the copied draft version folder. It must never modify the 
 - Grant itself permissions without deterministic permission review.
 - Set `shell=true`.
 - Invoke Codex through shell or subprocess instead of the backend Skill Codex Call API.
-- Add secrets, broad filesystem access, unrestricted network access, browser automation, email/calendar/finance actions, purchases, public posting, trading, file deletion, or arbitrary command execution.
+- Add secrets, broad filesystem access, unrestricted network access, browser automation, direct email/calendar/finance actions outside declared trusted integrations, purchases, public posting, trading, file deletion, or arbitrary command execution.

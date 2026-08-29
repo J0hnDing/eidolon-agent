@@ -39,6 +39,12 @@ WEB_ASSET_SUFFIXES = {".css", ".html", ".htm", ".js", ".mjs"}
 ABSOLUTE_BROWSER_URL = re.compile(r"https?://[^\s\"'<>)}]+", re.IGNORECASE)
 GITHUB_HOSTS = {"api.github.com", "github.com"}
 NOTION_HOSTS = {"api.notion.com"}
+GOOGLE_HOSTS = {
+    "accounts.google.com",
+    "oauth2.googleapis.com",
+    "openidconnect.googleapis.com",
+    "www.googleapis.com",
+}
 ATLAS_HOSTS = {"127.0.0.1", "localhost", "::1"}
 ATLAS_MARKERS = (
     "127.0.0.1:4817",
@@ -196,6 +202,8 @@ class StaticCapabilityScanner:
                             if domain in GITHUB_HOSTS
                             else "direct_notion_access"
                             if domain in NOTION_HOSTS
+                            else "direct_google_access"
+                            if domain in GOOGLE_HOSTS
                             else "browser_network"
                         ),
                         status="blocked",
@@ -316,6 +324,17 @@ class StaticCapabilityScanner:
                             line=getattr(node, "lineno", 1),
                             evidence="contains the direct Notion API host",
                             message="Direct Notion access is blocked; use the trusted integration helper.",
+                        )
+                    )
+                if any(host in lowered for host in GOOGLE_HOSTS):
+                    findings.append(
+                        CapabilityFinding(
+                            capability="direct_google_access",
+                            status="blocked",
+                            path=relative_path,
+                            line=getattr(node, "lineno", 1),
+                            evidence="contains a direct Google integration host",
+                            message="Direct Google access is blocked; use the trusted integration helper.",
                         )
                     )
                 if "/settings/integrations/" in lowered:
@@ -504,6 +523,15 @@ class StaticCapabilityScanner:
                         evidence=f"calls {call_name} with GitHub domain {domain}",
                         message="Direct GitHub access is blocked; use the trusted integration helper.",
                     )
+                if domain in GOOGLE_HOSTS:
+                    return CapabilityFinding(
+                        capability="direct_google_access",
+                        status="blocked",
+                        path=relative_path,
+                        line=node.lineno,
+                        evidence=f"calls {call_name} with Google domain {domain}",
+                        message="Direct Google access is blocked; use the trusted integration helper.",
+                    )
                 if domain in ATLAS_HOSTS:
                     return CapabilityFinding(
                         capability="direct_atlas_access",
@@ -662,7 +690,9 @@ class StaticCapabilityScanner:
         allowed = secret_name.lower() in approved_secrets
         if any(
             part in secret_name.lower()
-            for part in ("github", "atlas", "notion", "capability", "token", "credential", "secret", "passphrase")
+            for part in (
+                "github", "atlas", "notion", "google", "capability", "token", "credential", "secret", "passphrase"
+            )
         ):
             allowed = False
         return CapabilityFinding(

@@ -104,6 +104,18 @@ def test_direct_notion_and_integration_settings_access_are_rejected(tmp_path: Pa
     assert {"direct_notion_access", "integration_settings_access", "secrets"}.issubset(capabilities)
 
 
+def test_direct_google_calendar_and_oauth_secret_access_are_rejected(tmp_path: Path) -> None:
+    result = scan(
+        tmp_path,
+        "import os\n"
+        "import requests\n"
+        "requests.get('https://www.googleapis.com/calendar/v3/calendars/primary/events')\n"
+        "token = os.environ['GOOGLE_CALENDAR_REFRESH_TOKEN']\n",
+    )
+    capabilities = {finding.capability for finding in result.findings}
+    assert {"direct_google_access", "secrets"}.issubset(capabilities)
+
+
 def test_browser_integration_invocation_is_rejected(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("app = object()\n", encoding="utf-8")
     (tmp_path / "app.js").write_text(

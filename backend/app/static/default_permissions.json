@@ -30,7 +30,7 @@
     "Filesystem access outside the skill's own ./cache directory, including file deletion.",
     "Unrestricted or wildcard network access.",
     "Browser automation.",
-    "Email, calendar, finance, purchase, trading, or public-posting actions.",
+    "Direct email, calendar, finance, purchase, trading, or public-posting actions outside declared trusted integration operations.",
     "Runtime package installation, custom Dockerfiles, custom startup commands, and process-management code.",
     "Calling Codex CLI directly instead of an approved backend capability.",
     "Dependency specifiers that use URLs, Git references, local paths, command flags, or similar unsafe forms."

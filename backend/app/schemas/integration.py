@@ -52,6 +52,31 @@ class NotionConnectionStatus(BaseModel):
     error_type: str | None = None
 
 
+class GoogleCalendarOAuthStart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Trusted service code checks bounds so validation errors never reflect
+    # either submitted OAuth client credential.
+    client_id: SecretStr
+    client_secret: SecretStr
+
+
+class GoogleCalendarOAuthStartResponse(BaseModel):
+    authorization_url: str
+
+
+class GoogleCalendarConnectionStatus(BaseModel):
+    provider: Literal["google_calendar"] = "google_calendar"
+    connected: bool
+    status: Literal["connected", "disconnected", "unavailable", "invalid"]
+    account_email: str | None = None
+    last_validated_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    error_type: str | None = None
+    oauth_redirect_uri: str
+
+
 class IntegrationInvocationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

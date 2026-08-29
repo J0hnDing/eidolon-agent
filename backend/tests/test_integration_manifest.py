@@ -73,6 +73,13 @@ def test_registry_is_authoritative_and_context_is_selected_only() -> None:
         "notion.report.create",
         "notion.report.delete",
     }
+    assert {operation_id for operation_id in OPERATIONS if operation_id.startswith("google_calendar.")} == {
+        "google_calendar.event.create",
+        "google_calendar.event.list",
+        "google_calendar.event.get",
+        "google_calendar.event.update",
+        "google_calendar.event.delete",
+    }
     context = OPERATIONS["github.repository.file.read"].agent_context()
     assert context["operation"] == "github.repository.file.read"
     assert context["input_schema"] == OPERATIONS["github.repository.file.read"].input_schema
@@ -175,6 +182,38 @@ def test_manifest_accepts_notion_without_caller_selected_scope() -> None:
     assert OPERATIONS["notion.todo.create"].input_schema["properties"]["done"] == {"type": "boolean"}
     assert OPERATIONS["notion.todo.update"].input_schema["properties"]["done"] == {"type": "boolean"}
     assert OPERATIONS["notion.todo.list"].contract_version == 2
+
+
+def test_manifest_accepts_google_calendar_with_primary_calendar_scope_only() -> None:
+    parsed = validate_manifest(
+        manifest_with(
+            {
+                "provider": "google_calendar",
+                "operations": [
+                    "google_calendar.event.list",
+                    "google_calendar.event.create",
+                ],
+                "resource_scope": {},
+            }
+        )
+    )
+
+    requirement = parsed.integration_requirements[0]
+    assert requirement.provider == "google_calendar"
+    assert requirement.resource_scope.repositories == []
+    assert OPERATIONS["google_calendar.event.list"].risk == "low"
+    assert OPERATIONS["google_calendar.event.create"].risk == "medium"
+    assert OPERATIONS["google_calendar.event.create"].input_schema["required"] == [
+        "title",
+        "start",
+        "end",
+    ]
+    assert OPERATIONS["google_calendar.event.create"].input_schema["properties"]["recurrence"][
+        "minItems"
+    ] == 1
+    assert "minItems" not in OPERATIONS["google_calendar.event.update"].input_schema["properties"][
+        "recurrence"
+    ]
 
 
 def test_manifest_rejects_notion_operation_under_another_provider() -> None:

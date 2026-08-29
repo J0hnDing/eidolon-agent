@@ -291,6 +291,50 @@ describe("Notion Settings connection", () => {
   });
 });
 
+describe("Google Calendar OAuth connection", () => {
+  it("shows the fixed callback and never exposes OAuth client inputs as plain text", async () => {
+    vi.spyOn(api, "getGitHubConnection").mockResolvedValue({
+      provider: "github",
+      connected: false,
+      status: "disconnected",
+      account_login: null,
+      account_id: null,
+      last_validated_at: null,
+      created_at: null,
+      updated_at: null,
+      error_type: null,
+    });
+    vi.spyOn(api, "getGoogleCalendarConnection").mockResolvedValue({
+      provider: "google_calendar",
+      connected: true,
+      status: "connected",
+      account_email: "person@example.com",
+      last_validated_at: "2026-08-29T12:00:00Z",
+      created_at: "2026-08-29T12:00:00Z",
+      updated_at: "2026-08-29T12:00:00Z",
+      error_type: null,
+      oauth_redirect_uri: "http://localhost:8000/settings/integrations/google-calendar/oauth/callback",
+    });
+    vi.spyOn(api, "getAtlasStatus").mockRejectedValue(new Error("not running"));
+    vi.spyOn(api, "getNotionConnection").mockRejectedValue(new Error("not connected"));
+    vi.spyOn(api, "getCodexMcpStatus").mockRejectedValue(new Error("not installed"));
+
+    renderSettings("integrations");
+
+    expect(await screen.findByRole("heading", { name: "Google Calendar connection" })).toBeTruthy();
+    expect(screen.getByText("person@example.com")).toBeTruthy();
+    expect(
+      screen.getByText("http://localhost:8000/settings/integrations/google-calendar/oauth/callback"),
+    ).toBeTruthy();
+    expect((screen.getByLabelText("Replacement Google OAuth client ID") as HTMLInputElement).type).toBe(
+      "password",
+    );
+    expect(
+      (screen.getByLabelText("Replacement Google OAuth client secret") as HTMLInputElement).type,
+    ).toBe("password");
+  });
+});
+
 describe("Codex tools registration", () => {
   it("installs, repairs, and removes the owned MCP registration", async () => {
     vi.spyOn(api, "getGitHubConnection").mockResolvedValue({

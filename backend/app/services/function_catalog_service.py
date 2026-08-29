@@ -155,6 +155,7 @@ class FunctionCatalogService:
                 "github": "GitHub connection is not configured",
                 "atlas": "Atlas is not running and unlocked",
                 "notion": "Notion connection is not configured",
+                "google_calendar": "Google Calendar connection is not configured",
             }[operation.provider]
             reasons = [] if connected else [unavailable_reason]
             if operation.operation_id == "atlas.knowledge.node.know" and not atlas_codex_available:

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -27,6 +28,23 @@ from app.services.codex_usage_service import codex_usage_service
 from app.services.proposed_skill_service import ProposedSkillService
 from app.services.scheduler_service import SchedulerService
 from app.services.web_app_runtime_service import WebAppRuntimeConfig, WebAppRuntimeService
+
+GOOGLE_OAUTH_CALLBACK_PATH = "/settings/integrations/google-calendar/oauth/callback"
+
+
+class OAuthCallbackAccessLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not isinstance(record.args, tuple) or len(record.args) < 3:
+            return True
+        path = record.args[2]
+        if isinstance(path, str) and path.startswith(f"{GOOGLE_OAUTH_CALLBACK_PATH}?"):
+            args = list(record.args)
+            args[2] = GOOGLE_OAUTH_CALLBACK_PATH
+            record.args = tuple(args)
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(OAuthCallbackAccessLogFilter())
 
 
 def stop_idle_web_app_instances(config: WebAppRuntimeConfig) -> None:

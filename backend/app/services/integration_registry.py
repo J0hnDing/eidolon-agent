@@ -26,14 +26,14 @@ class IntegrationOperation:
     operation_id: str
     title: str
     description: str
-    provider: Literal["github", "atlas", "notion"]
+    provider: Literal["github", "atlas", "notion", "google_calendar"]
     input_schema: dict[str, Any]
     output_schema: dict[str, Any]
     read_only: bool
     side_effect: Literal["none", "write"]
     risk: Literal["low", "medium"]
     resource_scope: ScopeBehavior
-    method: Literal["GET", "POST", "PATCH"]
+    method: Literal["GET", "POST", "PATCH", "DELETE"]
     endpoint_template: str
     timeout_seconds: float
     allow_redirects: bool
@@ -920,10 +920,208 @@ _NOTION_OPERATIONS = (
     ),
 )
 
+_GOOGLE_CALENDAR_ERRORS = (
+    "connection_unavailable",
+    "invalid_credential",
+    "operation_undeclared",
+    "authorization_missing_or_stale",
+    "invalid_input",
+    "not_found",
+    "provider_forbidden",
+    "rate_limited",
+    "provider_timeout",
+    "response_too_large",
+    "provider_unavailable",
+    "internal_failure",
+)
+_GOOGLE_EVENT_ID = {"type": "string", "minLength": 1, "maxLength": 1024}
+_GOOGLE_EVENT_TIME_INPUT = {
+    "oneOf": [
+        _object_schema(
+            {
+                "date_time": {"type": "string", "minLength": 1, "maxLength": 64},
+                "time_zone": {"type": "string", "minLength": 1, "maxLength": 64},
+            },
+            ["date_time", "time_zone"],
+        ),
+        _object_schema(
+            {"date": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$"}},
+            ["date"],
+        ),
+    ]
+}
+_GOOGLE_EVENT_TIME_OUTPUT = {
+    "oneOf": [
+        _object_schema(
+            {
+                "date_time": {"type": "string", "minLength": 1, "maxLength": 64},
+                "time_zone": {"type": ["string", "null"], "maxLength": 64},
+            },
+            ["date_time", "time_zone"],
+        ),
+        _object_schema(
+            {"date": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$"}},
+            ["date"],
+        ),
+    ]
+}
+_GOOGLE_RECURRENCE = {
+    "type": "array",
+    "maxItems": 20,
+    "items": {"type": "string", "minLength": 1, "maxLength": 512},
+}
+_GOOGLE_EVENT_OUTPUT = _object_schema(
+    {
+        "id": _GOOGLE_EVENT_ID,
+        "status": {"type": "string", "enum": ["confirmed", "tentative"]},
+        "summary": {"type": ["string", "null"], "maxLength": 1024},
+        "description": {"type": ["string", "null"], "maxLength": 8192},
+        "location": {"type": ["string", "null"], "maxLength": 1024},
+        "start": _GOOGLE_EVENT_TIME_OUTPUT,
+        "end": _GOOGLE_EVENT_TIME_OUTPUT,
+        "recurrence": _GOOGLE_RECURRENCE,
+        "recurring_event_id": {"type": ["string", "null"], "maxLength": 1024},
+        "original_start": {"oneOf": [_GOOGLE_EVENT_TIME_OUTPUT, {"type": "null"}]},
+        "html_link": {"type": ["string", "null"], "maxLength": 4096},
+        "created_at": {"type": "string", "minLength": 1, "maxLength": 64},
+        "updated_at": {"type": "string", "minLength": 1, "maxLength": 64},
+    },
+    [
+        "id", "status", "summary", "description", "location", "start", "end", "recurrence",
+        "recurring_event_id", "original_start", "html_link", "created_at", "updated_at",
+    ],
+)
+_GOOGLE_MUTABLE_PROPERTIES = {
+    "title": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "description": {"type": ["string", "null"], "maxLength": 8192},
+    "location": {"type": ["string", "null"], "maxLength": 1024},
+    "start": _GOOGLE_EVENT_TIME_INPUT,
+    "end": _GOOGLE_EVENT_TIME_INPUT,
+    "recurrence": _GOOGLE_RECURRENCE,
+}
+_GOOGLE_CREATE_PROPERTIES = {
+    **_GOOGLE_MUTABLE_PROPERTIES,
+    "recurrence": {**_GOOGLE_RECURRENCE, "minItems": 1},
+}
+_GOOGLE_UPDATE_INPUT = _object_schema(
+    {"id": _GOOGLE_EVENT_ID, **_GOOGLE_MUTABLE_PROPERTIES},
+    ["id"],
+)
+_GOOGLE_UPDATE_INPUT["minProperties"] = 2
+
+_GOOGLE_CALENDAR_OPERATIONS = (
+    IntegrationOperation(
+        operation_id="google_calendar.event.create",
+        title="Create Google Calendar event",
+        description="Create one timed, all-day, or recurring event on the authenticated user's primary calendar.",
+        provider="google_calendar",
+        input_schema=_object_schema(dict(_GOOGLE_CREATE_PROPERTIES), ["title", "start", "end"]),
+        output_schema=_GOOGLE_EVENT_OUTPUT,
+        read_only=False, side_effect="write", risk="medium", resource_scope="none", method="POST",
+        endpoint_template="/calendar/v3/calendars/primary/events", timeout_seconds=15,
+        allow_redirects=False, max_pages=1, max_results=1, max_provider_response_bytes=2_000_000,
+        normalized_errors=_GOOGLE_CALENDAR_ERRORS, audit_resource_fields=(),
+        fake_behavior="google_calendar_event_create",
+        usage_example={
+            "operation": "google_calendar.event.create",
+            "input": {
+                "title": "Planning",
+                "start": {"date_time": "2026-09-01T09:00:00-04:00", "time_zone": "America/Toronto"},
+                "end": {"date_time": "2026-09-01T10:00:00-04:00", "time_zone": "America/Toronto"},
+            },
+        },
+    ),
+    IntegrationOperation(
+        operation_id="google_calendar.event.list",
+        title="List Google Calendar events",
+        description="List one bounded page of upcoming primary-calendar event instances in start-time order.",
+        provider="google_calendar",
+        input_schema=_object_schema(
+            {
+                "time_min": {"type": "string", "minLength": 1, "maxLength": 64},
+                "time_max": {"type": "string", "minLength": 1, "maxLength": 64},
+                "query": {"type": "string", "minLength": 1, "maxLength": 500},
+                "page_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
+                "page_token": {"type": "string", "minLength": 1, "maxLength": 2048},
+            },
+            [],
+        ),
+        output_schema=_object_schema(
+            {
+                "events": {"type": "array", "maxItems": 100, "items": _GOOGLE_EVENT_OUTPUT},
+                "time_min": {"type": "string", "minLength": 1, "maxLength": 64},
+                "time_max": {"type": ["string", "null"], "maxLength": 64},
+                "has_more": {"type": "boolean"},
+                "next_page_token": {"type": ["string", "null"], "maxLength": 2048},
+            },
+            ["events", "time_min", "time_max", "has_more", "next_page_token"],
+        ),
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="GET",
+        endpoint_template="/calendar/v3/calendars/primary/events", timeout_seconds=15,
+        allow_redirects=False, max_pages=1, max_results=100, max_provider_response_bytes=2_000_000,
+        normalized_errors=_GOOGLE_CALENDAR_ERRORS, audit_resource_fields=(),
+        fake_behavior="google_calendar_event_list",
+        usage_example={"operation": "google_calendar.event.list", "input": {"page_size": 25}},
+    ),
+    IntegrationOperation(
+        operation_id="google_calendar.event.get",
+        title="Get Google Calendar event",
+        description="Get one exact event or recurring-series master from the primary calendar.",
+        provider="google_calendar",
+        input_schema=_object_schema({"id": _GOOGLE_EVENT_ID}, ["id"]),
+        output_schema=_GOOGLE_EVENT_OUTPUT,
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="GET",
+        endpoint_template="/calendar/v3/calendars/primary/events/{id}", timeout_seconds=15,
+        allow_redirects=False, max_pages=1, max_results=1, max_provider_response_bytes=2_000_000,
+        normalized_errors=_GOOGLE_CALENDAR_ERRORS, audit_resource_fields=("id",),
+        fake_behavior="google_calendar_event_get",
+        usage_example={"operation": "google_calendar.event.get", "input": {"id": "event-id"}},
+    ),
+    IntegrationOperation(
+        operation_id="google_calendar.event.update",
+        title="Update Google Calendar event",
+        description="Partially update exactly one primary-calendar event instance or recurring-series master.",
+        provider="google_calendar",
+        input_schema=_GOOGLE_UPDATE_INPUT,
+        output_schema=_GOOGLE_EVENT_OUTPUT,
+        read_only=False, side_effect="write", risk="medium", resource_scope="none", method="PATCH",
+        endpoint_template="/calendar/v3/calendars/primary/events/{id}", timeout_seconds=15,
+        allow_redirects=False, max_pages=1, max_results=1, max_provider_response_bytes=2_000_000,
+        normalized_errors=_GOOGLE_CALENDAR_ERRORS, audit_resource_fields=("id",),
+        fake_behavior="google_calendar_event_update",
+        usage_example={
+            "operation": "google_calendar.event.update",
+            "input": {"id": "event-id", "location": "Room 2"},
+        },
+    ),
+    IntegrationOperation(
+        operation_id="google_calendar.event.delete",
+        title="Delete Google Calendar event",
+        description="Delete exactly one primary-calendar event instance or recurring-series master.",
+        provider="google_calendar",
+        input_schema=_object_schema({"id": _GOOGLE_EVENT_ID}, ["id"]),
+        output_schema=_object_schema(
+            {"id": _GOOGLE_EVENT_ID, "deleted": {"type": "boolean", "const": True}},
+            ["id", "deleted"],
+        ),
+        read_only=False, side_effect="write", risk="medium", resource_scope="none", method="DELETE",
+        endpoint_template="/calendar/v3/calendars/primary/events/{id}", timeout_seconds=15,
+        allow_redirects=False, max_pages=1, max_results=1, max_provider_response_bytes=2_000_000,
+        normalized_errors=_GOOGLE_CALENDAR_ERRORS, audit_resource_fields=("id",),
+        fake_behavior="google_calendar_event_delete",
+        usage_example={"operation": "google_calendar.event.delete", "input": {"id": "event-id"}},
+    ),
+)
+
 OPERATIONS = MappingProxyType(
     {
         operation.operation_id: operation
-        for operation in (*_OPERATIONS, *_ATLAS_OPERATIONS, *_NOTION_OPERATIONS)
+        for operation in (
+            *_OPERATIONS,
+            *_ATLAS_OPERATIONS,
+            *_NOTION_OPERATIONS,
+            *_GOOGLE_CALENDAR_OPERATIONS,
+        )
     }
 )
 

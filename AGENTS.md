@@ -74,6 +74,7 @@ Read the relevant files under `docs/` before making non-trivial changes. Start a
 - Scheduling: [docs/runtime/scheduling.md](docs/runtime/scheduling.md)
 - Function extension blueprints: [docs/runtime/function_extension_guide.md](docs/runtime/function_extension_guide.md)
 - Codex CLI integration: [docs/integrations/codex_cli.md](docs/integrations/codex_cli.md)
+- Google Calendar integration: [docs/integrations/google_calendar.md](docs/integrations/google_calendar.md)
 - Confirmed unfinished work: [docs/todo.md](docs/todo.md)
 - Working history log format: [docs/working_history.md](docs/working_history.md)
 
@@ -132,7 +133,7 @@ The MVP blocks or rejects:
 - broad filesystem writes,
 - unrestricted or wildcard network access,
 - browser automation,
-- email/calendar/finance actions,
+- direct email/calendar/finance actions outside declared trusted integration operations,
 - file deletion,
 - arbitrary command execution.
 

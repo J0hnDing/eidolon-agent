@@ -38,7 +38,7 @@ Example: add a provider other than GitHub.
 
 ```text
 Define the provider's operation contracts
-  -> Implement a provider-specific credential validator and adapter
+  -> Implement a provider-specific credential or OAuth validator and adapter
   -> Add trusted credential lifecycle and connection availability
   -> Route common IntegrationService checks to that provider adapter
   -> Add provider-specific runtime and fake-test behavior
@@ -46,7 +46,9 @@ Define the provider's operation contracts
   -> Catalog refresh publishes available operations
 ```
 
-Do not add another provider's behavior to `github_provider.py`. Extract a shared provider registry or interface when the second provider is implemented and its common contract is known.
+Keep provider transport and normalization in its own adapter. Shared integration enforcement remains in `IntegrationService`; do not add provider-specific URLs, credentials, or response handling to runtime helpers.
+
+OAuth setup routes are trusted Settings controls, not functions. For example, Google Calendar authorization start/callback/disconnect lives under `/settings/integrations/google-calendar`, while only the five typed `google_calendar.event.*` operations enter the registry and catalog. An OAuth provider must keep pending state bounded and single-use, store only its long-lived credential in the operating-system secret store, refresh short-lived access on demand, and exclude setup, token, and generic HTTP operations from generated code.
 
 Available typed integration operations are likewise included automatically in new MCP process snapshots. Preserve accurate `read_only`, side-effect, provider boundary, limits, and contract-version metadata because those fields drive MCP annotations and stale-contract checks.
 

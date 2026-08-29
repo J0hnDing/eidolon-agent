@@ -44,6 +44,7 @@ The product and repository are named **Eidolon**. Existing environment variables
 - [GitHub integration capability](integrations/github.md)
 - [Eidolon-Atlas integration](integrations/atlas.md)
 - [Notion Todo and Reports integration](integrations/notion.md)
+- [Google Calendar OAuth integration](integrations/google_calendar.md)
 - [Codex CLI integration](integrations/codex_cli.md)
 - [Codex MCP tools](integrations/codex_mcp.md)
 - [Working history file](working_history.md)

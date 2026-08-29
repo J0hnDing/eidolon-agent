@@ -434,6 +434,18 @@ export interface NotionConnectionStatus {
   error_type: string | null;
 }
 
+export interface GoogleCalendarConnectionStatus {
+  provider: "google_calendar";
+  connected: boolean;
+  status: "connected" | "disconnected" | "unavailable" | "invalid";
+  account_email: string | null;
+  last_validated_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  error_type: string | null;
+  oauth_redirect_uri: string;
+}
+
 export interface AtlasIntegrationStatus {
   provider: "atlas";
   directory: string;
@@ -775,6 +787,15 @@ export const api = {
     }),
   removeNotionConnection: () =>
     request<void>("/settings/integrations/notion", { method: "DELETE" }),
+  getGoogleCalendarConnection: () =>
+    request<GoogleCalendarConnectionStatus>("/settings/integrations/google-calendar"),
+  startGoogleCalendarOAuth: (clientId: string, clientSecret: string) =>
+    request<{ authorization_url: string }>("/settings/integrations/google-calendar/oauth/start", {
+      method: "POST",
+      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+    }),
+  removeGoogleCalendarConnection: () =>
+    request<void>("/settings/integrations/google-calendar", { method: "DELETE" }),
   getAtlasStatus: () => request<AtlasIntegrationStatus>("/settings/integrations/atlas"),
   updateAtlasDirectory: (directory: string) =>
     request<AtlasIntegrationStatus>("/settings/integrations/atlas/directory", {

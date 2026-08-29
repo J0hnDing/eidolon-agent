@@ -18,7 +18,7 @@ from app.models import (
     IntegrationConnection,
     Skill,
 )
-from app.schemas.integration import GitHubConnectionStatus, NotionConnectionStatus
+from app.schemas.integration import GitHubConnectionStatus, GoogleCalendarConnectionStatus, NotionConnectionStatus
 from app.schemas.manifest import ManifestIntegrationRequirement, SkillManifest
 from app.services.atlas_knowledge_service import AtlasKnowledgeError, AtlasKnowledgeService
 from app.services.atlas_provider import AtlasProviderAdapter, UrllibAtlasProviderAdapter
@@ -26,6 +26,14 @@ from app.services.github_provider import (
     GitHubProviderAdapter,
     IntegrationProviderError,
     UrllibGitHubProviderAdapter,
+)
+from app.services.google_calendar_provider import (
+    GOOGLE_CALENDAR_SECRET_NAMESPACE,
+    GOOGLE_OAUTH_REDIRECT_URI,
+    GoogleCalendarProviderAdapter,
+    GoogleOAuthStateStore,
+    UrllibGoogleCalendarProviderAdapter,
+    google_oauth_state_store,
 )
 from app.services.integration_registry import OPERATIONS, registry_contract_identity
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
@@ -81,7 +89,22 @@ NOTION_PROVIDER_ERROR_MESSAGES = {
     "provider_unavailable": "Notion is unavailable",
     "internal_failure": "Notion integration failed safely",
 }
-PROVIDER_DISPLAY_NAMES = {"github": "GitHub", "atlas": "Atlas", "notion": "Notion"}
+GOOGLE_CALENDAR_PROVIDER_ERROR_MESSAGES = {
+    "invalid_credential": "The Google Calendar authorization is invalid or revoked",
+    "not_found": "The requested Google Calendar event was not found",
+    "provider_forbidden": "Google denied the requested Calendar operation",
+    "rate_limited": "Google Calendar rate limited the integration request",
+    "provider_timeout": "Google Calendar did not respond before the timeout",
+    "response_too_large": "Google Calendar response exceeded the operation limit",
+    "provider_unavailable": "Google Calendar is unavailable",
+    "internal_failure": "Google Calendar integration failed safely",
+}
+PROVIDER_DISPLAY_NAMES = {
+    "github": "GitHub",
+    "atlas": "Atlas",
+    "notion": "Notion",
+    "google_calendar": "Google Calendar",
+}
 
 
 def provider_error_message(provider: str, error_type: str) -> str:
@@ -89,6 +112,8 @@ def provider_error_message(provider: str, error_type: str) -> str:
         messages = ATLAS_PROVIDER_ERROR_MESSAGES
     elif provider == "notion":
         messages = NOTION_PROVIDER_ERROR_MESSAGES
+    elif provider == "google_calendar":
+        messages = GOOGLE_CALENDAR_PROVIDER_ERROR_MESSAGES
     else:
         messages = PROVIDER_ERROR_MESSAGES
     return messages.get(error_type, messages["internal_failure"])
@@ -116,6 +141,8 @@ class IntegrationService:
     atlas: AtlasProviderAdapter | None = None
     notion_provider_factory: Callable[[str, str], TodoProvider] | None = None
     notion_report_provider_factory: Callable[[str, str], ReportProvider] | None = None
+    google_calendar: GoogleCalendarProviderAdapter | None = None
+    google_oauth_states: GoogleOAuthStateStore | None = None
     codex_adapter: Any | None = None
 
     def __post_init__(self) -> None:
@@ -129,6 +156,10 @@ class IntegrationService:
             self.notion_provider_factory = NotionTodoProvider
         if self.notion_report_provider_factory is None:
             self.notion_report_provider_factory = NotionReportProvider
+        if self.google_calendar is None:
+            self.google_calendar = UrllibGoogleCalendarProviderAdapter()
+        if self.google_oauth_states is None:
+            self.google_oauth_states = google_oauth_state_store
 
     def connection_status(self) -> GitHubConnectionStatus:
         connection = self._connection()
@@ -212,6 +243,127 @@ class IntegrationService:
                 # opaque entry is unreachable from Eidolon and contains no DB link.
                 pass
         return self.connection_status()
+
+    def google_calendar_connection_status(self) -> GoogleCalendarConnectionStatus:
+        connection = self._connection("google_calendar")
+        if connection is None:
+            return GoogleCalendarConnectionStatus(
+                connected=False,
+                status="disconnected",
+                oauth_redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
+            )
+        available = self.secret_store is not None and self.secret_store.implementation_id == connection.secret_store_id
+        status = connection.status if available else "unavailable"
+        return GoogleCalendarConnectionStatus(
+            connected=available and connection.status == "connected",
+            status=status,
+            account_email=connection.account_login,
+            last_validated_at=connection.last_validated_at,
+            created_at=connection.created_at,
+            updated_at=connection.updated_at,
+            error_type=connection.error_type if status != "connected" else None,
+            oauth_redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
+        )
+
+    def start_google_calendar_oauth(self, client_id: str, client_secret: str) -> str:
+        if not 1 <= len(client_id) <= 1024 or not 1 <= len(client_secret) <= 4096:
+            raise IntegrationError("invalid_input", "Google OAuth client credentials must be non-empty bounded strings")
+        assert self.google_oauth_states is not None
+        assert self.google_calendar is not None
+        state = self.google_oauth_states.create(client_id, client_secret)
+        return self.google_calendar.authorization_url(client_id, state)
+
+    def discard_google_calendar_oauth(self, state: str) -> None:
+        if not 1 <= len(state) <= 512:
+            raise IntegrationError("invalid_credential", "Google OAuth response is invalid or expired")
+        assert self.google_oauth_states is not None
+        try:
+            self.google_oauth_states.consume(state)
+        except IntegrationProviderError as exc:
+            raise IntegrationError(exc.error_type, provider_error_message("google_calendar", exc.error_type)) from None
+
+    def complete_google_calendar_oauth(self, state: str, code: str) -> GoogleCalendarConnectionStatus:
+        if not 1 <= len(state) <= 512 or not 1 <= len(code) <= 8192:
+            raise IntegrationError("invalid_credential", "Google OAuth response is invalid or expired")
+        if self.secret_store is None:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        assert self.google_oauth_states is not None
+        assert self.google_calendar is not None
+        try:
+            pending = self.google_oauth_states.consume(state)
+            tokens = self.google_calendar.exchange_code(pending, code)
+            identity = self.google_calendar.identity(tokens["access_token"])
+        except IntegrationProviderError as exc:
+            raise IntegrationError(exc.error_type, provider_error_message("google_calendar", exc.error_type)) from None
+        credential = json.dumps(
+            {
+                "client_id": pending.client_id,
+                "client_secret": pending.client_secret,
+                "refresh_token": tokens["refresh_token"],
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        try:
+            new_reference = self.secret_store.put(
+                credential,
+                namespace=GOOGLE_CALENDAR_SECRET_NAMESPACE,
+            )
+        except SecretStoreError:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable") from None
+        finally:
+            credential = ""
+            tokens = {}
+
+        previous = self._connection("google_calendar")
+        previous_reference = previous.secret_reference if previous is not None else None
+        previous_account_id = previous.account_id if previous is not None else None
+        now = utc_now()
+        try:
+            if previous is None:
+                connection = IntegrationConnection(
+                    provider="google_calendar",
+                    secret_store_id=self.secret_store.implementation_id,
+                    secret_reference=new_reference,
+                    credential_kind="oauth_refresh",
+                    status="connected",
+                    account_login=identity["email"],
+                    account_id=identity["account_id"],
+                    created_at=now,
+                    updated_at=now,
+                    last_validated_at=now,
+                )
+                self.db.add(connection)
+            else:
+                connection = previous
+                connection.secret_store_id = self.secret_store.implementation_id
+                connection.secret_reference = new_reference
+                connection.credential_kind = "oauth_refresh"
+                connection.status = "connected"
+                connection.account_login = identity["email"]
+                connection.account_id = identity["account_id"]
+                connection.error_type = None
+                connection.updated_at = now
+                connection.last_validated_at = now
+            if previous_account_id is not None and previous_account_id != identity["account_id"]:
+                self.invalidate_provider_authorizations(
+                    "google_calendar",
+                    "Google Calendar account identity changed",
+                )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            try:
+                self.secret_store.delete(new_reference, namespace=GOOGLE_CALENDAR_SECRET_NAMESPACE)
+            except SecretStoreError:
+                pass
+            raise IntegrationError("internal_failure", "Google Calendar connection could not be saved safely") from None
+        if previous_reference and previous_reference != new_reference:
+            try:
+                self.secret_store.delete(previous_reference, namespace=GOOGLE_CALENDAR_SECRET_NAMESPACE)
+            except SecretStoreError:
+                pass
+        return self.google_calendar_connection_status()
 
     def notion_connection_status(self) -> NotionConnectionStatus:
         connection = self._connection("notion")
@@ -540,6 +692,38 @@ class IntegrationService:
             raise IntegrationError("internal_failure", "Notion connection could not be removed safely") from None
         return NotionConnectionStatus(connected=False, status="disconnected")
 
+    def remove_google_calendar_connection(self) -> GoogleCalendarConnectionStatus:
+        connection = self._connection("google_calendar")
+        if connection is None:
+            return GoogleCalendarConnectionStatus(
+                connected=False,
+                status="disconnected",
+                oauth_redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
+            )
+        if self.secret_store is None or self.secret_store.implementation_id != connection.secret_store_id:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        try:
+            self.secret_store.delete(
+                connection.secret_reference,
+                namespace=GOOGLE_CALENDAR_SECRET_NAMESPACE,
+            )
+        except SecretStoreError:
+            raise IntegrationError(
+                "connection_unavailable",
+                "Operating-system secret storage could not remove the credential",
+            ) from None
+        try:
+            self.db.delete(connection)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise IntegrationError("internal_failure", "Google Calendar connection could not be removed safely") from None
+        return GoogleCalendarConnectionStatus(
+            connected=False,
+            status="disconnected",
+            oauth_redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
+        )
+
     def ensure_authorization_requests(
         self,
         skill: Skill,
@@ -610,7 +794,7 @@ class IntegrationService:
                     "approval_does_not_mean": [
                         f"the {provider_name} credential is shared with the skill",
                         f"direct {provider_name} or general network access is allowed",
-                        "new operations or repositories are approved",
+                        "new operations or broader resource scope are approved",
                         "the skill is installed, enabled, scheduled, or run",
                     ],
                 },
@@ -801,6 +985,10 @@ class IntegrationService:
             page_id = input_json.get("id")
             if isinstance(page_id, str):
                 resource = f"notion-page:{page_id}"
+        if resource is None and operation.provider == "google_calendar" and "id" in operation.audit_resource_fields:
+            event_id = input_json.get("id")
+            if isinstance(event_id, str):
+                resource = f"google-calendar-event:{event_id}"
         if audit_record is not None:
             audit_record.resource = resource
         if (
@@ -824,10 +1012,11 @@ class IntegrationService:
             ):
                 raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
             try:
-                credential = self.secret_store.get(
-                    connection.secret_reference,
-                    namespace="notion" if operation.provider == "notion" else "github",
-                )
+                namespace = {
+                    "notion": "notion",
+                    "google_calendar": GOOGLE_CALENDAR_SECRET_NAMESPACE,
+                }.get(operation.provider, "github")
+                credential = self.secret_store.get(connection.secret_reference, namespace=namespace)
             except (SecretStoreError, RuntimeError):
                 raise IntegrationError(
                     "connection_unavailable", "Stored integration credential is unavailable"
@@ -862,10 +1051,17 @@ class IntegrationService:
                         output = TodoService(
                             self.notion_provider_factory(credential, connection.configured_resource_id)
                         ).invoke(operation.operation_id, input_json)
+                elif operation.provider == "google_calendar":
+                    assert self.google_calendar is not None
+                    output = self.google_calendar.execute(operation, input_json, credential)
                 else:
                     output = self.github.execute(operation, input_json, credential)
             except IntegrationProviderError as exc:
-                if operation.provider in {"github", "notion"} and exc.error_type == "invalid_credential" and connection is not None:
+                if (
+                    operation.provider in {"github", "notion", "google_calendar"}
+                    and exc.error_type == "invalid_credential"
+                    and connection is not None
+                ):
                     connection.status = "invalid"
                     connection.error_type = "invalid_credential"
                 raise IntegrationError(
@@ -886,6 +1082,13 @@ class IntegrationService:
             Draft202012Validator(operation.output_schema).validate(output)
         except ValidationError:
             raise IntegrationError("internal_failure", "Integration returned an invalid normalized result") from None
+        if (
+            audit_record is not None
+            and resource is None
+            and operation.provider == "google_calendar"
+            and isinstance(output.get("id"), str)
+        ):
+            audit_record.resource = f"google-calendar-event:{output['id']}"
         return output
 
     def _commit_audit(self) -> None:

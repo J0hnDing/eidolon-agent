@@ -24,7 +24,7 @@ Runtime approval is based on the actual generated `manifest.json`. Installation 
 
 Declared `function_requirements` are shown during build-time and runtime review but are not permissions inherited from the target. Low-risk targets need no additional caller approval. Medium- and high-risk targets create a separate `function_access` approval tied to the caller and target. That approval is reusable only while the target risk, permissions, dependencies, and JSON callable schemas keep the same backend fingerprint. It never overrides a disabled target, missing runtime approval, unsupported permission, or blocked platform policy.
 
-Provider availability and skill authorization remain separate facts. Every actual-manifest `integration_requirements` entry creates or reuses an auditable `integration_access` record, but the user reviews it together with the base manifest permissions in one complete runtime approval. One decision applies to every pending component shown. Each integration fingerprint includes provider, operations, normalized scope, and registry contract versions. Expansion, GitHub account change, an Atlas native-contract or directory change, or a Notion bot identity change requires reapproval. Notion Todo and Reports source changes affect operation availability without invalidating authorization. Removing an Atlas auto-unlock passphrase does not invalidate authorization. See [GitHub integration](../integrations/github.md), [Atlas integration](../integrations/atlas.md), and [Notion integration](../integrations/notion.md).
+Provider availability and skill authorization remain separate facts. Every actual-manifest `integration_requirements` entry creates or reuses an auditable `integration_access` record, but the user reviews it together with the base manifest permissions in one complete runtime approval. One decision applies to every pending component shown. Each integration fingerprint includes provider, operations, normalized scope, and registry contract versions. Expansion, GitHub or Google account change, an Atlas native-contract or directory change, or a Notion bot identity change requires reapproval. Notion Todo and Reports source changes affect operation availability without invalidating authorization. Removing an Atlas auto-unlock passphrase does not invalidate authorization. See [GitHub integration](../integrations/github.md), [Atlas integration](../integrations/atlas.md), [Notion integration](../integrations/notion.md), and [Google Calendar integration](../integrations/google_calendar.md).
 
 ### Schedule
 
@@ -75,7 +75,7 @@ Blocked:
 - Codex permissions other than `call_response` and `internet_access`;
 - Codex internet access without approved runtime network domains;
 - browser automation;
-- email/calendar/finance actions;
+- direct email/calendar/finance actions outside a declared trusted integration operation;
 - purchases;
 - trading;
 - public posting;
@@ -96,13 +96,13 @@ Recognized evidence includes:
 - literal file-deletion targets proven to be outside approved runtime write roots;
 - Python files that cannot be parsed or exceed the bounded scan size.
 - literal absolute HTTP(S) URLs in browser assets, which are blocked regardless of server-side domains.
-- direct GitHub, Atlas, or Notion traffic, provider authentication construction, secret-store access, sensitive integration environment reads, trusted integration Settings routes, Atlas passphrase/unlock/browser-Knowledge routes, direct internal integration paths, literal undeclared or unselected operation ids, capability serialization, and browser-side integration use.
+- direct GitHub, Atlas, Notion, or Google traffic, provider authentication construction, secret-store access, sensitive integration environment reads, trusted integration Settings routes, Atlas passphrase/unlock/browser-Knowledge routes, direct internal integration paths, literal undeclared or unselected operation ids, capability serialization, and browser-side integration use.
 
 Network imports alone are not findings. Network evidence is recorded only for recognized calls with literal domains, and a literal URL domain must match a manifest-declared domain. Import aliases are resolved, while local URL string helpers such as `urllib.parse` are not network evidence. Process imports likewise do not block unless a recognized execution API is called. File cleanup with a dynamic target is not treated as proof of out-of-bounds deletion; literal deletion is blocked only when its target is provably outside approved runtime write roots. Integration operation expressions that are not inline string literals are likewise ambiguous rather than findings; the runtime helper remains authoritative for manifest declaration, selected-operation authorization, and scope enforcement. Recognized undeclared or blocked evidence fails final validation and prevents runtime permission review. A single-Codex workflow blocks immediately; a DAG workflow may use its bounded Builder repair loop and rescan. Results are persisted as `capability_scan.json` in the agent-run artifacts. The later runtime review separately compares the actual manifest with the earlier approved plan and requests approval for meaningful expansion.
 
 This scan does not grant permissions and does not replace sandbox enforcement. It is intentionally evidence-based rather than fail-closed when a path, domain, or call target cannot be proven statically. It cannot reliably analyze dynamic imports, reflection, encoded source, dependency internals, runtime-built paths or domains, Python-embedded browser assets, non-Python executables, or behavior hidden behind external services. Absence of a finding is not proof that code has no side effects.
 
-Ordinary network approval never authorizes direct provider traffic. GitHub, Atlas, and Notion calls must use the trusted helper so runtime scope, result limits, normalized output, and auditing remain enforceable.
+Ordinary network approval never authorizes direct provider traffic. GitHub, Atlas, Notion, and Google Calendar calls must use the trusted helper so runtime scope, result limits, normalized output, and auditing remain enforceable.
 
 ## Permission Expansion
 
