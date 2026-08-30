@@ -46,6 +46,9 @@ class WindowsCredentialSecretStore:
         "github": "Eidolon/GitHub/",  # Preserve existing credential targets.
         "notion": "Eidolon/Notion/",
         "google_calendar": "Eidolon/GoogleCalendar/",
+        "gmail": "Eidolon/Gmail/",
+        "google_oauth": "Eidolon/GoogleOAuth/",
+        "telegram": "Eidolon/Telegram/",
         "atlas_api_key": "Eidolon/Atlas/APIKey/",
         "atlas_passphrase": "Eidolon/Atlas/Passphrase/",
     }

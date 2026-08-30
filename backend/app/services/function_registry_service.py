@@ -13,12 +13,19 @@ from sqlalchemy.orm import Session
 from app.models import (
     ApprovalRequest,
     FunctionAccessApproval,
+    InvocationApproval,
     Skill,
     SkillRun,
     SkillVersion,
 )
 from app.schemas.function_registry import FunctionContractRead, FunctionRequirementReview
 from app.schemas.manifest import SkillManifest, classify_permission_risk
+from app.services.invocation_approval_contract import effective_invocation_contract
+from app.services.invocation_approval_service import (
+    InvocationApprovalError,
+    InvocationApprovalService,
+    InvocationCallerAttribution,
+)
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
@@ -134,20 +141,41 @@ class FunctionRegistryService:
             if manifest is not None
             else skill.risk_level
         )
+        description = manifest.description if manifest is not None else skill.description
+        input_schema = manifest.input_schema if manifest is not None else skill.input_schema_json
+        output_schema = manifest.output_schema if manifest is not None else skill.output_schema_json
+        requires_invocation_approval = bool(
+            manifest is not None and manifest.requires_invocation_approval
+        )
+        if (
+            manifest is not None
+            and input_schema is not None
+            and output_schema is not None
+        ):
+            effective = effective_invocation_contract(
+                description=description,
+                input_schema=input_schema,
+                output_schema=output_schema,
+                requires_invocation_approval=requires_invocation_approval,
+            )
+            description = effective.description
+            input_schema = effective.input_schema
+            output_schema = effective.output_schema
         return FunctionContractRead(
             skill_id=skill.id,
             name=skill.name,
-            description=manifest.description if manifest is not None else skill.description,
+            description=description,
             active_version_id=skill.active_version_id,
             active_version=active_version.version if active_version is not None else None,
-            input_schema=manifest.input_schema if manifest is not None else skill.input_schema_json,
-            output_schema=manifest.output_schema if manifest is not None else skill.output_schema_json,
+            input_schema=input_schema,
+            output_schema=output_schema,
             risk_level=risk_level,
             permissions=permissions,
             availability=availability,
             availability_reasons=reasons,
             declared_by_caller=declared_by_caller,
             access_state=access_state,
+            requires_invocation_approval=requires_invocation_approval,
         )
 
     def review_requirements(
@@ -233,7 +261,9 @@ class FunctionRegistryService:
             raise FunctionRegistryError(permission_decision.reason)
         return FunctionCaller(skill=caller, version_id=run.version_id, run_id=run.id)
 
-    def invoke_from_capability(self, token: str, target_name: str, input_json: dict[str, Any]) -> SkillRun:
+    def invoke_from_capability(
+        self, token: str, target_name: str, input_json: dict[str, Any]
+    ) -> SkillRun | InvocationApproval:
         caller = self.caller_from_capability(token)
         return self.invoke_declared(
             caller,
@@ -250,7 +280,7 @@ class FunctionRegistryService:
         web_app_instance_id: str,
         target_name: str,
         input_json: dict[str, Any],
-    ) -> SkillRun:
+    ) -> SkillRun | InvocationApproval:
         return self.invoke_declared(
             FunctionCaller(
                 skill=caller_skill,
@@ -271,7 +301,7 @@ class FunctionRegistryService:
         *,
         source: str,
         initiating_action: str,
-    ) -> SkillRun:
+    ) -> SkillRun | InvocationApproval:
         requirement_declared = target_name in self._requirements_by_name(caller.skill)
         target = self.db.scalar(select(Skill).where(Skill.name == target_name))
         if target is None or target.runtime != "function":
@@ -320,7 +350,7 @@ class FunctionRegistryService:
         source: str = "direct_user",
         source_schedule_id: int | None = None,
         initiating_action: str | None = None,
-    ) -> SkillRun:
+    ) -> SkillRun | InvocationApproval:
         return self._invoke(
             target,
             input_json,
@@ -338,7 +368,8 @@ class FunctionRegistryService:
         caller: FunctionCaller | None = None,
         source_schedule_id: int | None = None,
         initiating_action: str | None = None,
-    ) -> SkillRun:
+        bypass_invocation_approval: bool = False,
+    ) -> SkillRun | InvocationApproval:
         contract = self.contract_for_skill(target)
         availability_reasons = list(contract.availability_reasons)
         if source in {"direct_user", "backend", "schedule"}:
@@ -365,9 +396,12 @@ class FunctionRegistryService:
         contract_input = dict(input_json)
         if source == "schedule":
             contract_input.pop("_schedule", None)
+        input_schema = contract.input_schema
+        if bypass_invocation_approval:
+            input_schema = self._active_manifest(target).input_schema
         input_error = (
-            self._schema_error(contract_input, contract.input_schema, "input")
-            if contract.input_schema is not None
+            self._schema_error(contract_input, input_schema, "input")
+            if input_schema is not None
             else None
         )
         if input_error:
@@ -380,6 +414,41 @@ class FunctionRegistryService:
                 source_schedule_id=source_schedule_id,
                 initiating_action=initiating_action,
             )
+        if contract.requires_invocation_approval and not bypass_invocation_approval:
+            try:
+                return InvocationApprovalService(
+                    self.db, project_root=self.project_root
+                ).submit_user_function(
+                    target,
+                    input_json,
+                    attribution=InvocationCallerAttribution(
+                        caller_type=(
+                            "skill"
+                            if caller is not None and source == "skill"
+                            else "web_app"
+                            if caller is not None and source == "web_app"
+                            else source
+                        ),
+                        source=source,
+                        caller_skill_id=caller.skill.id if caller is not None else None,
+                        caller_version_id=caller.version_id if caller is not None else None,
+                        caller_run_id=caller.run_id if caller is not None else None,
+                        web_app_instance_id=(
+                            caller.web_app_instance_id if caller is not None else None
+                        ),
+                        initiating_action=initiating_action,
+                    ),
+                )
+            except InvocationApprovalError as exc:
+                return self._blocked_run(
+                    target,
+                    input_json,
+                    str(exc),
+                    source=source,
+                    caller=caller,
+                    source_schedule_id=source_schedule_id,
+                    initiating_action=initiating_action,
+                )
         capability_token = secrets.token_urlsafe(32)
         context = FunctionRunContext(
             version_id=target.active_version_id,
@@ -419,8 +488,11 @@ class FunctionRegistryService:
                 source_schedule_id=source_schedule_id,
                 initiating_action=initiating_action,
             )
-        if run.output_json is not None and contract.output_schema is not None:
-            output_error = self._schema_error(run.output_json, contract.output_schema, "output")
+        output_schema = contract.output_schema
+        if bypass_invocation_approval:
+            output_schema = self._active_manifest(target).output_schema
+        if run.output_json is not None and output_schema is not None:
+            output_error = self._schema_error(run.output_json, output_schema, "output")
             if output_error:
                 run.status = "failed"
                 run.error_message = self._merge_error(run.error_message, output_error)
@@ -428,6 +500,51 @@ class FunctionRegistryService:
                 self.db.commit()
                 self.db.refresh(run)
         return run
+
+    def invoke_approved(self, approval: InvocationApproval) -> SkillRun:
+        if approval.target_kind != "user_function" or approval.target_skill_id is None:
+            raise InvocationApprovalError("invalid_target", "Approval is not for a user function")
+        target = self.db.get(Skill, approval.target_skill_id)
+        if target is None or target.name != approval.target_id:
+            raise InvocationApprovalError("function_unavailable", "Approved function is unavailable")
+        if target.active_version_id != approval.target_version_id:
+            raise InvocationApprovalError("stale_contract", "Approved function version has changed")
+        if self.target_contract_fingerprint(target) != approval.target_contract_fingerprint:
+            raise InvocationApprovalError("stale_contract", "Approved function contract has changed")
+        manifest = self._active_manifest(target)
+        if not manifest.requires_invocation_approval:
+            raise InvocationApprovalError("stale_contract", "Function approval requirement has changed")
+        caller: FunctionCaller | None = None
+        if approval.caller_skill_id is not None:
+            caller_skill = self.db.get(Skill, approval.caller_skill_id)
+            if (
+                caller_skill is None
+                or caller_skill.status != "installed"
+                or not caller_skill.enabled
+                or caller_skill.active_version_id != approval.caller_version_id
+            ):
+                raise InvocationApprovalError("stale_contract", "Original caller is no longer current")
+            if target.name not in self._requirements_by_name(caller_skill):
+                raise InvocationApprovalError("stale_contract", "Original caller declaration has changed")
+            if (
+                self.contract_for_skill(target).risk_level in {"medium", "high"}
+                and self._access_state(caller_skill, target) != "approved"
+            ):
+                raise InvocationApprovalError("stale_contract", "Original caller access is no longer approved")
+            caller = FunctionCaller(
+                skill=caller_skill,
+                version_id=approval.caller_version_id,
+                run_id=approval.caller_run_id,
+                web_app_instance_id=approval.web_app_instance_id,
+            )
+        return self._invoke(
+            target,
+            approval.input_json,
+            source=approval.source,
+            caller=caller,
+            initiating_action=approval.initiating_action,
+            bypass_invocation_approval=True,
+        )
 
     def _blocked_run(
         self,
@@ -596,8 +713,10 @@ class FunctionRegistryService:
             "risk_level": classify_permission_risk(manifest.permissions, manifest.dependencies),
             "permissions": manifest.permissions.model_dump(mode="json"),
             "dependencies": manifest.dependencies,
+            "description": manifest.description,
             "input_schema": manifest.input_schema,
             "output_schema": manifest.output_schema,
+            "requires_invocation_approval": manifest.requires_invocation_approval,
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()

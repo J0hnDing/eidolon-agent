@@ -13,12 +13,19 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     ApprovalRequest,
+    GoogleOAuthClientConfig,
     IntegrationAuditRecord,
     IntegrationAuthorization,
     IntegrationConnection,
     Skill,
 )
-from app.schemas.integration import GitHubConnectionStatus, GoogleCalendarConnectionStatus, NotionConnectionStatus
+from app.schemas.integration import (
+    GitHubConnectionStatus,
+    GmailConnectionStatus,
+    GoogleCalendarConnectionStatus,
+    GoogleOAuthClientStatus,
+    NotionConnectionStatus,
+)
 from app.schemas.manifest import ManifestIntegrationRequirement, SkillManifest
 from app.services.atlas_knowledge_service import AtlasKnowledgeError, AtlasKnowledgeService
 from app.services.atlas_provider import AtlasProviderAdapter, UrllibAtlasProviderAdapter
@@ -27,15 +34,38 @@ from app.services.github_provider import (
     IntegrationProviderError,
     UrllibGitHubProviderAdapter,
 )
+from app.services.gmail_provider import (
+    GMAIL_OAUTH_REDIRECT_URI,
+    GMAIL_SECRET_NAMESPACE,
+    GmailProviderAdapter,
+    UrllibGmailProviderAdapter,
+    gmail_oauth_state_store,
+)
 from app.services.google_calendar_provider import (
     GOOGLE_CALENDAR_SECRET_NAMESPACE,
     GOOGLE_OAUTH_REDIRECT_URI,
     GoogleCalendarProviderAdapter,
-    GoogleOAuthStateStore,
     UrllibGoogleCalendarProviderAdapter,
     google_oauth_state_store,
 )
+from app.services.google_oauth import (
+    GOOGLE_OAUTH_CLIENT_SECRET_NAMESPACE,
+    GoogleOAuthStateStore,
+    parse_google_oauth_client,
+    parse_google_oauth_credential,
+    serialize_google_oauth_client,
+)
 from app.services.integration_registry import OPERATIONS, registry_contract_identity
+from app.services.invocation_approval_contract import (
+    InvocationApprovalContractError,
+    effective_invocation_contract,
+    split_approval_input,
+)
+from app.services.invocation_approval_service import (
+    InvocationApprovalError,
+    InvocationApprovalService,
+    InvocationCallerAttribution,
+)
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
 from app.services.notion_report_provider import NotionReportProvider
 from app.services.notion_todo_provider import NotionTodoProvider
@@ -99,12 +129,34 @@ GOOGLE_CALENDAR_PROVIDER_ERROR_MESSAGES = {
     "provider_unavailable": "Google Calendar is unavailable",
     "internal_failure": "Google Calendar integration failed safely",
 }
+GMAIL_PROVIDER_ERROR_MESSAGES = {
+    **GOOGLE_CALENDAR_PROVIDER_ERROR_MESSAGES,
+    "not_found": "The requested Gmail message or conversation was not found",
+    "provider_forbidden": "Google denied the requested Gmail operation",
+    "rate_limited": "Gmail rate limited the integration request",
+    "provider_timeout": "Gmail did not respond before the timeout",
+    "response_too_large": "Gmail response exceeded the operation limit",
+    "provider_unavailable": "Gmail is unavailable",
+    "internal_failure": "Gmail integration failed safely",
+}
+TELEGRAM_PROVIDER_ERROR_MESSAGES = {
+    **GOOGLE_CALENDAR_PROVIDER_ERROR_MESSAGES,
+    "invalid_credential": "The Telegram bot token is invalid or revoked",
+    "provider_forbidden": "Telegram denied the bot operation",
+    "rate_limited": "Telegram rate limited the integration request",
+    "provider_timeout": "Telegram did not respond before the timeout",
+    "response_too_large": "Telegram response exceeded the operation limit",
+    "provider_unavailable": "Telegram is unavailable",
+    "internal_failure": "Telegram integration failed safely",
+}
 PROVIDER_DISPLAY_NAMES = {
     "github": "GitHub",
     "atlas": "Atlas",
     "notion": "Notion",
     "google_calendar": "Google Calendar",
+    "gmail": "Gmail",
 }
+GOOGLE_OAUTH_CLIENT_CONFIG_ID = 1
 
 
 def provider_error_message(provider: str, error_type: str) -> str:
@@ -114,6 +166,10 @@ def provider_error_message(provider: str, error_type: str) -> str:
         messages = NOTION_PROVIDER_ERROR_MESSAGES
     elif provider == "google_calendar":
         messages = GOOGLE_CALENDAR_PROVIDER_ERROR_MESSAGES
+    elif provider == "gmail":
+        messages = GMAIL_PROVIDER_ERROR_MESSAGES
+    elif provider == "telegram":
+        messages = TELEGRAM_PROVIDER_ERROR_MESSAGES
     else:
         messages = PROVIDER_ERROR_MESSAGES
     return messages.get(error_type, messages["internal_failure"])
@@ -143,6 +199,8 @@ class IntegrationService:
     notion_report_provider_factory: Callable[[str, str], ReportProvider] | None = None
     google_calendar: GoogleCalendarProviderAdapter | None = None
     google_oauth_states: GoogleOAuthStateStore | None = None
+    gmail: GmailProviderAdapter | None = None
+    gmail_oauth_states: GoogleOAuthStateStore | None = None
     codex_adapter: Any | None = None
 
     def __post_init__(self) -> None:
@@ -160,6 +218,10 @@ class IntegrationService:
             self.google_calendar = UrllibGoogleCalendarProviderAdapter()
         if self.google_oauth_states is None:
             self.google_oauth_states = google_oauth_state_store
+        if self.gmail is None:
+            self.gmail = UrllibGmailProviderAdapter()
+        if self.gmail_oauth_states is None:
+            self.gmail_oauth_states = gmail_oauth_state_store
 
     def connection_status(self) -> GitHubConnectionStatus:
         connection = self._connection()
@@ -252,7 +314,12 @@ class IntegrationService:
                 status="disconnected",
                 oauth_redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
             )
-        available = self.secret_store is not None and self.secret_store.implementation_id == connection.secret_store_id
+        google_client = self.google_oauth_client_status()
+        available = (
+            google_client.configured
+            and self.secret_store is not None
+            and self.secret_store.implementation_id == connection.secret_store_id
+        )
         status = connection.status if available else "unavailable"
         return GoogleCalendarConnectionStatus(
             connected=available and connection.status == "connected",
@@ -261,17 +328,134 @@ class IntegrationService:
             last_validated_at=connection.last_validated_at,
             created_at=connection.created_at,
             updated_at=connection.updated_at,
-            error_type=connection.error_type if status != "connected" else None,
+            error_type=(connection.error_type or google_client.error_type) if status != "connected" else None,
             oauth_redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
         )
 
-    def start_google_calendar_oauth(self, client_id: str, client_secret: str) -> str:
+    def google_oauth_client_status(self) -> GoogleOAuthClientStatus:
+        try:
+            config = self._google_oauth_client_config(migrate_legacy=True)
+        except IntegrationError as exc:
+            return GoogleOAuthClientStatus(
+                configured=False,
+                status="conflict" if exc.error_type == "google_oauth_configuration_conflict" else "unavailable",
+                calendar_redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
+                gmail_redirect_uri=GMAIL_OAUTH_REDIRECT_URI,
+                error_type=exc.error_type,
+            )
+        if config is None:
+            return GoogleOAuthClientStatus(
+                configured=False,
+                status="not_configured",
+                calendar_redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
+                gmail_redirect_uri=GMAIL_OAUTH_REDIRECT_URI,
+            )
+        available = self.secret_store is not None and self.secret_store.implementation_id == config.secret_store_id
+        return GoogleOAuthClientStatus(
+            configured=available,
+            status="configured" if available else "unavailable",
+            calendar_redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
+            gmail_redirect_uri=GMAIL_OAUTH_REDIRECT_URI,
+            created_at=config.created_at,
+            updated_at=config.updated_at,
+            error_type=None if available else "connection_unavailable",
+        )
+
+    def configure_google_oauth_client(self, client_id: str, client_secret: str) -> GoogleOAuthClientStatus:
         if not 1 <= len(client_id) <= 1024 or not 1 <= len(client_secret) <= 4096:
             raise IntegrationError("invalid_input", "Google OAuth client credentials must be non-empty bounded strings")
+        if self.secret_store is None:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        existing = self._google_oauth_client_config(migrate_legacy=True)
+        existing_client: dict[str, str] | None = None
+        if existing is not None:
+            if self.secret_store.implementation_id != existing.secret_store_id:
+                raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+            try:
+                existing_client = parse_google_oauth_client(
+                    self.secret_store.get(
+                        existing.secret_reference,
+                        namespace=GOOGLE_OAUTH_CLIENT_SECRET_NAMESPACE,
+                    )
+                )
+            except (IntegrationProviderError, SecretStoreError):
+                raise IntegrationError("connection_unavailable", "Stored Google OAuth client is unavailable") from None
+            if existing_client == {"client_id": client_id, "client_secret": client_secret}:
+                return self.google_oauth_client_status()
+            if self._connection("google_calendar") is not None or self._connection("gmail") is not None:
+                raise IntegrationError(
+                    "google_oauth_configuration_in_use",
+                    "Disconnect Calendar and Gmail before replacing the shared Google OAuth client",
+                )
+        serialized = serialize_google_oauth_client(client_id, client_secret)
+        try:
+            new_reference = self.secret_store.put(
+                serialized,
+                namespace=GOOGLE_OAUTH_CLIENT_SECRET_NAMESPACE,
+            )
+        except SecretStoreError:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable") from None
+        finally:
+            serialized = ""
+        previous_reference = existing.secret_reference if existing is not None else None
+        now = utc_now()
+        try:
+            if existing is None:
+                config = GoogleOAuthClientConfig(
+                    id=GOOGLE_OAUTH_CLIENT_CONFIG_ID,
+                    secret_store_id=self.secret_store.implementation_id,
+                    secret_reference=new_reference,
+                    created_at=now,
+                    updated_at=now,
+                )
+                self.db.add(config)
+            else:
+                existing.secret_store_id = self.secret_store.implementation_id
+                existing.secret_reference = new_reference
+                existing.updated_at = now
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            try:
+                self.secret_store.delete(new_reference, namespace=GOOGLE_OAUTH_CLIENT_SECRET_NAMESPACE)
+            except SecretStoreError:
+                pass
+            raise IntegrationError("internal_failure", "Google OAuth client could not be saved safely") from None
+        if previous_reference and previous_reference != new_reference:
+            try:
+                self.secret_store.delete(previous_reference, namespace=GOOGLE_OAUTH_CLIENT_SECRET_NAMESPACE)
+            except SecretStoreError:
+                pass
+        return self.google_oauth_client_status()
+
+    def remove_google_oauth_client(self) -> GoogleOAuthClientStatus:
+        config = self._google_oauth_client_config(migrate_legacy=False)
+        if config is None:
+            return self.google_oauth_client_status()
+        if self._connection("google_calendar") is not None or self._connection("gmail") is not None:
+            raise IntegrationError(
+                "google_oauth_configuration_in_use",
+                "Disconnect Calendar and Gmail before removing the shared Google OAuth client",
+            )
+        if self.secret_store is None or self.secret_store.implementation_id != config.secret_store_id:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        try:
+            self.secret_store.delete(config.secret_reference, namespace=GOOGLE_OAUTH_CLIENT_SECRET_NAMESPACE)
+            self.db.delete(config)
+            self.db.commit()
+        except SecretStoreError:
+            raise IntegrationError("connection_unavailable", "Google OAuth client could not be removed") from None
+        except Exception:
+            self.db.rollback()
+            raise IntegrationError("internal_failure", "Google OAuth client could not be removed safely") from None
+        return self.google_oauth_client_status()
+
+    def start_google_calendar_oauth(self) -> str:
+        client = self._required_google_oauth_client()
         assert self.google_oauth_states is not None
         assert self.google_calendar is not None
-        state = self.google_oauth_states.create(client_id, client_secret)
-        return self.google_calendar.authorization_url(client_id, state)
+        state = self.google_oauth_states.create(client["client_id"], client["client_secret"])
+        return self.google_calendar.authorization_url(client["client_id"], state)
 
     def discard_google_calendar_oauth(self, state: str) -> None:
         if not 1 <= len(state) <= 512:
@@ -296,11 +480,7 @@ class IntegrationService:
         except IntegrationProviderError as exc:
             raise IntegrationError(exc.error_type, provider_error_message("google_calendar", exc.error_type)) from None
         credential = json.dumps(
-            {
-                "client_id": pending.client_id,
-                "client_secret": pending.client_secret,
-                "refresh_token": tokens["refresh_token"],
-            },
+            {"refresh_token": tokens["refresh_token"]},
             separators=(",", ":"),
             sort_keys=True,
         )
@@ -364,6 +544,120 @@ class IntegrationService:
             except SecretStoreError:
                 pass
         return self.google_calendar_connection_status()
+
+    def gmail_connection_status(self) -> GmailConnectionStatus:
+        connection = self._connection("gmail")
+        if connection is None:
+            return GmailConnectionStatus(
+                connected=False,
+                status="disconnected",
+                oauth_redirect_uri=GMAIL_OAUTH_REDIRECT_URI,
+            )
+        google_client = self.google_oauth_client_status()
+        available = (
+            google_client.configured
+            and self.secret_store is not None
+            and self.secret_store.implementation_id == connection.secret_store_id
+        )
+        status = connection.status if available else "unavailable"
+        return GmailConnectionStatus(
+            connected=available and connection.status == "connected",
+            status=status,
+            account_email=connection.account_login,
+            last_validated_at=connection.last_validated_at,
+            created_at=connection.created_at,
+            updated_at=connection.updated_at,
+            error_type=(connection.error_type or google_client.error_type) if status != "connected" else None,
+            oauth_redirect_uri=GMAIL_OAUTH_REDIRECT_URI,
+        )
+
+    def start_gmail_oauth(self) -> str:
+        client = self._required_google_oauth_client()
+        assert self.gmail_oauth_states is not None
+        assert self.gmail is not None
+        state = self.gmail_oauth_states.create(client["client_id"], client["client_secret"])
+        return self.gmail.authorization_url(client["client_id"], state)
+
+    def discard_gmail_oauth(self, state: str) -> None:
+        if not 1 <= len(state) <= 512:
+            raise IntegrationError("invalid_credential", "Gmail OAuth response is invalid or expired")
+        assert self.gmail_oauth_states is not None
+        try:
+            self.gmail_oauth_states.consume(state)
+        except IntegrationProviderError as exc:
+            raise IntegrationError(exc.error_type, provider_error_message("gmail", exc.error_type)) from None
+
+    def complete_gmail_oauth(self, state: str, code: str) -> GmailConnectionStatus:
+        if not 1 <= len(state) <= 512 or not 1 <= len(code) <= 8192:
+            raise IntegrationError("invalid_credential", "Gmail OAuth response is invalid or expired")
+        if self.secret_store is None:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        assert self.gmail_oauth_states is not None
+        assert self.gmail is not None
+        try:
+            pending = self.gmail_oauth_states.consume(state)
+            tokens = self.gmail.exchange_code(pending, code)
+            identity = self.gmail.identity(tokens["access_token"])
+        except IntegrationProviderError as exc:
+            raise IntegrationError(exc.error_type, provider_error_message("gmail", exc.error_type)) from None
+        credential = json.dumps(
+            {"refresh_token": tokens["refresh_token"]},
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        try:
+            new_reference = self.secret_store.put(credential, namespace=GMAIL_SECRET_NAMESPACE)
+        except SecretStoreError:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable") from None
+        finally:
+            credential = ""
+            tokens = {}
+        previous = self._connection("gmail")
+        previous_reference = previous.secret_reference if previous is not None else None
+        previous_account_id = previous.account_id if previous is not None else None
+        now = utc_now()
+        try:
+            if previous is None:
+                connection = IntegrationConnection(
+                    provider="gmail",
+                    secret_store_id=self.secret_store.implementation_id,
+                    secret_reference=new_reference,
+                    credential_kind="oauth_refresh",
+                    status="connected",
+                    account_login=identity["email"],
+                    account_id=identity["account_id"],
+                    created_at=now,
+                    updated_at=now,
+                    last_validated_at=now,
+                )
+                self.db.add(connection)
+            else:
+                connection = previous
+                connection.secret_store_id = self.secret_store.implementation_id
+                connection.secret_reference = new_reference
+                connection.credential_kind = "oauth_refresh"
+                connection.status = "connected"
+                connection.account_login = identity["email"]
+                connection.account_id = identity["account_id"]
+                connection.error_type = None
+                connection.updated_at = now
+                connection.last_validated_at = now
+            if previous_account_id is not None and previous_account_id != identity["account_id"]:
+                self.invalidate_provider_authorizations("gmail", "Gmail account identity changed")
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            try:
+                self.secret_store.delete(new_reference, namespace=GMAIL_SECRET_NAMESPACE)
+            except SecretStoreError:
+                pass
+            raise IntegrationError("internal_failure", "Gmail connection could not be saved safely") from None
+        if previous_reference and previous_reference != new_reference:
+            try:
+                self.secret_store.delete(previous_reference, namespace=GMAIL_SECRET_NAMESPACE)
+            except SecretStoreError:
+                pass
+        return self.gmail_connection_status()
 
     def notion_connection_status(self) -> NotionConnectionStatus:
         connection = self._connection("notion")
@@ -724,6 +1018,36 @@ class IntegrationService:
             oauth_redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
         )
 
+    def remove_gmail_connection(self) -> GmailConnectionStatus:
+        connection = self._connection("gmail")
+        if connection is None:
+            return GmailConnectionStatus(
+                connected=False,
+                status="disconnected",
+                oauth_redirect_uri=GMAIL_OAUTH_REDIRECT_URI,
+            )
+        if self.secret_store is None or self.secret_store.implementation_id != connection.secret_store_id:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        try:
+            self.secret_store.delete(connection.secret_reference, namespace=GMAIL_SECRET_NAMESPACE)
+        except SecretStoreError:
+            raise IntegrationError(
+                "connection_unavailable",
+                "Operating-system secret storage could not remove the credential",
+            ) from None
+        try:
+            self.invalidate_provider_authorizations("gmail", "Gmail connection removed")
+            self.db.delete(connection)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise IntegrationError("internal_failure", "Gmail connection could not be removed safely") from None
+        return GmailConnectionStatus(
+            connected=False,
+            status="disconnected",
+            oauth_redirect_uri=GMAIL_OAUTH_REDIRECT_URI,
+        )
+
     def ensure_authorization_requests(
         self,
         skill: Skill,
@@ -896,12 +1220,64 @@ class IntegrationService:
     ) -> dict[str, Any]:
         """Invoke a provider operation as the trusted local user, without skill authorization."""
 
-        return self._invoke_operation(
-            operation_id,
-            input_json,
-            audit_record=audit_record,
-            allowed_repositories=None,
-        )
+        operation = OPERATIONS.get(operation_id)
+        if operation is not None and operation.requires_invocation_approval:
+            return self._submit_integration_approval(
+                operation_id,
+                input_json,
+                attribution=InvocationCallerAttribution(
+                    caller_type="mcp" if audit_record is not None else "local_user",
+                    source="mcp" if audit_record is not None else "direct_integration",
+                ),
+            )
+        return self._invoke_operation(operation_id, input_json, audit_record=audit_record, allowed_repositories=None)
+
+    def invoke_approved_direct(
+        self,
+        operation_id: str,
+        input_json: dict[str, Any],
+        *,
+        expected_contract_fingerprint: str,
+        expected_provider_account_id: str | None,
+        approval_context: Any | None = None,
+    ) -> dict[str, Any]:
+        operation = OPERATIONS.get(operation_id)
+        if operation is None or not operation.requires_invocation_approval:
+            raise IntegrationError("stale_contract", "Approved integration contract is no longer current")
+        if self.operation_contract_fingerprint(operation_id) != expected_contract_fingerprint:
+            raise IntegrationError("stale_contract", "Approved integration contract has changed")
+        connection = self._connection(operation.provider)
+        if connection is None or connection.account_id != expected_provider_account_id:
+            raise IntegrationError("connection_changed", "Approved integration account has changed")
+        if approval_context is not None and approval_context.caller_skill_id is not None:
+            caller_skill = self.db.get(Skill, approval_context.caller_skill_id)
+            if (
+                caller_skill is None
+                or caller_skill.status != "installed"
+                or not caller_skill.enabled
+                or caller_skill.active_version_id != approval_context.caller_version_id
+            ):
+                raise IntegrationError("authorization_missing_or_stale", "Original integration caller is no longer current")
+            try:
+                manifest = validate_manifest_file(
+                    self.proposed_service.skill_dir_for_record(caller_skill) / "manifest.json"
+                )
+            except (ManifestValidationError, ProposedSkillError, FileNotFoundError):
+                raise IntegrationError("authorization_missing_or_stale", "Original integration caller manifest is invalid") from None
+            requirement = next(
+                (item for item in manifest.integration_requirements if operation_id in item.operations),
+                None,
+            )
+            if requirement is None or self.authorization_state(caller_skill, requirement) != "approved":
+                raise IntegrationError("authorization_missing_or_stale", "Original integration authorization is no longer current")
+            from app.services.permission_service import PermissionService
+
+            if not PermissionService(
+                self.db,
+                project_root=self.project_root,
+            ).can_run(caller_skill, include_integrations=False).allowed:
+                raise IntegrationError("authorization_missing_or_stale", "Original caller runtime approval is no longer current")
+        return self._invoke_operation(operation_id, input_json, audit_record=None, allowed_repositories=None)
 
     def _invoke_checked(
         self,
@@ -937,6 +1313,20 @@ class IntegrationService:
             raise IntegrationError("operation_undeclared", "Integration operation is not declared by the active manifest")
         if self.authorization_state(skill, requirement) != "approved":
             raise IntegrationError("authorization_missing_or_stale", "Integration authorization is missing or stale")
+        operation = OPERATIONS.get(operation_id)
+        if operation is not None and operation.requires_invocation_approval:
+            return self._submit_integration_approval(
+                operation_id,
+                input_json,
+                attribution=InvocationCallerAttribution(
+                    caller_type=caller.runtime,
+                    source="integration_capability",
+                    caller_skill_id=caller.skill_id,
+                    caller_version_id=caller.version_id,
+                    caller_run_id=caller.skill_run_id,
+                    web_app_instance_id=caller.web_app_instance_id,
+                ),
+            )
         return self._invoke_operation(
             operation_id,
             input_json,
@@ -967,6 +1357,11 @@ class IntegrationService:
                 if status.running and status.locked:
                     raise IntegrationError("atlas_locked", "Atlas is locked")
                 raise IntegrationError("connection_unavailable", "Atlas is unavailable")
+        elif operation.provider == "telegram":
+            from app.services.telegram_service import TelegramService
+
+            if not TelegramService(self.db, secret_store=self.secret_store).approval_available():
+                raise IntegrationError("connection_unavailable", "Telegram connection is unavailable")
         elif connection is None or connection.status != "connected":
             provider_name = PROVIDER_DISPLAY_NAMES.get(operation.provider, operation.provider.title())
             raise IntegrationError("connection_unavailable", f"{provider_name} connection is unavailable")
@@ -1004,7 +1399,7 @@ class IntegrationService:
             location = f" at {path}" if path else ""
             raise IntegrationError("invalid_input", f"Integration input is invalid{location}") from None
         credential = ""
-        if operation.provider != "atlas":
+        if operation.provider not in {"atlas", "telegram"}:
             assert connection is not None
             if (
                 self.secret_store is None
@@ -1015,8 +1410,13 @@ class IntegrationService:
                 namespace = {
                     "notion": "notion",
                     "google_calendar": GOOGLE_CALENDAR_SECRET_NAMESPACE,
+                    "gmail": GMAIL_SECRET_NAMESPACE,
                 }.get(operation.provider, "github")
                 credential = self.secret_store.get(connection.secret_reference, namespace=namespace)
+                if operation.provider in {"google_calendar", "gmail"}:
+                    credential = self._google_runtime_credential(credential)
+            except IntegrationError:
+                raise
             except (SecretStoreError, RuntimeError):
                 raise IntegrationError(
                     "connection_unavailable", "Stored integration credential is unavailable"
@@ -1054,11 +1454,21 @@ class IntegrationService:
                 elif operation.provider == "google_calendar":
                     assert self.google_calendar is not None
                     output = self.google_calendar.execute(operation, input_json, credential)
+                elif operation.provider == "gmail":
+                    assert self.gmail is not None
+                    output = self.gmail.execute(operation, input_json, credential)
+                elif operation.provider == "telegram":
+                    from app.services.telegram_service import TelegramService
+
+                    output = TelegramService(
+                        self.db,
+                        secret_store=self.secret_store,
+                    ).execute_notification(input_json)
                 else:
                     output = self.github.execute(operation, input_json, credential)
             except IntegrationProviderError as exc:
                 if (
-                    operation.provider in {"github", "notion", "google_calendar"}
+                    operation.provider in {"github", "notion", "google_calendar", "gmail", "telegram"}
                     and exc.error_type == "invalid_credential"
                     and connection is not None
                 ):
@@ -1109,6 +1519,64 @@ class IntegrationService:
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
+
+    def operation_contract_fingerprint(self, operation_id: str) -> str:
+        operation = OPERATIONS.get(operation_id)
+        if operation is None:
+            raise IntegrationError("operation_undeclared", "Integration operation does not exist")
+        encoded = json.dumps(
+            registry_contract_identity([operation_id]),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _submit_integration_approval(
+        self,
+        operation_id: str,
+        input_json: dict[str, Any],
+        *,
+        attribution: InvocationCallerAttribution,
+    ) -> dict[str, Any]:
+        operation = OPERATIONS.get(operation_id)
+        if operation is None or not operation.requires_invocation_approval:
+            raise IntegrationError("operation_undeclared", "Integration operation does not require approval")
+        connection = self._connection(operation.provider)
+        if (
+            connection is None
+            or connection.status != "connected"
+            or not self.operation_available(operation_id)
+        ):
+            raise IntegrationError("connection_unavailable", f"{PROVIDER_DISPLAY_NAMES.get(operation.provider, operation.provider)} connection is unavailable")
+        try:
+            effective = effective_invocation_contract(
+                description=operation.description,
+                input_schema=operation.input_schema,
+                output_schema=operation.output_schema,
+                requires_invocation_approval=True,
+            )
+            Draft202012Validator(effective.input_schema).validate(input_json)
+            reason, business_input = split_approval_input(input_json)
+            Draft202012Validator(operation.input_schema).validate(business_input)
+        except (InvocationApprovalContractError, ValidationError) as exc:
+            raise IntegrationError("invalid_input", f"Integration input is invalid: {exc}") from None
+        try:
+            approval = InvocationApprovalService(
+                self.db,
+                project_root=self.project_root,
+            ).submit_integration(
+                operation_id,
+                business_input,
+                reason,
+                target_contract_fingerprint=self.operation_contract_fingerprint(operation_id),
+                provider=operation.provider,
+                provider_account_id=connection.account_id or "",
+                attribution=attribution,
+                target_description=operation.description,
+            )
+        except InvocationApprovalError as exc:
+            raise IntegrationError(exc.error_type, str(exc)) from None
+        return InvocationApprovalService.receipt(approval)
 
     def invalidate_provider_authorizations(self, provider: str, reason: str) -> None:
         authorizations = self.db.scalars(
@@ -1163,6 +1631,151 @@ class IntegrationService:
             retry_after_seconds=error.retry_after_seconds,
         )
 
+    def _google_oauth_client_config(self, *, migrate_legacy: bool) -> GoogleOAuthClientConfig | None:
+        config = self.db.get(GoogleOAuthClientConfig, GOOGLE_OAUTH_CLIENT_CONFIG_ID)
+        if config is None and migrate_legacy:
+            config = self._migrate_legacy_google_oauth_client()
+        return config
+
+    def _migrate_legacy_google_oauth_client(self) -> GoogleOAuthClientConfig | None:
+        if self.secret_store is None:
+            return None
+        clients: dict[tuple[str, str], dict[str, str]] = {}
+        legacy_connections: list[
+            tuple[IntegrationConnection, str, str, dict[str, str]]
+        ] = []
+        for provider, namespace in (
+            ("google_calendar", GOOGLE_CALENDAR_SECRET_NAMESPACE),
+            ("gmail", GMAIL_SECRET_NAMESPACE),
+        ):
+            connection = self._connection(provider)
+            if connection is None or connection.secret_store_id != self.secret_store.implementation_id:
+                continue
+            try:
+                legacy = parse_google_oauth_credential(
+                    self.secret_store.get(connection.secret_reference, namespace=namespace)
+                )
+            except (IntegrationProviderError, SecretStoreError):
+                continue
+            key = (legacy["client_id"], legacy["client_secret"])
+            clients[key] = {"client_id": key[0], "client_secret": key[1]}
+            legacy_connections.append(
+                (connection, namespace, connection.secret_reference, legacy)
+            )
+        if not clients:
+            return None
+        if len(clients) != 1:
+            raise IntegrationError(
+                "google_oauth_configuration_conflict",
+                "Existing Calendar and Gmail connections use different OAuth clients; disconnect both and configure one shared client",
+            )
+        client = next(iter(clients.values()))
+        serialized = serialize_google_oauth_client(client["client_id"], client["client_secret"])
+        service_replacements: list[tuple[IntegrationConnection, str, str, str]] = []
+        try:
+            reference = self.secret_store.put(
+                serialized,
+                namespace=GOOGLE_OAUTH_CLIENT_SECRET_NAMESPACE,
+            )
+            for connection, namespace, previous_reference, legacy in legacy_connections:
+                service_credential = json.dumps(
+                    {"refresh_token": legacy["refresh_token"]},
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                new_reference = self.secret_store.put(
+                    service_credential,
+                    namespace=namespace,
+                )
+                service_replacements.append(
+                    (connection, namespace, previous_reference, new_reference)
+                )
+        except SecretStoreError:
+            for _connection, namespace, _previous_reference, new_reference in service_replacements:
+                try:
+                    self.secret_store.delete(new_reference, namespace=namespace)
+                except SecretStoreError:
+                    pass
+            if "reference" in locals():
+                try:
+                    self.secret_store.delete(
+                        reference,
+                        namespace=GOOGLE_OAUTH_CLIENT_SECRET_NAMESPACE,
+                    )
+                except SecretStoreError:
+                    pass
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable") from None
+        finally:
+            serialized = ""
+            client = {}
+        now = utc_now()
+        config = GoogleOAuthClientConfig(
+            id=GOOGLE_OAUTH_CLIENT_CONFIG_ID,
+            secret_store_id=self.secret_store.implementation_id,
+            secret_reference=reference,
+            created_at=now,
+            updated_at=now,
+        )
+        try:
+            self.db.add(config)
+            for connection, _namespace, _previous_reference, new_reference in service_replacements:
+                connection.secret_reference = new_reference
+                connection.updated_at = now
+            self.db.commit()
+            self.db.refresh(config)
+        except Exception:
+            self.db.rollback()
+            for _connection, namespace, _previous_reference, new_reference in service_replacements:
+                try:
+                    self.secret_store.delete(new_reference, namespace=namespace)
+                except SecretStoreError:
+                    pass
+            try:
+                self.secret_store.delete(reference, namespace=GOOGLE_OAUTH_CLIENT_SECRET_NAMESPACE)
+            except SecretStoreError:
+                pass
+            raise IntegrationError("internal_failure", "Google OAuth client migration failed safely") from None
+        for _connection, namespace, previous_reference, _new_reference in service_replacements:
+            try:
+                self.secret_store.delete(previous_reference, namespace=namespace)
+            except SecretStoreError:
+                pass
+        return config
+
+    def _required_google_oauth_client(self) -> dict[str, str]:
+        config = self._google_oauth_client_config(migrate_legacy=True)
+        if config is None:
+            raise IntegrationError("google_oauth_not_configured", "Configure the shared Google OAuth client first")
+        if self.secret_store is None or self.secret_store.implementation_id != config.secret_store_id:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        try:
+            return parse_google_oauth_client(
+                self.secret_store.get(
+                    config.secret_reference,
+                    namespace=GOOGLE_OAUTH_CLIENT_SECRET_NAMESPACE,
+                )
+            )
+        except (IntegrationProviderError, SecretStoreError):
+            raise IntegrationError("connection_unavailable", "Stored Google OAuth client is unavailable") from None
+
+    def _google_runtime_credential(self, service_credential: str) -> str:
+        try:
+            value = json.loads(service_credential)
+        except (json.JSONDecodeError, TypeError):
+            raise IntegrationError("invalid_credential", "Stored Google authorization is invalid") from None
+        if not isinstance(value, dict) or not isinstance(value.get("refresh_token"), str) or not value["refresh_token"]:
+            raise IntegrationError("invalid_credential", "Stored Google authorization is invalid")
+        client = self._required_google_oauth_client()
+        return json.dumps(
+            {
+                "client_id": client["client_id"],
+                "client_secret": client["client_secret"],
+                "refresh_token": value["refresh_token"],
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
     def _connection(self, provider: str = "github") -> IntegrationConnection | None:
         return self.db.scalar(
             select(IntegrationConnection).where(IntegrationConnection.provider == provider)
@@ -1177,6 +1790,16 @@ class IntegrationService:
                 return bool(status.running and status.locked is False)
             except (AttributeError, ImportError, RuntimeError):
                 return False
+        if provider == "telegram":
+            try:
+                from app.services.telegram_service import TelegramService
+
+                return TelegramService(
+                    self.db,
+                    secret_store=self.secret_store,
+                ).approval_available()
+            except (AttributeError, ImportError, RuntimeError):
+                return False
         connection = self._connection(provider)
         if connection is None or connection.status != "connected":
             return False
@@ -1184,6 +1807,17 @@ class IntegrationService:
             return False
         if self.secret_store is None or self.secret_store.implementation_id != connection.secret_store_id:
             return False
+        if provider in {"google_calendar", "gmail"}:
+            try:
+                config = self._google_oauth_client_config(migrate_legacy=True)
+            except IntegrationError:
+                return False
+            if (
+                config is None
+                or self.secret_store is None
+                or config.secret_store_id != self.secret_store.implementation_id
+            ):
+                return False
         return True
 
     def operation_available(self, operation_id: str) -> bool:

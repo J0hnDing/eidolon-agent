@@ -112,7 +112,12 @@ def call_function(
         result = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise WebRuntimeCapabilityError("Eidolon capability returned invalid JSON") from exc
-    if not isinstance(result, dict) or not isinstance(result.get("run"), dict):
+    if not isinstance(result, dict):
+        raise WebRuntimeCapabilityError("Eidolon capability returned an invalid function contract")
+    approval = result.get("approval")
+    if isinstance(approval, dict) and approval.get("status") == "pending_approval":
+        return approval
+    if not isinstance(result.get("run"), dict):
         raise WebRuntimeCapabilityError("Eidolon capability returned an invalid function contract")
     run = result["run"]
     if run.get("status") not in {"succeeded", "partial"}:

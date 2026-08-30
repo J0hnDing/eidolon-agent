@@ -52,7 +52,7 @@ class NotionConnectionStatus(BaseModel):
     error_type: str | None = None
 
 
-class GoogleCalendarOAuthStart(BaseModel):
+class GoogleOAuthClientWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # Trusted service code checks bounds so validation errors never reflect
@@ -61,7 +61,18 @@ class GoogleCalendarOAuthStart(BaseModel):
     client_secret: SecretStr
 
 
-class GoogleCalendarOAuthStartResponse(BaseModel):
+class GoogleOAuthClientStatus(BaseModel):
+    provider: Literal["google"] = "google"
+    configured: bool
+    status: Literal["configured", "not_configured", "unavailable", "conflict"]
+    calendar_redirect_uri: str
+    gmail_redirect_uri: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    error_type: str | None = None
+
+
+class GoogleOAuthStartResponse(BaseModel):
     authorization_url: str
 
 
@@ -75,6 +86,51 @@ class GoogleCalendarConnectionStatus(BaseModel):
     updated_at: datetime | None = None
     error_type: str | None = None
     oauth_redirect_uri: str
+
+
+class GmailConnectionStatus(BaseModel):
+    provider: Literal["gmail"] = "gmail"
+    connected: bool
+    status: Literal["connected", "disconnected", "unavailable", "invalid"]
+    account_email: str | None = None
+    last_validated_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    error_type: str | None = None
+    oauth_redirect_uri: str
+
+
+class TelegramPairingStart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: SecretStr
+
+
+class TelegramConnectionStatus(BaseModel):
+    provider: Literal["telegram"] = "telegram"
+    connected: bool
+    status: Literal[
+        "connected",
+        "disconnected",
+        "pairing",
+        "unavailable",
+        "invalid",
+        "webhook_conflict",
+    ]
+    bot_username: str | None = None
+    paired_chat_id: str | None = None
+    paired_user_id: str | None = None
+    pairing_expires_at: datetime | None = None
+    last_validated_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    error_type: str | None = None
+
+
+class TelegramPairingResponse(BaseModel):
+    connection: TelegramConnectionStatus
+    pairing_code: str
+    expires_at: datetime
 
 
 class IntegrationInvocationRequest(BaseModel):

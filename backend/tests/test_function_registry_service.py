@@ -7,16 +7,27 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import ApprovalRequest, Skill, SkillRun, SkillSchedule, SkillVersion
+from app.models import (
+    ApprovalRequest,
+    InvocationApproval,
+    Skill,
+    SkillRun,
+    SkillSchedule,
+    SkillVersion,
+)
+from app.schemas.manifest import SkillManifest
 from app.services.function_catalog_service import FunctionCatalogService
 from app.services.function_registry_service import (
     FunctionCaller,
     FunctionRegistryService,
 )
+from app.services.invocation_approval_contract import INVOCATION_APPROVAL_DESCRIPTION_SUFFIX
+from app.services.invocation_approval_service import InvocationApprovalService
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
 from app.services.skill_operation_guard import SkillOperationGuard
@@ -72,6 +83,7 @@ def make_function(
     network: list[str] | None = None,
     input_schema: dict[str, Any] | None = None,
     output_schema: dict[str, Any] | None = None,
+    requires_invocation_approval: bool = False,
 ) -> Skill:
     skill_dir = project_root / "skills" / "installed" / name / "versions" / "v1"
     (skill_dir / "tests").mkdir(parents=True)
@@ -103,6 +115,7 @@ def make_function(
             "required": ["result"],
             "additionalProperties": False,
         },
+        "requires_invocation_approval": requires_invocation_approval,
         "function_requirements": requirements or [],
         "dependencies": [],
         "permissions": permissions,
@@ -164,6 +177,111 @@ def test_registry_exposes_backend_validated_contract(tmp_path: Path, db_session:
     assert contracts[0].risk_level == "low"
     assert contracts[0].availability == "available"
     assert "entrypoint" not in contracts[0].model_dump()
+
+
+def test_invocation_approval_projects_contract_and_defers_execution(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = make_function(
+        db_session,
+        tmp_path,
+        "send_sensitive_action",
+        requires_invocation_approval=True,
+    )
+    runner = FakeRunner(db_session)
+
+    class FakeTelegram:
+        def approval_available(self) -> bool:
+            return True
+
+        def deliver_invocation_approval(self, approval: InvocationApproval) -> None:
+            approval.telegram_delivery_status = "delivered"
+
+    monkeypatch.setattr(
+        InvocationApprovalService,
+        "_telegram_service",
+        lambda _self: FakeTelegram(),
+    )
+    registry = service(db_session, tmp_path, runner)
+    contract = registry.contract_for_skill(target)
+
+    assert contract.description == f"send_sensitive_action description {INVOCATION_APPROVAL_DESCRIPTION_SUFFIX}"
+    assert contract.requires_invocation_approval is True
+    assert contract.input_schema["required"] == ["value", "reason_to_call"]
+    assert contract.output_schema["properties"]["status"]["const"] == "pending_approval"
+    approval_fingerprint = registry.target_contract_fingerprint(target)
+    manifest_path = tmp_path / target.manifest_path
+    manifest_json = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_json["requires_invocation_approval"] = False
+    manifest_path.write_text(json.dumps(manifest_json), encoding="utf-8")
+    assert registry.target_contract_fingerprint(target) != approval_fingerprint
+    manifest_json["requires_invocation_approval"] = True
+    manifest_path.write_text(json.dumps(manifest_json), encoding="utf-8")
+
+    approval = registry.invoke_direct(
+        target,
+        {"value": "execute later", "reason_to_call": "The user requested it."},
+    )
+
+    assert isinstance(approval, InvocationApproval)
+    assert approval.input_json == {"value": "execute later"}
+    assert approval.reason_to_call == "The user requested it."
+    assert approval.decision_status == "pending"
+    assert runner.calls == []
+
+    monkeypatch.setattr(
+        FunctionRegistryService,
+        "invoke_approved",
+        lambda _self, _approval: SimpleNamespace(
+            status="succeeded",
+            output_json={"result": "ok"},
+            error_message=None,
+        ),
+    )
+    decided = InvocationApprovalService(db_session, project_root=tmp_path).approve(
+        approval.id,
+        decided_via="local",
+        decided_by="local_user",
+    )
+    assert decided.decision_status == "approved"
+    assert decided.execution_status == "succeeded"
+    assert decided.result_json == {"result": "ok"}
+
+
+def test_manifest_rejects_invalid_invocation_approval_contracts() -> None:
+    base = {
+        "name": "approval_contract",
+        "description": "Approval contract",
+        "runtime": "service",
+        "entrypoint": "skill.py",
+        "input_schema": {"type": "object", "properties": {}},
+        "output_schema": {"type": "object", "properties": {}},
+        "permissions": {},
+        "schedule": {
+            "type": "daily",
+            "time": "09:00",
+            "timezone": "America/Toronto",
+            "input": {},
+        },
+        "requires_invocation_approval": True,
+    }
+    with pytest.raises(PydanticValidationError, match="supported only for function"):
+        SkillManifest.model_validate(base)
+
+    base.update(
+        {
+            "runtime": "function",
+            "schedule": None,
+            "input_schema": {
+                "type": "object",
+                "properties": {"reason_to_call": {"type": "string"}},
+            },
+        }
+    )
+    with pytest.raises(PydanticValidationError, match="reason_to_call is reserved"):
+        SkillManifest.model_validate(base)
 
 
 def test_unified_catalog_persists_categories_states_and_user_lifecycle(

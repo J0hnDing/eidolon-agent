@@ -5,10 +5,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import ApprovalRequest, Skill, SkillRun, SkillSchedule, SkillVersion
+from app.models import ApprovalRequest, InvocationApproval, Skill, SkillRun, SkillSchedule, SkillVersion
 from app.routers.schedules import get_scheduler_service
 from app.schemas.agent_run import AgentRunRead
 from app.schemas.approval_request import ApprovalRequestRead
+from app.schemas.invocation_approval import PendingApprovalReceipt
 from app.schemas.proposed_skill import (
     ProposedSkillValidationRead,
     SkillFileRead,
@@ -65,19 +66,28 @@ def read_runner_status() -> RunnerStatusRead:
 
 
 @router.get("/{skill_id}", response_model=SkillRead)
-def get_skill(skill_id: int, db: Session = Depends(get_db)) -> Skill:
+def get_skill(skill_id: int, db: Session = Depends(get_db)) -> Skill | SkillRead:
     skill = db.get(Skill, skill_id)
     if skill is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+    if skill.runtime == "function" and skill.status == "installed":
+        contract = FunctionRegistryService(db).contract_for_skill(skill)
+        return SkillRead.model_validate(skill).model_copy(
+            update={
+                "description": contract.description,
+                "input_schema_json": contract.input_schema,
+                "output_schema_json": contract.output_schema,
+            }
+        )
     return skill
 
 
-@router.post("/{skill_id}/run", response_model=SkillRunRead)
+@router.post("/{skill_id}/run", response_model=SkillRunRead | PendingApprovalReceipt)
 def run_skill(
     skill_id: int,
     payload: SkillRunRequest,
     db: Session = Depends(get_db),
-) -> SkillRun:
+) -> SkillRun | PendingApprovalReceipt:
     skill = db.get(Skill, skill_id)
     if skill is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
@@ -99,12 +109,15 @@ def run_skill(
     if not permission_decision.allowed:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=permission_decision.reason)
 
-    return FunctionRegistryService(db).invoke_direct(
+    result = FunctionRegistryService(db).invoke_direct(
         skill,
         payload.input,
         source="direct_user",
         initiating_action="Manual skill run",
     )
+    if isinstance(result, InvocationApproval):
+        return PendingApprovalReceipt(approval_id=result.id)
+    return result
 
 
 @router.post("/{skill_id}/codex", response_model=SkillCodexResponse)

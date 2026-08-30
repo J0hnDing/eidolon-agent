@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../api/client";
+import ApprovalRequestsPage from "./ApprovalRequestsPage";
 import UsageSettingsPage, { SettingsSection } from "./UsageSettingsPage";
 
 const permissionPolicy = {
@@ -315,23 +316,73 @@ describe("Google Calendar OAuth connection", () => {
       error_type: null,
       oauth_redirect_uri: "http://localhost:8000/settings/integrations/google-calendar/oauth/callback",
     });
+    vi.spyOn(api, "getGoogleOAuthClient").mockResolvedValue({
+      provider: "google",
+      configured: true,
+      status: "configured",
+      calendar_redirect_uri: "http://localhost:8000/settings/integrations/google-calendar/oauth/callback",
+      gmail_redirect_uri: "http://localhost:8000/settings/integrations/gmail/oauth/callback",
+      created_at: "2026-08-29T12:00:00Z",
+      updated_at: "2026-08-29T12:00:00Z",
+      error_type: null,
+    });
+    vi.spyOn(api, "getGmailConnection").mockResolvedValue({
+      provider: "gmail",
+      connected: true,
+      status: "connected",
+      account_email: "mail@example.com",
+      last_validated_at: "2026-08-29T12:00:00Z",
+      created_at: "2026-08-29T12:00:00Z",
+      updated_at: "2026-08-29T12:00:00Z",
+      error_type: null,
+      oauth_redirect_uri: "http://localhost:8000/settings/integrations/gmail/oauth/callback",
+    });
+    vi.spyOn(api, "getTelegramConnection").mockResolvedValue({
+      provider: "telegram",
+      connected: true,
+      status: "connected",
+      bot_username: "eidolon_bot",
+      paired_chat_id: "11",
+      paired_user_id: "22",
+      pairing_expires_at: null,
+      last_validated_at: "2026-08-29T12:00:00Z",
+      created_at: "2026-08-29T12:00:00Z",
+      updated_at: "2026-08-29T12:00:00Z",
+      error_type: null,
+    });
     vi.spyOn(api, "getAtlasStatus").mockRejectedValue(new Error("not running"));
     vi.spyOn(api, "getNotionConnection").mockRejectedValue(new Error("not connected"));
     vi.spyOn(api, "getCodexMcpStatus").mockRejectedValue(new Error("not installed"));
 
     renderSettings("integrations");
 
-    expect(await screen.findByRole("heading", { name: "Google Calendar connection" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Google connection" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Google Calendar" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Gmail" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Telegram Notification + Approval bot" })).toBeTruthy();
     expect(screen.getByText("person@example.com")).toBeTruthy();
+    expect(screen.getByText("mail@example.com")).toBeTruthy();
     expect(
       screen.getByText("http://localhost:8000/settings/integrations/google-calendar/oauth/callback"),
     ).toBeTruthy();
+    expect(screen.getByText("http://localhost:8000/settings/integrations/gmail/oauth/callback")).toBeTruthy();
     expect((screen.getByLabelText("Replacement Google OAuth client ID") as HTMLInputElement).type).toBe(
       "password",
     );
     expect(
       (screen.getByLabelText("Replacement Google OAuth client secret") as HTMLInputElement).type,
     ).toBe("password");
+    expect(screen.queryByLabelText("Gmail OAuth client ID")).toBeNull();
+    expect(screen.getByRole("button", { name: "Choose another Calendar account" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Choose another Gmail account" })).toBeTruthy();
+
+    vi.spyOn(api, "listPermissionRequests").mockResolvedValue([]);
+    vi.spyOn(api, "listInvocationApprovals").mockResolvedValue([]);
+    cleanup();
+    render(<ApprovalRequestsPage />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Invocation approvals" }));
+    expect(screen.getByRole("heading", { name: "Actions" })).toBeTruthy();
+    expect(screen.getByText("No invocation approvals yet.")).toBeTruthy();
   });
 });
 

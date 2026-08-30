@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -10,11 +11,12 @@ from app.db import Base
 from app.routers import integrations
 from app.schemas.integration import (
     GitHubCredentialWrite,
-    GoogleCalendarOAuthStart,
+    GoogleOAuthClientWrite,
     NotionCredentialWrite,
     NotionDataSourcesWrite,
 )
 from app.services.github_provider import FakeGitHubProviderAdapter
+from app.services.gmail_provider import FakeGmailProviderAdapter
 from app.services.google_calendar_provider import FakeGoogleCalendarProviderAdapter, GoogleOAuthStateStore
 from app.services.integration_service import IntegrationService
 from app.services.report_service import FakeReportProvider
@@ -49,6 +51,8 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
         github=provider,
         google_calendar=FakeGoogleCalendarProviderAdapter(),
         google_oauth_states=GoogleOAuthStateStore(),
+        gmail=FakeGmailProviderAdapter(email="mail@example.com", account_id="gmail-route"),
+        gmail_oauth_states=GoogleOAuthStateStore(),
     )
     monkeypatch.setattr(integrations, "build_default_integration_service", lambda _db: service)
     app = FastAPI()
@@ -112,10 +116,12 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
     assert integrations.notion_connection_status(db).status == "disconnected"
 
     google_secret = "EIDOLON_GOOGLE_ROUTE_SENTINEL_95e1"
-    oauth_start = integrations.start_google_calendar_oauth(
-        GoogleCalendarOAuthStart(client_id="client-id", client_secret=google_secret),
+    shared_google = integrations.put_google_oauth_client(
+        GoogleOAuthClientWrite(client_id="client-id", client_secret=google_secret),
         db,
     )
+    assert shared_google.configured is True
+    oauth_start = integrations.start_google_calendar_oauth(db)
     assert google_secret not in oauth_start.model_dump_json()
     state = oauth_start.authorization_url.rsplit("state=", 1)[1]
     monkeypatch.setattr(integrations.FunctionCatalogService, "refresh", lambda _self: None)
@@ -126,10 +132,7 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
     assert google_status.connected is True
     assert google_status.account_email == "person@example.com"
     assert google_secret not in google_status.model_dump_json()
-    denied_start = integrations.start_google_calendar_oauth(
-        GoogleCalendarOAuthStart(client_id="client-id", client_secret="replacement-secret"),
-        db,
-    )
+    denied_start = integrations.start_google_calendar_oauth(db)
     denied_state = denied_start.authorization_url.rsplit("state=", 1)[1]
     denied = integrations.complete_google_calendar_oauth(denied_state, "", "access_denied", db)
     assert denied.headers["location"].endswith("?google_calendar=denied")
@@ -140,12 +143,32 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
     assert google_removed.status_code == 204
     assert integrations.google_calendar_connection_status(db).status == "disconnected"
 
+    gmail_start = integrations.start_gmail_oauth(db)
+    assert google_secret not in gmail_start.model_dump_json()
+    gmail_state = parse_qs(urlparse(gmail_start.authorization_url).query)["state"][0]
+    gmail_callback = integrations.complete_gmail_oauth(gmail_state, "gmail-code", "", db)
+    assert gmail_callback.headers["location"].endswith("?gmail=connected")
+    gmail_status = integrations.gmail_connection_status(db)
+    assert gmail_status.connected is True
+    assert gmail_status.account_email == "mail@example.com"
+    assert service.google_calendar_connection_status().status == "disconnected"
+    assert google_secret not in gmail_status.model_dump_json()
+    assert integrations.remove_gmail_connection(db).status_code == 204
+    removed_google = integrations.remove_google_oauth_client(db)
+    assert removed_google.configured is False
+
     paths = app.openapi()["paths"]
     assert "/settings/integrations/github" in paths
     assert "/settings/integrations/notion" in paths
     assert "/settings/integrations/notion/data-sources" in paths
+    assert "/settings/integrations/google" in paths
+    assert "/settings/integrations/google/oauth-client" in paths
     assert "/settings/integrations/google-calendar" in paths
     assert "/settings/integrations/google-calendar/oauth/start" in paths
     assert "/settings/integrations/google-calendar/oauth/callback" not in paths
+    assert "/settings/integrations/gmail" in paths
+    assert "/settings/integrations/gmail/oauth/start" in paths
+    assert "/settings/integrations/gmail/oauth/callback" not in paths
+    assert "/settings/integrations/telegram" in paths
     assert "/integrations/capabilities/invoke" not in paths
     assert all("github.repository." not in path for path in paths)

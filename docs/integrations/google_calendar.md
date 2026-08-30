@@ -4,13 +4,13 @@ Eidolon supports one trusted Google Calendar connection and exactly five typed e
 
 ## OAuth Setup and Storage
 
-In Google Cloud, enable the Google Calendar API and create an OAuth client of type **Web application**. Register this redirect URI exactly:
+In Google Cloud, enable the Google Calendar and Gmail APIs and create one OAuth client of type **Web application**. The client is configured once in Eidolon's shared Google connection section. Register both service callback URIs on that client; Calendar uses this one:
 
 ```text
 http://localhost:8000/settings/integrations/google-calendar/oauth/callback
 ```
 
-Settings accepts the OAuth client ID and client secret as write-only password inputs. Authorization uses Google's web-server authorization-code flow with offline access, consent prompting, a cryptographically random single-use state held in backend memory for ten minutes, and only these scopes:
+The shared client ID and client secret are write-only password inputs and are never redisplayed. Calendar has its own Connect button and authorization grant. Authorization uses Google's web-server authorization-code flow with offline access, `prompt=consent select_account`, a cryptographically random single-use state held in backend memory for ten minutes, and only these scopes. The client configuration is shared with Gmail, but state, scope, refresh token, account identity, and authorization records are independent, so Calendar and Gmail may use different Google accounts:
 
 ```text
 openid
@@ -18,9 +18,9 @@ email
 https://www.googleapis.com/auth/calendar.events.owned
 ```
 
-The callback consumes the state, rejects missing or denied Calendar permission, requires a refresh token, and retrieves a stable Google subject plus verified email through UserInfo. Eidolon stores one JSON bundle containing client ID, client secret, and refresh token in Windows Credential Manager under the `google_calendar` namespace. SQLite stores only the opaque secret reference, `credential_kind="oauth_refresh"`, verified email, a SHA-256-derived account identifier, sanitized status, and timestamps. Access tokens are refreshed for individual function calls and are never persisted.
+The callback consumes the state, rejects missing or denied Calendar permission, requires a refresh token, and retrieves a stable Google subject plus verified email through UserInfo. Eidolon stores the shared client configuration once under the `google_oauth` OS-secret namespace and stores only Calendar's refresh token under `google_calendar`. SQLite stores opaque secret references, `credential_kind="oauth_refresh"`, verified email, a SHA-256-derived account identifier, sanitized status, and timestamps. Access tokens are assembled from the shared client and Calendar grant only for individual function calls and are never persisted.
 
-A failed or abandoned replacement leaves the current connection active. A successful replacement removes the prior local secret; if the Google account identity changes, existing Google Calendar skill authorizations are invalidated. Disconnect removes only Eidolon's local credential and connection. It does not call Google's project-wide token-revocation endpoint.
+A failed or abandoned account replacement leaves the current Calendar connection active. A successful replacement removes the prior local refresh credential; if the Google account identity changes, existing Google Calendar skill authorizations are invalidated. Disconnect removes only Eidolon's local Calendar grant and connection. It does not affect Gmail or call Google's project-wide token-revocation endpoint. Replacing or removing the shared OAuth client requires both Calendar and Gmail to be disconnected.
 
 OAuth callbacks always redirect to `/settings/integrations` with `connected`, `denied`, or `failed`; provider details are not returned. Uvicorn access logging removes the callback query string before formatting so authorization codes and state do not enter access logs.
 
@@ -63,7 +63,10 @@ The capability scanner blocks direct Google API/OAuth/UserInfo hosts, Google-sen
 ## Trusted Settings API
 
 - `GET /settings/integrations/google-calendar`: sanitized connection status and exact redirect URI.
-- `POST /settings/integrations/google-calendar/oauth/start`: accepts write-only `client_id` and `client_secret`, creates pending state, and returns Google's authorization URL.
+- `GET /settings/integrations/google`: sanitized shared OAuth-client status and both redirect URIs.
+- `PUT /settings/integrations/google/oauth-client`: stores the shared write-only `client_id` and `client_secret`.
+- `DELETE /settings/integrations/google/oauth-client`: removes the shared client only when Calendar and Gmail are disconnected.
+- `POST /settings/integrations/google-calendar/oauth/start`: creates Calendar-specific pending state from the configured shared client and returns Google's authorization URL.
 - `GET /settings/integrations/google-calendar/oauth/callback`: hidden OAuth callback that redirects with a bounded result.
 - `DELETE /settings/integrations/google-calendar`: removes the local credential and connection.
 

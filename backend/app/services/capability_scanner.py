@@ -41,10 +41,12 @@ GITHUB_HOSTS = {"api.github.com", "github.com"}
 NOTION_HOSTS = {"api.notion.com"}
 GOOGLE_HOSTS = {
     "accounts.google.com",
+    "gmail.googleapis.com",
     "oauth2.googleapis.com",
     "openidconnect.googleapis.com",
     "www.googleapis.com",
 }
+TELEGRAM_HOSTS = {"api.telegram.org"}
 ATLAS_HOSTS = {"127.0.0.1", "localhost", "::1"}
 ATLAS_MARKERS = (
     "127.0.0.1:4817",
@@ -204,6 +206,8 @@ class StaticCapabilityScanner:
                             if domain in NOTION_HOSTS
                             else "direct_google_access"
                             if domain in GOOGLE_HOSTS
+                            else "direct_telegram_access"
+                            if domain in TELEGRAM_HOSTS
                             else "browser_network"
                         ),
                         status="blocked",
@@ -335,6 +339,17 @@ class StaticCapabilityScanner:
                             line=getattr(node, "lineno", 1),
                             evidence="contains a direct Google integration host",
                             message="Direct Google access is blocked; use the trusted integration helper.",
+                        )
+                    )
+                if any(host in lowered for host in TELEGRAM_HOSTS):
+                    findings.append(
+                        CapabilityFinding(
+                            capability="direct_telegram_access",
+                            status="blocked",
+                            path=relative_path,
+                            line=getattr(node, "lineno", 1),
+                            evidence="contains the direct Telegram Bot API host",
+                            message="Direct Telegram access is blocked; use the trusted integration helper.",
                         )
                     )
                 if "/settings/integrations/" in lowered:
@@ -691,7 +706,8 @@ class StaticCapabilityScanner:
         if any(
             part in secret_name.lower()
             for part in (
-                "github", "atlas", "notion", "google", "capability", "token", "credential", "secret", "passphrase"
+                "github", "atlas", "notion", "google", "gmail", "telegram", "oauth",
+                "capability", "token", "credential", "secret", "passphrase"
             )
         ):
             allowed = False

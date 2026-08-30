@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Skill, WebAppAuditRecord, WebAppInstance
+from app.models import InvocationApproval, Skill, WebAppAuditRecord, WebAppInstance
 from app.schemas.function_registry import FunctionInvocationRequest, FunctionInvocationResponse
 from app.schemas.integration import IntegrationInvocationRequest, IntegrationInvocationResponse
 from app.schemas.manifest import SkillManifest
@@ -163,6 +163,16 @@ def web_app_function_capability(
         )
     except (FunctionRegistryError, WebAppRuntimeError) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if isinstance(run, InvocationApproval):
+        receipt = {"status": "pending_approval", "approval_id": run.id}
+        runtime.record_audit(
+            instance,
+            "function_call",
+            "pending_approval",
+            request={"function_name": function_name, "input": payload.input},
+            response={"approval_id": run.id, "status": "pending_approval"},
+        )
+        return FunctionInvocationResponse(output=receipt, approval=receipt)
     runtime.record_audit(
         instance,
         "function_call",

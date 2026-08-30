@@ -8,6 +8,7 @@ import {
   ProposedSkillValidation,
 } from "../../api/client";
 import { ChatConversation, ChatMessage } from "../../lib/chatStore";
+import { formatSystemDateTime } from "../../lib/dateTime";
 
 type ChatWorkspaceProps = {
   conversations: ChatConversation[];
@@ -127,7 +128,7 @@ function ChatSidebar({
               onClick={() => onSelectConversation(conversation.id)}
             >
               <strong>{conversation.title}</strong>
-              <span>{new Date(conversation.updatedAt).toLocaleString()}</span>
+              <span>{formatSystemDateTime(conversation.updatedAt)}</span>
             </button>
             <button
               type="button"

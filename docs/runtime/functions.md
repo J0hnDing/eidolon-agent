@@ -28,6 +28,10 @@ Function skills and scheduled services call the selected `backend.codex.call` ca
 
 For concise extension blueprints covering user, integration, and backend-core functions, see [Extending the function catalog](function_extension_guide.md).
 
+The trusted integration path also includes Google Calendar, Gmail, and Telegram. Gmail and Calendar keep separate OAuth identities; direct provider access remains blocked.
+
+Approval-required functions and integrations expose a backend-derived contract consistently in catalog, ProductManager context, capability discovery, manual runs, and MCP. The immediate caller receives only a pending approval id and is never resumed. Execution happens later through the backend-owned decision service. See [Invocation approvals](../security/invocation_approvals.md).
+
 ## Authorization
 
 The backend evaluates the direct caller-to-target relationship on every call:

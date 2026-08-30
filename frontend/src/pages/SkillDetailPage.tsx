@@ -27,6 +27,7 @@ import { usePolling } from "../lib/usePolling";
 import {
   AgentRun,
   ApprovalRequest,
+  PendingApprovalReceipt,
   ProposedSkillValidation,
   RunnerStatus,
   Skill,
@@ -47,6 +48,7 @@ export default function SkillDetailPage() {
   const navigate = useNavigate();
   const [skill, setSkill] = useState<Skill | null>(null);
   const [runs, setRuns] = useState<SkillRun[]>([]);
+  const [pendingApproval, setPendingApproval] = useState<PendingApprovalReceipt | null>(null);
   const [files, setFiles] = useState<SkillFile[]>([]);
   const [validation, setValidation] = useState<ProposedSkillValidation | null>(null);
   const [runtimePermission, setRuntimePermission] = useState<ApprovalRequest | null>(null);
@@ -131,6 +133,11 @@ export default function SkillDetailPage() {
         throw new Error("Run input must be a JSON object");
       }
       const run = await api.runSkill(skill.id, parsedInput as Record<string, unknown>);
+      if ("status" in run && run.status === "pending_approval") {
+        setPendingApproval(run);
+        return;
+      }
+      setPendingApproval(null);
       setRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not run skill");
@@ -840,7 +847,12 @@ export default function SkillDetailPage() {
         <>
           <section className="detail-panel">
             <h2>Output</h2>
-            <RunOutput run={runOutput} />
+            {pendingApproval ? (
+              <p>
+                Waiting for per-call approval #{pendingApproval.approval_id}.{" "}
+                <Link to="/approval-requests">Open Invocation approvals</Link>
+              </p>
+            ) : <RunOutput run={runOutput} />}
           </section>
 
           <section className="detail-panel">

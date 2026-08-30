@@ -446,6 +446,49 @@ export interface GoogleCalendarConnectionStatus {
   oauth_redirect_uri: string;
 }
 
+export interface GoogleOAuthClientStatus {
+  provider: "google";
+  configured: boolean;
+  status: "configured" | "not_configured" | "unavailable" | "conflict";
+  calendar_redirect_uri: string;
+  gmail_redirect_uri: string;
+  created_at: string | null;
+  updated_at: string | null;
+  error_type: string | null;
+}
+
+export interface GmailConnectionStatus {
+  provider: "gmail";
+  connected: boolean;
+  status: "connected" | "disconnected" | "unavailable" | "invalid";
+  account_email: string | null;
+  last_validated_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  error_type: string | null;
+  oauth_redirect_uri: string;
+}
+
+export interface TelegramConnectionStatus {
+  provider: "telegram";
+  connected: boolean;
+  status: "connected" | "disconnected" | "pairing" | "unavailable" | "invalid" | "webhook_conflict";
+  bot_username: string | null;
+  paired_chat_id: string | null;
+  paired_user_id: string | null;
+  pairing_expires_at: string | null;
+  last_validated_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  error_type: string | null;
+}
+
+export interface TelegramPairingResponse {
+  connection: TelegramConnectionStatus;
+  pairing_code: string;
+  expires_at: string;
+}
+
 export interface AtlasIntegrationStatus {
   provider: "atlas";
   directory: string;
@@ -562,6 +605,63 @@ export interface ApprovalRequest {
   resolved_at: string | null;
   resolved_by: string | null;
   decision_notes: string | null;
+}
+
+export interface InvocationApproval {
+  id: number;
+  target_kind: string;
+  target_id: string;
+  target_skill_id: number | null;
+  target_version_id: number | null;
+  target_contract_fingerprint: string;
+  target_description: string;
+  provider: string | null;
+  provider_account_id: string | null;
+  caller_type: string;
+  source: string;
+  caller_skill_id: number | null;
+  caller_version_id: number | null;
+  caller_run_id: number | null;
+  web_app_instance_id: string | null;
+  initiating_action: string | null;
+  input_json: Record<string, unknown>;
+  input_hash: string;
+  reason_to_call: string;
+  presentation_json: InvocationApprovalPresentation;
+  dispatch_metadata_json: Record<string, unknown>;
+  decision_status: "pending" | "approved" | "denied";
+  execution_status: "not_started" | "executing" | "succeeded" | "failed" | "stale" | "outcome_unknown";
+  decided_via: string | null;
+  decided_by: string | null;
+  telegram_delivery_status: string;
+  telegram_message_ids_json: number[];
+  result_json: Record<string, unknown> | null;
+  error_type: string | null;
+  error_message: string | null;
+  created_at: string;
+  delivered_at: string | null;
+  decided_at: string | null;
+  execution_started_at: string | null;
+  execution_completed_at: string | null;
+  updated_at: string;
+}
+
+export interface InvocationApprovalPresentation {
+  version: number;
+  preset: string;
+  action: string;
+  caller: string;
+  fields: Array<{
+    label: string;
+    value: string;
+    multiline: boolean;
+  }>;
+  reason: string;
+}
+
+export interface PendingApprovalReceipt {
+  status: "pending_approval";
+  approval_id: number;
 }
 
 export type ChatResponse =
@@ -717,6 +817,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({}),
     }),
+  listInvocationApprovals: () =>
+    request<InvocationApproval[]>("/invocation-approvals"),
+  getInvocationApproval: (id: number) =>
+    request<InvocationApproval>(`/invocation-approvals/${id}`),
+  approveInvocationApproval: (id: number) =>
+    request<InvocationApproval>(`/invocation-approvals/${id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  denyInvocationApproval: (id: number) =>
+    request<InvocationApproval>(`/invocation-approvals/${id}/deny`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
   listMemoryFacts: () => request<MemoryFact[]>("/memory-facts"),
   createMemoryFact: (payload: MemoryFactInput) =>
     request<MemoryFact>("/memory-facts", {
@@ -789,13 +903,42 @@ export const api = {
     request<void>("/settings/integrations/notion", { method: "DELETE" }),
   getGoogleCalendarConnection: () =>
     request<GoogleCalendarConnectionStatus>("/settings/integrations/google-calendar"),
-  startGoogleCalendarOAuth: (clientId: string, clientSecret: string) =>
+  getGoogleOAuthClient: () =>
+    request<GoogleOAuthClientStatus>("/settings/integrations/google"),
+  putGoogleOAuthClient: (clientId: string, clientSecret: string) =>
+    request<GoogleOAuthClientStatus>("/settings/integrations/google/oauth-client", {
+      method: "PUT",
+      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+    }),
+  removeGoogleOAuthClient: () =>
+    request<GoogleOAuthClientStatus>("/settings/integrations/google/oauth-client", { method: "DELETE" }),
+  startGoogleCalendarOAuth: () =>
     request<{ authorization_url: string }>("/settings/integrations/google-calendar/oauth/start", {
       method: "POST",
-      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
     }),
   removeGoogleCalendarConnection: () =>
     request<void>("/settings/integrations/google-calendar", { method: "DELETE" }),
+  getGmailConnection: () =>
+    request<GmailConnectionStatus>("/settings/integrations/gmail"),
+  startGmailOAuth: () =>
+    request<{ authorization_url: string }>("/settings/integrations/gmail/oauth/start", {
+      method: "POST",
+    }),
+  removeGmailConnection: () =>
+    request<void>("/settings/integrations/gmail", { method: "DELETE" }),
+  getTelegramConnection: () =>
+    request<TelegramConnectionStatus>("/settings/integrations/telegram"),
+  startTelegramPairing: (token: string) =>
+    request<TelegramPairingResponse>("/settings/integrations/telegram/pairing/start", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+  refreshTelegramPairing: () =>
+    request<TelegramConnectionStatus>("/settings/integrations/telegram/pairing/refresh", {
+      method: "POST",
+    }),
+  removeTelegramConnection: () =>
+    request<void>("/settings/integrations/telegram", { method: "DELETE" }),
   getAtlasStatus: () => request<AtlasIntegrationStatus>("/settings/integrations/atlas"),
   updateAtlasDirectory: (directory: string) =>
     request<AtlasIntegrationStatus>("/settings/integrations/atlas/directory", {
@@ -903,7 +1046,7 @@ export const api = {
       method: "POST",
     }),
   runSkill: (id: number, input: Record<string, unknown> = {}) =>
-    request<SkillRun>(`/skills/${id}/run`, {
+    request<SkillRun | PendingApprovalReceipt>(`/skills/${id}/run`, {
       method: "POST",
       body: JSON.stringify({ input }),
     }),

@@ -24,6 +24,7 @@ For new Project-mode builds, the backend derives an initial skeleton from the ap
     "properties": {},
     "additionalProperties": true
   },
+  "requires_invocation_approval": false,
   "function_requirements": ["installed_function_name"],
   "integration_requirements": [],
   "dependencies": [],
@@ -44,9 +45,11 @@ Installation state, enabled state, active version, provenance, and risk level ar
 
 The ProductManager blueprint declares object-shaped `input_schema` and `output_schema` JSON Schemas for new function and service skills. Builder implements that contract but does not redefine it. Service schemas are required. The backend validates the schemas themselves and validates every registry function input/output and every scheduled service input/output against them. Older installed functions with missing schemas remain directly runnable, but appear unavailable for cross-skill registry invocation until updated with explicit contracts.
 
+`requires_invocation_approval` defaults to `false` and is valid only for `function`. When true, the backend derives the public `reason_to_call` input and pending-receipt output without changing the authored schemas. The authored input must not define the reserved `reason_to_call` field. This flag is a per-call execution boundary, not a permission request. See [Invocation approvals](../security/invocation_approvals.md).
+
 `function_requirements` declares caller relationships as exact installed user-function names. ProductManager selects unified catalog ids in the blueprint; the backend derives this manifest list for selected user functions. There is no per-function reason field. Requirements are not Python dependencies, and the caller does not inherit the target function's permissions. A skill cannot require itself and duplicate target names are invalid.
 
-`integration_requirements` declares trusted provider authorization separately from ordinary network permission. The backend groups blueprint-selected operations into one entry per provider. GitHub entries contain exact normalized repository scope when required; Atlas and Notion entries use an empty caller-selected resource scope, with Notion Todo and Reports containment fixed by their trusted connection settings. Wildcards, credentials, duplicate providers, and operations assigned to the wrong provider are invalid. See [GitHub integration](../integrations/github.md), [Atlas integration](../integrations/atlas.md), and [Notion integration](../integrations/notion.md).
+`integration_requirements` declares trusted provider authorization separately from ordinary network permission. The backend groups blueprint-selected operations into one entry per provider. GitHub entries contain exact normalized repository scope when required; Atlas, Notion, Gmail, and Telegram entries use an empty caller-selected resource scope, with provider containment fixed by trusted connection settings. Wildcards, credentials, duplicate providers, and operations assigned to the wrong provider are invalid. See [GitHub integration](../integrations/github.md), [Atlas integration](../integrations/atlas.md), [Notion integration](../integrations/notion.md), [Gmail integration](../integrations/gmail.md), and [Telegram integration](../integrations/telegram.md).
 
 `schedule` seeds the initial runtime schedule for a `service`. A service manifest must declare exactly one schedule. Function and web-app manifests must use `null`. Supported service schedule forms are:
 

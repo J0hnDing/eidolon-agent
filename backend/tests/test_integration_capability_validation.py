@@ -110,10 +110,12 @@ def test_direct_google_calendar_and_oauth_secret_access_are_rejected(tmp_path: P
         "import os\n"
         "import requests\n"
         "requests.get('https://www.googleapis.com/calendar/v3/calendars/primary/events')\n"
-        "token = os.environ['GOOGLE_CALENDAR_REFRESH_TOKEN']\n",
+        "requests.get('https://gmail.googleapis.com/gmail/v1/users/me/messages')\n"
+        "requests.post('https://api.telegram.org/bot-token/sendMessage')\n"
+        "token = os.environ['GMAIL_OAUTH_REFRESH_TOKEN']\n",
     )
     capabilities = {finding.capability for finding in result.findings}
-    assert {"direct_google_access", "secrets"}.issubset(capabilities)
+    assert {"direct_google_access", "direct_telegram_access", "secrets"}.issubset(capabilities)
 
 
 def test_browser_integration_invocation_is_rejected(tmp_path: Path) -> None:

@@ -1215,6 +1215,7 @@ def test_machine_consumed_codex_actions_have_valid_output_schemas(action: str) -
                 "name",
                 "description",
                 "runtime",
+                "requires_invocation_approval",
                 "input_schema",
                 "output_schema",
                 "expected_behavior",
@@ -1228,6 +1229,7 @@ def test_machine_consumed_codex_actions_have_valid_output_schemas(action: str) -
                 "goal",
                 "skill_name",
                 "runtime",
+                "requires_invocation_approval",
                 "input_schema",
                 "output_schema",
                 "functions",
@@ -1240,6 +1242,7 @@ def test_machine_consumed_codex_actions_have_valid_output_schemas(action: str) -
                 "goal",
                 "skill_name",
                 "runtime",
+                "requires_invocation_approval",
                 "suggestion",
                 "input_schema",
                 "output_schema",
@@ -1262,7 +1265,9 @@ def test_product_manager_output_schemas_constrain_known_blueprint_fields(
         blueprint_schema = blueprint_schema["anyOf"][1]
     assert blueprint_schema["additionalProperties"] is False
     assert set(blueprint_schema["properties"]) == expected_fields
-    assert set(blueprint_schema["required"]) == expected_fields
+    assert set(blueprint_schema["required"]) == expected_fields - {
+        "requires_invocation_approval"
+    }
 
 
 def test_build_blueprint_schema_keeps_nested_callable_schemas_open() -> None:

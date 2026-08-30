@@ -498,6 +498,8 @@ def test_docker_web_app_ingress_does_not_grant_internet_egress(tmp_path: Path) -
     assert "api.notion.com:127.0.0.1" in app_command
     assert "www.googleapis.com:127.0.0.1" in app_command
     assert "oauth2.googleapis.com:127.0.0.1" in app_command
+    assert "gmail.googleapis.com:127.0.0.1" in app_command
+    assert "api.telegram.org:127.0.0.1" in app_command
     assert "127.0.0.1::8000" not in app_command
     assert "--read-only" in app_command
     assert app_command[app_command.index("--cap-drop") + 1] == "ALL"

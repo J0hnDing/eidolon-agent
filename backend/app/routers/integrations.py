@@ -6,23 +6,30 @@ from app.db import get_db
 from app.schemas.integration import (
     GitHubConnectionStatus,
     GitHubCredentialWrite,
+    GmailConnectionStatus,
     GoogleCalendarConnectionStatus,
-    GoogleCalendarOAuthStart,
-    GoogleCalendarOAuthStartResponse,
+    GoogleOAuthClientStatus,
+    GoogleOAuthClientWrite,
+    GoogleOAuthStartResponse,
     IntegrationInvocationRequest,
     IntegrationInvocationResponse,
     NotionConnectionStatus,
     NotionCredentialWrite,
     NotionDataSourcesWrite,
+    TelegramConnectionStatus,
+    TelegramPairingResponse,
+    TelegramPairingStart,
 )
 from app.services.function_catalog_service import FunctionCatalogService
 from app.services.function_registry_service import FunctionRegistryError, FunctionRegistryService
+from app.services.gmail_provider import GMAIL_OAUTH_RETURN_URL
 from app.services.google_calendar_provider import GOOGLE_OAUTH_RETURN_URL
 from app.services.integration_service import (
     IntegrationCaller,
     IntegrationError,
     build_default_integration_service,
 )
+from app.services.telegram_service import TelegramService, TelegramServiceError
 
 router = APIRouter(tags=["integrations"])
 
@@ -118,6 +125,42 @@ def remove_notion_connection(db: Session = Depends(get_db)) -> Response:
 
 
 @router.get(
+    "/settings/integrations/google",
+    response_model=GoogleOAuthClientStatus,
+)
+def google_oauth_client_status(db: Session = Depends(get_db)) -> GoogleOAuthClientStatus:
+    return build_default_integration_service(db).google_oauth_client_status()
+
+
+@router.put(
+    "/settings/integrations/google/oauth-client",
+    response_model=GoogleOAuthClientStatus,
+)
+def put_google_oauth_client(
+    payload: GoogleOAuthClientWrite,
+    db: Session = Depends(get_db),
+) -> GoogleOAuthClientStatus:
+    try:
+        return build_default_integration_service(db).configure_google_oauth_client(
+            payload.client_id.get_secret_value(),
+            payload.client_secret.get_secret_value(),
+        )
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+
+
+@router.delete(
+    "/settings/integrations/google/oauth-client",
+    response_model=GoogleOAuthClientStatus,
+)
+def remove_google_oauth_client(db: Session = Depends(get_db)) -> GoogleOAuthClientStatus:
+    try:
+        return build_default_integration_service(db).remove_google_oauth_client()
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+
+
+@router.get(
     "/settings/integrations/google-calendar",
     response_model=GoogleCalendarConnectionStatus,
 )
@@ -127,18 +170,14 @@ def google_calendar_connection_status(db: Session = Depends(get_db)) -> GoogleCa
 
 @router.post(
     "/settings/integrations/google-calendar/oauth/start",
-    response_model=GoogleCalendarOAuthStartResponse,
+    response_model=GoogleOAuthStartResponse,
 )
 def start_google_calendar_oauth(
-    payload: GoogleCalendarOAuthStart,
     db: Session = Depends(get_db),
-) -> GoogleCalendarOAuthStartResponse:
+) -> GoogleOAuthStartResponse:
     try:
-        authorization_url = build_default_integration_service(db).start_google_calendar_oauth(
-            payload.client_id.get_secret_value(),
-            payload.client_secret.get_secret_value(),
-        )
-        return GoogleCalendarOAuthStartResponse(authorization_url=authorization_url)
+        authorization_url = build_default_integration_service(db).start_google_calendar_oauth()
+        return GoogleOAuthStartResponse(authorization_url=authorization_url)
     except IntegrationError as exc:
         raise _http_error(exc) from None
 
@@ -183,6 +222,93 @@ def remove_google_calendar_connection(db: Session = Depends(get_db)) -> Response
         FunctionCatalogService(db).refresh()
     except IntegrationError as exc:
         raise _http_error(exc) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/settings/integrations/gmail", response_model=GmailConnectionStatus)
+def gmail_connection_status(db: Session = Depends(get_db)) -> GmailConnectionStatus:
+    return build_default_integration_service(db).gmail_connection_status()
+
+
+@router.post("/settings/integrations/gmail/oauth/start", response_model=GoogleOAuthStartResponse)
+def start_gmail_oauth(db: Session = Depends(get_db)) -> GoogleOAuthStartResponse:
+    try:
+        authorization_url = build_default_integration_service(db).start_gmail_oauth()
+        return GoogleOAuthStartResponse(authorization_url=authorization_url)
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+
+
+@router.get(
+    "/settings/integrations/gmail/oauth/callback",
+    response_class=RedirectResponse,
+    include_in_schema=False,
+)
+def complete_gmail_oauth(
+    state_value: str = Query(default="", alias="state"),
+    code_value: str = Query(default="", alias="code"),
+    error: str = Query(default=""),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    service = build_default_integration_service(db)
+    if error:
+        try:
+            service.discard_gmail_oauth(state_value)
+        except IntegrationError:
+            result = "failed"
+        else:
+            result = "denied" if error == "access_denied" else "failed"
+        return RedirectResponse(f"{GMAIL_OAUTH_RETURN_URL}?gmail={result}", status_code=303)
+    try:
+        service.complete_gmail_oauth(state_value, code_value)
+        FunctionCatalogService(db).refresh()
+    except IntegrationError:
+        return RedirectResponse(f"{GMAIL_OAUTH_RETURN_URL}?gmail=failed", status_code=303)
+    finally:
+        code_value = ""
+    return RedirectResponse(f"{GMAIL_OAUTH_RETURN_URL}?gmail=connected", status_code=303)
+
+
+@router.delete("/settings/integrations/gmail", status_code=status.HTTP_204_NO_CONTENT)
+def remove_gmail_connection(db: Session = Depends(get_db)) -> Response:
+    try:
+        build_default_integration_service(db).remove_gmail_connection()
+        FunctionCatalogService(db).refresh()
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/settings/integrations/telegram", response_model=TelegramConnectionStatus)
+def telegram_connection_status(db: Session = Depends(get_db)) -> TelegramConnectionStatus:
+    return TelegramService(db).connection_status()
+
+
+@router.post("/settings/integrations/telegram/pairing/start", response_model=TelegramPairingResponse)
+def start_telegram_pairing(
+    payload: TelegramPairingStart,
+    db: Session = Depends(get_db),
+) -> TelegramPairingResponse:
+    try:
+        result = TelegramService(db).start_pairing(payload.token.get_secret_value())
+        FunctionCatalogService(db).refresh()
+        return result
+    except TelegramServiceError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
+
+
+@router.post("/settings/integrations/telegram/pairing/refresh", response_model=TelegramConnectionStatus)
+def refresh_telegram_pairing(db: Session = Depends(get_db)) -> TelegramConnectionStatus:
+    return TelegramService(db).connection_status()
+
+
+@router.delete("/settings/integrations/telegram", status_code=status.HTTP_204_NO_CONTENT)
+def remove_telegram_connection(db: Session = Depends(get_db)) -> Response:
+    try:
+        TelegramService(db).remove()
+        FunctionCatalogService(db).refresh()
+    except TelegramServiceError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

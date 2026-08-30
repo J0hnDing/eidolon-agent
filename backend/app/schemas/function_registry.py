@@ -3,6 +3,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from app.schemas.common import RiskLevel
+from app.schemas.invocation_approval import PendingApprovalReceipt
 from app.schemas.skill_run import SkillRunRead
 
 FunctionAvailability = Literal["available", "disabled", "unavailable"]
@@ -38,6 +39,7 @@ class FunctionCatalogEntryRead(BaseModel):
     mcp_destructive: bool | None = None
     mcp_open_world: bool | None = None
     mcp_contract_fingerprint: str | None = None
+    requires_invocation_approval: bool = False
 
 
 class FunctionContractRead(BaseModel):
@@ -54,6 +56,7 @@ class FunctionContractRead(BaseModel):
     availability_reasons: list[str] = Field(default_factory=list)
     declared_by_caller: bool | None = None
     access_state: FunctionAccessState = "not_requested"
+    requires_invocation_approval: bool = False
 
 
 class FunctionRequirementReview(BaseModel):
@@ -73,6 +76,7 @@ class FunctionInvocationRequest(BaseModel):
 
 
 class FunctionInvocationResponse(BaseModel):
-    run: SkillRunRead
+    run: SkillRunRead | None = None
     output: dict[str, Any] | None = None
     error: str | None = None
+    approval: PendingApprovalReceipt | None = None

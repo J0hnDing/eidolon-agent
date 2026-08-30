@@ -1028,10 +1028,16 @@ class CodexService:
             self.db,
             project_root=self.project_root,
         ).available_index()
+        active_manifest = self.db.get(SkillVersion, skill.active_version_id) if skill.active_version_id else None
+        requires_invocation_approval = bool(
+            active_manifest
+            and active_manifest.manifest_json.get("requires_invocation_approval", False)
+        )
         payload = {
             "codex_task": "product_manager_repair_blueprint",
             "skill_name": skill.name,
             "runtime": skill.runtime,
+            "requires_invocation_approval": requires_invocation_approval,
             "input_schema": skill.input_schema_json,
             "output_schema": skill.output_schema_json,
             "functions": self._skill_function_ids(skill),
@@ -1057,12 +1063,18 @@ class CodexService:
             project_root=self.project_root,
         ).available_index()
         permission_policy = planning_permission_policy()
+        active_manifest = self.db.get(SkillVersion, skill.active_version_id) if skill.active_version_id else None
+        requires_invocation_approval = bool(
+            active_manifest
+            and active_manifest.manifest_json.get("requires_invocation_approval", False)
+        )
         payload = {
             "codex_task": "product_manager_update_review",
             "skill_name": skill.name,
             "description": skill.description,
             "suggestion": suggestion,
             "runtime": skill.runtime,
+            "requires_invocation_approval": requires_invocation_approval,
             "input_schema": skill.input_schema_json,
             "output_schema": skill.output_schema_json,
             "functions": self._skill_function_ids(skill),
@@ -1633,6 +1645,12 @@ class CodexService:
             ),
             "runtime": runtime,
             "entrypoint": "app:app" if runtime == "web_app" else "skill.py",
+            "requires_invocation_approval": bool(
+                blueprint.get(
+                    "requires_invocation_approval",
+                    plan.get("requires_invocation_approval", False),
+                )
+            ),
             "instructions_path": self._planned_instructions_path(plan),
             "input_schema": blueprint.get("input_schema", plan.get("input_schema")),
             "output_schema": blueprint.get("output_schema", plan.get("output_schema")),
@@ -1887,6 +1905,7 @@ Payload:
             "name": identity["skill_name"],
             "description": generation_request.user_message,
             "runtime": runtime,
+            "requires_invocation_approval": False,
             "input_schema": {"type": "object", "additionalProperties": True} if runtime in {"function", "service"} else None,
             "output_schema": {"type": "object", "additionalProperties": True} if runtime in {"function", "service"} else None,
             "expected_behavior": ["Implement the requested reusable capability."],
@@ -1930,11 +1949,16 @@ Payload:
         return {"schema_version": 1, "nodes": [node]}
 
     def _fallback_repair_blueprint(self, skill: Skill, user_request: str | None) -> dict[str, object]:
+        active_manifest = self.db.get(SkillVersion, skill.active_version_id) if skill.active_version_id else None
+        manifest_json = active_manifest.manifest_json if active_manifest is not None else {}
         return {
             "goal": user_request or f"Repair {skill.name}.",
             "skill_name": skill.name,
             "display_name": skill.name.replace("_", " ").replace("-", " ").title(),
             "runtime": skill.runtime,
+            "requires_invocation_approval": bool(
+                manifest_json.get("requires_invocation_approval", False)
+            ),
             "input_schema": skill.input_schema_json,
             "output_schema": skill.output_schema_json,
             "functions": self._skill_function_ids(skill),
@@ -1960,6 +1984,14 @@ Payload:
             "goal": decision["summary"],
             "skill_name": skill.name,
             "runtime": skill.runtime,
+            "requires_invocation_approval": bool(
+                self.db.get(SkillVersion, skill.active_version_id)
+                and self.db.get(SkillVersion, skill.active_version_id).manifest_json.get(
+                    "requires_invocation_approval", False
+                )
+            )
+            if skill.active_version_id
+            else False,
             "suggestion": suggestion,
             "functions": self._skill_function_ids(skill),
             "input_schema": skill.input_schema_json,

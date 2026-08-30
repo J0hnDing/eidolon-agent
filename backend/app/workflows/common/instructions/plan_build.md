@@ -26,6 +26,7 @@ Planning responsibilities for `proceed_to_approval`:
 - Use `runtime=web_app` only for a self-rendered interactive application. Use `runtime=service` for a recurring headless endpoint, and `runtime=function` for an unscheduled callable capability.
 - Use one filesystem-safe `name` and one concise `description`; do not return separate goal, skill-name, or display-name fields.
 - For a function or service, define complete object-shaped input and output JSON Schemas. For a web application, both schemas are `null`.
+- Set `requires_invocation_approval=true` only for a function whose every call must pause for backend-managed user approval. Otherwise set it to `false`. Never add the reserved `reason_to_call` field to the authored input schema; Eidolon projects it onto the callable contract.
 - Describe concrete user-visible requirements in `expected_behavior`; do not return blueprint-level acceptance criteria. Task-specific acceptance criteria are created later only for the task-DAG workflow.
 - Put every needed catalog function id in `blueprint.functions` with no reason fields.
 - A service requires recurring schedule metadata. Functions and web applications always use `schedule: null`.

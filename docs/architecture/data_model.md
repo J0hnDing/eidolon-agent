@@ -68,6 +68,16 @@ Links one caller skill, one target function, the user-facing approval request, a
 
 Stores one sanitized connection row per provider. GitHub stores validated account identity. Notion additionally stores sanitized bot/workspace identity plus separate non-secret configured Todo and Reports data-source IDs under one credential reference. The Reports ID is nullable for compatibility with legacy Todo-only connections. Atlas may use the row for its optional owned-process passphrase lifecycle. Every secret-bearing provider stores only the operating-system secret-store implementation id and opaque reference; credential plaintext, authorization headers, provider responses, todos, and reports are never stored.
 
+Calendar and Gmail use separate connection rows, account identities, OAuth refresh-token references, and service secret namespaces. They may authorize different Google accounts. One singleton `google_oauth_client_configs` row references their shared Google OAuth application client in the OS secret store; it contains no service grant or account identity.
+
+### telegram_bot_connections
+
+Stores role/default selection, sanitized bot identity and status, paired private chat/user ids, persisted update offset, and hashed one-time pairing state. Bot tokens remain in the operating-system secret store.
+
+### invocation_approvals
+
+Stores the immutable target/version-or-contract/account identity, caller attribution, bounded business input and hash, reason, Telegram delivery metadata, separate decision/execution states, outcome, errors, and timestamps for per-call approval. It is intentionally unrelated to `approval_requests`.
+
 ### integration_authorizations
 
 Links one skill/provider integration-contract fingerprint to its `integration_access` approval. Different fingerprints may coexist so a proposed draft cannot revoke the active version's unchanged contract; validated account identity changes invalidate all existing rows while preserving history.

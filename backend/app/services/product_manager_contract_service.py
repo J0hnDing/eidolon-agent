@@ -26,6 +26,7 @@ class ProductManagerContractService:
             "skill_name",
             "display_name",
             "runtime",
+            "requires_invocation_approval",
             "input_schema",
             "output_schema",
             "expected_behavior",
@@ -52,6 +53,13 @@ class ProductManagerContractService:
         )[:256]
         runtime = blueprint.get("runtime") or fallback.get("runtime", "function")
         blueprint["runtime"] = runtime if runtime in {"function", "web_app", "service"} else "function"
+        blueprint["requires_invocation_approval"] = bool(
+            blueprint.get("requires_invocation_approval", False)
+        )
+        if blueprint["requires_invocation_approval"] and blueprint["runtime"] != "function":
+            raise ProductManagerContractError(
+                "requires_invocation_approval is supported only for function skills"
+            )
         blueprint["input_schema"] = self._object_schema(
             blueprint.get("input_schema"),
             fallback.get("input_schema"),
@@ -284,6 +292,11 @@ class ProductManagerContractService:
             raise ProductManagerContractError("A completed ProductManager plan requires blueprint and permissions")
 
         runtime = blueprint.get("runtime")
+        requires_invocation_approval = blueprint.get("requires_invocation_approval") is True
+        if requires_invocation_approval and runtime != "function":
+            raise ProductManagerContractError(
+                "requires_invocation_approval is supported only for function blueprints"
+            )
         if runtime in {"function", "service"}:
             for field_name in ("input_schema", "output_schema"):
                 callable_schema = blueprint.get(field_name)
@@ -297,6 +310,12 @@ class ProductManagerContractService:
                     raise ProductManagerContractError(
                         f"A {runtime} blueprint contains an invalid {field_name}"
                     ) from exc
+            if requires_invocation_approval:
+                properties = blueprint["input_schema"].get("properties", {})
+                if isinstance(properties, dict) and "reason_to_call" in properties:
+                    raise ProductManagerContractError(
+                        "reason_to_call is reserved for backend-managed invocation approval"
+                    )
             if runtime == "function" and blueprint.get("schedule") is not None:
                 raise ProductManagerContractError("A function blueprint cannot include a schedule")
             if runtime == "service" and not isinstance(blueprint.get("schedule"), dict):
@@ -327,6 +346,9 @@ class ProductManagerContractService:
             "name": str(blueprint["name"]).strip(),
             "description": str(blueprint["description"]).strip(),
             "runtime": blueprint["runtime"],
+            "requires_invocation_approval": bool(
+                blueprint.get("requires_invocation_approval", False)
+            ),
             "input_schema": blueprint["input_schema"],
             "output_schema": blueprint["output_schema"],
             "expected_behavior": self._unique_strings(blueprint["expected_behavior"]),

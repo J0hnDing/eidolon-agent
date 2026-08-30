@@ -12,11 +12,15 @@ import {
   CodexRoutingSettingsPayload,
   CodexUsageWindow,
   GitHubConnectionStatus,
+  GmailConnectionStatus,
   GoogleCalendarConnectionStatus,
+  GoogleOAuthClientStatus,
   NotionConnectionStatus,
   PermissionPolicy,
+  TelegramConnectionStatus,
   api,
 } from "../api/client";
+import { formatSystemDateTime } from "../lib/dateTime";
 
 export type SettingsSection = "usage" | "project" | "models" | "integrations" | "permissions";
 
@@ -65,8 +69,14 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
   const [notionDataSourceId, setNotionDataSourceId] = useState("");
   const [notionReportDataSourceId, setNotionReportDataSourceId] = useState("");
   const [googleCalendar, setGoogleCalendar] = useState<GoogleCalendarConnectionStatus | null>(null);
+  const [googleOAuth, setGoogleOAuth] = useState<GoogleOAuthClientStatus | null>(null);
   const [googleClientId, setGoogleClientId] = useState("");
   const [googleClientSecret, setGoogleClientSecret] = useState("");
+  const [gmail, setGmail] = useState<GmailConnectionStatus | null>(null);
+  const [telegram, setTelegram] = useState<TelegramConnectionStatus | null>(null);
+  const [telegramToken, setTelegramToken] = useState("");
+  const [telegramPairingCode, setTelegramPairingCode] = useState<string | null>(null);
+  const [telegramPairingExpiry, setTelegramPairingExpiry] = useState<string | null>(null);
   const [atlas, setAtlas] = useState<AtlasIntegrationStatus | null>(null);
   const [atlasDirectory, setAtlasDirectory] = useState("");
   const [atlasPassphrase, setAtlasPassphrase] = useState("");
@@ -99,11 +109,14 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setRouting(nextRouting);
         setRoutingDirty(false);
       } else if (section === "integrations") {
-        const [nextGitHub, nextAtlas, nextNotion, nextGoogleCalendar, nextCodexMcp] = await Promise.all([
+        const [nextGitHub, nextAtlas, nextNotion, nextGoogleOAuth, nextGoogleCalendar, nextGmail, nextTelegram, nextCodexMcp] = await Promise.all([
           api.getGitHubConnection(),
           api.getAtlasStatus().catch((err) => atlasUnavailableStatus(err)),
           api.getNotionConnection().catch((err) => notionUnavailableStatus(err)),
+          api.getGoogleOAuthClient().catch((err) => googleOAuthUnavailableStatus(err)),
           api.getGoogleCalendarConnection().catch((err) => googleCalendarUnavailableStatus(err)),
+          api.getGmailConnection().catch((err) => gmailUnavailableStatus(err)),
+          api.getTelegramConnection().catch((err) => telegramUnavailableStatus(err)),
           api.getCodexMcpStatus().catch((err) => codexMcpUnavailableStatus(err)),
         ]);
         setGitHub(nextGitHub);
@@ -112,7 +125,10 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setNotion(nextNotion);
         setNotionDataSourceId(nextNotion.data_source_id ?? "");
         setNotionReportDataSourceId(nextNotion.report_data_source_id ?? "");
+        setGoogleOAuth(nextGoogleOAuth);
         setGoogleCalendar(nextGoogleCalendar);
+        setGmail(nextGmail);
+        setTelegram(nextTelegram);
         setCodexMcp(nextCodexMcp);
       } else {
         setPermissionPolicy(await api.getPermissionPolicy());
@@ -131,12 +147,17 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
   useEffect(() => {
     if (section !== "integrations") return;
     const url = new URL(window.location.href);
-    const result = url.searchParams.get("google_calendar");
-    if (!result) return;
-    if (result === "connected") setSaved("Google Calendar connected.");
-    else if (result === "denied") setError("Google Calendar authorization was denied.");
-    else setError("Google Calendar authorization failed or expired. Try connecting again.");
+    const calendarResult = url.searchParams.get("google_calendar");
+    const gmailResult = url.searchParams.get("gmail");
+    if (!calendarResult && !gmailResult) return;
+    if (calendarResult === "connected") setSaved("Google Calendar connected.");
+    else if (calendarResult === "denied") setError("Google Calendar authorization was denied.");
+    else if (calendarResult) setError("Google Calendar authorization failed or expired. Try connecting again.");
+    if (gmailResult === "connected") setSaved("Gmail connected.");
+    else if (gmailResult === "denied") setError("Gmail authorization was denied.");
+    else if (gmailResult) setError("Gmail authorization failed or expired. Try connecting again.");
     url.searchParams.delete("google_calendar");
+    url.searchParams.delete("gmail");
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   }, [section]);
 
@@ -285,19 +306,50 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     }
   }
 
-  async function startGoogleCalendarOAuth() {
+  async function saveGoogleOAuthClient() {
     if (!googleClientId || !googleClientSecret) return;
     setError(null);
     setSaved(null);
     setLoading(true);
     try {
-      const result = await api.startGoogleCalendarOAuth(googleClientId, googleClientSecret);
+      setGoogleOAuth(await api.putGoogleOAuthClient(googleClientId, googleClientSecret));
       setGoogleClientId("");
       setGoogleClientSecret("");
-      window.location.assign(result.authorization_url);
+      setSaved("Shared Google OAuth client saved.");
     } catch (err) {
       setGoogleClientId("");
       setGoogleClientSecret("");
+      setError(err instanceof Error ? err.message : "Could not save the shared Google OAuth client");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function removeGoogleOAuthClient() {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      setGoogleOAuth(await api.removeGoogleOAuthClient());
+      setGoogleClientId("");
+      setGoogleClientSecret("");
+      setSaved("Shared Google OAuth client removed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove the shared Google OAuth client");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function startGoogleCalendarOAuth() {
+    if (!googleOAuth?.configured) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const result = await api.startGoogleCalendarOAuth();
+      window.location.assign(result.authorization_url);
+    } catch (err) {
       setError(err instanceof Error ? err.message : "Could not start Google Calendar authorization");
       setLoading(false);
     }
@@ -310,14 +362,88 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     try {
       await api.removeGoogleCalendarConnection();
       setGoogleCalendar(await api.getGoogleCalendarConnection());
-      setGoogleClientId("");
-      setGoogleClientSecret("");
       setSaved("Google Calendar connection removed.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not remove Google Calendar connection");
     } finally {
       setLoading(false);
     }
+  }
+
+  async function startGmailOAuth() {
+    if (!googleOAuth?.configured) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const result = await api.startGmailOAuth();
+      window.location.assign(result.authorization_url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start Gmail authorization");
+      setLoading(false);
+    }
+  }
+
+  async function removeGmailConnection() {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      await api.removeGmailConnection();
+      setGmail(await api.getGmailConnection());
+      setSaved("Gmail connection removed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove Gmail connection");
+    } finally { setLoading(false); }
+  }
+
+  async function startTelegramPairing() {
+    if (!telegramToken) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const result = await api.startTelegramPairing(telegramToken);
+      setTelegram(result.connection);
+      setTelegramToken("");
+      setTelegramPairingCode(result.pairing_code);
+      setTelegramPairingExpiry(result.expires_at);
+      setSaved("Telegram bot validated. Finish pairing in the private bot chat.");
+    } catch (err) {
+      setTelegramToken("");
+      setError(err instanceof Error ? err.message : "Could not start Telegram pairing");
+    } finally { setLoading(false); }
+  }
+
+  async function refreshTelegramPairing() {
+    setError(null);
+    try {
+      const next = await api.refreshTelegramPairing();
+      setTelegram(next);
+      if (next.connected) {
+        setTelegramPairingCode(null);
+        setTelegramPairingExpiry(null);
+        setSaved("Telegram bot paired.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not refresh Telegram pairing");
+    }
+  }
+
+  async function removeTelegramConnection() {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      await api.removeTelegramConnection();
+      setTelegram(await api.getTelegramConnection());
+      setTelegramToken("");
+      setTelegramPairingCode(null);
+      setTelegramPairingExpiry(null);
+      setSaved("Telegram bot removed. Pending actions remain available for local decisions.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove Telegram bot");
+    } finally { setLoading(false); }
   }
 
   async function saveAtlasDirectory() {
@@ -432,6 +558,11 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     }
   }
 
+  const googleServiceGrantPresent = Boolean(
+    (googleCalendar && googleCalendar.status !== "disconnected")
+    || (gmail && gmail.status !== "disconnected"),
+  );
+
   return (
     <section className="page stack">
       <header className="page-header">
@@ -525,70 +656,90 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
         </section>
       )}
-      {section === "integrations" && googleCalendar && (
+      {section === "integrations" && googleOAuth && googleCalendar && gmail && (
         <section className="detail-panel stack">
           <div>
-            <h2>Google Calendar connection</h2>
+            <h2>Google connection</h2>
             <p className="muted">
-              OAuth grants Eidolon access only to events on calendars you own. The five event functions always use your primary calendar; Eidolon keeps no event copy, sync process, or calendar UI.
+              One Google OAuth client is shared by Calendar and Gmail. Each service has its own authorization grant, refresh token, scopes, selected account, connect button, and disconnect action, so the two accounts may differ.
             </p>
+            <p className="muted">The requested <code>gmail.modify</code> scope is restricted by Google; configure the consent screen and testing users before connecting Gmail.</p>
           </div>
           <dl className="detail-grid">
-            <div><dt>Status</dt><dd>{googleCalendar.connected ? "Connected" : googleCalendar.status}</dd></div>
-            <div><dt>Account</dt><dd>{googleCalendar.account_email ?? "None"}</dd></div>
-            <div><dt>Last validated</dt><dd>{formatDate(googleCalendar.last_validated_at)}</dd></div>
+            <div><dt>OAuth client</dt><dd>{googleOAuth.configured ? "Configured" : googleOAuth.status.replace(/_/g, " ")}</dd></div>
+            <div><dt>Updated</dt><dd>{formatDate(googleOAuth.updated_at)}</dd></div>
           </dl>
-          {googleCalendar.error_type && (
-            <p className="error-text">Connection status: {googleCalendar.error_type.replace(/_/g, " ")}</p>
-          )}
+          {googleOAuth.error_type && <p className="error-text">OAuth client status: {googleOAuth.error_type.replace(/_/g, " ")}</p>}
           <div className="settings-subsection stack">
             <div>
-              <h3>OAuth client</h3>
+              <h3>Shared OAuth client</h3>
               <p className="muted">
-                Enable Google Calendar API, create a Web application OAuth client, and register this exact redirect URI:
+                Enable the Google Calendar and Gmail APIs on one Web application OAuth client and register both redirect URIs:
               </p>
-              <p><code>{googleCalendar.oauth_redirect_uri}</code></p>
+              <p><code>{googleOAuth.calendar_redirect_uri}</code></p>
+              <p><code>{googleOAuth.gmail_redirect_uri}</code></p>
             </div>
             <label>
-              {googleCalendar.connected ? "Replacement Google OAuth client ID" : "Google OAuth client ID"}
+              {googleOAuth.configured ? "Replacement Google OAuth client ID" : "Google OAuth client ID"}
               <input
                 type="password"
                 autoComplete="new-password"
                 value={googleClientId}
                 onChange={(event) => setGoogleClientId(event.target.value)}
                 placeholder="Client ID is never displayed after submission"
+                disabled={loading || googleServiceGrantPresent}
               />
             </label>
             <label>
-              {googleCalendar.connected ? "Replacement Google OAuth client secret" : "Google OAuth client secret"}
+              {googleOAuth.configured ? "Replacement Google OAuth client secret" : "Google OAuth client secret"}
               <input
                 type="password"
                 autoComplete="new-password"
                 value={googleClientSecret}
                 onChange={(event) => setGoogleClientSecret(event.target.value)}
                 placeholder="Client secret is never displayed after submission"
+                disabled={loading || googleServiceGrantPresent}
               />
             </label>
             <div className="button-row">
               <button
                 type="button"
-                onClick={() => void startGoogleCalendarOAuth()}
-                disabled={loading || !googleClientId || !googleClientSecret}
+                onClick={() => void saveGoogleOAuthClient()}
+                disabled={loading || !googleClientId || !googleClientSecret || googleServiceGrantPresent}
               >
-                {googleCalendar.connected ? "Replace Google Calendar connection" : "Connect Google Calendar"}
+                {googleOAuth.configured ? "Replace shared OAuth client" : "Save shared OAuth client"}
               </button>
-              {googleCalendar.connected && (
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => void removeGoogleCalendarConnection()}
-                  disabled={loading}
-                >
-                  Remove Google Calendar connection
-                </button>
-              )}
+              {googleOAuth.configured && !googleServiceGrantPresent && <button type="button" className="secondary" onClick={() => void removeGoogleOAuthClient()} disabled={loading}>Remove shared OAuth client</button>}
             </div>
+            {googleServiceGrantPresent && <p className="muted">Disconnect both services before replacing or removing the shared OAuth client.</p>}
           </div>
+
+          <div className="settings-subsection stack">
+            <div><h3>Google Calendar</h3><p className="muted">Uses the Calendar scope and the selected account's primary calendar. It does not share its grant or account identity with Gmail.</p></div>
+            <dl className="detail-grid"><div><dt>Status</dt><dd>{googleCalendar.connected ? "Connected" : googleCalendar.status}</dd></div><div><dt>Account</dt><dd>{googleCalendar.account_email ?? "None"}</dd></div><div><dt>Last validated</dt><dd>{formatDate(googleCalendar.last_validated_at)}</dd></div></dl>
+            {googleCalendar.error_type && <p className="error-text">Calendar status: {googleCalendar.error_type.replace(/_/g, " ")}</p>}
+            <div className="button-row"><button type="button" onClick={() => void startGoogleCalendarOAuth()} disabled={loading || !googleOAuth.configured}>{googleCalendar.connected ? "Choose another Calendar account" : "Connect Calendar"}</button>{googleCalendar.status !== "disconnected" && <button type="button" className="secondary" onClick={() => void removeGoogleCalendarConnection()} disabled={loading}>Disconnect Calendar</button>}</div>
+          </div>
+
+          <div className="settings-subsection stack">
+            <div><h3>Gmail</h3><p className="muted">Uses the Gmail scope and its own selected account. It does not replace or alter the Calendar authorization.</p></div>
+            <dl className="detail-grid"><div><dt>Status</dt><dd>{gmail.connected ? "Connected" : gmail.status}</dd></div><div><dt>Account</dt><dd>{gmail.account_email ?? "None"}</dd></div><div><dt>Last validated</dt><dd>{formatDate(gmail.last_validated_at)}</dd></div></dl>
+            {gmail.error_type && <p className="error-text">Gmail status: {gmail.error_type.replace(/_/g, " ")}</p>}
+            <div className="button-row"><button type="button" onClick={() => void startGmailOAuth()} disabled={loading || !googleOAuth.configured}>{gmail.connected ? "Choose another Gmail account" : "Connect Gmail"}</button>{gmail.status !== "disconnected" && <button type="button" className="secondary" onClick={() => void removeGmailConnection()} disabled={loading}>Disconnect Gmail</button>}</div>
+          </div>
+        </section>
+      )}
+      {section === "integrations" && telegram && (
+        <section className="detail-panel stack">
+          <div><h2>Telegram Notification + Approval bot</h2><p className="muted">Use one private bot chat for notifications and per-call decisions. Tokens stay in the operating-system secret store; Eidolon shows only sanitized pairing status.</p></div>
+          <dl className="detail-grid"><div><dt>Status</dt><dd>{telegramStatusLabel(telegram)}</dd></div><div><dt>Bot</dt><dd>{telegram.bot_username ? `@${telegram.bot_username}` : "None"}</dd></div><div><dt>Private chat</dt><dd>{telegram.paired_chat_id ?? "Not paired"}</dd></div><div><dt>User</dt><dd>{telegram.paired_user_id ?? "Not paired"}</dd></div>{telegram.pairing_expires_at && <div><dt>Pairing expires</dt><dd>{formatDate(telegram.pairing_expires_at)}</dd></div>}</dl>
+          {telegram.error_type && <p className="error-text">Connection status: {telegram.error_type.replace(/_/g, " ")}</p>}
+          {telegramPairingCode && <div className="settings-subsection"><h3>Finish pairing</h3><p>Open the bot in Telegram and send <code>/start {telegramPairingCode}</code> from the private chat and user that should receive approvals.</p><p className="muted">Code expires {formatDate(telegramPairingExpiry)}.</p><button type="button" className="secondary" onClick={() => void refreshTelegramPairing()}>Check pairing</button></div>}
+          {!telegramPairingCode && telegram.status === "pairing" && <div className="settings-subsection"><p>Pairing is still waiting for the private <code>/start</code> message. If you no longer have the one-time code, enter the bot token again to generate a new one.</p><button type="button" className="secondary" onClick={() => void refreshTelegramPairing()}>Check pairing</button></div>}
+          {telegram.error_type === "pairing_expired" && <p>Enter the bot token again to generate a new 10-minute pairing code.</p>}
+          <label>{telegram.connected ? "Replacement bot token" : "Bot token"}<input type="password" autoComplete="new-password" value={telegramToken} onChange={(event) => setTelegramToken(event.target.value)} placeholder="Token is never displayed after submission" /></label>
+          <div className="button-row"><button type="button" onClick={() => void startTelegramPairing()} disabled={loading || !telegramToken}>{telegram.connected ? "Replace bot" : "Pair bot"}</button>{telegram.connected && <button type="button" className="secondary" onClick={() => void removeTelegramConnection()} disabled={loading}>Disconnect bot</button>}</div>
+          <p className="muted">Approval previews intentionally send complete bounded action input—including email bodies—to Telegram. Telegram is a cloud privacy boundary.</p>
         </section>
       )}
       {section === "integrations" && codexMcp && (
@@ -976,6 +1127,56 @@ function googleCalendarUnavailableStatus(err: unknown): GoogleCalendarConnection
   };
 }
 
+function googleOAuthUnavailableStatus(err: unknown): GoogleOAuthClientStatus {
+  return {
+    provider: "google",
+    configured: false,
+    status: "unavailable",
+    calendar_redirect_uri: "http://localhost:8000/settings/integrations/google-calendar/oauth/callback",
+    gmail_redirect_uri: "http://localhost:8000/settings/integrations/gmail/oauth/callback",
+    created_at: null,
+    updated_at: null,
+    error_type: err instanceof Error ? err.message : "unavailable",
+  };
+}
+
+function gmailUnavailableStatus(err: unknown): GmailConnectionStatus {
+  return {
+    provider: "gmail",
+    connected: false,
+    status: "unavailable",
+    account_email: null,
+    last_validated_at: null,
+    created_at: null,
+    updated_at: null,
+    error_type: err instanceof Error ? err.message : "unavailable",
+    oauth_redirect_uri: "http://localhost:8000/settings/integrations/gmail/oauth/callback",
+  };
+}
+
+function telegramUnavailableStatus(err: unknown): TelegramConnectionStatus {
+  return {
+    provider: "telegram",
+    connected: false,
+    status: "unavailable",
+    bot_username: null,
+    paired_chat_id: null,
+    paired_user_id: null,
+    pairing_expires_at: null,
+    last_validated_at: null,
+    created_at: null,
+    updated_at: null,
+    error_type: err instanceof Error ? err.message : "unavailable",
+  };
+}
+
+function telegramStatusLabel(connection: TelegramConnectionStatus): string {
+  if (connection.connected) return "Connected";
+  if (connection.error_type === "pairing_expired") return "Pairing expired";
+  if (connection.status === "pairing") return "Awaiting private chat";
+  return connection.status.replace(/_/g, " ");
+}
+
 function codexMcpUnavailableStatus(err: unknown): CodexMcpStatus {
   return {
     enabled: false,
@@ -1090,5 +1291,5 @@ function UsageCard({ title, window }: { title: string; window: CodexUsageWindow 
 }
 
 function formatDate(value: string | null): string {
-  return value ? new Date(value).toLocaleString() : "unknown";
+  return formatSystemDateTime(value);
 }

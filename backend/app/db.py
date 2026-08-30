@@ -227,6 +227,28 @@ def ensure_local_schema() -> None:
                 connection.execute(
                     text(f"CREATE INDEX IF NOT EXISTS ix_skill_runs_{column} ON skill_runs ({column})")
                 )
+        if "invocation_approvals" in table_names:
+            columns = {
+                column["name"] for column in inspector.get_columns("invocation_approvals")
+            }
+            if "presentation_json" not in columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE invocation_approvals "
+                        "ADD COLUMN presentation_json JSON NOT NULL DEFAULT '{}'"
+                    )
+                )
+            connection.execute(
+                text(
+                    "UPDATE invocation_approvals "
+                    "SET execution_status = 'outcome_unknown', "
+                    "error_type = COALESCE(error_type, 'interrupted_execution'), "
+                    "error_message = COALESCE(error_message, "
+                    "'Eidolon restarted while this action was executing; the external outcome is unknown.'), "
+                    "execution_completed_at = COALESCE(execution_completed_at, CURRENT_TIMESTAMP) "
+                    "WHERE execution_status = 'executing'"
+                )
+            )
         if "web_app_instances" in table_names:
             columns = {column["name"] for column in inspector.get_columns("web_app_instances")}
             if "relay_container_id" not in columns:

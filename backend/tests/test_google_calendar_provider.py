@@ -46,7 +46,7 @@ def test_oauth_url_exchange_and_identity_use_exact_local_contract(monkeypatch: p
         "access_type": ["offline"],
         "client_id": ["client-id"],
         "include_granted_scopes": ["false"],
-        "prompt": ["consent"],
+        "prompt": ["consent select_account"],
         "redirect_uri": [GOOGLE_OAUTH_REDIRECT_URI],
         "response_type": ["code"],
         "scope": [f"openid email {GOOGLE_CALENDAR_SCOPE}"],

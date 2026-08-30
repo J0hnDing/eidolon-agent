@@ -8,6 +8,7 @@ import {
   SkillVersion,
   SkillVersionComparison,
 } from "../../api/client";
+import { formatSystemDateTime } from "../../lib/dateTime";
 
 export type UpdateChatMessage = {
   id: number;
@@ -225,9 +226,7 @@ export function VersionComparisonPanel({ comparison }: { comparison: SkillVersio
 }
 
 export function formatTimestamp(value: string | null, fallback: string): string {
-  if (!value) return fallback;
-  const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(value) ? value : `${value}Z`;
-  return new Date(normalized).toLocaleString();
+  return formatSystemDateTime(value, fallback);
 }
 
 export function ValidationResult({ validation }: { validation: ProposedSkillValidation }) {

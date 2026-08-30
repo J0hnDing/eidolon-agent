@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import { AgentRunDetail, SkillRun, api } from "../api/client";
 import { canRetryAgentRun } from "../features/agent-run/agentRunActions";
+import { formatSystemDateTime } from "../lib/dateTime";
 import { usePolling } from "../lib/usePolling";
 
 const LIVE_RUN_STATUSES = new Set(["pending", "running", "waiting_for_approval"]);
@@ -544,9 +545,7 @@ function formatList(value: string[] | undefined): string {
 }
 
 function formatTimestamp(value: string | null, fallback: string): string {
-  if (!value) return fallback;
-  const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(value);
-  return new Date(hasTimezone ? value : `${value}Z`).toLocaleString();
+  return formatSystemDateTime(value, fallback);
 }
 
 function formatStepName(value: string): string {

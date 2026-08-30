@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models import InvocationApproval
 from app.schemas.function_registry import (
     FunctionCatalogEntryRead,
     FunctionContractRead,
@@ -91,6 +92,9 @@ def invoke_function(
         )
     except FunctionRegistryError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if isinstance(run, InvocationApproval):
+        receipt = {"status": "pending_approval", "approval_id": run.id}
+        return FunctionInvocationResponse(output=receipt, approval=receipt)
     return FunctionInvocationResponse(
         run=SkillRunRead.model_validate(run),
         output=run.output_json,

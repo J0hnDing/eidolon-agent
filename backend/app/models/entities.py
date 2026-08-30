@@ -185,6 +185,60 @@ class SkillRun(Base):
     caller_version: Mapped["SkillVersion | None"] = relationship(foreign_keys=[caller_version_id])
 
 
+class InvocationApproval(Base):
+    __tablename__ = "invocation_approvals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    target_kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    target_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    target_skill_id: Mapped[int | None] = mapped_column(ForeignKey("skills.id"), nullable=True, index=True)
+    target_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("skill_versions.id"), nullable=True, index=True
+    )
+    target_contract_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    target_description: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    provider_account_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    caller_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    caller_skill_id: Mapped[int | None] = mapped_column(ForeignKey("skills.id"), nullable=True, index=True)
+    caller_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("skill_versions.id"), nullable=True, index=True
+    )
+    caller_run_id: Mapped[int | None] = mapped_column(ForeignKey("skill_runs.id"), nullable=True, index=True)
+    web_app_instance_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    initiating_action: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    input_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    reason_to_call: Mapped[str] = mapped_column(String(500), nullable=False)
+    presentation_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    dispatch_metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    decision_status: Mapped[str] = mapped_column(
+        String(32), default="pending", nullable=False, index=True
+    )
+    execution_status: Mapped[str] = mapped_column(
+        String(32), default="not_started", nullable=False, index=True
+    )
+    decided_via: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    decided_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    telegram_delivery_status: Mapped[str] = mapped_column(
+        String(32), default="pending", nullable=False, index=True
+    )
+    telegram_message_ids_json: Mapped[list[int]] = mapped_column(JSON, default=list, nullable=False)
+    telegram_callback_nonce_hash: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    execution_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    execution_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
 class FunctionAccessApproval(Base):
     __tablename__ = "function_access_approvals"
 
@@ -233,6 +287,40 @@ class IntegrationConnection(Base):
         nullable=False,
     )
     last_validated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GoogleOAuthClientConfig(Base):
+    __tablename__ = "google_oauth_client_configs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    secret_store_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    secret_reference: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
+class TelegramBotConnection(Base):
+    __tablename__ = "telegram_bot_connections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    role: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    secret_store_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    secret_reference: Mapped[str] = mapped_column(String(256), nullable=False)
+    bot_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    bot_username: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    paired_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    paired_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    last_update_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pairing_code_hash: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    pairing_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
 
 
 class IntegrationAuthorization(Base):

@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import secrets
-import threading
-import time
-from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
@@ -14,11 +9,18 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.services.github_provider import IntegrationProviderError
+from app.services.google_oauth import (
+    MAX_OAUTH_RESPONSE_BYTES,
+    GoogleOAuthStateStore,
+    PendingGoogleOAuth,
+    exchange_google_oauth_code,
+    google_authorization_url,
+    google_identity,
+    parse_google_oauth_credential,
+    refresh_google_access_token,
+)
 from app.services.integration_registry import IntegrationOperation
 
-GOOGLE_AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 GOOGLE_CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
 GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events.owned"
 GOOGLE_OAUTH_SCOPES = ("openid", "email", GOOGLE_CALENDAR_SCOPE)
@@ -27,55 +29,11 @@ GOOGLE_OAUTH_REDIRECT_URI = (
 )
 GOOGLE_OAUTH_RETURN_URL = "http://localhost:5173/settings/integrations"
 GOOGLE_CALENDAR_SECRET_NAMESPACE = "google_calendar"
-MAX_OAUTH_RESPONSE_BYTES = 1_000_000
 
 
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201
         return None
-
-
-@dataclass(frozen=True)
-class PendingGoogleOAuth:
-    client_id: str
-    client_secret: str
-    expires_at: float
-
-
-class GoogleOAuthStateStore:
-    def __init__(self, *, ttl_seconds: int = 600, max_pending: int = 8) -> None:
-        self.ttl_seconds = ttl_seconds
-        self.max_pending = max_pending
-        self._pending: dict[str, PendingGoogleOAuth] = {}
-        self._lock = threading.Lock()
-
-    def create(self, client_id: str, client_secret: str) -> str:
-        now = time.monotonic()
-        with self._lock:
-            self._prune(now)
-            while len(self._pending) >= self.max_pending:
-                oldest = min(self._pending, key=lambda state: self._pending[state].expires_at)
-                self._pending.pop(oldest, None)
-            state = secrets.token_urlsafe(32)
-            self._pending[state] = PendingGoogleOAuth(
-                client_id=client_id,
-                client_secret=client_secret,
-                expires_at=now + self.ttl_seconds,
-            )
-        return state
-
-    def consume(self, state: str) -> PendingGoogleOAuth:
-        now = time.monotonic()
-        with self._lock:
-            pending = self._pending.pop(state, None)
-            self._prune(now)
-        if pending is None or pending.expires_at <= now:
-            raise IntegrationProviderError("invalid_credential", "Google OAuth state is invalid or expired")
-        return pending
-
-    def _prune(self, now: float) -> None:
-        for state in [key for key, item in self._pending.items() if item.expires_at <= now]:
-            self._pending.pop(state, None)
 
 
 google_oauth_state_store = GoogleOAuthStateStore()
@@ -101,69 +59,25 @@ class UrllibGoogleCalendarProviderAdapter:
         self._opener = build_opener(_NoRedirect())
 
     def authorization_url(self, client_id: str, state: str) -> str:
-        return f"{GOOGLE_AUTHORIZATION_URL}?{urlencode({
-            'client_id': client_id,
-            'redirect_uri': GOOGLE_OAUTH_REDIRECT_URI,
-            'response_type': 'code',
-            'scope': ' '.join(GOOGLE_OAUTH_SCOPES),
-            'access_type': 'offline',
-            'prompt': 'consent',
-            'include_granted_scopes': 'false',
-            'state': state,
-        })}"
+        return google_authorization_url(
+            client_id,
+            state,
+            redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
+            scopes=GOOGLE_OAUTH_SCOPES,
+        )
 
     def exchange_code(self, pending: PendingGoogleOAuth, code: str) -> dict[str, str]:
-        payload = self._request_json(
-            GOOGLE_TOKEN_URL,
-            method="POST",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            body=urlencode(
-                {
-                    "client_id": pending.client_id,
-                    "client_secret": pending.client_secret,
-                    "code": code,
-                    "grant_type": "authorization_code",
-                    "redirect_uri": GOOGLE_OAUTH_REDIRECT_URI,
-                }
-            ).encode("utf-8"),
-            timeout=15,
-            max_bytes=MAX_OAUTH_RESPONSE_BYTES,
-            oauth_request=True,
+        return exchange_google_oauth_code(
+            self._request_json,
+            pending,
+            code,
+            redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
+            required_scope=GOOGLE_CALENDAR_SCOPE,
+            permission_name="Google Calendar",
         )
-        access_token = payload.get("access_token")
-        refresh_token = payload.get("refresh_token")
-        granted_scope = payload.get("scope")
-        if not isinstance(access_token, str) or not access_token:
-            raise IntegrationProviderError("invalid_credential", "Google OAuth did not return an access token")
-        if not isinstance(refresh_token, str) or not refresh_token:
-            raise IntegrationProviderError("invalid_credential", "Google OAuth did not return a refresh token")
-        scopes = set(granted_scope.split()) if isinstance(granted_scope, str) else set()
-        if GOOGLE_CALENDAR_SCOPE not in scopes:
-            raise IntegrationProviderError("provider_forbidden", "Google Calendar permission was not granted")
-        return {"access_token": access_token, "refresh_token": refresh_token}
 
     def identity(self, access_token: str) -> dict[str, str]:
-        payload = self._request_json(
-            GOOGLE_USERINFO_URL,
-            method="GET",
-            headers={"Authorization": f"Bearer {access_token}"},
-            body=None,
-            timeout=10,
-            max_bytes=MAX_OAUTH_RESPONSE_BYTES,
-        )
-        subject = payload.get("sub")
-        email = payload.get("email")
-        verified = payload.get("email_verified")
-        if (
-            not isinstance(subject, str)
-            or not subject
-            or not isinstance(email, str)
-            or not email
-            or verified is not True
-        ):
-            raise IntegrationProviderError("provider_unavailable", "Google returned an invalid account identity")
-        account_id = hashlib.sha256(f"google:{subject}".encode("utf-8")).hexdigest()
-        return {"account_id": account_id, "email": email}
+        return google_identity(self._request_json, access_token)
 
     def execute(
         self,
@@ -397,37 +311,10 @@ class UrllibGoogleCalendarProviderAdapter:
         return value
 
     def _credential_bundle(self, credential: str) -> dict[str, str]:
-        try:
-            value = json.loads(credential)
-        except (json.JSONDecodeError, TypeError):
-            raise IntegrationProviderError("invalid_credential", "Stored Google OAuth credential is invalid") from None
-        if not isinstance(value, dict) or set(value) != {"client_id", "client_secret", "refresh_token"}:
-            raise IntegrationProviderError("invalid_credential", "Stored Google OAuth credential is invalid")
-        if not all(isinstance(value[key], str) and value[key] for key in value):
-            raise IntegrationProviderError("invalid_credential", "Stored Google OAuth credential is invalid")
-        return value
+        return parse_google_oauth_credential(credential)
 
     def _refresh_access_token(self, bundle: dict[str, str]) -> str:
-        payload = self._request_json(
-            GOOGLE_TOKEN_URL,
-            method="POST",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            body=urlencode(
-                {
-                    "client_id": bundle["client_id"],
-                    "client_secret": bundle["client_secret"],
-                    "refresh_token": bundle["refresh_token"],
-                    "grant_type": "refresh_token",
-                }
-            ).encode("utf-8"),
-            timeout=15,
-            max_bytes=MAX_OAUTH_RESPONSE_BYTES,
-            oauth_request=True,
-        )
-        access_token = payload.get("access_token")
-        if not isinstance(access_token, str) or not access_token:
-            raise IntegrationProviderError("invalid_credential", "Google OAuth refresh failed")
-        return access_token
+        return refresh_google_access_token(self._request_json, bundle)
 
     def _event_url(self, event_id: str | None = None, *, query: dict[str, Any] | None = None) -> str:
         path = f"{GOOGLE_CALENDAR_API_BASE}/calendars/primary/events"

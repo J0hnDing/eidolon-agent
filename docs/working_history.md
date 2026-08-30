@@ -673,3 +673,16 @@ Added one trusted Google Calendar OAuth connection with exactly five typed prima
 ### Limitations
 
 No live Google OAuth or Calendar API E2E test was run; provider behavior is covered by deterministic focused tests. The integration intentionally excludes secondary calendars, event storage, synchronization, webhooks, schedules, calendar UI, and token revocation.
+
+## 2026-08-29 22:56 — Fix Telegram re-pair race and system-time display
+
+- Category: bugfix
+- Area: Telegram integration and frontend time display
+
+### Summary
+
+Fixed an in-flight Telegram long-poll race that could compare a fresh pairing command against stale pairing state and consume it without binding. Polling now refreshes and validates the current bot generation before handling updates. Unified user-facing timestamps through a system-time formatter that treats offset-less backend timestamps as UTC and renders the host timezone abbreviation; the live Telegram bot was successfully paired after restart.
+
+### Limitations
+
+none

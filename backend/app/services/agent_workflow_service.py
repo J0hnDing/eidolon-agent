@@ -964,6 +964,13 @@ class AgentWorkflowService:
                 raise ManifestValidationError(
                     f"Manifest runtime {manifest.runtime!r} does not match approved blueprint runtime {planned_runtime!r}"
                 )
+            planned_invocation_approval = bool(
+                self._agent_blueprint(agent_run).get("requires_invocation_approval", False)
+            )
+            if manifest.requires_invocation_approval != planned_invocation_approval:
+                raise ValueError(
+                    "Manifest requires_invocation_approval does not match the approved blueprint"
+                )
             if manifest.name != skill.name:
                 raise ManifestValidationError(
                     f"Manifest name {manifest.name!r} does not match the controlled skill name {skill.name!r}"
@@ -1827,6 +1834,9 @@ class AgentWorkflowService:
                 "skill_name": skill_name,
                 "display_name": display_name,
                 "runtime": skill_runtime,
+                "requires_invocation_approval": bool(
+                    blueprint.get("requires_invocation_approval", False)
+                ),
                 "input_schema": blueprint.get("input_schema"),
                 "output_schema": blueprint.get("output_schema"),
                 "functions": selected_functions,

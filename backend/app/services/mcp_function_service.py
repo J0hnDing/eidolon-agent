@@ -12,10 +12,11 @@ from mcp import types
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import CodexMcpSettings, McpAuditRecord, Skill
+from app.models import CodexMcpSettings, InvocationApproval, McpAuditRecord, Skill
 from app.services.function_catalog_service import FunctionCatalogService
 from app.services.function_registry_service import FunctionRegistryService
 from app.services.integration_service import IntegrationError, build_default_integration_service
+from app.services.invocation_approval_contract import pending_approval_receipt
 
 MAX_MCP_INPUT_BYTES = 256 * 1024
 MAX_MCP_OUTPUT_BYTES = 1024 * 1024
@@ -45,6 +46,7 @@ class McpToolSnapshot:
     destructive: bool
     open_world: bool
     contract_fingerprint: str
+    requires_invocation_approval: bool
 
     def as_mcp_tool(self) -> types.Tool:
         return types.Tool(
@@ -128,17 +130,27 @@ class McpFunctionService:
                     arguments,
                     audit_record=audit,
                 )
-                status = "succeeded"
+                status = (
+                    "pending_approval"
+                    if output.get("status") == "pending_approval"
+                    else "succeeded"
+                )
             else:
                 raise McpFunctionError("not_exposed", "Backend-core functions require a registered direct MCP handler.")
             response_size = self._json_size(output)
             if response_size > MAX_MCP_OUTPUT_BYTES:
                 raise McpFunctionError("response_too_large", "MCP tool output exceeds the bounded response limit.")
-            audit.status = "succeeded"
+            audit.status = status
             audit.response_size = response_size
             audit.completed_at = utc_now()
             self._commit_audit()
-            qualifier = " with partial status" if status == "partial" else ""
+            qualifier = (
+                " with partial status"
+                if status == "partial"
+                else "; approval is pending"
+                if status == "pending_approval"
+                else ""
+            )
             return McpInvocationResult(
                 output=output,
                 summary=f"Eidolon tool completed{qualifier} ({response_size} response bytes).",
@@ -168,6 +180,8 @@ class McpFunctionService:
             source="codex_mcp",
             initiating_action="codex_mcp",
         )
+        if isinstance(run, InvocationApproval):
+            return pending_approval_receipt(run.id), "pending_approval"
         if run.status not in {"succeeded", "partial"} or not isinstance(run.output_json, dict):
             error_type = "function_blocked" if run.status == "blocked" else "function_failed"
             raise McpFunctionError(error_type, f"Eidolon function invocation {run.status}.")
@@ -227,6 +241,7 @@ class McpFunctionService:
             "mcp_destructive": entry.get("mcp_destructive"),
             "mcp_open_world": entry.get("mcp_open_world"),
             "mcp_contract_fingerprint": entry.get("mcp_contract_fingerprint"),
+            "requires_invocation_approval": entry.get("requires_invocation_approval", False),
         }
         encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return McpToolSnapshot(
@@ -241,6 +256,7 @@ class McpFunctionService:
             destructive=entry.get("mcp_destructive") is True,
             open_world=entry.get("mcp_open_world") is True,
             contract_fingerprint=hashlib.sha256(encoded).hexdigest(),
+            requires_invocation_approval=entry.get("requires_invocation_approval") is True,
         )
 
     @staticmethod

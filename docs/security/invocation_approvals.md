@@ -1,0 +1,15 @@
+# Invocation Approvals
+
+Invocation approval is a durable per-call control plane separate from build-time permissions, runtime permissions, caller-to-function access, and provider integration authorization. It applies only to callable user functions and integration operations explicitly marked `requires_invocation_approval`; services and web applications cannot set the manifest flag.
+
+The backend projects one effective public contract without modifying the authored business contract. It appends exactly: “Requires per-call approval. Calling this function sends an approval request to Telegram; the action executes only after user approval. Approval and execution are managed entirely by Eidolon's backend.” It also adds required `reason_to_call` (1-500 characters) and projects the immediate output as `{status: "pending_approval", approval_id}`. Authored schemas may not reserve `reason_to_call`; the backend strips it before business validation and execution.
+
+The caller supplies `reason_to_call`; Eidolon validates, stores, and presents that reason without generating it for the caller. The backend owns the complete approval-message presentation. It selects an exact function preset when one exists: `email.send` shows Action, Caller, To, optional Cc/Bcc, Subject, complete Body, and Why. Other functions use a deterministic generic presentation that converts input keys and nested JSON values into readable labels, lists, and sections instead of displaying raw JSON. The normalized presentation is snapshotted with the approval so later backend changes cannot reinterpret a pending action.
+
+Submission revalidates the caller, active declaration, persistent permission/authorization, connection/account identity, effective input schema, and the 32 KiB input limit before storing a pending row. It does not retrieve the target provider credential or run business code. A paired Telegram bot is required for new approval-gated submissions.
+
+Local and Telegram decisions call the same service. Approval atomically claims the action, revalidates the exact skill version or integration contract and account identity, and dispatches once. Denial never dispatches. Pending requests do not expire. Contract, version, caller authorization, or account changes produce `stale`. A restart changes interrupted `executing` actions to `outcome_unknown` and never retries them; safely queued approved actions may resume.
+
+Telegram decision buttons are attached to the approval status message. After a decision, Eidolon edits that message, removes its buttons, and reports `Approved · Executed`, `Denied`, or `Approved · Execution failed`. Email outcomes retain recipient and subject metadata. Failed executions include a normalized error code, its backend-owned user-facing meaning, and bounded sanitized details when available.
+
+`InvocationApproval` keeps decision status separate from execution status and stores bounded input, hashes, attribution, delivery metadata, outcome, and timestamps. `/invocation-approvals` provides list/detail/local approve/local deny. Existing `approval_requests`, `/permission-requests`, and `PermissionService` remain unchanged.

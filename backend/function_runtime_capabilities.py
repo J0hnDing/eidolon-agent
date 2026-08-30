@@ -70,7 +70,12 @@ def call_function(
         payload={"input": input_json},
         timeout_seconds=timeout_seconds,
     )
-    if not isinstance(result, dict) or not isinstance(result.get("run"), dict):
+    if not isinstance(result, dict):
+        raise FunctionRuntimeCapabilityError("Function invocation returned an invalid response contract")
+    approval = result.get("approval")
+    if isinstance(approval, dict) and approval.get("status") == "pending_approval":
+        return approval
+    if not isinstance(result.get("run"), dict):
         raise FunctionRuntimeCapabilityError("Function invocation returned an invalid response contract")
     run = result["run"]
     if run.get("status") not in {"succeeded", "partial"}:

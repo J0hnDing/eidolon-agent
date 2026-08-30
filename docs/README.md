@@ -34,6 +34,7 @@ The product and repository are named **Eidolon**. Existing environment variables
 
 - [Permission system](security/permissions.md)
 - [Sandbox execution](security/sandbox_execution.md)
+- [Per-call invocation approvals](security/invocation_approvals.md)
 - [Sandboxed web applications](runtime/web_applications.md)
 - [Function registry and invocation](runtime/functions.md)
 - [Extending the function catalog](runtime/function_extension_guide.md)
@@ -45,6 +46,8 @@ The product and repository are named **Eidolon**. Existing environment variables
 - [Eidolon-Atlas integration](integrations/atlas.md)
 - [Notion Todo and Reports integration](integrations/notion.md)
 - [Google Calendar OAuth integration](integrations/google_calendar.md)
+- [Gmail OAuth integration](integrations/gmail.md)
+- [Telegram Notification and Approval bot](integrations/telegram.md)
 - [Codex CLI integration](integrations/codex_cli.md)
 - [Codex MCP tools](integrations/codex_mcp.md)
 - [Working history file](working_history.md)

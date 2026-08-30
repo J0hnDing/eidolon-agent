@@ -9,6 +9,7 @@ import {
   api,
 } from "../api/client";
 import { formatDisplayName } from "../lib/displayName";
+import { formatSystemDateTime } from "../lib/dateTime";
 import { usePolling } from "../lib/usePolling";
 
 export const WEB_APP_IFRAME_SANDBOX = "allow-scripts allow-forms allow-same-origin allow-modals";
@@ -154,7 +155,7 @@ export default function WebAppPage() {
               <div><dt>Browser network</dt><dd>{openedApp.containment.browser_network}</dd></div>
               <div><dt>Server network</dt><dd>{openedApp.containment.server_network_enforcement}</dd></div>
               <div><dt>WebSockets</dt><dd>{openedApp.containment.websocket_support}</dd></div>
-              <div><dt>Session expires</dt><dd>{new Date(openedApp.session.expires_at).toLocaleString()}</dd></div>
+              <div><dt>Session expires</dt><dd>{formatSystemDateTime(openedApp.session.expires_at)}</dd></div>
             </dl>
           </details>
         </>
@@ -170,7 +171,7 @@ export default function WebAppPage() {
               <article className="run-row" key={record.id}>
                 <div>
                   <strong>{record.operation}</strong>
-                  <span>{new Date(record.started_at).toLocaleString()}</span>
+                  <span>{formatSystemDateTime(record.started_at)}</span>
                 </div>
                 <span className={`badge status-${record.status}`}>{record.status}</span>
               </article>

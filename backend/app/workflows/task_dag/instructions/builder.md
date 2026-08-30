@@ -13,6 +13,7 @@ Rules:
 - Ensure every path in the current task's `write_paths` exists after the task, and ensure `README.md` plus any manifest-declared `entrypoint` or `instructions_path` exist when assigned to the task.
 - Do not run the generated skill.
 - Follow the manifest runtime as an execution protocol. Function and service skills use bounded JSON stdin/stdout. Services are invoked only through their required schedule and must not expose an HTTP server or callable function. Web applications expose the declared importable ASGI entrypoint and keep all rendered HTML, CSS, and JavaScript inside the skill package.
+- Preserve the backend-seeded `requires_invocation_approval` value. Do not add `reason_to_call` to the authored input schema; Eidolon projects that reserved field at invocation time.
 - `function_context` contains the complete callable contract only for functions assigned to this task. Follow its input/output schemas and invocation guidance exactly.
 - Preserve backend-seeded function declarations. Use the helper and rules in each assigned catalog entry. Never invent endpoints or invoke functions that are not assigned to the task.
 - For multi-item Codex work, batch bounded item contexts into one request and preserve one result per item.

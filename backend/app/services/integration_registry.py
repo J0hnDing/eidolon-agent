@@ -26,7 +26,7 @@ class IntegrationOperation:
     operation_id: str
     title: str
     description: str
-    provider: Literal["github", "atlas", "notion", "google_calendar"]
+    provider: Literal["github", "atlas", "notion", "google_calendar", "gmail", "telegram"]
     input_schema: dict[str, Any]
     output_schema: dict[str, Any]
     read_only: bool
@@ -44,6 +44,7 @@ class IntegrationOperation:
     audit_resource_fields: tuple[str, ...]
     fake_behavior: str
     usage_example: dict[str, Any]
+    requires_invocation_approval: bool = False
     contract_version: int = 1
 
     def agent_context(self) -> dict[str, Any]:
@@ -56,6 +57,7 @@ class IntegrationOperation:
             "resource_scope": self.resource_scope,
             "read_only": self.read_only,
             "risk": self.risk,
+            "requires_invocation_approval": self.requires_invocation_approval,
             "normalized_errors": list(self.normalized_errors),
             "usage_example": self.usage_example,
             "helper": (
@@ -1113,6 +1115,241 @@ _GOOGLE_CALENDAR_OPERATIONS = (
     ),
 )
 
+_EMAIL_ADDRESS = {
+    "type": "string",
+    "minLength": 3,
+    "maxLength": 320,
+    "pattern": r"^[^\s@]+@[^\s@]+\.[^\s@]+$",
+}
+_EMAIL_ADDRESS_LIST = {
+    "type": "array",
+    "maxItems": 10,
+    "uniqueItems": True,
+    "items": _EMAIL_ADDRESS,
+}
+_EMAIL_ATTACHMENT = _object_schema(
+    {
+        "filename": {"type": "string", "maxLength": 1024},
+        "mime_type": {"type": "string", "maxLength": 255},
+        "size": {"type": "integer", "minimum": 0},
+    },
+    ["filename", "mime_type", "size"],
+)
+_EMAIL_MESSAGE = _object_schema(
+    {
+        "message_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "conversation_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "from": {"type": "string", "maxLength": 2000},
+        "to": {"type": "array", "maxItems": 100, "items": {"type": "string", "maxLength": 2000}},
+        "cc": {"type": "array", "maxItems": 100, "items": {"type": "string", "maxLength": 2000}},
+        "bcc": {"type": "array", "maxItems": 100, "items": {"type": "string", "maxLength": 2000}},
+        "subject": {"type": "string", "maxLength": 2000},
+        "date": {"type": "string", "maxLength": 128},
+        "snippet": {"type": "string", "maxLength": 2000},
+        "text": {"type": "string", "maxLength": 4_000_000},
+        "unread": {"type": "boolean"},
+        "attachments": {"type": "array", "maxItems": 100, "items": _EMAIL_ATTACHMENT},
+    },
+    [
+        "message_id", "conversation_id", "from", "to", "cc", "bcc", "subject", "date",
+        "snippet", "text", "unread", "attachments",
+    ],
+)
+_EMAIL_CONVERSATION_SUMMARY = _object_schema(
+    {
+        "conversation_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "subject": {"type": "string", "maxLength": 2000},
+        "latest_sender": {"type": "string", "maxLength": 2000},
+        "latest_date": {"type": "string", "maxLength": 128},
+        "snippet": {"type": "string", "maxLength": 2000},
+        "message_count": {"type": "integer", "minimum": 1, "maximum": 100},
+        "unread": {"type": "boolean"},
+        "has_attachment": {"type": "boolean"},
+    },
+    [
+        "conversation_id", "subject", "latest_sender", "latest_date", "snippet", "message_count",
+        "unread", "has_attachment",
+    ],
+)
+_EMAIL_SEARCH_INPUT = _object_schema(
+    {
+        "keywords": {"type": "string", "minLength": 1, "maxLength": 500},
+        "from": _EMAIL_ADDRESS,
+        "to": _EMAIL_ADDRESS,
+        "subject": {"type": "string", "minLength": 1, "maxLength": 500},
+        "after": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$"},
+        "before": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$"},
+        "unread": {"type": "boolean"},
+        "has_attachment": {"type": "boolean"},
+        "page_size": {"type": "integer", "minimum": 1, "maximum": 25, "default": 25},
+        "page_token": {"type": "string", "minLength": 1, "maxLength": 2048},
+    },
+    [],
+)
+_EMAIL_SEARCH_INPUT["anyOf"] = [
+    {"required": [field]}
+    for field in ("keywords", "from", "to", "subject", "after", "before", "unread", "has_attachment")
+]
+_GMAIL_ERRORS = (
+    "connection_unavailable",
+    "invalid_credential",
+    "operation_undeclared",
+    "authorization_missing_or_stale",
+    "invalid_input",
+    "not_found",
+    "provider_forbidden",
+    "rate_limited",
+    "provider_timeout",
+    "response_too_large",
+    "provider_unavailable",
+    "internal_failure",
+)
+_GMAIL_OPERATIONS = (
+    IntegrationOperation(
+        operation_id="email.search",
+        title="Search email",
+        description="Search Gmail with provider-neutral keywords and filters and return bounded conversation summaries.",
+        provider="gmail",
+        input_schema=_EMAIL_SEARCH_INPUT,
+        output_schema=_object_schema(
+            {
+                "conversations": {"type": "array", "maxItems": 25, "items": _EMAIL_CONVERSATION_SUMMARY},
+                "has_more": {"type": "boolean"},
+                "next_page_token": {"type": ["string", "null"], "maxLength": 2048},
+            },
+            ["conversations", "has_more", "next_page_token"],
+        ),
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="GET",
+        endpoint_template="/gmail/v1/users/me/threads", timeout_seconds=20, allow_redirects=False,
+        max_pages=1, max_results=25, max_provider_response_bytes=4_000_000,
+        normalized_errors=_GMAIL_ERRORS, audit_resource_fields=(), fake_behavior="email_search",
+        usage_example={"operation": "email.search", "input": {"keywords": "quarterly report", "page_size": 10}},
+    ),
+    IntegrationOperation(
+        operation_id="email.conversation.get",
+        title="Get email conversation",
+        description="Read one complete bounded email conversation as normalized text with attachment metadata.",
+        provider="gmail",
+        input_schema=_object_schema(
+            {"conversation_id": {"type": "string", "minLength": 1, "maxLength": 1024}},
+            ["conversation_id"],
+        ),
+        output_schema=_object_schema(
+            {
+                "conversation_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+                "messages": {"type": "array", "maxItems": 100, "items": _EMAIL_MESSAGE},
+            },
+            ["conversation_id", "messages"],
+        ),
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="GET",
+        endpoint_template="/gmail/v1/users/me/threads/{conversation_id}?format=full", timeout_seconds=20,
+        allow_redirects=False, max_pages=1, max_results=100, max_provider_response_bytes=4_000_000,
+        normalized_errors=_GMAIL_ERRORS, audit_resource_fields=("conversation_id",),
+        fake_behavior="email_conversation_get",
+        usage_example={"operation": "email.conversation.get", "input": {"conversation_id": "thread-id"}},
+    ),
+    IntegrationOperation(
+        operation_id="email.read_new",
+        title="Read new email",
+        description=(
+            "Read up to 50 unread Primary Inbox messages from the last year, then mark exactly that fetched batch read."
+        ),
+        provider="gmail",
+        input_schema=_object_schema({}, []),
+        output_schema=_object_schema(
+            {
+                "messages": {"type": "array", "maxItems": 50, "items": _EMAIL_MESSAGE},
+                "count": {"type": "integer", "minimum": 0, "maximum": 50},
+                "has_more": {"type": "boolean"},
+            },
+            ["messages", "count", "has_more"],
+        ),
+        read_only=False, side_effect="write", risk="medium", resource_scope="none", method="POST",
+        endpoint_template="/gmail/v1/users/me/messages plus batchModify", timeout_seconds=30,
+        allow_redirects=False, max_pages=1, max_results=50, max_provider_response_bytes=4_000_000,
+        normalized_errors=_GMAIL_ERRORS, audit_resource_fields=(), fake_behavior="email_read_new",
+        usage_example={"operation": "email.read_new", "input": {}},
+    ),
+    IntegrationOperation(
+        operation_id="email.send",
+        title="Send email",
+        description="Send one bounded plain-text email from the authenticated Gmail account.",
+        provider="gmail",
+        input_schema=_object_schema(
+            {
+                "to": {**_EMAIL_ADDRESS_LIST, "minItems": 1},
+                "cc": _EMAIL_ADDRESS_LIST,
+                "bcc": _EMAIL_ADDRESS_LIST,
+                "subject": {"type": "string", "minLength": 1, "maxLength": 500},
+                "body": {"type": "string", "minLength": 1, "maxLength": 20_000},
+            },
+            ["to", "subject", "body"],
+        ),
+        output_schema=_object_schema(
+            {
+                "sent": {"type": "boolean", "const": True},
+                "message_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+                "conversation_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+            },
+            ["sent", "message_id", "conversation_id"],
+        ),
+        read_only=False, side_effect="write", risk="medium", resource_scope="none", method="POST",
+        endpoint_template="/gmail/v1/users/me/messages/send", timeout_seconds=20, allow_redirects=False,
+        max_pages=1, max_results=1, max_provider_response_bytes=2_000_000,
+        normalized_errors=_GMAIL_ERRORS, audit_resource_fields=(), fake_behavior="email_send",
+        usage_example={
+            "operation": "email.send",
+            "input": {"to": ["person@example.com"], "subject": "Hello", "body": "Hello from Eidolon."},
+        },
+        requires_invocation_approval=True,
+    ),
+)
+
+_TELEGRAM_ERRORS = (
+    "connection_unavailable",
+    "invalid_credential",
+    "operation_undeclared",
+    "authorization_missing_or_stale",
+    "invalid_input",
+    "provider_forbidden",
+    "rate_limited",
+    "provider_timeout",
+    "response_too_large",
+    "provider_unavailable",
+    "internal_failure",
+)
+_TELEGRAM_OPERATIONS = (
+    IntegrationOperation(
+        operation_id="telegram.notification.send",
+        title="Send Telegram notification",
+        description="Send one structured notification to the paired Eidolon Telegram chat.",
+        provider="telegram",
+        input_schema=_object_schema(
+            {
+                "title": {"type": "string", "minLength": 1, "maxLength": 120},
+                "description": {"type": "string", "minLength": 1, "maxLength": 800},
+                "link": {"type": "string", "minLength": 1, "maxLength": 2048, "pattern": r"^https?://"},
+            },
+            ["title", "description"],
+        ),
+        output_schema=_object_schema(
+            {
+                "sent": {"type": "boolean", "const": True},
+                "message_id": {"type": "integer", "minimum": 1},
+            },
+            ["sent", "message_id"],
+        ),
+        read_only=False, side_effect="write", risk="medium", resource_scope="none", method="POST",
+        endpoint_template="/bot<token>/sendMessage", timeout_seconds=15, allow_redirects=False,
+        max_pages=1, max_results=1, max_provider_response_bytes=1_000_000,
+        normalized_errors=_TELEGRAM_ERRORS, audit_resource_fields=(), fake_behavior="telegram_notification_send",
+        usage_example={
+            "operation": "telegram.notification.send",
+            "input": {"title": "Build complete", "description": "The requested build finished."},
+        },
+    ),
+)
+
 OPERATIONS = MappingProxyType(
     {
         operation.operation_id: operation
@@ -1121,10 +1358,20 @@ OPERATIONS = MappingProxyType(
             *_ATLAS_OPERATIONS,
             *_NOTION_OPERATIONS,
             *_GOOGLE_CALENDAR_OPERATIONS,
+            *_GMAIL_OPERATIONS,
+            *_TELEGRAM_OPERATIONS,
         )
     }
 )
 
 
-def registry_contract_identity(operation_ids: list[str]) -> dict[str, int]:
-    return {operation_id: OPERATIONS[operation_id].contract_version for operation_id in sorted(operation_ids)}
+def registry_contract_identity(operation_ids: list[str]) -> dict[str, dict[str, int | bool]]:
+    return {
+        operation_id: {
+            "version": OPERATIONS[operation_id].contract_version,
+            "requires_invocation_approval": OPERATIONS[
+                operation_id
+            ].requires_invocation_approval,
+        }
+        for operation_id in sorted(operation_ids)
+    }

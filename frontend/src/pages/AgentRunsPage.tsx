@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 
 import { AgentRun, api } from "../api/client";
+import { formatSystemDateTime } from "../lib/dateTime";
 import { usePolling } from "../lib/usePolling";
 
 const LIVE_RUN_STATUSES = new Set(["pending", "running", "waiting_for_approval"]);
@@ -99,6 +100,5 @@ function formatStepName(value: string): string {
 }
 
 function formatTimestamp(value: string): string {
-  const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(value);
-  return new Date(hasTimezone ? value : `${value}Z`).toLocaleString();
+  return formatSystemDateTime(value);
 }

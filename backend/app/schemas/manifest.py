@@ -179,7 +179,7 @@ class ManifestIntegrationResourceScope(BaseModel):
 class ManifestIntegrationRequirement(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["github", "atlas", "notion", "google_calendar"]
+    provider: Literal["github", "atlas", "notion", "google_calendar", "gmail", "telegram"]
     operations: list[str] = Field(min_length=1, max_length=20)
     resource_scope: ManifestIntegrationResourceScope = Field(default_factory=ManifestIntegrationResourceScope)
 
@@ -217,6 +217,7 @@ class SkillManifest(BaseModel):
     instructions_path: str | None = Field(default=None, min_length=1)
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
+    requires_invocation_approval: bool = False
     function_requirements: list[str] = Field(default_factory=list)
     integration_requirements: list[ManifestIntegrationRequirement] = Field(default_factory=list)
     dependencies: list[str] = Field(default_factory=list)
@@ -291,6 +292,8 @@ class SkillManifest(BaseModel):
 
     @model_validator(mode="after")
     def validate_skill_contract(self) -> "SkillManifest":
+        if self.requires_invocation_approval and self.runtime != "function":
+            raise ValueError("requires_invocation_approval is supported only for function skills")
         if len(self.function_requirements) != len(set(self.function_requirements)):
             raise ValueError("function_requirements cannot contain duplicate function names")
         if self.name in self.function_requirements:
@@ -316,6 +319,16 @@ class SkillManifest(BaseModel):
                     raise ValueError(f"{self.runtime} {schema_name} must declare type object")
             if self.runtime == "function" and self.schedule is not None:
                 raise ValueError("function skills cannot declare schedules")
+            if self.requires_invocation_approval:
+                if self.input_schema is None or self.output_schema is None:
+                    raise ValueError(
+                        "approval-required function skills require input_schema and output_schema"
+                    )
+                properties = self.input_schema.get("properties")
+                if isinstance(properties, dict) and "reason_to_call" in properties:
+                    raise ValueError(
+                        "reason_to_call is reserved for backend-managed invocation approval"
+                    )
             if self.runtime == "service" and self.schedule is None:
                 raise ValueError("service skills require a schedule")
         else:

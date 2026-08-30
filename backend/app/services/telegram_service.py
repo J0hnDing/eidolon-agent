@@ -1,0 +1,428 @@
+from __future__ import annotations
+
+import secrets
+import threading
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any, Callable
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.db import SessionLocal
+from app.models import InvocationApproval, TelegramBotConnection
+from app.schemas.integration import TelegramConnectionStatus, TelegramPairingResponse
+from app.services.invocation_approval_presentation import (
+    ApprovalPresentation,
+    build_approval_presentation,
+    presentation_from_snapshot,
+    presentation_snapshot,
+)
+from app.services.secret_store import SecretStore, SecretStoreError, default_secret_store
+from app.services.telegram_provider import (
+    PairingMessage,
+    TelegramApprovalCallback,
+    TelegramBotApi,
+    TelegramLongPollWorker,
+    TelegramNotificationProviderAdapter,
+    TelegramProviderError,
+    UrllibTelegramBotApi,
+    create_pairing_code,
+    edit_approval_outcome,
+    hash_pairing_code,
+    send_approval_request,
+    validate_callback_origin,
+)
+
+TELEGRAM_SECRET_NAMESPACE = "telegram"
+TELEGRAM_ROLE = "notification_approval"
+
+
+class TelegramServiceError(RuntimeError):
+    def __init__(self, error_type: str, message: str) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+
+
+@dataclass
+class _DatabaseOffsetStore:
+    db: Session
+    connection_id: int
+    bot_id: str
+
+    def _row(self) -> TelegramBotConnection:
+        row = self.db.get(TelegramBotConnection, self.connection_id)
+        if row is None:
+            raise TelegramServiceError("connection_unavailable", "Telegram bot connection changed")
+        self.db.refresh(row)
+        if row.bot_id != self.bot_id:
+            raise TelegramServiceError("connection_unavailable", "Telegram bot connection changed")
+        return row
+
+    def get_offset(self) -> int | None:
+        row = self._row()
+        return None if row.last_update_id is None else row.last_update_id + 1
+
+    def set_offset(self, offset: int) -> None:
+        row = self._row()
+        row.last_update_id = offset - 1
+        self.db.commit()
+
+
+class TelegramService:
+    def __init__(
+        self,
+        db: Session,
+        *,
+        secret_store: SecretStore | None = None,
+        api_factory: Callable[[str], TelegramBotApi] = UrllibTelegramBotApi,
+    ) -> None:
+        self.db = db
+        if secret_store is None:
+            try:
+                secret_store = default_secret_store()
+            except SecretStoreError:
+                secret_store = None
+        self.secret_store = secret_store
+        self.api_factory = api_factory
+
+    def connection_status(self) -> TelegramConnectionStatus:
+        row = self._connection()
+        if row is None:
+            return TelegramConnectionStatus(connected=False, status="disconnected")
+        available = self.secret_store is not None and self.secret_store.implementation_id == row.secret_store_id
+        status = row.status if available else "unavailable"
+        error_type = None if status in {"connected", "pairing"} else status
+        pairing_expiry = row.pairing_expires_at
+        comparable_expiry = pairing_expiry
+        if comparable_expiry is not None and comparable_expiry.tzinfo is None:
+            comparable_expiry = comparable_expiry.replace(tzinfo=UTC)
+        if status == "pairing" and comparable_expiry is not None and datetime.now(UTC) >= comparable_expiry:
+            status = "invalid"
+            error_type = "pairing_expired"
+        return TelegramConnectionStatus(
+            connected=available and status == "connected" and bool(row.paired_chat_id and row.paired_user_id),
+            status=status,
+            bot_username=row.bot_username,
+            paired_chat_id=row.paired_chat_id,
+            paired_user_id=row.paired_user_id,
+            pairing_expires_at=pairing_expiry,
+            last_validated_at=row.updated_at,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            error_type=error_type,
+        )
+
+    def start_pairing(self, token: str) -> TelegramPairingResponse:
+        if not token or len(token) > 512:
+            raise TelegramServiceError("invalid_credential", "Telegram bot token is invalid")
+        if self.secret_store is None:
+            raise TelegramServiceError("connection_unavailable", "Operating-system secret storage is unavailable")
+        try:
+            api = self.api_factory(token)
+            identity = api.get_me()
+            webhook = api.get_webhook_info()
+            if webhook.get("configured") or webhook.get("url"):
+                raise TelegramServiceError("webhook_conflict", "Telegram webhook is configured; long polling is required")
+            reference = self.secret_store.put(token, namespace=TELEGRAM_SECRET_NAMESPACE)
+        except TelegramServiceError:
+            raise
+        except TelegramProviderError as exc:
+            raise TelegramServiceError(exc.error_type, str(exc)) from None
+        except SecretStoreError:
+            raise TelegramServiceError("connection_unavailable", "Operating-system secret storage is unavailable") from None
+        finally:
+            token = ""
+        pairing = create_pairing_code()
+        expiry = datetime.fromtimestamp(pairing.expires_at, tz=UTC)
+        previous = self._connection()
+        previous_reference = previous.secret_reference if previous is not None else None
+        now = datetime.now(UTC)
+        try:
+            if previous is None:
+                row = TelegramBotConnection(
+                    role=TELEGRAM_ROLE,
+                    is_default=True,
+                    secret_store_id=self.secret_store.implementation_id,
+                    secret_reference=reference,
+                    bot_id=str(identity["id"]),
+                    bot_username=identity.get("username"),
+                    status="pairing",
+                    pairing_code_hash=pairing.code_hash,
+                    pairing_expires_at=expiry,
+                    created_at=now,
+                    updated_at=now,
+                )
+                self.db.add(row)
+            else:
+                row = previous
+                row.secret_store_id = self.secret_store.implementation_id
+                row.secret_reference = reference
+                row.bot_id = str(identity["id"])
+                row.bot_username = identity.get("username")
+                row.status = "pairing"
+                row.paired_chat_id = None
+                row.paired_user_id = None
+                row.last_update_id = None
+                row.pairing_code_hash = pairing.code_hash
+                row.pairing_expires_at = expiry
+                row.updated_at = now
+            self.db.commit()
+            self.db.refresh(row)
+        except Exception:
+            self.db.rollback()
+            try:
+                self.secret_store.delete(reference, namespace=TELEGRAM_SECRET_NAMESPACE)
+            except SecretStoreError:
+                pass
+            raise TelegramServiceError("internal_failure", "Telegram pairing could not be saved safely") from None
+        if previous_reference and previous_reference != reference:
+            try:
+                self.secret_store.delete(previous_reference, namespace=TELEGRAM_SECRET_NAMESPACE)
+            except SecretStoreError:
+                pass
+        return TelegramPairingResponse(
+            connection=self.connection_status(),
+            pairing_code=pairing.code,
+            expires_at=expiry,
+        )
+
+    def remove(self) -> None:
+        row = self._connection()
+        if row is None:
+            return
+        if self.secret_store is None or self.secret_store.implementation_id != row.secret_store_id:
+            raise TelegramServiceError("connection_unavailable", "Operating-system secret storage is unavailable")
+        try:
+            self.secret_store.delete(row.secret_reference, namespace=TELEGRAM_SECRET_NAMESPACE)
+            self.db.delete(row)
+            self.db.commit()
+        except SecretStoreError:
+            raise TelegramServiceError("connection_unavailable", "Telegram token could not be removed") from None
+        except Exception:
+            self.db.rollback()
+            raise TelegramServiceError("internal_failure", "Telegram connection could not be removed safely") from None
+
+    def approval_available(self) -> bool:
+        return self.connection_status().connected
+
+    def execute_notification(self, input_json: dict[str, Any]) -> dict[str, Any]:
+        row, token = self._connected_api_credential()
+        try:
+            return TelegramNotificationProviderAdapter(self.api_factory).execute(
+                "telegram.notification.send",
+                input_json,
+                token,
+                chat_id=row.paired_chat_id,
+            )
+        finally:
+            token = ""
+
+    def deliver_invocation_approval(self, approval: InvocationApproval) -> None:
+        row, token = self._connected_api_credential()
+        presentation = self._approval_presentation(approval)
+        try:
+            delivery = send_approval_request(
+                self.api_factory(token),
+                row.paired_chat_id or "",
+                presentation,
+            )
+        finally:
+            token = ""
+        approval.telegram_message_ids_json = list(delivery.message_ids)
+        approval.telegram_callback_nonce_hash = delivery.nonce_hash
+        approval.telegram_delivery_status = "delivered"
+        approval.delivered_at = datetime.now(UTC)
+        self.db.commit()
+        self.db.refresh(approval)
+
+    def update_invocation_approval(self, approval: InvocationApproval) -> None:
+        if not approval.telegram_message_ids_json:
+            return
+        row, token = self._connected_api_credential()
+        presentation = self._approval_presentation(approval)
+        try:
+            edit_approval_outcome(
+                self.api_factory(token),
+                row.paired_chat_id or "",
+                approval.telegram_message_ids_json[0],
+                presentation,
+                decision_status=approval.decision_status,
+                execution_status=approval.execution_status,
+                error_type=approval.error_type,
+                error_message=approval.error_message,
+            )
+        finally:
+            token = ""
+        approval.telegram_callback_nonce_hash = None
+        approval.telegram_delivery_status = "updated"
+        self.db.commit()
+        self.db.refresh(approval)
+
+    def poll_once(self) -> int:
+        row, token = self._configured_api_credential()
+        connection_id = row.id
+        bot_id = row.bot_id
+        try:
+            api = self.api_factory(token)
+            worker = TelegramLongPollWorker(
+                api,
+                offset_store=_DatabaseOffsetStore(self.db, connection_id, bot_id),
+                expected_chat_id=int(row.paired_chat_id) if row.paired_chat_id is not None else None,
+                expected_user_id=int(row.paired_user_id) if row.paired_user_id is not None else None,
+                on_pairing=lambda pairing: self._handle_pairing(connection_id, bot_id, pairing),
+                on_callback=lambda callback: self._handle_callback(connection_id, bot_id, callback),
+                on_error=lambda _error: None,
+            )
+            worker.ensure_long_polling_ready()
+            processed = worker.poll_once()
+            self.db.refresh(row)
+            if row.status == "webhook_conflict":
+                row.status = (
+                    "connected"
+                    if row.paired_chat_id is not None and row.paired_user_id is not None
+                    else "pairing"
+                )
+                self.db.commit()
+            return processed
+        except TelegramProviderError as exc:
+            if exc.error_type == "webhook_conflict":
+                row.status = "webhook_conflict"
+                self.db.commit()
+            raise TelegramServiceError(exc.error_type, str(exc)) from None
+        finally:
+            token = ""
+
+    def _handle_pairing(self, connection_id: int, bot_id: str, pairing: PairingMessage) -> None:
+        row = self.db.get(TelegramBotConnection, connection_id)
+        if row is None:
+            return
+        self.db.refresh(row)
+        if (
+            row.bot_id != bot_id
+            or row.status != "pairing"
+            or row.pairing_code_hash is None
+            or row.pairing_expires_at is None
+        ):
+            return
+        expiry = row.pairing_expires_at
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=UTC)
+        if datetime.now(UTC) >= expiry or not secrets.compare_digest(
+            hash_pairing_code(pairing.code), row.pairing_code_hash
+        ):
+            return
+        row.paired_chat_id = str(pairing.chat_id)
+        row.paired_user_id = str(pairing.user_id)
+        row.pairing_code_hash = None
+        row.pairing_expires_at = None
+        row.status = "connected"
+        self.db.commit()
+        unresolved = self.db.scalars(
+            select(InvocationApproval)
+            .where(InvocationApproval.decision_status == "pending")
+            .where(InvocationApproval.execution_status == "not_started")
+            .order_by(InvocationApproval.id)
+        ).all()
+        for approval in unresolved:
+            try:
+                self.deliver_invocation_approval(approval)
+            except Exception:
+                self.db.rollback()
+
+    def _handle_callback(self, connection_id: int, bot_id: str, callback: TelegramApprovalCallback) -> None:
+        row = self.db.get(TelegramBotConnection, connection_id)
+        if row is None:
+            return
+        self.db.refresh(row)
+        if row.bot_id != bot_id or row.paired_chat_id is None or row.paired_user_id is None:
+            return
+        approval = self.db.get(InvocationApproval, callback.approval_id)
+        if approval is None:
+            return
+        try:
+            validate_callback_origin(
+                callback,
+                expected_chat_id=int(row.paired_chat_id),
+                expected_user_id=int(row.paired_user_id),
+                expected_nonce_hash=approval.telegram_callback_nonce_hash,
+            )
+        except TelegramProviderError:
+            return
+        from app.services.invocation_approval_service import InvocationApprovalService
+
+        service = InvocationApprovalService(self.db)
+        if callback.decision == "approve":
+            service.approve(approval.id, decided_via="telegram", decided_by=row.paired_user_id)
+        else:
+            service.deny(approval.id, decided_via="telegram", decided_by=row.paired_user_id)
+        approval = self.db.get(InvocationApproval, approval.id)
+        if approval is not None:
+            if approval.telegram_delivery_status != "updated":
+                try:
+                    self.update_invocation_approval(approval)
+                except Exception:
+                    self.db.rollback()
+            approval = self.db.get(InvocationApproval, approval.id)
+            if approval is not None and approval.telegram_callback_nonce_hash is not None:
+                approval.telegram_callback_nonce_hash = None
+                self.db.commit()
+
+    def _connection(self) -> TelegramBotConnection | None:
+        return self.db.scalar(
+            select(TelegramBotConnection)
+            .where(TelegramBotConnection.role == TELEGRAM_ROLE)
+            .where(TelegramBotConnection.is_default.is_(True))
+            .order_by(TelegramBotConnection.id.desc())
+        )
+
+    def _approval_presentation(self, approval: InvocationApproval) -> ApprovalPresentation:
+        snapshot = approval.presentation_json or {}
+        presentation = presentation_from_snapshot(approval.id, snapshot)
+        if presentation is not None:
+            return presentation
+        presentation = build_approval_presentation(
+            approval_id=approval.id,
+            action=approval.target_id,
+            caller=approval.source,
+            input_json=approval.input_json,
+            reason=approval.reason_to_call,
+        )
+        approval.presentation_json = presentation_snapshot(presentation)
+        return presentation
+
+    def _configured_api_credential(self) -> tuple[TelegramBotConnection, str]:
+        row = self._connection()
+        if row is None or self.secret_store is None or self.secret_store.implementation_id != row.secret_store_id:
+            raise TelegramServiceError("connection_unavailable", "Telegram bot is unavailable")
+        try:
+            return row, self.secret_store.get(row.secret_reference, namespace=TELEGRAM_SECRET_NAMESPACE)
+        except SecretStoreError:
+            raise TelegramServiceError("connection_unavailable", "Telegram bot token is unavailable") from None
+
+    def _connected_api_credential(self) -> tuple[TelegramBotConnection, str]:
+        row, token = self._configured_api_credential()
+        if row.status != "connected" or row.paired_chat_id is None or row.paired_user_id is None:
+            raise TelegramServiceError("connection_unavailable", "Telegram bot is not paired")
+        return row, token
+
+
+def run_telegram_long_polling(stop_event: threading.Event) -> None:
+    failures = 0
+    while not stop_event.is_set():
+        db = SessionLocal()
+        try:
+            TelegramService(db).poll_once()
+            failures = 0
+        except TelegramServiceError as exc:
+            if exc.error_type == "connection_unavailable":
+                delay = 1.0
+            else:
+                delay = min(60.0, float(2 ** min(failures, 6)))
+                failures += 1
+            stop_event.wait(delay)
+        except Exception:
+            failures += 1
+            stop_event.wait(min(60.0, float(2 ** min(failures, 6))))
+        finally:
+            db.close()

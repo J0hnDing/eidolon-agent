@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { SchedulePayload, ScheduleType, SkillSchedule, api } from "../api/client";
+import { formatSystemDateTime, parseBackendDateTime } from "../lib/dateTime";
 import { formatDisplayName } from "../lib/displayName";
 import { usePolling } from "../lib/usePolling";
 
@@ -253,7 +254,7 @@ function humanSchedule(schedule: SkillSchedule): string {
 
 function timeZoneAbbreviation(schedule: SkillSchedule): string {
   try {
-    const date = schedule.next_run_at ? new Date(schedule.next_run_at) : new Date();
+    const date = schedule.next_run_at ? parseBackendDateTime(schedule.next_run_at) : new Date();
     const part = new Intl.DateTimeFormat("en-US", {
       timeZone: schedule.timezone,
       timeZoneName: "short",
@@ -269,8 +270,5 @@ function capitalize(value: string | null | undefined): string {
 }
 
 function formatTimestamp(value: string | null, fallback: string): string {
-  if (!value) return fallback;
-  const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(value);
-  const normalized = hasTimezone ? value : `${value}Z`;
-  return new Date(normalized).toLocaleString();
+  return formatSystemDateTime(value, fallback);
 }

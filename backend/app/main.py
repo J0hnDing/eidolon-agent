@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -14,6 +15,7 @@ from app.routers import (
     codex_settings,
     functions,
     integrations,
+    invocation_approvals,
     memory_facts,
     permission_requests,
     schedules,
@@ -25,11 +27,16 @@ from app.routers import (
 from app.services.atlas_lifecycle_service import atlas_lifecycle_service
 from app.services.atlas_settings_service import build_default_atlas_settings_service
 from app.services.codex_usage_service import codex_usage_service
+from app.services.invocation_approval_service import InvocationApprovalService
 from app.services.proposed_skill_service import ProposedSkillService
 from app.services.scheduler_service import SchedulerService
+from app.services.telegram_service import run_telegram_long_polling
 from app.services.web_app_runtime_service import WebAppRuntimeConfig, WebAppRuntimeService
 
-GOOGLE_OAUTH_CALLBACK_PATH = "/settings/integrations/google-calendar/oauth/callback"
+GOOGLE_OAUTH_CALLBACK_PATHS = (
+    "/settings/integrations/google-calendar/oauth/callback",
+    "/settings/integrations/gmail/oauth/callback",
+)
 
 
 class OAuthCallbackAccessLogFilter(logging.Filter):
@@ -37,9 +44,13 @@ class OAuthCallbackAccessLogFilter(logging.Filter):
         if not isinstance(record.args, tuple) or len(record.args) < 3:
             return True
         path = record.args[2]
-        if isinstance(path, str) and path.startswith(f"{GOOGLE_OAUTH_CALLBACK_PATH}?"):
+        callback_path = next(
+            (item for item in GOOGLE_OAUTH_CALLBACK_PATHS if isinstance(path, str) and path.startswith(f"{item}?")),
+            None,
+        )
+        if callback_path is not None:
             args = list(record.args)
-            args[2] = GOOGLE_OAUTH_CALLBACK_PATH
+            args[2] = callback_path
             record.args = tuple(args)
         return True
 
@@ -64,6 +75,15 @@ async def web_app_runtime_maintenance(config: WebAppRuntimeConfig) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     create_db_and_tables()
+    recovery_db = SessionLocal()
+    try:
+        InvocationApprovalService(recovery_db).recover()
+    finally:
+        recovery_db.close()
+    telegram_stop = threading.Event()
+    telegram_worker = asyncio.create_task(
+        asyncio.to_thread(run_telegram_long_polling, telegram_stop)
+    )
     atlas_db = SessionLocal()
     try:
         build_default_atlas_settings_service(atlas_db).startup()
@@ -88,6 +108,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        telegram_stop.set()
+        try:
+            await telegram_worker
+        except asyncio.CancelledError:
+            pass
         web_app_maintenance.cancel()
         try:
             await web_app_maintenance
@@ -143,6 +168,7 @@ app.include_router(agent_runs.router)
 app.include_router(chat.router)
 app.include_router(skill_generation_requests.router)
 app.include_router(permission_requests.router)
+app.include_router(invocation_approvals.router)
 app.include_router(schedules.router)
 app.include_router(usage.router)
 app.include_router(codex_settings.router)
