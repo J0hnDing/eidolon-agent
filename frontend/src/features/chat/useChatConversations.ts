@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { ActSessionSummary, ChatMode } from "../../api/client";
+import { ActSessionSummary, ConversationMode } from "../../api/client";
 import {
   appendMessages as appendStoredMessages,
   CHAT_STORAGE_KEY,
@@ -8,7 +8,7 @@ import {
   ChatConversation,
   ChatMessage,
   createConversation,
-  initialMessages,
+  initialMessagesForMode,
   loadActiveConversationId,
   loadStoredConversations,
   saveActiveConversationId,
@@ -20,18 +20,17 @@ export function useChatConversations() {
   const [conversations, setConversations] = useState<ChatConversation[]>(() => loadStoredConversations());
   const [activeConversationId, setActiveConversationId] = useState(() => loadActiveConversationId(conversations));
   const activeConversation = useMemo(
-    () => conversations.find((conversation) => conversation.id === activeConversationId) ?? conversations[0],
+    () => conversations.find((conversation) => conversation.id === activeConversationId),
     [activeConversationId, conversations],
   );
-  const messages = activeConversation?.messages ?? initialMessages;
+  const messages = activeConversation?.messages ?? initialMessagesForMode("project");
   const draft = activeConversation?.draft ?? "";
-  const mode = activeConversation?.mode ?? "chat";
+  const mode = activeConversation?.mode ?? "project";
 
   useEffect(() => {
-    if (!localStorage.getItem(CHAT_STORAGE_KEY)) {
-      saveStoredConversations(conversations);
-    }
-    // The initial load may synthesize the first conversation; persist that exact id.
+    // The initial load may synthesize a project after removing unsupported
+    // legacy direct-chat rows; persist that exact normalized collection.
+    saveStoredConversations(conversations);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -75,7 +74,7 @@ export function useChatConversations() {
   }
 
   function createNewConversation(
-    mode: ChatMode = "chat",
+    mode: ConversationMode = "project",
     options: { actSessionId?: number; title?: string } = {},
   ): string {
     const conversation = createConversation(mode, options);

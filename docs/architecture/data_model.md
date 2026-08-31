@@ -10,7 +10,7 @@ Compatibility storage for chat messages with role, content, optional conversatio
 
 ### codex_routing_settings
 
-Stores the single-user Codex invocation routing document. It contains independent Chat settings, ProductManager action settings, Builder default/difficulty/repair/update settings, and Tester task/final/update settings. Model ids and reasoning efforts are user-owned settings; ProductManager task DAG output does not contain them.
+Stores the single-user Codex invocation routing document. It contains independent Act settings, ProductManager action settings, Builder default/difficulty/repair/update settings, and Tester task/final/update settings. Model ids and reasoning efforts are user-owned settings; ProductManager task DAG output does not contain them. Legacy stored `chat` routing values are ignored.
 
 ### codex_mcp_settings
 
@@ -18,7 +18,7 @@ Stores the single host registration state: whether running MCP processes may inv
 
 ### act_sessions and act_turns
 
-`act_sessions` stores each durable Codex thread id, title, origin, lifecycle status, and timestamps. `act_turns` stores the user message, queued/running/terminal state, live Codex turn id, concise activity, final answer or bounded failure, cancellation request, and optional Telegram delivery target/status. Only queued turns are safe to retain across restart; running rows are recovered as interrupted.
+`act_sessions` stores each durable Codex thread id, title, origin, lifecycle status, and timestamps. `act_turns` stores the user message, queued/running/terminal state, execution start/completion timestamps, live Codex turn id, concise activity, final answer or bounded failure, cancellation request, and optional Telegram delivery target/status. Only queued turns are safe to retain across restart; running rows are recovered as interrupted.
 
 ### act_telegram_bindings
 

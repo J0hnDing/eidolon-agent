@@ -340,6 +340,7 @@ def ensure_local_schema() -> None:
                 "delivery_connection_id": "INTEGER",
                 "delivery_chat_id": "VARCHAR(64)",
                 "delivery_status": "VARCHAR(32)",
+                "started_at": "DATETIME",
             }
             for column, definition in additions.items():
                 if column not in columns:

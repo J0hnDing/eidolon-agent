@@ -115,7 +115,6 @@ export default function WebAppPage() {
     <section className="web-app-page stack">
       <header className="web-app-trusted-chrome">
         <div>
-          <p className="eyebrow">Trusted Eidolon application chrome</p>
           <h1>{skill ? formatDisplayName(skill.name) : "Web application"}</h1>
           <p>{skill?.description}</p>
         </div>

@@ -88,6 +88,7 @@ def test_local_schema_migrates_legacy_statuses_task_columns_and_retired_skill_fi
                 "id INTEGER PRIMARY KEY, milestone_name VARCHAR(128), step_name VARCHAR(64))"
             )
         )
+        connection.execute(text("CREATE TABLE act_turns (id INTEGER PRIMARY KEY)"))
         connection.execute(
             text("INSERT INTO agent_run_steps (id, milestone_name, step_name) VALUES (1, 'legacy_task', 'builder')")
         )
@@ -117,6 +118,7 @@ def test_local_schema_migrates_legacy_statuses_task_columns_and_retired_skill_fi
         "agent_input_text",
         "agent_output_text",
     } <= agent_step_columns
+    assert "started_at" in {column["name"] for column in inspector.get_columns("act_turns")}
     with legacy_engine.connect() as connection:
         assert connection.execute(text("SELECT status, enabled, runtime FROM skills WHERE id = 1")).one() == (
             "installed",

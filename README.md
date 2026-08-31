@@ -15,7 +15,7 @@ Eidolon is an experiment in a different kind of personal AI: not a remote chatbo
 </div>
 
 > [!IMPORTANT]
-> Eidolon is under active development. It already has working chat, explicit memory CRUD, skill generation, validation, approvals, versioning, function execution, sandboxed web applications, scheduling, and run history. Automatic memory use, experience-driven adaptation, and fully autonomous long-term learning are **not implemented yet**.
+> Eidolon is under active development. It already has Project planning, persistent Act sessions, explicit memory CRUD, skill generation, validation, approvals, versioning, function execution, sandboxed web applications, scheduling, and run history. Automatic memory use, experience-driven adaptation, and fully autonomous long-term learning are **not implemented yet**.
 
 ## The idea
 
@@ -33,9 +33,9 @@ The long-term goal is a personal agent whose usefulness grows with you while its
 
 | Capability | Status | What that means today |
 | --- | --- | --- |
-| Local chat | ✅ Implemented | Chat mode answers through the locally available Codex CLI integration. |
+| Project and Act work | ✅ Implemented | Project plans reusable skills; Act performs persistent work in a controlled shared workspace. |
 | Explicit memory | ✅ Implemented | Memory facts have a local CRUD interface and SQLite persistence. |
-| Memory-aware responses | 🧭 Planned | Stored facts are not yet automatically selected or injected into ordinary chat or skill runs. |
+| Memory-aware responses | 🧭 Planned | Stored facts are not yet automatically selected or injected into agent workflows or skill runs. |
 | Self-built skills | ✅ Implemented | Project mode can plan, generate, test, permission-review, and propose Python skill packages. |
 | Skill use | ✅ Implemented | Installed skills can run as bounded functions or open as sandboxed ASGI web applications. |
 | Skill composition | 🟡 Partial | Declared one-hop function calls are supported; nested invocation is not. |
@@ -111,7 +111,7 @@ flowchart TB
 
 - Python 3.12+
 - Node.js 20+
-- Codex CLI for real chat and skill-building flows
+- Codex CLI for Project planning, Act, and skill-building flows
 - Docker Desktop for the default isolated skill runtime
 
 ### Backend
@@ -167,7 +167,7 @@ Start with [AGENTS.md](AGENTS.md) before changing behavior, then use the [docume
 
 Eidolon’s next chapters are less about making it “more autonomous” and more about making improvement trustworthy:
 
-1. connect explicit memory to context selection without turning chat history into silent surveillance;
+1. connect explicit memory to context selection without turning conversation history into silent surveillance;
 2. capture outcomes and user feedback as inspectable evidence;
 3. let Eidolon propose memory and skill changes instead of applying them silently;
 4. evaluate adaptations against prior versions before promotion;

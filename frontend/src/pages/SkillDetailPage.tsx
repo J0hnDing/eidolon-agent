@@ -496,7 +496,6 @@ export default function SkillDetailPage() {
     <section className="page stack">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Skill Detail</p>
           <h1>{displayName}</h1>
         </div>
         <Link to="/skills">Back to skills</Link>

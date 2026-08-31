@@ -12,6 +12,7 @@ import SchedulesPage from "./pages/SchedulesPage";
 import UsageSettingsPage from "./pages/UsageSettingsPage";
 import WebAppPage from "./pages/WebAppPage";
 import WebAppsPage from "./pages/WebAppsPage";
+import eidolonLogo from "../resource/logo/eidolon_logo_exact.svg";
 
 type NavIcon =
   | "chat"
@@ -63,7 +64,7 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">
-            <span />
+            <img src={eidolonLogo} alt="" />
           </span>
           <div>
             <strong>Eidolon</strong>
@@ -118,6 +119,7 @@ export default function App() {
             <Route path="/agent-runs/:agentRunId" element={<AgentRunDetailPage />} />
             <Route path="/approval-requests" element={<ApprovalRequestsPage />} />
             <Route path="/settings" element={<Navigate to="/settings/usage" replace />} />
+            <Route path="/settings/appearance" element={<UsageSettingsPage section="appearance" />} />
             <Route path="/settings/usage" element={<UsageSettingsPage />} />
             <Route path="/settings/project" element={<UsageSettingsPage section="project" />} />
             <Route path="/settings/models" element={<UsageSettingsPage section="models" />} />

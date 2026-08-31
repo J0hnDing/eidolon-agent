@@ -1,3 +1,4 @@
+import inspect
 import json
 from io import BytesIO
 from urllib.error import HTTPError
@@ -5,6 +6,7 @@ from urllib.error import HTTPError
 import pytest
 
 import function_runtime_capabilities as capabilities
+import function_runtime_relay as relay
 
 
 class FakeResponse:
@@ -97,3 +99,10 @@ def test_function_helper_reports_blocked_call(monkeypatch: pytest.MonkeyPatch) -
 def test_function_codex_helper_rejects_empty_prompt() -> None:
     with pytest.raises(capabilities.FunctionRuntimeCapabilityError, match="cannot be empty"):
         capabilities.call_codex("   ")
+
+
+def test_nested_skill_capabilities_use_five_minute_timeouts() -> None:
+    assert capabilities.DEFAULT_SKILL_CAPABILITY_TIMEOUT_SECONDS == 300
+    assert inspect.signature(capabilities.call_codex).parameters["timeout_seconds"].default == 300
+    assert inspect.signature(capabilities.call_function).parameters["timeout_seconds"].default == 300
+    assert relay.UPSTREAM_TIMEOUT_SECONDS == 300

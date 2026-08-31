@@ -33,7 +33,7 @@ Web applications additionally receive a platform-owned import entrypoint and an 
 
 Generated skills cannot provide Dockerfiles, image names, build contexts, or build args.
 
-Skill entrypoints have a default 120-second execution timeout, configurable with `PERSONAL_AGENT_SKILL_TIMEOUT_SECONDS`. Generated network or backend-Codex workflows must budget retrieval, bounded Codex calls, cache writes, and graceful error output within that limit. Multi-item Codex work should use one batched backend request rather than sequential per-item calls. Individual backend-Codex caller timeouts should remain bounded below the full entrypoint timeout so the skill can persist partial results and exit cleanly.
+Skill entrypoints have a default 300-second execution timeout, configurable with `PERSONAL_AGENT_SKILL_TIMEOUT_SECONDS`. Nested function and backend-Codex capability calls and their trusted relays also use a 300-second default so the capability transport does not impose a shorter hidden cutoff. Generated network or backend-Codex workflows must still budget retrieval, bounded calls, cache writes, and graceful error output within the entrypoint limit. Multi-item Codex work should use one batched backend request rather than sequential per-item calls.
 
 ## Network Limitation
 

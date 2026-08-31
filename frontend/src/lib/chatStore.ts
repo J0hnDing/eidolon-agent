@@ -1,7 +1,7 @@
 import {
   AgentRun,
   ApprovalRequest,
-  ChatMode,
+  ConversationMode,
   ProposedSkillValidation,
   Skill,
   SkillGenerationRequest,
@@ -19,20 +19,26 @@ export type ChatMessage = {
   agentRun?: AgentRun | null;
   actionStatus?: "pending" | "working" | "approved" | "denied" | "expired" | "superseded" | "completed" | "failed";
   actTurnId?: number;
+  actWork?: {
+    status: string;
+    activities: Array<{ kind: string; label: string }>;
+    startedAt: string;
+    completedAt: string | null;
+  };
 };
 
 export const initialMessages: ChatMessage[] = [
   {
     id: 1,
     role: "assistant",
-    content: "Chat is ready for normal Codex-backed conversation.",
+    content: "Hi, what can I build for you today?",
   },
 ];
 
 export type ChatConversation = {
   id: string;
   title: string;
-  mode: ChatMode;
+  mode: ConversationMode;
   draft: string;
   pendingGenerationRequestId?: number;
   actSessionId?: number;
@@ -46,7 +52,7 @@ export const ACTIVE_CONVERSATION_KEY = "personal-agent.active-chat-conversation.
 export const CHAT_UPDATED_EVENT = "personal-agent-chat-updated";
 
 export function createConversation(
-  mode: ChatMode = "chat",
+  mode: ConversationMode = "project",
   options: { id?: string; title?: string; actSessionId?: number; createdAt?: string; updatedAt?: string } = {},
 ): ChatConversation {
   const now = new Date().toISOString();
@@ -142,6 +148,7 @@ function isStoredConversation(value: unknown): value is ChatConversation {
   return (
     typeof raw.id === "string" &&
     typeof raw.title === "string" &&
+    (raw.mode === "project" || raw.mode === "act") &&
     Array.isArray(raw.messages) &&
     typeof raw.createdAt === "string" &&
     typeof raw.updatedAt === "string"
@@ -151,7 +158,8 @@ function isStoredConversation(value: unknown): value is ChatConversation {
 function normalizeStoredConversation(conversation: ChatConversation): ChatConversation {
   return {
     ...conversation,
-    mode: conversation.mode === "project" || conversation.mode === "act" ? conversation.mode : "chat",
+    mode: conversation.mode,
+    messages: conversation.messages.map((message) => normalizeStarterMessage(message, conversation.mode)),
     draft: typeof conversation.draft === "string" ? conversation.draft : "",
     pendingGenerationRequestId:
       typeof conversation.pendingGenerationRequestId === "number" ? conversation.pendingGenerationRequestId : undefined,
@@ -159,17 +167,23 @@ function normalizeStoredConversation(conversation: ChatConversation): ChatConver
   };
 }
 
-export function initialMessagesForMode(mode: ChatMode): ChatMessage[] {
+export function initialMessagesForMode(mode: ConversationMode): ChatMessage[] {
   const content = mode === "project"
-    ? "Project is ready to plan a reusable skill proposal."
-    : mode === "act"
-      ? "Act is ready to work persistently in its shared workspace using Eidolon tools."
-      : initialMessages[0].content;
+    ? "Hi, what can I build for you today?"
+    : "Hi, what can I do for you?";
   return [{ id: 1, role: "assistant", content }];
+}
+
+function normalizeStarterMessage(message: ChatMessage, mode: ConversationMode): ChatMessage {
+  const previousStarter = mode === "project"
+    ? "Project is ready to plan a reusable skill proposal."
+    : "Act is ready to work persistently in its shared workspace using Eidolon tools.";
+  if (message.id !== 1 || message.role !== "assistant" || message.content !== previousStarter) return message;
+  return initialMessagesForMode(mode)[0];
 }
 
 function makeTitle(content: string): string {
   const normalized = content.replace(/\s+/g, " ").trim();
-  if (normalized.length <= 42) return normalized || "New chat";
+  if (normalized.length <= 42) return normalized || "New project";
   return `${normalized.slice(0, 39)}...`;
 }

@@ -35,9 +35,6 @@ export default function PermissionRequestModal({
       <section className="modal-panel permission-modal">
         <header className="page-header">
           <div>
-            <p className="eyebrow">
-              {request.request_scope === "build_time" ? "Build-Time Approval" : "Runtime Approval"}
-            </p>
             <h2>{title}</h2>
             {subject && <p className="muted">{subject}</p>}
           </div>

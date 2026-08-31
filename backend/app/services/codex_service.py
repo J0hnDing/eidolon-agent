@@ -172,7 +172,6 @@ CODEX_ACTION_TIMEOUT_SECONDS = {
     "skill_update_repair": 600,
     "skill_update": 600,
     "tester_write_tests": 300,
-    "skill_runtime_codex": 45,
     "atlas_knowledge_expand": 180,
     "atlas_knowledge_explain_expand": 180,
 }

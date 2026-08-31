@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 from jsonschema import Draft202012Validator
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -28,12 +28,6 @@ from app.services.codex_service import (
     codex_action_timeout_seconds,
     codex_process_registry,
     default_codex_adapter,
-)
-from app.services.direct_chat_service import (
-    DirectChatService,
-    RealDirectChatAdapter,
-    UnavailableDirectChatAdapter,
-    default_direct_chat_adapter,
 )
 from app.services.permission_service import PermissionService
 from app.services.product_manager_contract_service import ProductManagerContractError
@@ -154,20 +148,6 @@ class FixedBlueprintAdapter(DeterministicCodexStub):
         )
 
 
-class RecordingDirectChatAdapter:
-    def __init__(self, answer_text: str = "Codex direct answer.") -> None:
-        self.called = False
-        self.prompt = ""
-        self.message = ""
-        self.answer_text = answer_text
-
-    def answer(self, prompt: str, message: str) -> str:
-        self.called = True
-        self.prompt = prompt
-        self.message = message
-        return self.answer_text
-
-
 def approve_build_time_permissions(db_session: Session, generation_request: SkillGenerationRequest) -> None:
     if "skill_name" not in generation_request.plan_json:
         prepared_plan = skill_plan()
@@ -223,35 +203,6 @@ def skill_plan(**overrides) -> dict:
     return plan
 
 
-def test_chat_mode_returns_direct_answer(db_session: Session) -> None:
-    adapter = RecordingDirectChatAdapter("Inflation is a broad rise in prices.")
-    response = ChatOrchestrator(
-        db_session,
-        direct_chat_service=DirectChatService(adapter=adapter),
-    ).handle_message("What is inflation?", mode="chat")
-
-    assert response["type"] == "direct_answer"
-    assert response["message"] == "Inflation is a broad rise in prices."
-    assert adapter.called is True
-    assert adapter.message == "What is inflation?"
-    assert "Chat mode" in adapter.prompt
-
-
-def test_chat_mode_does_not_create_skill_proposal_from_reusable_request(db_session: Session) -> None:
-    adapter = RecordingDirectChatAdapter("Switch to Project mode if you want a reusable skill.")
-    response = ChatOrchestrator(
-        db_session,
-        direct_chat_service=DirectChatService(adapter=adapter),
-    ).handle_message(
-        "Create a reusable skill that summarizes AI chip news from Nvidia and AMD.",
-        mode="chat",
-    )
-
-    assert response["type"] == "direct_answer"
-    assert adapter.called is True
-    assert db_session.query(SkillGenerationRequest).count() == 0
-
-
 def test_project_mode_creates_skill_proposal(db_session: Session) -> None:
     codex_adapter = FixedBlueprintAdapter(
         skill_plan(
@@ -274,7 +225,6 @@ def test_project_mode_creates_skill_proposal(db_session: Session) -> None:
         codex_service=CodexService(db_session, adapter=codex_adapter),
     ).handle_message(
         "Create a reusable skill that summarizes AI chip news from Nvidia and AMD.",
-        mode="project",
     )
 
     assert response["type"] == "skill_generation_plan"
@@ -288,6 +238,11 @@ def test_project_mode_creates_skill_proposal(db_session: Session) -> None:
     assert permission_request.status == "pending"
 
 
+def test_removed_chat_mode_is_rejected_by_the_request_contract() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        ChatRequest.model_validate({"message": "What is inflation?", "mode": "chat"})
+
+
 def test_chat_response_model_serializes_generation_request_fields(db_session: Session) -> None:
     codex_adapter = FixedBlueprintAdapter(
         skill_plan(skill_name="ai_infra_news_digest", display_name="Ai Infra News Digest")
@@ -297,7 +252,6 @@ def test_chat_response_model_serializes_generation_request_fields(db_session: Se
         codex_service=CodexService(db_session, adapter=codex_adapter),
     ).handle_message(
         "Create a reusable skill that summarizes AI chip news from Nvidia and AMD.",
-        mode="project",
     )
     data = TypeAdapter(ChatResponse).validate_python(response).model_dump(mode="json")
 
@@ -324,7 +278,6 @@ def test_project_mode_uses_one_product_manager_planning_action(db_session: Sessi
         codex_service=CodexService(db_session, adapter=RecordingAdapter()),
     ).handle_message(
         "Create a reusable skill that summarizes AI chip news from Nvidia and AMD.",
-        mode="project",
     )
 
     generation_request = response["generation_request"]
@@ -376,7 +329,7 @@ def test_unsupported_project_reports_pm_reason_without_artifacts(db_session: Ses
                     stdout=json.dumps(
                         {
                             "decision": "stop_inplausible",
-                            "user_prompt": "File deletion is blocked. Ask for safe cleanup guidance in normal chat instead.",
+                            "user_prompt": "File deletion is blocked. Ask for safe manual cleanup guidance instead.",
                             "build_workflow": None,
                             "blueprint": None,
                             "permission_plan": None,
@@ -389,12 +342,12 @@ def test_unsupported_project_reports_pm_reason_without_artifacts(db_session: Ses
     response = ChatOrchestrator(
         db_session,
         codex_service=CodexService(db_session, adapter=UnsupportedAdapter(), project_root=tmp_path),
-    ).handle_message("Make a skill that deletes files automatically.", mode="project")
+    ).handle_message("Make a skill that deletes files automatically.")
 
     assert response == {
         "type": "project_not_plausible",
         "message": "I would not turn that into a skill yet.",
-        "reason": "File deletion is blocked. Ask for safe cleanup guidance in normal chat instead.",
+        "reason": "File deletion is blocked. Ask for safe manual cleanup guidance instead.",
     }
     generation_request = db_session.query(SkillGenerationRequest).one()
     assert generation_request.status == "failed"
@@ -434,7 +387,7 @@ def test_unclear_project_asks_for_input_then_same_chat_reply_builds_plan(
         db_session,
         codex_service=CodexService(db_session, adapter=codex_adapter, project_root=tmp_path),
     )
-    first_response = orchestrator.handle_message("Build me something useful.", mode="project", conversation_id="chat-1")
+    first_response = orchestrator.handle_message("Build me something useful.", conversation_id="chat-1")
 
     assert first_response["type"] == "project_needs_input"
     generation_request = first_response["generation_request"]
@@ -443,7 +396,6 @@ def test_unclear_project_asks_for_input_then_same_chat_reply_builds_plan(
 
     second_response = orchestrator.handle_message(
         "Make it summarize recurring local meeting notes into action items.",
-        mode="project",
         generation_request_id=generation_request.id,
         conversation_id="chat-1",
     )
@@ -451,7 +403,6 @@ def test_unclear_project_asks_for_input_then_same_chat_reply_builds_plan(
     assert second_response["type"] == "project_needs_input"
     third_response = orchestrator.handle_message(
         "The notes are Markdown files selected by the user each time.",
-        mode="project",
         generation_request_id=generation_request.id,
         conversation_id="chat-1",
     )
@@ -501,7 +452,6 @@ def test_project_clarification_rejects_cross_conversation_request_id(db_session:
 def test_project_mode_does_not_use_backend_unsafe_keyword_heuristic(db_session: Session) -> None:
     response = ChatOrchestrator(db_session).handle_message(
         "Make a skill that deletes files automatically.",
-        mode="project",
     )
 
     assert response["type"] == "skill_generation_plan"
@@ -549,10 +499,9 @@ def test_product_manager_can_reject_after_clarification_without_creating_artifac
         db_session,
         codex_service=CodexService(db_session, adapter=adapter, project_root=tmp_path),
     )
-    first = orchestrator.handle_message("Build a cleanup skill.", mode="project")
+    first = orchestrator.handle_message("Build a cleanup skill.")
     second = orchestrator.handle_message(
         "Yes, delete them automatically.",
-        mode="project",
         generation_request_id=first["generation_request"].id,
     )
 
@@ -594,7 +543,7 @@ def test_product_manager_unavailable_function_fails_without_build_artifacts(
         ),
     )
     with pytest.raises(AgentWorkflowError, match="Unknown function id: missing.function"):
-        orchestrator.handle_message("Build a reusable local workflow skill.", mode="project")
+        orchestrator.handle_message("Build a reusable local workflow skill.")
 
     generation_request = db_session.query(SkillGenerationRequest).one()
     agent_run = db_session.query(AgentRun).filter_by(generation_request_id=generation_request.id).one()
@@ -651,7 +600,7 @@ def test_generation_request_contains_plan_permissions_and_dependencies(db_sessio
     response = ChatOrchestrator(
         db_session,
         codex_service=CodexService(db_session, adapter=codex_adapter),
-    ).handle_message("Create an automation for tracking Nvidia and AMD news.", mode="project")
+    ).handle_message("Create an automation for tracking Nvidia and AMD news.")
     generation_request = response["generation_request"]
 
     assert generation_request.plan_json["files_to_generate"]
@@ -675,7 +624,7 @@ def test_build_time_permission_allows_skill_own_cache_read(db_session: Session) 
     response = ChatOrchestrator(
         db_session,
         codex_service=CodexService(db_session, adapter=codex_adapter),
-    ).handle_message("Create a local game tool with cache-backed state.", mode="project")
+    ).handle_message("Create a local game tool with cache-backed state.")
 
     permission_request = response["permission_request"]
     assert permission_request.risk_level == "low"
@@ -698,7 +647,7 @@ def test_stale_blocked_build_time_request_is_refreshed_before_approval(db_sessio
     response = ChatOrchestrator(
         db_session,
         codex_service=CodexService(db_session, adapter=codex_adapter),
-    ).handle_message("Create a local game tool with cache-backed state.", mode="project")
+    ).handle_message("Create a local game tool with cache-backed state.")
     permission_request = response["permission_request"]
     permission_request.risk_level = "blocked"
     db_session.commit()
@@ -730,7 +679,7 @@ def test_product_manager_blueprint_owns_runtime_and_io_schemas(db_session: Sessi
     response = ChatOrchestrator(
         db_session,
         codex_service=CodexService(db_session, adapter=adapter),
-    ).handle_message("Build a calculator tool.", mode="project")
+    ).handle_message("Build a calculator tool.")
     plan = response["generation_request"].plan_json
 
     assert adapter.called is True
@@ -1543,7 +1492,6 @@ def test_product_manager_session_reuses_thread_and_sends_only_latest_answer(
         ("skill_update_repair", 600),
         ("skill_update", 600),
         ("tester_write_tests", 300),
-        ("skill_runtime_codex", 45),
     ],
 )
 def test_codex_action_timeout_policy(action: str, expected_timeout: int) -> None:
@@ -1553,6 +1501,11 @@ def test_codex_action_timeout_policy(action: str, expected_timeout: int) -> None
 
 def test_unknown_codex_action_uses_compatibility_timeout() -> None:
     assert codex_action_timeout_seconds({"codex_task": "legacy_action"}) == DEFAULT_CODEX_ACTION_TIMEOUT_SECONDS
+
+
+def test_skill_runtime_codex_uses_general_timeout() -> None:
+    assert "skill_runtime_codex" not in CODEX_ACTION_TIMEOUT_SECONDS
+    assert codex_action_timeout_seconds({"codex_task": "skill_runtime_codex"}) == 300
 
 
 def test_real_codex_adapter_applies_action_specific_timeout(
@@ -1838,35 +1791,6 @@ def test_real_codex_adapter_auto_search_honors_permission_plan(
     assert "--search" not in captured["command"]
 
 
-def test_real_direct_chat_adapter_uses_read_only_codex_exec(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict = {}
-
-    def fake_run(command, **kwargs):
-        captured["command"] = command
-        captured["kwargs"] = kwargs
-        return subprocess.CompletedProcess(args=command, returncode=0, stdout="Direct Codex answer.", stderr="")
-
-    monkeypatch.setattr("app.services.direct_chat_service.subprocess.run", fake_run)
-
-    adapter = RealDirectChatAdapter(command="codex", timeout_seconds=10, workdir=tmp_path)
-    answer = adapter.answer("Answer normally.", "What is inflation?")
-
-    command = captured["command"]
-    assert answer == "Direct Codex answer."
-    assert command[0] == "codex"
-    assert command.index("--ask-for-approval") < command.index("exec")
-    assert command[command.index("-C") + 1] == str(tmp_path)
-    assert command[command.index("--sandbox") + 1] == "read-only"
-    assert command[command.index("--ask-for-approval") + 1] == "never"
-    assert command[-1] == "-"
-    assert captured["kwargs"]["cwd"] == tmp_path
-    assert captured["kwargs"]["input"] == "Answer normally."
-    assert captured["kwargs"]["encoding"] == "utf-8"
-
-
 def test_chat_route_returns_400_for_agent_workflow_error(
     monkeypatch: pytest.MonkeyPatch,
     db_session: Session,
@@ -1877,7 +1801,7 @@ def test_chat_route_returns_400_for_agent_workflow_error(
     monkeypatch.setattr("app.services.chat_orchestrator.ChatOrchestrator.handle_message", raise_workflow_error)
 
     with pytest.raises(HTTPException) as exc_info:
-        chat_router.chat(ChatRequest(message="Build a weekly report skill", mode="project"), db_session)
+        chat_router.chat(ChatRequest(message="Build a weekly report skill"), db_session)
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == "Proposed skill already exists: generated_skill"
@@ -1931,12 +1855,3 @@ def test_removed_fake_mode_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None
     assert isinstance(adapter, UnavailableCodexAdapter)
     with pytest.raises(CodexGenerationError, match="fake Codex modes were removed"):
         adapter.generate("prompt", Path.cwd(), {})
-
-
-def test_removed_fake_chat_mode_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PERSONAL_AGENT_CODEX_MODE", "fake")
-
-    adapter = default_direct_chat_adapter()
-
-    assert isinstance(adapter, UnavailableDirectChatAdapter)
-    assert "fake Codex modes were removed" in adapter.answer("prompt", "message")

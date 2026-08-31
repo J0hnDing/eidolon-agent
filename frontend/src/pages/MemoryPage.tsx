@@ -99,7 +99,6 @@ export default function MemoryPage() {
     <section className="page stack">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Editable facts</p>
           <h1>Memory</h1>
           <p className="muted">Keep the context Eidolon uses explicit, focused, and under your control.</p>
         </div>

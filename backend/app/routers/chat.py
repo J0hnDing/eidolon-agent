@@ -15,7 +15,6 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)):
     try:
         return ChatOrchestrator(db).handle_message(
             payload.message,
-            payload.mode,
             generation_request_id=payload.generation_request_id,
             conversation_id=payload.conversation_id,
         )

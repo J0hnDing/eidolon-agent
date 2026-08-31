@@ -92,7 +92,7 @@ def config(tmp_path: Path) -> RunnerConfig:
 
 
 def test_default_runner_timeout_supports_bounded_network_workflows() -> None:
-    assert RunnerConfig().timeout_seconds == 120
+    assert RunnerConfig().timeout_seconds == 300
 
 
 def test_private_function_capability_command_uses_internal_network_and_relay_url(

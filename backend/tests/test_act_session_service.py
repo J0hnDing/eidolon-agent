@@ -111,7 +111,7 @@ class FakeRuntimeSessions(FakeThreadSessions):
         kwargs["on_turn_started"]("turn-codex")
         return SimpleNamespace(
             output_text='{"response":"Done"}',
-            items=[{"type": "mcpToolCall"}],
+            items=[{"type": "mcpToolCall", "name": "atlas.goals.list"}],
         )
 
 
@@ -178,8 +178,9 @@ def test_dispatcher_resumes_and_completes_queued_turn(
         assert runtime.resumed == ["thread-act"]
         assert turn.codex_turn_id == "turn-codex"
         assert turn.status == "succeeded"
+        assert turn.started_at is not None
         assert turn.assistant_message == "Done"
-        assert turn.activity_json == [{"kind": "mcpToolCall", "label": "Used an Eidolon tool"}]
+        assert turn.activity_json == [{"kind": "mcpToolCall", "label": "Used atlas.goals.list"}]
     finally:
         verify.close()
 

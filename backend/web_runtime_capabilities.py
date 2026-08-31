@@ -7,6 +7,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 MAX_CAPABILITY_RESPONSE_BYTES = 5_000_000
+DEFAULT_SKILL_CAPABILITY_TIMEOUT_SECONDS = 300
 
 
 class WebRuntimeCapabilityError(RuntimeError):
@@ -25,7 +26,7 @@ def call_codex(
     context: dict[str, Any] | None = None,
     model: str | None = None,
     internet_access: bool = False,
-    timeout_seconds: float = 120,
+    timeout_seconds: float = DEFAULT_SKILL_CAPABILITY_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Call Codex through the instance-scoped Eidolon capability."""
     if not prompt.strip():
@@ -77,7 +78,7 @@ def call_function(
     name: str,
     input_json: dict[str, Any],
     *,
-    timeout_seconds: float = 120,
+    timeout_seconds: float = DEFAULT_SKILL_CAPABILITY_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Invoke one manifest-declared function through the instance capability."""
     if not name.strip():

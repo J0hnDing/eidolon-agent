@@ -1,6 +1,6 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
-import { ActSession, ActTurn, ChatMode, api } from "../api/client";
+import { ActSession, ActTurn, ConversationMode, api } from "../api/client";
 import {
   ChatWorkspace,
   buildApprovalMessage,
@@ -20,6 +20,7 @@ export default function ChatPage() {
   const [projectStateNeedsPolling, setProjectStateNeedsPolling] = useState(false);
   const [actStateNeedsPolling, setActStateNeedsPolling] = useState(false);
   const [activeActTurnId, setActiveActTurnId] = useState<number | null>(null);
+  const pendingActSessions = useRef(new Map<string, Promise<ActSession>>());
   const hasPendingMessage = chat.messages.some(
     (message) => message.kind === "thinking" || message.actionStatus === "working",
   );
@@ -102,20 +103,28 @@ export default function ChatPage() {
     1000,
   );
 
-  async function handleNewConversation(mode: ChatMode) {
+  async function handleNewConversation(mode: ConversationMode) {
     setError(null);
     if (mode !== "act") {
       chat.createNewConversation(mode);
       return;
     }
-    setIsSending(true);
+    const conversationId = chat.createNewConversation("act");
+    const sessionPromise = api.createActSession();
+    pendingActSessions.current.set(conversationId, sessionPromise);
     try {
-      const session = await api.createActSession();
-      chat.createNewConversation("act", { actSessionId: session.id, title: session.title });
+      const session = await sessionPromise;
+      chat.updateConversation(conversationId, (conversation) => ({
+        ...conversation,
+        actSessionId: session.id,
+        title: session.title,
+        updatedAt: session.updated_at,
+      }));
     } catch (reason) {
+      chat.deleteConversation(conversationId);
       setError(reason instanceof Error ? reason.message : "Could not create Act conversation");
     } finally {
-      setIsSending(false);
+      pendingActSessions.current.delete(conversationId);
     }
   }
 
@@ -148,41 +157,39 @@ export default function ChatPage() {
 
     const conversationId = chat.activeConversationId;
     const mode = chat.mode;
-    const actSessionId = chat.activeConversation?.actSessionId;
+    let actSessionId = chat.activeConversation?.actSessionId;
     const nextId = Date.now();
     const thinkingId = nextId + 1;
     chat.appendMessagesToConversation(conversationId, [
       { id: nextId, role: "user", content },
-      {
+      ...(mode === "project" ? [{
         id: thinkingId,
-        role: "assistant",
-        content: mode === "project" ? "ProductManager is reviewing the project..." : mode === "act" ? "Act is working..." : "Codex is thinking...",
-        kind: "thinking",
-      },
+        role: "assistant" as const,
+        content: "ProductManager is reviewing the project...",
+        kind: "thinking" as const,
+      }] : []),
     ]);
     chat.updateConversation(conversationId, (conversation) => ({ ...conversation, draft: "" }));
     setIsSending(true);
     setError(null);
     try {
       if (mode === "act") {
+        if (actSessionId === undefined) {
+          actSessionId = (await pendingActSessions.current.get(conversationId))?.id;
+        }
         if (actSessionId === undefined) throw new Error("This Act conversation is not connected to a session.");
         await api.runActTurn(actSessionId, content);
         setActStateNeedsPolling(true);
         await syncActConversation(conversationId, actSessionId);
         return;
       }
-      const response = await api.sendChatMessage(
+      const response = await api.sendProjectMessage(
         content,
-        mode,
         chat.activeConversation?.pendingGenerationRequestId,
         conversationId,
       );
       chat.removeMessageFromConversation(conversationId, thinkingId);
-      if (response.type === "direct_answer" || response.type === "unsafe_or_unsupported") {
-        chat.appendMessagesToConversation(conversationId, [
-          { id: nextId + 2, role: "assistant", content: response.message },
-        ]);
-      } else if (response.type === "project_not_plausible") {
+      if (response.type === "project_not_plausible") {
         chat.updateConversation(conversationId, (conversation) => ({
           ...conversation,
           pendingGenerationRequestId: undefined,
@@ -234,7 +241,7 @@ export default function ChatPage() {
         setError(null);
         return;
       }
-      const message = err instanceof Error ? err.message : "Could not send chat message";
+      const message = err instanceof Error ? err.message : "Could not send conversation message";
       chat.appendMessagesToConversation(conversationId, [
         { id: nextId + 3, role: "assistant", content: message },
       ]);
@@ -434,18 +441,24 @@ function actSessionMessages(session: ActSession): ChatMessage[] {
   return [
     ...initialMessagesForMode("act"),
     ...session.turns.flatMap((turn) => {
-      const activity = turn.activity_json.map((item) => item.label);
-      const result = turn.assistant_message
-        ?? turn.error_message
-        ?? (turn.status === "queued" ? "Queued for Act." : "Act is working...");
+      const active = isActiveActTurn(turn);
+      const result = active
+        ? "Eidolon is thinking..."
+        : turn.assistant_message ?? turn.error_message ?? "Act did not return a response.";
       return [
         { id: turn.id * 10 + 2, role: "user" as const, content: turn.user_message, actTurnId: turn.id },
         {
           id: turn.id * 10 + 3,
           role: "assistant" as const,
-          content: [...activity, result].filter((value, index, values) => value && values.indexOf(value) === index).join("\n\n"),
-          kind: isActiveActTurn(turn) ? "thinking" as const : "text" as const,
+          content: result,
+          kind: active ? "thinking" as const : "text" as const,
           actTurnId: turn.id,
+          actWork: {
+            status: turn.status,
+            activities: turn.activity_json,
+            startedAt: turn.started_at ?? turn.created_at,
+            completedAt: turn.completed_at,
+          },
         },
       ];
     }),

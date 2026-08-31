@@ -38,7 +38,6 @@ export default function AgentRunsPage() {
     <section className="page stack">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Observable Workflows</p>
           <h1>Agent Runs</h1>
           <p className="muted">Follow bounded build, repair, and test workflows from request to result.</p>
         </div>

@@ -11,8 +11,9 @@ from app.schemas.skill import SkillRead
 
 
 class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     message: str
-    mode: Literal["chat", "project"] = "chat"
     generation_request_id: int | None = None
     conversation_id: str | None = None
 
@@ -36,20 +37,10 @@ class SkillGenerationRequestRead(BaseModel):
     error_message: str | None
 
 
-class DirectChatResponse(BaseModel):
-    type: Literal["direct_answer"]
-    message: str
-
-
 class SkillGenerationPlanResponse(BaseModel):
     type: Literal["skill_generation_plan"]
     generation_request: SkillGenerationRequestRead
     permission_request: ApprovalRequestRead
-
-
-class UnsafeChatResponse(BaseModel):
-    type: Literal["unsafe_or_unsupported"]
-    message: str
 
 
 class ProjectNotPlausibleResponse(BaseModel):
@@ -85,9 +76,7 @@ class ProjectConversationStateRead(BaseModel):
 
 
 ChatResponse = (
-    DirectChatResponse
-    | SkillGenerationPlanResponse
-    | UnsafeChatResponse
+    SkillGenerationPlanResponse
     | ProjectNotPlausibleResponse
     | ProjectNeedsInputResponse
 )

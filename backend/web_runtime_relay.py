@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request, Response
 
 MAX_REQUEST_BYTES = 1_000_000
 MAX_RESPONSE_BYTES = 5_000_000
+UPSTREAM_TIMEOUT_SECONDS = 300
 CODEX_CAPABILITY_PATH = "/web-apps/capabilities/codex"
 SAFE_FUNCTION_NAME = re.compile(r"^[a-zA-Z0-9_-]+$")
 
@@ -75,7 +76,7 @@ async def _forward_capability(request: Request, path: str) -> Response:
 
 def _read_backend(request: UrlRequest) -> tuple[bytes, int, str]:
     try:
-        upstream = build_opener(_NoRedirect()).open(request, timeout=120)
+        upstream = build_opener(_NoRedirect()).open(request, timeout=UPSTREAM_TIMEOUT_SECONDS)
     except HTTPError as exc:
         upstream = exc
     try:

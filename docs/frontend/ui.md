@@ -17,6 +17,7 @@ Routes are defined in `frontend/src/App.tsx`:
 - `/agent-runs`
 - `/agent-runs/:agentRunId`
 - `/approval-requests`
+- `/settings/appearance`
 - `/settings/usage`
 - `/settings/project`
 - `/settings/models`
@@ -27,7 +28,11 @@ The application shell groups these destinations into Workspace, Capabilities, an
 
 ## Visual and Interaction System
 
-The shared stylesheet defines Eidolon's neutral local-first interface system across every route: dark navigation chrome, warm canvas surfaces, green action accents, consistent cards, tables, forms, status badges, modals, and responsive spacing. Page and message transitions use short motion with no workflow-level delay. `prefers-reduced-motion` disables non-essential animation, and focused controls retain an explicit visible ring.
+The shared stylesheet defines Eidolon's dark-first control-plane interface across every route. Near-black graphite surfaces establish hierarchy, while the desaturated blue scale is reserved for hover, selection, focus, and a small number of high-priority actions. Plus Jakarta Sans is the normal interface face and IBM Plex Mono is reserved for technical metadata, code, function names, and timestamps. Spatial layout relies primarily on whitespace, dividers, and segmented rows rather than wrapping every group in a rounded card; containment boxes remain for approvals, modals, and sandboxed application chrome where the boundary carries meaning.
+
+Page headers begin with the title and retain their descriptive copy beneath it. They do not add a second eyebrow-style tagline above the title.
+
+Passive status presentation uses a small semantic dot with a plain-text label instead of a colored capsule. Color is never the only state signal. Page and message transitions use short motion with no workflow-level delay. `prefers-reduced-motion` disables non-essential animation, and focused controls retain an explicit visible ring.
 
 Settings section navigation stays visible while scrolling and becomes horizontally scrollable on narrow screens. Chat keeps conversation management separate from the transcript, uses a bounded scrolling message area, and anchors its composer at the bottom of the chat surface. Approval Requests uses a selectable request browser with visible active, status, and risk states beside the detail panel.
 
@@ -37,20 +42,23 @@ Settings section navigation stays visible while scrolling and becomes horizontal
 
 ## Chat Page
 
-Chat supports three explicit, conversation-owned modes:
+The shared conversation page supports two explicit, conversation-owned modes:
 
-- `chat`: direct conversation only.
 - `project`: writes the initial message unchanged through the one-time intent placeholder, then starts a resumable `pm_plan_build` session for a reusable skill request. The placeholder does not call Codex. The session may ask a clarification question or reject the request before any blueprint, permission, or task DAG artifacts are created; the next reply in the same chat resumes the same generation request and Codex thread.
 - `act`: binds the local conversation to a backend-owned durable Act session and renders its queued/running/terminal turns in the shared transcript.
 
-Conversation mode is fixed after creation. The sidebar provides separate New Chat, New Project, and New Act actions, and every conversation row plus the transcript header carries a mode badge. There is no in-conversation mode switch and no separate Act page; the legacy `/act` route redirects to `/chat`.
+Conversation mode is fixed after creation. The sidebar provides separate New Project and New Act actions, and every conversation row plus the transcript header carries a neutral symbol-and-text mode marker. Direct Chat mode is not supported. Legacy direct-chat rows in frontend storage are discarded rather than reinterpreted as Project requests. There is no in-conversation mode switch and no separate Act page; the legacy `/act` route redirects to `/chat`.
+
+The desktop conversation workspace has a viewport-bounded fixed height. The conversation list and transcript scroll independently, and the composer remains anchored at the bottom of the transcript segment. The compact conversation list has no row separators or timestamps: each row uses a leading mode icon, title, and trailing mode text with blue Act and amber Project semantics, plus clear hover and selected surfaces. Deletion is available only for the active conversation as a red trash-icon button in the transcript header, with an accessible text label. New Project and New Act remain two distinct controls. On narrow screens the workspace becomes a stacked layout and releases the desktop height constraint.
+
+Transcript messages have no horizontal separators. A fresh Project opens with “Hi, what can I build for you today?” and a fresh Act opens with “Hi, what can I do for you?” New Act creates its local conversation immediately and attaches the backend session without reusing message-send loading UI. Active Project and Act turns share one visible “Eidolon is thinking…” treatment; Act does not add a second polling placeholder. Each Act response includes a collapsed work-details row with persisted execution time and concise backend-recorded activity, including the tool name when Codex returns it. Raw model reasoning is not fetched, reconstructed, or displayed. User messages use a conventional right-aligned text bubble. Eidolon responses remain full-width transcript segments and use the visible role label **Eidolon**, never **assistant**. The composer uses a square return-key Send control with an accessible text label.
 
 Build-time and runtime approvals are rendered inline in the chat transcript. Approval messages must remain in chat history when the user navigates away and returns. Project chat synchronizes its conversation-scoped generation request, linked agent run, proposed skill, and latest build/runtime approvals from the backend, so a response lost after a committed request or a decision made on the global Approval Requests page is recovered inline without duplicating messages.
 
 Medium/high-risk caller-to-function relationships use normal Approval Requests entries with caller name, target function, description, derived risk, and explicit approval boundaries. Low-risk declared relationships are summarized during runtime review and do not create redundant approval rows.
 
-Chat persistence is local frontend storage managed by `frontend/src/lib/chatStore.ts`. Project conversations also store the pending generation request id while ProductManager is waiting for clarification so the user's next reply stays attached to the same request.
-Users can delete any chat conversation from the chat list. Deletion removes the local transcript and asks the backend to remove any persisted message rows for the same frontend conversation id; Project-mode approval records remain available through the approval pages.
+Chat persistence is local frontend storage managed by `frontend/src/lib/chatStore.ts`. Every transcript is owned strictly by its conversation id: a temporarily unavailable selection renders a clean Project placeholder rather than falling back to another conversation, and the transcript subtree remounts when the selected id changes. Project conversations also store the pending generation request id while ProductManager is waiting for clarification so the user's next reply stays attached to the same request.
+Users can delete any Project or Act conversation from the conversation list. Deletion removes the local transcript and asks the backend to remove any persisted message rows for the same frontend conversation id; Project-mode approval records remain available through the approval pages.
 
 Approving a Project build-time request from either its inline chat card or the global Approval Requests page continues the linked agent run automatically. A separate Agent Run resume click is reserved for quota pauses, recoverable workflow failures, or explicit user-action blockers rather than ordinary permission approval.
 
@@ -68,7 +76,7 @@ Lists skills in one list with their `function`, `service`, or `web_app` runtime.
 
 ## Schedules Page
 
-The top-level Schedules page is the only schedule management surface. It includes mutable generated-service schedules and read-only platform services. The Service column shows the service name and links generated services to Skill Detail; the Schedule column contains only the human-readable recurrence. Generated services support edit, pause/resume, and Run Now; Run Now also works while paused and does not resume the schedule. There are no create, delete, or schedule-approval controls because every generated service owns exactly one required schedule. The daily Notion Done cleanup appears with next/last state and “Managed by Eidolon.”
+The top-level Schedules page is the only schedule management surface. It includes mutable generated-service schedules and read-only platform services. The table uses fixed column allocations so status, timestamp, and action changes do not shift the column boundaries; narrower viewports scroll the table instead of redistributing it. The Service column shows the service name and links generated services to Skill Detail; the Schedule column contains only the human-readable recurrence. Recurrence and next/last timestamps omit timezone names and abbreviations from the table; the Edit modal retains the timezone field that controls execution. Generated services support edit, pause/resume, and Run Now; Run Now also works while paused and does not resume the schedule. Actions are left-aligned, Pause and Resume share one stable width, and Edit opens the existing schedule form in a modal. There are no create, delete, or schedule-approval controls because every generated service owns exactly one required schedule. Last Run places a status-colored dot before the timestamp and exposes the status text from the dot's hover tooltip instead of repeating it inline. Schedule rows keep one consistent desktop height, including rows with action buttons. The daily Notion Done cleanup appears with next/last state and “Managed by Eidolon.”
 
 ## Skill Detail Page
 
@@ -105,11 +113,13 @@ Agent Runs list and detail pages show run status, current task node or parallel 
 
 Settings uses a shared section navigation so each concern has a focused URL and loads only the data it needs. `/settings` redirects to `/settings/usage`.
 
+`/settings/appearance` lets the user choose Dark or Light. The choice is stored in local browser storage and applied immediately to the document. Dark is the default when no choice has been saved.
+
 `/settings/usage` shows the resolved CLI and both the 5-hour and weekly Codex allowance windows. DAG builds pause before the next ready batch when either window has less than 5% remaining. Refresh reads current local App Server state; it does not infer quota from project-build token totals. Skill runtime calls remain excluded from build token accounting.
 
 `/settings/project` lets the user keep automatic Project build workflow selection or force every new build through Simple (`single_codex`) or Task DAG (`task_dag`); forced selection overrides ProductManager output in the backend.
 
-`/settings/models` labels the existing blueprint route **Project planning and clarification**. It loads the live App Server model catalog and lets the user choose model and reasoning effort independently for Chat, ProductManager actions, the single-Codex Builder, Builder difficulty tiers plus repair/update, and Tester task/final/update actions. Model controls have an adjacent **Save model routing** action and show whether changes are unsaved or when the persisted routes were last saved. Unsupported model/effort combinations are rejected by the backend.
+`/settings/models` labels the existing blueprint route **Project planning and clarification**. It loads the live App Server model catalog and lets the user choose model and reasoning effort independently for Act, ProductManager actions, the single-Codex Builder, Builder difficulty tiers plus repair/update, and Tester task/final/update actions. Model controls have an adjacent **Save model routing** action and show whether changes are unsaved or when the persisted routes were last saved. Unsupported model/effort combinations are rejected by the backend.
 
 `/settings/integrations` includes the single GitHub connection. It shows connected/disconnected/unavailable state, validated account identity, last validation time, and sanitized errors, with add, replace, and remove actions. The token input is password-style, is cleared after submission, and is never returned or redisplayed.
 
@@ -119,7 +129,7 @@ One Google connection panel owns a single write-only OAuth client ID and secret 
 
 One Telegram panel contains separate **Notification / Approval bot** and **Agent bot** subsections. Each has its own write-only token, sanitized bot/pairing state, one-time private-chat instructions, and replacement/disconnect controls. The notification bot subsection includes the complete-input cloud privacy disclosure. Pairing distinguishes `Awaiting private chat` from `Pairing expired`, and only reports connected after both private chat and user IDs are bound.
 
-User-facing timestamps are rendered in the browser's system timezone with a short timezone label. Backend and SQLite timestamps without an explicit offset are treated as UTC before conversion; persisted timestamps and scheduler bookkeeping remain UTC internally. On an Eastern-time host this renders EDT or EST according to daylight-saving rules.
+User-facing timestamps are rendered in the browser's system timezone with a short timezone label, except the Schedules table deliberately omits the label. Backend and SQLite timestamps without an explicit offset are treated as UTC before conversion; persisted timestamps and scheduler bookkeeping remain UTC internally. On an Eastern-time host this otherwise renders EDT or EST according to daylight-saving rules.
 
 Approval Requests has separate **Permission approvals** and **Invocation approvals** tabs. The invocation view shows pending/history actions, the backend-snapshotted readable approval fields, caller-provided reason, Telegram delivery, decision/execution state, result/error, and local approve/deny controls. The frontend does not recognize individual function ids or independently format raw invocation JSON.
 

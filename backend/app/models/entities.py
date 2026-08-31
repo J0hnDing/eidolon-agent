@@ -273,6 +273,7 @@ class ActTurn(Base):
     delivery_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     delivery_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     session: Mapped["ActSession"] = relationship(back_populates="turns")

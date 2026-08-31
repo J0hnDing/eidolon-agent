@@ -4,7 +4,7 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 
 ## Main Routers
 
-- `/chat`: normal chat and project-mode entry point, plus conversation history cleanup by frontend conversation id.
+- `/chat`: Project-mode message entry point, plus conversation history cleanup by frontend conversation id. The request contract has no direct-chat mode.
 - `/act/sessions`: durable Act session list/create/read/archive, asynchronous turn enqueue, and queued/running turn cancellation.
 - `/memory-facts`: explicit user memory CRUD.
 - `/skills`: skill listing/detail, function/web-app enable/disable, proposed skill workflow, runs, validation, install/reject/delete, files, versions, repair, runtime permissions, and backend-mediated skill Codex calls. Bare skill-record creation and schedule creation are not exposed; user-facing creation must use the controlled proposed-skill workflow.
@@ -37,11 +37,11 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 
 ### ChatOrchestrator
 
-Coordinates chat requests. Chat mode returns direct answers. Project mode creates generation requests, writes the initial message unchanged through the intent placeholder, and starts build-time approval planning only after ProductManager decides the request is ready to blueprint. If ProductManager asks for clarification, the next Project-mode chat reply is appended to the same generation request. Backend keyword heuristics must not silently create or block skills.
+Coordinates Project requests. It creates generation requests, writes the initial message unchanged through the intent placeholder, and starts build-time approval planning only after ProductManager decides the request is ready to blueprint. If ProductManager asks for clarification, the next Project reply is appended to the same generation request. Backend keyword heuristics must not silently create or block skills.
 
 ### Act services
 
-`ActSessionService` owns durable sessions, queue admission, cancellation, and archive guards. `ActTurnDispatcher` recovers interrupted work at startup, claims queued turns, resumes saved App Server threads, records live turn ids, and persists terminal output. A thread started in the current App Server process is used directly for its first turn because no rollout exists yet. If a later resume reports a missing rollout before the new turn starts, the dispatcher creates one replacement thread and supplies completed user/assistant transcript as inert historical context; it never replays prior tool calls or a turn that already received a live Codex turn id. `ActAppServerService` owns a dedicated App Server process, enforces the current writable workspace root and instructions on every resume, reloads the Eidolon MCP registration, and verifies that tools are present before execution. Running turns are never replayed after a restart; queued turns have not crossed the side-effect boundary and remain eligible.
+`ActSessionService` owns durable sessions, queue admission, cancellation, and archive guards. `ActTurnDispatcher` recovers interrupted work at startup, claims queued turns, records the execution start time, resumes saved App Server threads, records live turn ids, and persists terminal output plus bounded activity labels. Returned MCP item names are retained only as concise tool-use labels for the collapsed frontend work details; raw reasoning is not persisted. A thread started in the current App Server process is used directly for its first turn because no rollout exists yet. If a later resume reports a missing rollout before the new turn starts, the dispatcher creates one replacement thread and supplies completed user/assistant transcript as inert historical context; it never replays prior tool calls or a turn that already received a live Codex turn id. `ActAppServerService` owns a dedicated App Server process, enforces the current writable workspace root and instructions on every resume, reloads the Eidolon MCP registration, and verifies that tools are present before execution. Running turns are never replayed after a restart; queued turns have not crossed the side-effect boundary and remain eligible.
 
 ### ProductManager planning
 

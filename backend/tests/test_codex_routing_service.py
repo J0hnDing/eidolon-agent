@@ -103,24 +103,11 @@ def test_single_codex_builder_has_independent_route(db_session: Session) -> None
     assert resolved.route_source == "builder.single_codex"
 
 
-def test_act_has_an_independent_route_and_falls_back_to_chat(db_session: Session) -> None:
+def test_act_has_an_independent_route(db_session: Session) -> None:
     service = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
     service.update_settings(
         CodexRoutingSettingsPayload.model_validate(
-            {"chat": {"model": "gpt-fast", "reasoning_effort": "low"}}
-        )
-    )
-    inherited = service.resolve(role="act", action="act")
-    assert inherited.effective_model == "gpt-fast"
-    assert inherited.effective_reasoning_effort == "low"
-    assert inherited.route_source == "chat"
-
-    service.update_settings(
-        CodexRoutingSettingsPayload.model_validate(
-            {
-                "chat": {"model": "gpt-fast", "reasoning_effort": "low"},
-                "act": {"model": "gpt-smart", "reasoning_effort": "high"},
-            }
+            {"act": {"model": "gpt-smart", "reasoning_effort": "high"}}
         )
     )
     explicit = service.resolve(role="act", action="act")
@@ -225,6 +212,24 @@ def test_legacy_refine_intent_route_is_ignored_when_reading_settings(db_session:
     assert settings.product_manager.blueprint_and_permissions.model == "gpt-fast"
 
 
+def test_legacy_chat_route_is_removed_when_reading_settings(db_session: Session) -> None:
+    db_session.add(
+        CodexRoutingSettings(
+            id=1,
+            settings_json={
+                "chat": {"model": "gpt-smart", "reasoning_effort": "xhigh"},
+                "act": {"model": "gpt-fast", "reasoning_effort": "low"},
+            },
+        )
+    )
+    db_session.commit()
+
+    settings = CodexRoutingService(db_session, catalog_service=FakeCatalogService()).read_settings()
+
+    assert "chat" not in settings.model_dump()
+    assert settings.act.model == "gpt-fast"
+
+
 def test_product_manager_action_override_is_independent(db_session: Session) -> None:
     payload = CodexRoutingSettingsPayload.model_validate(
         {
@@ -294,7 +299,7 @@ def test_product_manager_plan_build_uses_blueprint_and_permissions_route(db_sess
 
 def test_settings_reject_effort_not_advertised_by_selected_model(db_session: Session) -> None:
     payload = CodexRoutingSettingsPayload.model_validate(
-        {"chat": {"model": "gpt-fast", "reasoning_effort": "xhigh"}}
+        {"act": {"model": "gpt-fast", "reasoning_effort": "xhigh"}}
     )
     service = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
 

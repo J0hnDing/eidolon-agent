@@ -21,10 +21,16 @@ import {
   api,
 } from "../api/client";
 import { formatSystemDateTime } from "../lib/dateTime";
+import {
+  AppearanceTheme,
+  readAppearanceTheme,
+  saveAppearanceTheme,
+} from "../lib/theme";
 
-export type SettingsSection = "usage" | "project" | "models" | "integrations" | "permissions";
+export type SettingsSection = "appearance" | "usage" | "project" | "models" | "integrations" | "permissions";
 
 const settingsSections: Array<{ section: SettingsSection; label: string; to: string }> = [
+  { section: "appearance", label: "Appearance", to: "/settings/appearance" },
   { section: "usage", label: "Usage & CLI", to: "/settings/usage" },
   { section: "project", label: "Project builds", to: "/settings/project" },
   { section: "models", label: "Model routing", to: "/settings/models" },
@@ -33,6 +39,10 @@ const settingsSections: Array<{ section: SettingsSection; label: string; to: str
 ];
 
 const settingsPageCopy: Record<SettingsSection, { title: string; description: string }> = {
+  appearance: {
+    title: "Appearance",
+    description: "Choose how Eidolon looks on this device.",
+  },
   usage: {
     title: "Usage & CLI",
     description: "Review the local Codex CLI and current account allowance windows.",
@@ -56,6 +66,7 @@ const settingsPageCopy: Record<SettingsSection, { title: string; description: st
 };
 
 export default function UsageSettingsPage({ section = "usage" }: { section?: SettingsSection }) {
+  const [appearanceTheme, setAppearanceTheme] = useState<AppearanceTheme>(() => readAppearanceTheme());
   const [usage, setUsage] = useState<CodexAccountUsage | null>(null);
   const [cliStatus, setCliStatus] = useState<CodexCliStatus | null>(null);
   const [catalog, setCatalog] = useState<CodexModelCatalog | null>(null);
@@ -135,7 +146,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setTelegram(nextTelegram);
         setTelegramAgent(nextTelegramAgent);
         setCodexMcp(nextCodexMcp);
-      } else {
+      } else if (section === "permissions") {
         setPermissionPolicy(await api.getPermissionPolicy());
       }
     } catch (err) {
@@ -167,7 +178,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
   }, [section]);
 
   function updateChoice(
-    group: "chat" | "act" | "product_manager" | "builder" | "tester",
+    group: "act" | "product_manager" | "builder" | "tester",
     key: string,
     choice: CodexInvocationChoice,
   ) {
@@ -175,10 +186,15 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     setRoutingDirty(true);
     setRouting((current) => {
       if (!current) return current;
-      if (group === "chat" || group === "act") return { ...current, [group]: choice };
+      if (group === "act") return { ...current, act: choice };
       const nextGroup = { ...current[group], [key]: choice };
       return { ...current, [group]: nextGroup };
     });
+  }
+
+  function chooseAppearance(theme: AppearanceTheme) {
+    setAppearanceTheme(theme);
+    saveAppearanceTheme(theme);
   }
 
   async function saveRouting(successMessage: string) {
@@ -604,13 +620,14 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     <section className="page stack">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Settings</p>
           <h1>{settingsPageCopy[section].title}</h1>
           <p className="muted">{settingsPageCopy[section].description}</p>
         </div>
-        <button type="button" className="secondary" onClick={() => void loadSettings(true)} disabled={loading}>
-          Refresh
-        </button>
+        {section !== "appearance" && (
+          <button type="button" className="secondary" onClick={() => void loadSettings(true)} disabled={loading}>
+            Refresh
+          </button>
+        )}
       </header>
       <nav className="settings-nav" aria-label="Settings sections">
         {settingsSections.map((item) => (
@@ -626,6 +643,32 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
       {error && <p className="error-text">{error}</p>}
       {saved && <p className="success-text">{saved}</p>}
       {loading && <p className="muted" role="status">Loading {settingsPageCopy[section].title.toLowerCase()}…</p>}
+      {section === "appearance" && !loading && (
+        <section className="appearance-settings" aria-labelledby="appearance-theme-heading">
+          <div className="section-heading">
+            <div>
+              <h2 id="appearance-theme-heading">Color appearance</h2>
+            </div>
+            <p className="muted">Your choice is stored locally and applied immediately.</p>
+          </div>
+          <div className="appearance-options" role="group" aria-label="Color appearance">
+            <AppearanceOption
+              theme="dark"
+              title="Dark"
+              description="Graphite surfaces with restrained blue interaction states."
+              selected={appearanceTheme === "dark"}
+              onSelect={chooseAppearance}
+            />
+            <AppearanceOption
+              theme="light"
+              title="Light"
+              description="Warm neutral surfaces with the same quiet hierarchy."
+              selected={appearanceTheme === "light"}
+              onSelect={chooseAppearance}
+            />
+          </div>
+        </section>
+      )}
       {section === "permissions" && permissionPolicy && (
         <section className="detail-panel stack">
           <div>
@@ -1046,16 +1089,10 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         <>
           <section className="detail-panel stack">
             <div>
-              <h2>Chat routing</h2>
-              <p className="muted">Normal Chat mode is independent from Project workflow routing.</p>
+              <h2>Act routing</h2>
+              <p className="muted">Act uses its own model and reasoning-effort route.</p>
             </div>
-            <RoutingRow
-              label="Chat"
-              choice={routing.chat}
-              models={catalog.models}
-              onChange={(choice) => updateChoice("chat", "chat", choice)}
-            />
-            <RoutingRow label="Act" choice={routing.act ?? routing.chat} fallback={routing.chat} models={catalog.models} onChange={(choice) => updateChoice("act", "act", choice)} />
+            <RoutingRow label="Act" choice={routing.act} models={catalog.models} onChange={(choice) => updateChoice("act", "act", choice)} />
           </section>
 
           <section className="detail-panel stack">
@@ -1324,6 +1361,43 @@ function RoutingSaveStatus({ routing, dirty }: { routing: CodexRoutingSettings; 
     return <p className="muted" aria-live="polite">Saved {formatDate(routing.updated_at)}. Future invocations use these routes.</p>;
   }
   return <p className="muted" aria-live="polite">Using Codex defaults. No routing override has been saved yet.</p>;
+}
+
+function AppearanceOption({
+  theme,
+  title,
+  description,
+  selected,
+  onSelect,
+}: {
+  theme: AppearanceTheme;
+  title: string;
+  description: string;
+  selected: boolean;
+  onSelect: (theme: AppearanceTheme) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`appearance-option ${selected ? "active" : ""}`}
+      aria-pressed={selected}
+      onClick={() => onSelect(theme)}
+    >
+      <span className={`appearance-preview ${theme}`} aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </span>
+      <span className="appearance-option-copy">
+        <strong>{title}</strong>
+        <small>{description}</small>
+      </span>
+      <span className="appearance-option-state">
+        <span className="status-dot" aria-hidden="true" />
+        {selected ? "Selected" : "Select"}
+      </span>
+    </button>
+  );
 }
 
 function formatCliSource(source: string | null): string {

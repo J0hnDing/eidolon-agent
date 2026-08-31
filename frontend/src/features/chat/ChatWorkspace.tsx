@@ -1,26 +1,25 @@
-import { FormEvent } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
   AgentRun,
   ApprovalRequest,
-  ChatMode,
+  ConversationMode,
   ProposedSkillValidation,
 } from "../../api/client";
 import { ChatConversation, ChatMessage } from "../../lib/chatStore";
-import { formatSystemDateTime } from "../../lib/dateTime";
 
 type ChatWorkspaceProps = {
   conversations: ChatConversation[];
   activeConversationId: string;
   messages: ChatMessage[];
   draft: string;
-  mode: ChatMode;
+  mode: ConversationMode;
   isBusy: boolean;
   isSending: boolean;
   isGenerating: boolean;
   error: string | null;
-  onNewConversation: (mode: ChatMode) => void;
+  onNewConversation: (mode: ConversationMode) => void;
   onSelectConversation: (conversationId: string) => void;
   onDeleteConversation: (conversationId: string) => void;
   activeActTurnId: number | null;
@@ -59,7 +58,6 @@ export function ChatWorkspace({
     <section className="page stack">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Conversation</p>
           <h1>Chat</h1>
         </div>
       </header>
@@ -68,14 +66,18 @@ export function ChatWorkspace({
         <ChatSidebar
           conversations={conversations}
           activeConversationId={activeConversationId}
-          isBusy={isBusy}
           onNewConversation={onNewConversation}
           onSelectConversation={onSelectConversation}
-          onDeleteConversation={onDeleteConversation}
         />
         <div className="chat-panel">
-          <ChatModeBar mode={mode} />
+          <ConversationModeBar
+            mode={mode}
+            activeConversationId={activeConversationId}
+            isBusy={isBusy}
+            onDeleteConversation={onDeleteConversation}
+          />
           <MessageList
+            key={activeConversationId}
             messages={messages}
             isSending={isSending}
             isGenerating={isGenerating}
@@ -104,25 +106,22 @@ export function ChatWorkspace({
 function ChatSidebar({
   conversations,
   activeConversationId,
-  isBusy,
   onNewConversation,
   onSelectConversation,
-  onDeleteConversation,
 }: Pick<
   ChatWorkspaceProps,
   | "conversations"
   | "activeConversationId"
-  | "isBusy"
   | "onNewConversation"
   | "onSelectConversation"
-  | "onDeleteConversation"
 >) {
   return (
     <aside className="chat-sidebar" aria-label="Chats">
       <div className="chat-create-actions" aria-label="Create conversation">
-        {(["chat", "project", "act"] as ChatMode[]).map((mode) => (
+        {(["project", "act"] as ConversationMode[]).map((mode) => (
           <button key={mode} type="button" onClick={() => onNewConversation(mode)}>
-            New {mode === "chat" ? "Chat" : mode === "project" ? "Project" : "Act"}
+            <span className="conversation-mode-symbol" aria-hidden="true">{modeSymbol(mode)}</span>
+            <span>New {modeLabel(mode)}</span>
           </button>
         ))}
       </div>
@@ -138,22 +137,12 @@ function ChatSidebar({
               onClick={() => onSelectConversation(conversation.id)}
             >
               <span className="chat-thread-heading">
-                <strong>{conversation.title}</strong>
-                <small className={`conversation-mode-badge ${conversation.mode}`}>{modeLabel(conversation.mode)}</small>
+                <span className={`chat-thread-title ${conversation.mode}`}>
+                  <span className="chat-thread-icon" aria-hidden="true">{modeSymbol(conversation.mode)}</span>
+                  <strong>{conversation.title}</strong>
+                </span>
+                <ConversationModeMarker mode={conversation.mode} showSymbol={false} />
               </span>
-              <span>{formatSystemDateTime(conversation.updatedAt)}</span>
-            </button>
-            <button
-              type="button"
-              className="chat-thread-delete"
-              onClick={() => onDeleteConversation(conversation.id)}
-              disabled={isBusy}
-              aria-label={`Delete ${conversation.mode} conversation ${conversation.title}`}
-              title={`Delete ${modeLabel(conversation.mode)} conversation`}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M5 7h14M9 7V4h6v3m2 0-1 13H8L7 7m3 4v5m4-5v5" />
-              </svg>
             </button>
           </div>
         ))}
@@ -162,17 +151,31 @@ function ChatSidebar({
   );
 }
 
-function ChatModeBar({ mode }: Pick<ChatWorkspaceProps, "mode">) {
+function ConversationModeBar({
+  mode,
+  activeConversationId,
+  isBusy,
+  onDeleteConversation,
+}: Pick<ChatWorkspaceProps, "mode" | "activeConversationId" | "isBusy" | "onDeleteConversation">) {
   return (
     <div className="chat-mode-bar">
       <span className="muted">
         {mode === "project"
           ? "Project mode creates proposed skills after approval."
-          : mode === "act"
-            ? "Act works persistently in the shared workspace with Eidolon tools."
-            : "Chat mode asks Codex for normal answers and will not build skills."}
+          : "Act works persistently in the shared workspace with Eidolon tools."}
       </span>
-      <span className={`conversation-mode-badge ${mode}`}>{modeLabel(mode)}</span>
+      <button
+        type="button"
+        className="chat-current-delete"
+        onClick={() => onDeleteConversation(activeConversationId)}
+        disabled={isBusy}
+        aria-label="Delete conversation"
+        title="Delete conversation"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
+        </svg>
+      </button>
     </div>
   );
 }
@@ -199,7 +202,7 @@ function MessageList({
     <div className="message-list" aria-live="polite">
       {messages.map((message) => (
         <article key={message.id} className={`message ${message.role}`}>
-          <span>{message.role}</span>
+          <span>{message.role === "assistant" ? "Eidolon" : "You"}</span>
           <MessageBody
             message={message}
             isWorking={isGenerating}
@@ -211,11 +214,11 @@ function MessageList({
         </article>
       ))}
       {(isSending || isGenerating) && !messages.some((message) => message.kind === "thinking") && (
-        <article className="message assistant thinking-message" aria-label="Codex is thinking">
-          <span>assistant</span>
+        <article className="message assistant thinking-message" aria-label="Eidolon is thinking">
+          <span>Eidolon</span>
           <div className="thinking-row">
             <span className="thinking-spinner" aria-hidden="true" />
-            <p>{isGenerating ? "Codex is generating..." : "Codex is thinking..."}</p>
+            <p>{isGenerating ? "Eidolon is generating..." : "Eidolon is thinking..."}</p>
           </div>
         </article>
       )}
@@ -243,17 +246,29 @@ function ChatComposer({
         onChange={(event) => onDraftChange(event.target.value)}
         placeholder={
           isBusy
-            ? "Project build is running..."
+            ? mode === "project" ? "Project build is running..." : "Eidolon is thinking..."
             : mode === "project"
               ? "Describe the skill you want to propose"
-              : mode === "act"
-                ? "Ask Act to work in its workspace"
-                : "Type a message"
+              : "Ask Act to work in its workspace"
         }
-        aria-label="Chat message"
+        aria-label="Conversation message"
         disabled={isBusy && mode === "project"}
       />
-      <button type="submit" disabled={isBusy}>{isSending ? "Sending..." : "Send"}</button>
+      <button
+        type="submit"
+        className="chat-send-button"
+        disabled={isBusy}
+        aria-label={isSending ? "Sending message" : "Send message"}
+        title={isSending ? "Sending" : "Send message"}
+      >
+        {isSending ? (
+          <span className="thinking-spinner" aria-hidden="true" />
+        ) : (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9 7 5 11l4 4M5 11h8a4 4 0 0 0 4-4V5" />
+          </svg>
+        )}
+      </button>
       {mode === "act" && activeActTurnId !== null && (
         <button type="button" className="secondary" onClick={onCancelAct}>Cancel</button>
       )}
@@ -261,8 +276,21 @@ function ChatComposer({
   );
 }
 
-function modeLabel(mode: ChatMode): string {
-  return mode === "chat" ? "Chat" : mode === "project" ? "Project" : "Act";
+function modeLabel(mode: ConversationMode): string {
+  return mode === "project" ? "Project" : "Act";
+}
+
+function modeSymbol(mode: ConversationMode): string {
+  return mode === "project" ? "◇" : "↯";
+}
+
+function ConversationModeMarker({ mode, showSymbol = true }: { mode: ConversationMode; showSymbol?: boolean }) {
+  return (
+    <span className={`conversation-mode-marker ${mode}`}>
+      {showSymbol && <span className="conversation-mode-symbol" aria-hidden="true">{modeSymbol(mode)}</span>}
+      <span>{modeLabel(mode)}</span>
+    </span>
+  );
 }
 
 function MessageBody({
@@ -280,6 +308,17 @@ function MessageBody({
   onApproveRuntime: (message: ChatMessage) => void;
   onDenyRuntime: (message: ChatMessage) => void;
 }) {
+  if (message.kind === "thinking") {
+    return (
+      <div className="message-body">
+        <div className="thinking-row">
+          <span className="thinking-spinner" aria-hidden="true" />
+          <p>{message.content}</p>
+        </div>
+        {message.actWork && <ActWorkDetails work={message.actWork} />}
+      </div>
+    );
+  }
   if (message.kind === "build_approval" && message.permissionRequest) {
     return (
       <div className="chat-approval-card">
@@ -325,7 +364,58 @@ function MessageBody({
       </div>
     );
   }
-  return <p>{message.content}</p>;
+  return (
+    <div className="message-body">
+      <p>{message.content}</p>
+      {message.actWork && <ActWorkDetails work={message.actWork} />}
+    </div>
+  );
+}
+
+function ActWorkDetails({ work }: { work: NonNullable<ChatMessage["actWork"]> }) {
+  const active = work.status === "queued" || work.status === "running";
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!active) return undefined;
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [active]);
+
+  const startedAt = Date.parse(work.startedAt);
+  const completedAt = work.completedAt ? Date.parse(work.completedAt) : now;
+  const elapsedMilliseconds = Number.isFinite(startedAt) && Number.isFinite(completedAt)
+    ? Math.max(0, completedAt - startedAt)
+    : 0;
+  const toolCount = work.activities.filter((activity) => activity.kind === "mcpToolCall").length;
+  const visibleActivities = work.activities.filter((activity) => activity.kind !== "started");
+  const summary = `${active ? "Working" : "Worked"} for ${formatElapsedTime(elapsedMilliseconds)}`
+    + (toolCount ? ` · ${toolCount} tool${toolCount === 1 ? "" : "s"} used` : "");
+
+  return (
+    <details className="act-work-details">
+      <summary>{summary}</summary>
+      <div className="act-work-details-content">
+        {visibleActivities.length ? (
+          <ul>
+            {visibleActivities.map((activity, index) => (
+              <li key={`${activity.kind}-${index}`}>{activity.label}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="muted">No tool activity recorded{active ? " yet" : ""}.</p>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function formatElapsedTime(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.round(milliseconds / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
 function ApprovalButtons({

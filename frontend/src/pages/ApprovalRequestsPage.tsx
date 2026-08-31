@@ -74,8 +74,8 @@ export default function ApprovalRequestsPage() {
 
   return (
     <section className="page stack">
-      <header className="page-header"><div><p className="eyebrow">Risk control</p><h1>Approval Requests</h1><p className="muted">Review access grants and individual actions without mixing their consent boundaries.</p></div></header>
-      <div className="button-row" role="tablist" aria-label="Approval type">
+      <header className="page-header"><div><h1>Approval Requests</h1><p className="muted">Review access grants and individual actions without mixing their consent boundaries.</p></div></header>
+      <div className="approval-tabs" role="tablist" aria-label="Approval type">
         <button type="button" role="tab" aria-selected={tab === "permissions"} className={tab === "permissions" ? "" : "secondary"} onClick={() => setTab("permissions")}>Permission approvals</button>
         <button type="button" role="tab" aria-selected={tab === "invocations"} className={tab === "invocations" ? "" : "secondary"} onClick={() => setTab("invocations")}>Invocation approvals</button>
       </div>

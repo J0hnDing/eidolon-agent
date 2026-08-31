@@ -178,7 +178,6 @@ export default function AgentRunDetailPage() {
     <section className="page stack">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Agent Run</p>
           <h1>Run #{run.id}</h1>
         </div>
         <Link to="/agent-runs">Back to agent runs</Link>

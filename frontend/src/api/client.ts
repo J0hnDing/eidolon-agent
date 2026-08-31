@@ -15,7 +15,7 @@ export type SkillRuntime = "function" | "web_app" | "service";
 export type SkillStatus = "building" | "proposed" | "installed" | "failed" | "deleted";
 export type FunctionCategory = "backend_core" | "user" | "integration";
 export type FunctionAvailability = "available" | "disabled" | "unavailable";
-export type ChatMode = "chat" | "project" | "act";
+export type ConversationMode = "project" | "act";
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired" | "superseded";
 export type PermissionRequestScope = "build_time" | "runtime";
 export type ScheduleStatus = "active" | "paused";
@@ -341,8 +341,7 @@ export type ProjectBuildWorkflowOverride = "single_codex" | "task_dag";
 
 export interface CodexRoutingSettingsPayload {
   project_build_workflow_override: ProjectBuildWorkflowOverride | null;
-  chat: CodexInvocationChoice;
-  act?: CodexInvocationChoice;
+  act: CodexInvocationChoice;
   product_manager: {
     default: CodexInvocationChoice;
     blueprint_and_permissions: CodexInvocationChoice;
@@ -383,6 +382,7 @@ export interface ActTurn {
   cancel_requested_at: string | null;
   delivery_status: string | null;
   created_at: string;
+  started_at: string | null;
   completed_at: string | null;
 }
 
@@ -697,17 +697,9 @@ export interface PendingApprovalReceipt {
 
 export type ChatResponse =
   | {
-      type: "direct_answer";
-      message: string;
-    }
-  | {
       type: "skill_generation_plan";
       generation_request: SkillGenerationRequest;
       permission_request: ApprovalRequest;
-    }
-  | {
-      type: "unsafe_or_unsupported";
-      message: string;
     }
   | {
       type: "project_not_plausible";
@@ -799,12 +791,11 @@ function formatApiError(raw: string): string {
 }
 
 export const api = {
-  sendChatMessage: (message: string, mode: Exclude<ChatMode, "act">, generationRequestId?: number, conversationId?: string) =>
+  sendProjectMessage: (message: string, generationRequestId?: number, conversationId?: string) =>
     request<ChatResponse>("/chat", {
       method: "POST",
       body: JSON.stringify({
         message,
-        mode,
         generation_request_id: generationRequestId,
         conversation_id: conversationId,
       }),

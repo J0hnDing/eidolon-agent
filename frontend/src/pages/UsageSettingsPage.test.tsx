@@ -93,7 +93,7 @@ describe("GitHub Settings connection", () => {
     const choice = { model: null, reasoning_effort: null };
     vi.spyOn(api, "getCodexRoutingSettings").mockResolvedValue({
       project_build_workflow_override: null,
-      chat: choice,
+      act: choice,
       product_manager: {
         default: choice,
         blueprint_and_permissions: choice,
@@ -188,7 +188,7 @@ describe("Notion Settings connection", () => {
     });
     vi.spyOn(api, "getCodexRoutingSettings").mockResolvedValue({
       project_build_workflow_override: null,
-      chat: choice,
+      act: choice,
       product_manager: {
         default: choice,
         blueprint_and_permissions: choice,
@@ -522,7 +522,7 @@ describe("Codex model routing", () => {
     const choice = { model: null, reasoning_effort: null };
     const routing = {
       project_build_workflow_override: null,
-      chat: choice,
+      act: choice,
       product_manager: {
         default: choice,
         blueprint_and_permissions: choice,
@@ -624,7 +624,7 @@ describe("Atlas Settings", () => {
     });
     vi.spyOn(api, "getCodexRoutingSettings").mockResolvedValue({
       project_build_workflow_override: null,
-      chat: choice,
+      act: choice,
       product_manager: {
         default: choice,
         blueprint_and_permissions: choice,

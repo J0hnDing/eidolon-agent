@@ -8,69 +8,57 @@ from sqlalchemy.orm import Session
 from app.models import SkillGenerationRequest
 from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
 from app.services.codex_service import CodexService
-from app.services.direct_chat_service import DirectChatService
 from app.services.permission_service import PermissionService
 
 
 @dataclass
 class ChatOrchestrator:
     db: Session
-    direct_chat_service: DirectChatService | None = None
     codex_service: CodexService | None = None
-
-    def __post_init__(self) -> None:
-        if self.direct_chat_service is None:
-            self.direct_chat_service = DirectChatService(db=self.db)
 
     def handle_message(
         self,
         message: str,
-        mode: str = "chat",
         generation_request_id: int | None = None,
         conversation_id: str | None = None,
     ) -> dict[str, Any]:
-        if mode == "project":
-            generation_request = self._project_generation_request_for_message(
-                message,
-                generation_request_id=generation_request_id,
-                conversation_id=conversation_id,
-            )
-            agent_run = AgentWorkflowService(
-                self.db,
-                codex_service=self.codex_service,
-                project_root=self.codex_service.project_root if self.codex_service is not None else None,
-            ).create_build_run(generation_request)
-            self.db.refresh(generation_request)
-            decision = (agent_run.final_summary_json or {}).get("decision_json", {}).get("decision")
-            if decision == "ask_user_for_input" or generation_request.status == "needs_input":
-                return {
-                    "type": "project_needs_input",
-                    "message": "ProductManager needs a little more information before blueprinting.",
-                    "question": str((agent_run.final_summary_json or {}).get("user_prompt") or agent_run.summary or ""),
-                    "generation_request": generation_request,
-                    "agent_run": agent_run,
-                }
-            if decision in {"stop_inplausible", "stop_unsupported"}:
-                return {
-                    "type": "project_not_plausible",
-                    "message": "I would not turn that into a skill yet.",
-                    "reason": str((agent_run.final_summary_json or {}).get("user_summary") or agent_run.summary or ""),
-                }
-            if agent_run.status == "failed" or generation_request.status == "failed":
-                raise AgentWorkflowError(
-                    generation_request.error_message
-                    or agent_run.error_message
-                    or "ProductManager planning failed"
-                )
-            permission_request = PermissionService(self.db).create_build_time_request(generation_request)
+        generation_request = self._project_generation_request_for_message(
+            message,
+            generation_request_id=generation_request_id,
+            conversation_id=conversation_id,
+        )
+        agent_run = AgentWorkflowService(
+            self.db,
+            codex_service=self.codex_service,
+            project_root=self.codex_service.project_root if self.codex_service is not None else None,
+        ).create_build_run(generation_request)
+        self.db.refresh(generation_request)
+        decision = (agent_run.final_summary_json or {}).get("decision_json", {}).get("decision")
+        if decision == "ask_user_for_input" or generation_request.status == "needs_input":
             return {
-                "type": "skill_generation_plan",
+                "type": "project_needs_input",
+                "message": "ProductManager needs a little more information before blueprinting.",
+                "question": str((agent_run.final_summary_json or {}).get("user_prompt") or agent_run.summary or ""),
                 "generation_request": generation_request,
-                "permission_request": permission_request,
+                "agent_run": agent_run,
             }
+        if decision in {"stop_inplausible", "stop_unsupported"}:
+            return {
+                "type": "project_not_plausible",
+                "message": "I would not turn that into a skill yet.",
+                "reason": str((agent_run.final_summary_json or {}).get("user_summary") or agent_run.summary or ""),
+            }
+        if agent_run.status == "failed" or generation_request.status == "failed":
+            raise AgentWorkflowError(
+                generation_request.error_message
+                or agent_run.error_message
+                or "ProductManager planning failed"
+            )
+        permission_request = PermissionService(self.db).create_build_time_request(generation_request)
         return {
-            "type": "direct_answer",
-            "message": self.direct_chat_service.answer(message),
+            "type": "skill_generation_plan",
+            "generation_request": generation_request,
+            "permission_request": permission_request,
         }
 
     def create_generation_request(

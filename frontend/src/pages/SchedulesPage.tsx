@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { SchedulePayload, ScheduleType, SkillSchedule, api } from "../api/client";
-import { formatSystemDateTime, parseBackendDateTime } from "../lib/dateTime";
+import { parseBackendDateTime } from "../lib/dateTime";
 import { formatDisplayName } from "../lib/displayName";
 import { usePolling } from "../lib/usePolling";
 
@@ -54,7 +54,6 @@ export default function SchedulesPage() {
     <section className="page stack">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Recurring services</p>
           <h1>Schedules</h1>
           <p className="muted">Manage generated service schedules and review backend-owned service jobs.</p>
         </div>
@@ -65,7 +64,15 @@ export default function SchedulesPage() {
         <p className="muted">Loading schedules...</p>
       ) : (
         <section className="table-wrap">
-          <table>
+          <table className="schedules-table">
+            <colgroup>
+              <col className="schedule-column-service" />
+              <col className="schedule-column-recurrence" />
+              <col className="schedule-column-status" />
+              <col className="schedule-column-next-run" />
+              <col className="schedule-column-last-run" />
+              <col className="schedule-column-actions" />
+            </colgroup>
             <thead>
               <tr>
                 <th>Service</th>
@@ -92,10 +99,16 @@ export default function SchedulesPage() {
                   <td><span className={`badge status-${schedule.status}`}>{schedule.status}</span></td>
                   <td>{formatTimestamp(schedule.next_run_at, "not scheduled")}</td>
                   <td>
-                    {formatTimestamp(schedule.last_run_at, "never")}
-                    {schedule.last_run_status && (
-                      <span className={`badge run-${schedule.last_run_status}`}>{schedule.last_run_status}</span>
-                    )}
+                    <span className="schedule-last-run">
+                      {schedule.last_run_status && (
+                        <span
+                          className={`status-dot run-${schedule.last_run_status}`}
+                          aria-label={`Last run status: ${schedule.last_run_status}`}
+                          title={schedule.last_run_status}
+                        />
+                      )}
+                      {formatTimestamp(schedule.last_run_at, "never")}
+                    </span>
                   </td>
                   <td>
                     {schedule.read_only ? (
@@ -103,11 +116,11 @@ export default function SchedulesPage() {
                     ) : (
                       <div className="button-row schedule-actions">
                         {schedule.status === "active" ? (
-                          <button type="button" className="secondary" onClick={() => act(() => api.pauseSchedule(schedule.id))} disabled={isWorking}>
+                          <button type="button" className="secondary schedule-state-action" onClick={() => act(() => api.pauseSchedule(schedule.id))} disabled={isWorking}>
                             Pause
                           </button>
                         ) : (
-                          <button type="button" onClick={() => act(() => api.resumeSchedule(schedule.id))} disabled={isWorking}>
+                          <button type="button" className="schedule-state-action" onClick={() => act(() => api.resumeSchedule(schedule.id))} disabled={isWorking}>
                             Resume
                           </button>
                         )}
@@ -188,81 +201,69 @@ function ScheduleEditor({ schedule, isWorking, onCancel, onSave }: {
   }
 
   return (
-    <form className="detail-panel stack" onSubmit={submit}>
-      <header className="page-header">
-        <div>
-          <h2>Edit Service Schedule</h2>
-          <p className="muted">Changes are runtime state and remain in place across service version updates.</p>
-        </div>
-      </header>
-      <div className="form-grid">
-        <label>Name<input value={name} onChange={(event) => setName(event.target.value)} required /></label>
-        <label>
-          Type
-          <select value={type} onChange={(event) => setType(event.target.value as ScheduleType)}>
-            <option value="daily">daily</option>
-            <option value="weekly">weekly</option>
-            <option value="interval">interval</option>
-          </select>
-        </label>
-        {(type === "daily" || type === "weekly") && (
-          <label>Time<input type="time" value={time} onChange={(event) => setTime(event.target.value)} required /></label>
-        )}
-        {type === "weekly" && (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="schedule-editor-title">
+      <form className="modal-panel schedule-editor-modal stack" onSubmit={submit}>
+        <header className="page-header">
+          <div>
+            <h2 id="schedule-editor-title">Edit Service Schedule</h2>
+            <p className="muted">Changes are runtime state and remain in place across service version updates.</p>
+          </div>
+        </header>
+        <div className="form-grid">
+          <label>Name<input value={name} onChange={(event) => setName(event.target.value)} required /></label>
           <label>
-            Day
-            <select value={day} onChange={(event) => setDay(event.target.value)}>
-              {["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].map((value) => (
-                <option key={value} value={value}>{value}</option>
-              ))}
+            Type
+            <select value={type} onChange={(event) => setType(event.target.value as ScheduleType)}>
+              <option value="daily">daily</option>
+              <option value="weekly">weekly</option>
+              <option value="interval">interval</option>
             </select>
           </label>
-        )}
-        {type === "interval" && (
-          <>
-            <label>Every<input type="number" min="1" value={every} onChange={(event) => setEvery(Number(event.target.value))} required /></label>
+          {(type === "daily" || type === "weekly") && (
+            <label>Time<input type="time" value={time} onChange={(event) => setTime(event.target.value)} required /></label>
+          )}
+          {type === "weekly" && (
             <label>
-              Unit
-              <select value={unit} onChange={(event) => setUnit(event.target.value as "minutes" | "hours" | "days")}>
-                <option value="minutes">minutes</option>
-                <option value="hours">hours</option>
-                <option value="days">days</option>
+              Day
+              <select value={day} onChange={(event) => setDay(event.target.value)}>
+                {["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].map((value) => (
+                  <option key={value} value={value}>{value}</option>
+                ))}
               </select>
             </label>
-          </>
-        )}
-        <label>Timezone<input value={timezone} onChange={(event) => setTimezone(event.target.value)} required /></label>
-      </div>
-      <label>Input JSON<textarea rows={7} value={input} onChange={(event) => setInput(event.target.value)} /></label>
-      {inputError && <p className="error-text">{inputError}</p>}
-      <div className="button-row">
-        <button type="submit" disabled={isWorking}>Save Schedule</button>
-        <button type="button" className="secondary" onClick={onCancel} disabled={isWorking}>Cancel</button>
-      </div>
-    </form>
+          )}
+          {type === "interval" && (
+            <>
+              <label>Every<input type="number" min="1" value={every} onChange={(event) => setEvery(Number(event.target.value))} required /></label>
+              <label>
+                Unit
+                <select value={unit} onChange={(event) => setUnit(event.target.value as "minutes" | "hours" | "days")}>
+                  <option value="minutes">minutes</option>
+                  <option value="hours">hours</option>
+                  <option value="days">days</option>
+                </select>
+              </label>
+            </>
+          )}
+          <label>Timezone<input value={timezone} onChange={(event) => setTimezone(event.target.value)} required /></label>
+        </div>
+        <label>Input JSON<textarea rows={7} value={input} onChange={(event) => setInput(event.target.value)} /></label>
+        {inputError && <p className="error-text">{inputError}</p>}
+        <div className="button-row">
+          <button type="submit" disabled={isWorking}>Save Schedule</button>
+          <button type="button" className="secondary" onClick={onCancel} disabled={isWorking}>Cancel</button>
+        </div>
+      </form>
+    </div>
   );
 }
 
 function humanSchedule(schedule: SkillSchedule): string {
   const data = schedule.schedule_json;
-  const timezone = timeZoneAbbreviation(schedule);
-  if (schedule.schedule_type === "daily") return `Daily at ${data.time} ${timezone}`;
-  if (schedule.schedule_type === "weekly") return `Weekly on ${capitalize(data.day)} at ${data.time} ${timezone}`;
+  if (schedule.schedule_type === "daily") return `Daily at ${data.time}`;
+  if (schedule.schedule_type === "weekly") return `Weekly on ${capitalize(data.day)} at ${data.time}`;
   if (schedule.schedule_type === "interval") return `Every ${data.every} ${data.unit}`;
   return schedule.schedule_type;
-}
-
-function timeZoneAbbreviation(schedule: SkillSchedule): string {
-  try {
-    const date = schedule.next_run_at ? parseBackendDateTime(schedule.next_run_at) : new Date();
-    const part = new Intl.DateTimeFormat("en-US", {
-      timeZone: schedule.timezone,
-      timeZoneName: "short",
-    }).formatToParts(date).find(({ type }) => type === "timeZoneName");
-    return part?.value ?? schedule.timezone;
-  } catch {
-    return schedule.timezone;
-  }
 }
 
 function capitalize(value: string | null | undefined): string {
@@ -270,5 +271,15 @@ function capitalize(value: string | null | undefined): string {
 }
 
 function formatTimestamp(value: string | null, fallback: string): string {
-  return formatSystemDateTime(value, fallback);
+  if (!value) return fallback;
+  const date = parseBackendDateTime(value);
+  if (Number.isNaN(date.getTime())) return fallback;
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(date);
 }

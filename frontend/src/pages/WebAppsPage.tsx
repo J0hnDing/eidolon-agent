@@ -36,7 +36,6 @@ export default function WebAppsPage() {
     <section className="page stack">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Self-rendered sandboxed skills</p>
           <h1>Applications</h1>
           <p className="muted">
             Application content runs on an isolated origin while Eidolon keeps lifecycle, version,

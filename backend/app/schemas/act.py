@@ -26,6 +26,7 @@ class ActTurnRead(BaseModel):
     cancel_requested_at: datetime | None
     delivery_status: str | None
     created_at: datetime
+    started_at: datetime | None
     completed_at: datetime | None
 
 

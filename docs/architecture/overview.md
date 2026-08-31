@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Eidolon is a local-first control plane for reusable application skills. The assistant can chat, store explicit memory, propose skills, build them with Codex-backed agents, validate them, request approvals, install them, run bounded function skills, host persistent sandboxed web applications, execute scheduler-only services, and update skills through versioned drafts.
+Eidolon is a local-first control plane for reusable application skills. The assistant can plan Project requests, perform persistent Act work, store explicit memory, propose skills, build them with Codex-backed agents, validate them, request approvals, install them, run bounded function skills, host persistent sandboxed web applications, execute scheduler-only services, and update skills through versioned drafts.
 
 ## Main Parts
 
@@ -31,7 +31,7 @@ The backend is the safety boundary. The frontend may disable buttons or show war
 
 The frontend is a local control UI. It exposes:
 
-- Chat with chat/project modes;
+- Project conversations and persistent Act sessions;
 - persistent Act sessions backed by local Codex App Server threads and a controlled shared workspace;
 - Memory CRUD;
 - Skills list and skill detail;
@@ -74,7 +74,7 @@ The manifest `runtime` discriminator selects an execution protocol:
 
 The backend is the control plane for all three protocols. One persistent catalog describes backend-core, installed user, and integration functions and their current availability; service skills are deliberately excluded from it. Invocation authority is still derived from active manifests, current versions, runtime eligibility, integration state, and caller-target approval. Web-app content remains on a distinct untrusted origin inside a sandboxed iframe; the React UI retains trusted navigation, lifecycle, version, permission, schedule, and function-catalog controls. See [Function registry and invocation](../runtime/functions.md), [Scheduling](../runtime/scheduling.md), and [Sandboxed web applications](../runtime/web_applications.md).
 
-An explicitly installed local STDIO MCP server snapshots the available eligible catalog for Codex Desktop, CLI, and IDE sessions. It is not part of Eidolon chat and does not start the FastAPI lifecycle. Calls still pass through the trusted function registry or integration services and recheck a shared enabled state plus current availability and contract identity. See [Codex MCP tools](../integrations/codex_mcp.md).
+An explicitly installed local STDIO MCP server snapshots the available eligible catalog for Codex Desktop, CLI, and IDE sessions. It is separate from Eidolon's Project and Act surfaces and does not start the FastAPI lifecycle. Calls still pass through the trusted function registry or integration services and recheck a shared enabled state plus current availability and contract identity. See [Codex MCP tools](../integrations/codex_mcp.md).
 
 ## Trusted Integrations
 
@@ -82,4 +82,4 @@ GitHub, local Eidolon-Atlas, Notion Todos/Reports, and Google Calendar are trust
 
 ## Current Constraints
 
-The MVP is local and single-user. It intentionally avoids multi-user auth, cloud orchestration, autonomous background agents, unrestricted shell access, browser automation, secrets access, high-risk third-party actions, and silent package installation. Explicit memory facts are implemented, but automatic context selection, memory-aware chat, outcome learning, and long-term adaptation are not.
+The MVP is local and single-user. It intentionally avoids multi-user auth, cloud orchestration, autonomous background agents, unrestricted shell access, browser automation, secrets access, high-risk third-party actions, and silent package installation. Explicit memory facts are implemented, but automatic context selection, memory-aware agent workflows, outcome learning, and long-term adaptation are not.

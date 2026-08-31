@@ -1,12 +1,12 @@
 # Codex CLI Integration
 
-The backend can use the local Codex CLI for direct chat, the resumable Project-mode planning session, Builder edits, Tester test writing, repairs, updates, and ProductManager summaries. The preceding intent placeholder copies the initial user message and does not invoke Codex.
+The backend can use the local Codex CLI for the resumable Project-mode planning session, persistent Act work, Builder edits, Tester test writing, repairs, updates, and ProductManager summaries. The preceding intent placeholder copies the initial user message and does not invoke Codex.
 
-The backend starts one persistent local `codex app-server --stdio` child process for account allowance reads. It uses `account/rateLimits/read` to expose the current 5-hour and weekly windows. App Server availability failures are reported by the usage API and do not block normal chat or skill runtime. Act owns a second dedicated App Server process so its persistent threads, MCP reloads, and long turns cannot interfere with usage or Product Manager traffic.
+The backend starts one persistent local `codex app-server --stdio` child process for account allowance reads. It uses `account/rateLimits/read` to expose the current 5-hour and weekly windows. App Server availability failures are reported by the usage API and do not block skill runtime. Act owns a second dedicated App Server process so its persistent threads, MCP reloads, and long turns cannot interfere with usage or Product Manager traffic.
 
 DAG builds keep a 5% reserve in both account windows. A new ready-node batch is not admitted when either window has less than 5% remaining; already admitted parallel-ready work is allowed to reach its batch boundary before the run pauses.
 
-Project-build Codex CLI invocations use JSONL output plus the final-message file. ProductManager actions also pass an action-specific JSON Schema through `--output-schema`; blueprint responses constrain their known build, repair, or update fields while leaving the nested callable input/output JSON Schema documents open for user-defined properties. Their existing prompt contracts and backend parsing, sanitization, catalog checks, and fallbacks remain defense in depth. Builder, Tester, and single-Codex build calls do not use a final-response schema because their authoritative outputs are controlled files and validation results. The backend persists the `turn.completed` token breakdown for ProductManager, Builder, and Tester invocations. Records include adapter, role, route source, requested/effective model, requested/effective reasoning effort, and Builder difficulty when applicable. Installed skill runtime calls use the same normalized invocation shape but are stored on the active skill run; they and direct chat are not added to project-build token totals.
+Project-build Codex CLI invocations use JSONL output plus the final-message file. ProductManager actions also pass an action-specific JSON Schema through `--output-schema`; blueprint responses constrain their known build, repair, or update fields while leaving the nested callable input/output JSON Schema documents open for user-defined properties. Their existing prompt contracts and backend parsing, sanitization, catalog checks, and fallbacks remain defense in depth. Builder, Tester, and single-Codex build calls do not use a final-response schema because their authoritative outputs are controlled files and validation results. The backend persists the `turn.completed` token breakdown for ProductManager, Builder, and Tester invocations. Records include adapter, role, route source, requested/effective model, requested/effective reasoning effort, and Builder difficulty when applicable. Installed skill runtime calls use the same normalized invocation shape but are stored on the active skill run and are not added to project-build token totals.
 
 ## Defaults
 
@@ -14,7 +14,6 @@ Project-build Codex CLI invocations use JSONL output plus the final-message file
 PERSONAL_AGENT_CODEX_MODE=auto
 PERSONAL_AGENT_CODEX_SANDBOX=workspace-write
 PERSONAL_AGENT_CODEX_PLAUSIBILITY_SANDBOX=read-only
-PERSONAL_AGENT_CODEX_CHAT_SANDBOX=read-only
 PERSONAL_AGENT_CODEX_SKILL_SANDBOX=read-only
 PERSONAL_AGENT_CODEX_APPROVAL_POLICY=never
 PERSONAL_AGENT_CODEX_ENABLE_SEARCH=auto
@@ -26,7 +25,7 @@ Backend tests inject deterministic test-only stubs directly into service constru
 
 ## Executable Resolution and Compatibility
 
-Every backend Codex path, including Chat, ProductManager, Builder, Tester, planning, skill runtime calls, and the persistent App Server, uses one central CLI resolver.
+Every backend Codex path, including Act, ProductManager, Builder, Tester, planning, skill runtime calls, and the persistent App Server, uses one central CLI resolver.
 
 When `PERSONAL_AGENT_CODEX_COMMAND` is set, that executable is an explicit override and no automatic fallback replaces it. Without an override, the backend checks the Codex Desktop installation and every `codex` executable visible on `PATH`, runs `<candidate> --version`, and selects the newest valid semantic version. Codex Desktop wins a version tie. This prevents an older PATH installation from silently taking precedence over a newer Desktop-bundled CLI.
 
@@ -44,8 +43,7 @@ The backend reads the account-aware model picker through App Server `model/list`
 
 Routing settings cover:
 
-- normal Chat independently;
-- persistent Act independently, falling back to Chat when its route is unset;
+- persistent Act independently;
 - ProductManager refine-intent, plan-build, task-DAG, repair, and update actions;
 - Builder single-Codex builds, `easy`, `medium`, and `hard` DAG nodes, plus repair and update actions;
 - Tester task, final end-to-end, and update actions.
@@ -99,14 +97,12 @@ single-Codex workflow uses one larger limit for its combined planning, implement
 | Builder task, update, and repair | 600 seconds |
 | Tester task, final E2E authoring, and update testing | 300 seconds |
 | Single-Codex combined build | 900 seconds |
-| Installed-skill bounded Codex call | 45 seconds |
 
-Unknown legacy actions use a 300-second compatibility fallback. Direct chat retains its service-specific 120-second limit. Progress-aware idle timeouts,
+Installed-skill Codex calls have no action-specific override and use the general 300-second fallback. Unknown legacy actions use the same 300-second compatibility fallback. Progress-aware idle timeouts,
 whole-workflow budgets, and partial recovery are not part of these hard limits and remain tracked in `TODO-012`.
 
 ## Sandbox Modes
 
-- Chat: read-only project root.
 - Act: persistent resumable threads with `workspace-write` rooted only at `runtime/act/workspace`; the reserved memory directory and managed instructions remain outside that writable root.
 - ProductManager planning: a persistent App Server thread with a final-response JSON Schema for the combined decision/blueprint/permission contract.
 - ProductManager workflow actions: read-only `runtime/product_manager` workspace. ProductManager returns CLI-schema-constrained JSON on stdout; the backend parses and sanitizes it, then writes workflow artifacts such as `blueprint.json`, `permissions.json`, and `task_dag.json`.

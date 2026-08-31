@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 from io import BytesIO
 from pathlib import Path
@@ -67,6 +68,13 @@ def test_trusted_capability_helper_reports_backend_rejection(monkeypatch: pytest
 
     with pytest.raises(capabilities.WebRuntimeCapabilityError, match="rejected"):
         capabilities.call_codex("Summarize")
+
+
+def test_web_skill_capabilities_use_five_minute_timeouts() -> None:
+    assert capabilities.DEFAULT_SKILL_CAPABILITY_TIMEOUT_SECONDS == 300
+    assert inspect.signature(capabilities.call_codex).parameters["timeout_seconds"].default == 300
+    assert inspect.signature(capabilities.call_function).parameters["timeout_seconds"].default == 300
+    assert relay.UPSTREAM_TIMEOUT_SECONDS == 300
 
 
 def test_web_capability_helper_invokes_declared_function(monkeypatch: pytest.MonkeyPatch) -> None:

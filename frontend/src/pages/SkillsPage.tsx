@@ -32,7 +32,6 @@ export default function SkillsPage() {
     <section className="page stack">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Reusable capability packages</p>
           <h1>Skills</h1>
           <p className="muted">Inspect, validate, and manage every capability Eidolon can run.</p>
         </div>

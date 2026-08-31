@@ -217,7 +217,7 @@ def test_product_manager_uses_codex_adapter_for_blueprint_and_permissions(tmp_pa
 
 
 def test_approval_updates_waiting_product_manager_permission_step(db_session: Session) -> None:
-    response = ChatOrchestrator(db_session).handle_message("Create a reusable local workflow skill.", mode="project")
+    response = ChatOrchestrator(db_session).handle_message("Create a reusable local workflow skill.")
     permission_request = response["permission_request"]
 
     PermissionService(db_session).approve_request(permission_request)
@@ -251,7 +251,7 @@ def test_resume_after_generic_approval_runs_builder(tmp_path: Path, db_session: 
 
 
 def test_build_time_permission_summary_has_pm_and_permission_review_parts(db_session: Session) -> None:
-    response = ChatOrchestrator(db_session).handle_message("Create a reusable local workflow skill.", mode="project")
+    response = ChatOrchestrator(db_session).handle_message("Create a reusable local workflow skill.")
     permission_request = response["permission_request"]
 
     assert "ProductManager:" in permission_request.user_explanation
@@ -1499,7 +1499,7 @@ def test_generation_planning_lock_rejects_overlapping_clarification_turns(
 
 
 def test_delete_agent_run_removes_steps(db_session: Session) -> None:
-    response = ChatOrchestrator(db_session).handle_message("Create a reusable local workflow skill.", mode="project")
+    response = ChatOrchestrator(db_session).handle_message("Create a reusable local workflow skill.")
     agent_run = AgentWorkflowService(db_session).latest_run_for_generation(response["generation_request"].id)
     step_ids = [step.id for step in agent_run.steps]
 

@@ -38,7 +38,6 @@ export default function FunctionsPage() {
     <section className="page stack">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Callable capability catalog</p>
           <h1>Functions</h1>
           <p className="muted">
             Backend, user, and integration functions available to application skills.

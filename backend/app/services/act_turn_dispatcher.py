@@ -114,6 +114,7 @@ class ActTurnDispatcher:
                 .where(ActTurn.id == turn.id, ActTurn.status == "queued")
                 .values(
                     status="running",
+                    started_at=datetime.now(UTC),
                     activity_json=[{"kind": "started", "label": "Act is working"}],
                 )
             )
@@ -316,7 +317,19 @@ def _activities(items: list[dict[str, Any]]) -> list[dict[str, str]]:
     for item in items:
         kind = item.get("type")
         if isinstance(kind, str) and kind in display:
-            labels.append({"kind": kind, "label": display[kind]})
+            label = display[kind]
+            if kind == "mcpToolCall":
+                tool_name = next(
+                    (
+                        value.strip()
+                        for value in (item.get("tool"), item.get("name"))
+                        if isinstance(value, str) and value.strip()
+                    ),
+                    None,
+                )
+                if tool_name is not None:
+                    label = f"Used {tool_name[:120]}"
+            labels.append({"kind": kind, "label": label})
     return labels[:20] or [{"kind": "completed", "label": "Act completed the turn"}]
 
 

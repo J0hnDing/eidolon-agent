@@ -149,7 +149,6 @@ class CodexRoutingService:
 
     def _validate_all(self, payload: CodexRoutingSettingsPayload, catalog: dict[str, Any]) -> None:
         routes = [
-            ("chat", "chat", None),
             ("act", "act", None),
             *[("product_manager", action, None) for action in _PM_ACTIONS],
             ("builder", "single_codex_build", None),
@@ -166,6 +165,7 @@ class CodexRoutingService:
     @staticmethod
     def _payload(value: dict[str, Any]) -> CodexRoutingSettingsPayload:
         normalized = dict(value or {})
+        normalized.pop("chat", None)
         product_manager = normalized.get("product_manager")
         if isinstance(product_manager, dict) and "refine_intent" in product_manager:
             normalized["product_manager"] = dict(product_manager)
@@ -181,10 +181,8 @@ class CodexRoutingService:
         difficulty: str | None,
     ) -> tuple[InvocationChoice, InvocationChoice, str]:
         empty = InvocationChoice()
-        if role == "chat":
-            return empty, payload.chat, "chat"
         if role == "act":
-            return payload.chat, payload.act, "act" if (payload.act.model or payload.act.reasoning_effort) else "chat"
+            return empty, payload.act, "act"
         if role == "product_manager":
             route = _PM_ACTIONS.get(action)
             specific = getattr(payload.product_manager, route) if route else empty

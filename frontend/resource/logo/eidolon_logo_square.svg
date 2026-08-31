@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="360" height="360" viewBox="0 0 360 360"
+     role="img" aria-label="Eidolon balanced four-band concentric arc logo">
+  <defs>
+    <!--
+      Exact SVG equivalent of:
+      radial-gradient(circle at 12% 88%,
+        #506A91 0% 22%,
+        #2A3C4E 22% 42%,
+        #1A2631 42% 62%,
+        #0F171E 62% 100%)
+
+      CSS radial-gradient's default circle size is farthest-corner.
+      For a 360x360 square with center (43.2, 316.8), that radius is
+      448.02285655979654 units.
+    -->
+    <radialGradient id="eidolon-gradient"
+                    gradientUnits="userSpaceOnUse"
+                    cx="43.2" cy="316.8" r="448.02285655979654">
+      <stop offset="0" stop-color="#506A91"/>
+      <stop offset="0.22" stop-color="#506A91"/>
+      <stop offset="0.22" stop-color="#2A3C4E"/>
+      <stop offset="0.42" stop-color="#2A3C4E"/>
+      <stop offset="0.42" stop-color="#1A2631"/>
+      <stop offset="0.62" stop-color="#1A2631"/>
+      <stop offset="0.62" stop-color="#0F171E"/>
+      <stop offset="1" stop-color="#0F171E"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="360" height="360" fill="url(#eidolon-gradient)"/>
+</svg>

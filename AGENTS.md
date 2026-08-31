@@ -4,7 +4,7 @@
 
 Eidolon: a local-first, self-extending personal AI assistant.
 
-This repository builds a local-first assistant that can chat with the user, store explicit editable memory, and turn repeated needs into safe reusable application skills. A skill is a reusable capability package that can be proposed, inspected, validated, installed, updated, run according to its runtime contract, or deleted by the user.
+This repository builds a local-first assistant that can plan reusable projects, perform persistent Act work, store explicit editable memory, and turn repeated needs into safe reusable application skills. A skill is a reusable capability package that can be proposed, inspected, validated, installed, updated, run according to its runtime contract, or deleted by the user.
 
 All skills contain executable Python code and tests. A skill may optionally include `SKILL.md` reusable instructions or operating guidance.
 
@@ -90,7 +90,7 @@ Memory must be explicit, editable, and deletable. Store actionable facts only. D
 
 ### No Silent Skill Creation
 
-Normal chat mode must not create application skills. Project mode is the only UI mode that may start application skill proposal workflows. Do not use backend keyword heuristics to silently convert normal chat into skill generation.
+Project mode is the only UI mode that may start application skill proposal workflows. Act and other surfaces must not create application skills. Do not use backend keyword heuristics to silently convert unrelated input into skill generation.
 
 ### Platform Controls Generated Code
 
@@ -156,7 +156,7 @@ The backend must prevent overlapping per-skill operations:
 - no run while the same skill is installing, updating, repairing, or deleting,
 - no delete while a run is active.
 
-Do not add a global queue that blocks unrelated skills or normal chat.
+Do not add a global queue that blocks unrelated skills, Project planning, or Act work.
 
 ## Agent System Summary
 
