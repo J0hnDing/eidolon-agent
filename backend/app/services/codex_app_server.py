@@ -77,8 +77,9 @@ class CodexAppServerSubscription:
 class CodexAppServerClient:
     """Thread-safe JSON-RPC client for one persistent local App Server process."""
 
-    def __init__(self, command: str | None = None) -> None:
+    def __init__(self, command: str | None = None, *, extra_args: tuple[str, ...] = ()) -> None:
         self.command = command
+        self.extra_args = extra_args
         self._process: subprocess.Popen[str] | None = None
         self._reader: threading.Thread | None = None
         self._generation = 0
@@ -107,6 +108,11 @@ class CodexAppServerClient:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 process.kill()
+
+    def restart(self) -> None:
+        with self._lifecycle_lock:
+            self.stop()
+            self._ensure_started_locked()
 
     def request(self, method: str, params: Any, *, timeout: float = 30) -> dict[str, Any]:
         self.start()
@@ -139,7 +145,7 @@ class CodexAppServerClient:
 
         command = self.command or codex_cli_service.command()
         process = subprocess.Popen(
-            [command, "app-server", "--stdio"],
+            [command, *self.extra_args, "app-server", "--stdio"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,

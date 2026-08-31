@@ -1,9 +1,12 @@
 import logging
 
-from app.main import GOOGLE_OAUTH_CALLBACK_PATH, OAuthCallbackAccessLogFilter
+import pytest
+
+from app.main import GOOGLE_OAUTH_CALLBACK_PATHS, OAuthCallbackAccessLogFilter
 
 
-def test_google_oauth_authorization_code_is_redacted_from_access_log() -> None:
+@pytest.mark.parametrize("callback_path", GOOGLE_OAUTH_CALLBACK_PATHS)
+def test_google_oauth_authorization_code_is_redacted_from_access_log(callback_path: str) -> None:
     record = logging.LogRecord(
         name="uvicorn.access",
         level=logging.INFO,
@@ -13,7 +16,7 @@ def test_google_oauth_authorization_code_is_redacted_from_access_log() -> None:
         args=(
             "127.0.0.1:1234",
             "GET",
-            f"{GOOGLE_OAUTH_CALLBACK_PATH}?state=safe&code=SECRET_AUTHORIZATION_CODE",
+            f"{callback_path}?state=safe&code=SECRET_AUTHORIZATION_CODE",
             "1.1",
             303,
         ),
@@ -21,5 +24,5 @@ def test_google_oauth_authorization_code_is_redacted_from_access_log() -> None:
     )
 
     assert OAuthCallbackAccessLogFilter().filter(record) is True
-    assert record.args[2] == GOOGLE_OAUTH_CALLBACK_PATH
+    assert record.args[2] == callback_path
     assert "SECRET_AUTHORIZATION_CODE" not in record.getMessage()

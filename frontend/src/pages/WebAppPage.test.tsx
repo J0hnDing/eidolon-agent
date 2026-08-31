@@ -63,7 +63,7 @@ describe("WebAppFrame", () => {
     );
 
     await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1));
-    expect(await screen.findByTitle("notes application")).toBeTruthy();
+    expect(await screen.findByTitle("Notes application")).toBeTruthy();
   });
 
   it("rejects ordinary external and credential-bearing origins", () => {

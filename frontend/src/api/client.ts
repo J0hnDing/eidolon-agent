@@ -15,7 +15,7 @@ export type SkillRuntime = "function" | "web_app" | "service";
 export type SkillStatus = "building" | "proposed" | "installed" | "failed" | "deleted";
 export type FunctionCategory = "backend_core" | "user" | "integration";
 export type FunctionAvailability = "available" | "disabled" | "unavailable";
-export type ChatMode = "chat" | "project";
+export type ChatMode = "chat" | "project" | "act";
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired" | "superseded";
 export type PermissionRequestScope = "build_time" | "runtime";
 export type ScheduleStatus = "active" | "paused";
@@ -112,6 +112,9 @@ export interface SkillRun {
   output_tokens: number;
   reasoning_output_tokens: number;
   total_tokens: number;
+  schedule_occurrence_key?: string | null;
+  scheduled_for_at?: string | null;
+  schedule_trigger?: "automatic" | "startup_catch_up" | null;
 }
 
 export type WebAppInstanceStatus = "starting" | "ready" | "healthy" | "unhealthy" | "stopped" | "failed";
@@ -339,6 +342,7 @@ export type ProjectBuildWorkflowOverride = "single_codex" | "task_dag";
 export interface CodexRoutingSettingsPayload {
   project_build_workflow_override: ProjectBuildWorkflowOverride | null;
   chat: CodexInvocationChoice;
+  act?: CodexInvocationChoice;
   product_manager: {
     default: CodexInvocationChoice;
     blueprint_and_permissions: CodexInvocationChoice;
@@ -366,6 +370,33 @@ export interface CodexRoutingSettingsPayload {
 export interface CodexRoutingSettings extends CodexRoutingSettingsPayload {
   updated_at: string | null;
 }
+
+export interface ActTurn {
+  id: number;
+  session_id: number;
+  codex_turn_id: string | null;
+  user_message: string;
+  assistant_message: string | null;
+  activity_json: Array<{ kind: string; label: string }>;
+  status: string;
+  error_message: string | null;
+  cancel_requested_at: string | null;
+  delivery_status: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface ActSession {
+  id: number;
+  title: string;
+  origin: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  turns: ActTurn[];
+}
+
+export type ActSessionSummary = Omit<ActSession, "turns">;
 
 export interface PermissionPolicy {
   source: string;
@@ -768,7 +799,7 @@ function formatApiError(raw: string): string {
 }
 
 export const api = {
-  sendChatMessage: (message: string, mode: ChatMode, generationRequestId?: number, conversationId?: string) =>
+  sendChatMessage: (message: string, mode: Exclude<ChatMode, "act">, generationRequestId?: number, conversationId?: string) =>
     request<ChatResponse>("/chat", {
       method: "POST",
       body: JSON.stringify({
@@ -782,6 +813,12 @@ export const api = {
     request<void>(`/chat/conversations/${encodeURIComponent(conversationId)}`, {
       method: "DELETE",
     }),
+  listActSessions: () => request<ActSessionSummary[]>("/act/sessions"),
+  createActSession: () => request<ActSession>("/act/sessions", { method: "POST", body: JSON.stringify({ origin: "web" }) }),
+  getActSession: (sessionId: number) => request<ActSession>(`/act/sessions/${sessionId}`),
+  runActTurn: (sessionId: number, message: string) => request<ActTurn>(`/act/sessions/${sessionId}/turns`, { method: "POST", body: JSON.stringify({ message }) }),
+  cancelActTurn: (sessionId: number, turnId: number) => request<ActTurn>(`/act/sessions/${sessionId}/turns/${turnId}/cancel`, { method: "POST" }),
+  archiveActSession: (sessionId: number) => request<void>(`/act/sessions/${sessionId}`, { method: "DELETE" }),
   approveSkillGeneration: (id: number) =>
     request<SkillGenerationApprovalResponse>(`/skill-generation-requests/${id}/approve-generation`, {
       method: "POST",
@@ -928,17 +965,24 @@ export const api = {
     request<void>("/settings/integrations/gmail", { method: "DELETE" }),
   getTelegramConnection: () =>
     request<TelegramConnectionStatus>("/settings/integrations/telegram"),
+  getTelegramAgentConnection: () => request<TelegramConnectionStatus>("/settings/integrations/telegram-agent"),
   startTelegramPairing: (token: string) =>
     request<TelegramPairingResponse>("/settings/integrations/telegram/pairing/start", {
       method: "POST",
       body: JSON.stringify({ token }),
     }),
+  startTelegramAgentPairing: (token: string) => request<TelegramPairingResponse>("/settings/integrations/telegram-agent/pairing/start", { method: "POST", body: JSON.stringify({ token }) }),
   refreshTelegramPairing: () =>
     request<TelegramConnectionStatus>("/settings/integrations/telegram/pairing/refresh", {
       method: "POST",
     }),
+  refreshTelegramAgentPairing: () =>
+    request<TelegramConnectionStatus>("/settings/integrations/telegram-agent/pairing/refresh", {
+      method: "POST",
+    }),
   removeTelegramConnection: () =>
     request<void>("/settings/integrations/telegram", { method: "DELETE" }),
+  removeTelegramAgentConnection: () => request<void>("/settings/integrations/telegram-agent", { method: "DELETE" }),
   getAtlasStatus: () => request<AtlasIntegrationStatus>("/settings/integrations/atlas"),
   updateAtlasDirectory: (directory: string) =>
     request<AtlasIntegrationStatus>("/settings/integrations/atlas/directory", {

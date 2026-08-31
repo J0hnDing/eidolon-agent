@@ -35,6 +35,7 @@ class FunctionCatalogEntryRead(BaseModel):
     skill_id: int | None = None
     active_version: str | None = None
     mcp_exposed: bool = True
+    agent_selectable: bool = True
     mcp_read_only: bool | None = None
     mcp_destructive: bool | None = None
     mcp_open_world: bool | None = None

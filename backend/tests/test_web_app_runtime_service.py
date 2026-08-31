@@ -23,6 +23,7 @@ from app.models import (
     WebAppSession,
 )
 from app.routers import web_apps as web_apps_router
+from app.schemas.manifest import SkillManifest, manifest_permission_requests
 from app.schemas.skill_codex import SkillCodexRequest
 from app.services.skill_version_service import SkillVersionService
 from app.services.web_app_runtime_service import (
@@ -139,7 +140,9 @@ def create_web_app(db: Session, project_root: Path, *, enabled: bool = True) -> 
             request_scope="runtime",
             request_type="install",
             risk_level="low",
-            requested_permissions_json=manifest["permissions"],
+            requested_permissions_json=manifest_permission_requests(
+                SkillManifest.model_validate(manifest).permissions
+            ),
             requested_dependencies_json=[],
             requested_network_domains_json=[],
             requested_filesystem_json={"filesystem_read": ["./cache"], "filesystem_write": ["./cache"]},
@@ -732,7 +735,7 @@ def test_instance_capability_rejects_forged_tokens_and_records_bounded_codex_aud
         f"Bearer {launcher.capability_token}",
         db_session,
     )
-    assert response.response == "Fake Codex response."
+    assert response.response == "Deterministic Codex response."
     audit = db_session.scalars(
         select(WebAppAuditRecord).where(WebAppAuditRecord.operation == "codex_call")
     ).all()

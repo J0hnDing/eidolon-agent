@@ -55,6 +55,7 @@ class FunctionCatalogService:
             }
             for entry in self.list_entries()
             if entry.get("availability") == "available"
+            and entry.get("agent_selectable", True) is not False
         ]
 
     def context(self, function_ids: object, *, available_only: bool = True) -> list[dict[str, Any]]:
@@ -80,6 +81,8 @@ class FunctionCatalogService:
             if entry.get("availability") != "available":
                 reasons = entry.get("availability_reasons") or ["Function is unavailable"]
                 raise FunctionCatalogError(f"Function {function_id} is unavailable: {'; '.join(reasons)}")
+            if entry.get("agent_selectable", True) is False:
+                raise FunctionCatalogError(f"Function {function_id} is reserved for Eidolon Act")
         return selected_ids
 
     def user_function_names(self, function_ids: object) -> list[str]:

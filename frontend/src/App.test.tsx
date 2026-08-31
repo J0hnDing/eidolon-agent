@@ -22,6 +22,7 @@ describe("App navigation", () => {
     expect(within(navigation).getByText("Control")).toBeTruthy();
 
     expect(within(navigation).getByRole("link", { name: "Chat" }).getAttribute("href")).toBe("/chat");
+    expect(within(navigation).queryByRole("link", { name: "Act" })).toBeNull();
     expect(within(navigation).getByRole("link", { name: "Applications" }).getAttribute("href")).toBe("/apps");
     expect(within(navigation).getByRole("link", { name: "Approvals" }).getAttribute("href")).toBe("/approval-requests");
     expect(within(navigation).getByRole("link", { name: "Settings" }).getAttribute("href")).toBe("/settings");

@@ -28,6 +28,9 @@ class SkillRunBase(BaseModel):
     caller_skill_id: int | None = None
     caller_version_id: int | None = None
     source_schedule_id: int | None = None
+    schedule_occurrence_key: str | None = None
+    scheduled_for_at: datetime | None = None
+    schedule_trigger: str | None = None
     web_app_instance_id: str | None = None
     initiating_action: str | None = None
 

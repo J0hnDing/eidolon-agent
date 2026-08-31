@@ -1,13 +1,24 @@
+import hashlib
+import json
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import SessionLocal
-from app.models import Skill, SkillRun, SkillSchedule
+from app.models import (
+    ScheduleOccurrence,
+    ScheduleRuntimeState,
+    Skill,
+    SkillOperationLock,
+    SkillRun,
+    SkillSchedule,
+)
 from app.schemas.schedule import SchedulePayload, ScheduleUpdate
 from app.services.permission_service import PermissionService
 from app.services.platform_service import (
@@ -77,10 +88,13 @@ class SchedulerService:
     def start(self) -> None:
         if self.scheduler is None:
             return
+        startup_at = utc_now()
+        self.recover_interrupted_occurrences(startup_at)
+        self.load_active_schedules()
+        self.register_platform_services(now=startup_at)
+        self.queue_startup_catchups(startup_at)
         if not getattr(self.scheduler, "running", False):
             self.scheduler.start()
-        self.load_active_schedules()
-        self.register_platform_services()
 
     def shutdown(self) -> None:
         if self.scheduler is not None and getattr(self.scheduler, "running", False):
@@ -99,11 +113,13 @@ class SchedulerService:
             except Exception:
                 schedule.status = "paused"
                 schedule.next_run_at = None
+                self._set_schedule_state(schedule, active_since_at=None)
                 self.db.commit()
 
-    def register_platform_services(self) -> None:
+    def register_platform_services(self, *, now: datetime | None = None) -> None:
         if self.scheduler is None:
             return
+        self._ensure_platform_state(now or utc_now())
         hour, minute = self._parse_time(NOTION_DONE_CLEANUP_TIME)
         trigger: Any
         if CronTrigger is None:
@@ -123,24 +139,72 @@ class SchedulerService:
             replace_existing=True,
             max_instances=1,
             coalesce=True,
+            misfire_grace_time=None,
         )
 
     def execute_platform_service(self, service_id: str) -> dict[str, Any] | None:
         with self.session_factory() as db:
-            try:
-                result = PlatformServiceDispatcher(db).invoke(service_id)
-            except Exception as exc:
-                self.platform_last_run_at = utc_now()
-                self.platform_last_run_status = "failed"
-                print(f"Scheduled platform service {service_id} failed safely: {type(exc).__name__}")
-                return None
-            self.platform_last_run_at = utc_now()
-            self.platform_last_run_status = str(result["status"])
-            print(
-                f"Scheduled platform service {service_id} completed with status {result['status']}; "
-                f"scanned={result['scanned_count']}; deleted={result['deleted_count']}"
+            service = SchedulerService(
+                db,
+                scheduler=self.scheduler,
+                session_factory=self.session_factory,
+                project_root=self.project_root,
             )
-            return result
+            now = utc_now()
+            state = service._ensure_platform_state(now)
+            scheduled_for_at = service._latest_platform_due_at(state, now)
+            if scheduled_for_at is None:
+                return None
+            occurrence = service._claim_occurrence(
+                schedule_key=service._platform_schedule_key(service_id),
+                definition_fingerprint=state.definition_fingerprint,
+                scheduled_for_at=scheduled_for_at,
+                trigger_reason="automatic",
+            )
+            if occurrence is None:
+                return None
+            return service._execute_claimed_platform_occurrence(occurrence)
+
+    def execute_claimed_platform_occurrence(self, occurrence_id: int) -> dict[str, Any] | None:
+        with self.session_factory() as db:
+            service = SchedulerService(
+                db,
+                scheduler=self.scheduler,
+                session_factory=self.session_factory,
+                project_root=self.project_root,
+            )
+            occurrence = db.get(ScheduleOccurrence, occurrence_id)
+            if occurrence is None or occurrence.status != "claimed":
+                return None
+            return service._execute_claimed_platform_occurrence(occurrence)
+
+    def _execute_claimed_platform_occurrence(
+        self,
+        occurrence: ScheduleOccurrence,
+    ) -> dict[str, Any] | None:
+        occurrence.status = "running"
+        occurrence.started_at = utc_now()
+        self.db.commit()
+        try:
+            result = PlatformServiceDispatcher(self.db).invoke(NOTION_DONE_CLEANUP_SERVICE_ID)
+        except Exception as exc:
+            self._finish_occurrence(occurrence, "failed", error_message=str(exc))
+            self.platform_last_run_at = occurrence.ended_at
+            self.platform_last_run_status = "failed"
+            print(
+                "Scheduled platform service "
+                f"{NOTION_DONE_CLEANUP_SERVICE_ID} failed safely: {type(exc).__name__}"
+            )
+            return None
+        status = str(result["status"])
+        self._finish_occurrence(occurrence, status)
+        self.platform_last_run_at = occurrence.ended_at
+        self.platform_last_run_status = status
+        print(
+            f"Scheduled platform service {NOTION_DONE_CLEANUP_SERVICE_ID} completed with status "
+            f"{status}; scanned={result['scanned_count']}; deleted={result['deleted_count']}"
+        )
+        return result
 
     def serialize_notion_done_cleanup_schedule(self) -> dict[str, Any]:
         job = None
@@ -149,6 +213,24 @@ class SchedulerService:
                 job = self.scheduler.get_job(NOTION_DONE_CLEANUP_JOB_ID)
             except Exception:
                 job = None
+        latest_occurrence = self.db.scalar(
+            select(ScheduleOccurrence)
+            .where(
+                ScheduleOccurrence.schedule_key
+                == self._platform_schedule_key(NOTION_DONE_CLEANUP_SERVICE_ID)
+            )
+            .order_by(ScheduleOccurrence.scheduled_for_at.desc(), ScheduleOccurrence.id.desc())
+            .limit(1)
+        )
+        state = self.db.get(
+            ScheduleRuntimeState,
+            self._platform_schedule_key(NOTION_DONE_CLEANUP_SERVICE_ID),
+        )
+        last_run_at = (
+            latest_occurrence.ended_at or latest_occurrence.started_at
+            if latest_occurrence is not None
+            else None
+        )
         return {
             "id": NOTION_DONE_CLEANUP_SCHEDULE_ID,
             "schedule_kind": "platform",
@@ -168,10 +250,10 @@ class SchedulerService:
             "input_json": {},
             "timezone": NOTION_DONE_CLEANUP_TIMEZONE,
             "next_run_at": getattr(job, "next_run_time", None),
-            "last_run_at": self.platform_last_run_at,
-            "last_run_status": self.platform_last_run_status,
-            "created_at": self.platform_started_at,
-            "updated_at": self.platform_last_run_at or self.platform_started_at,
+            "last_run_at": last_run_at,
+            "last_run_status": latest_occurrence.status if latest_occurrence is not None else None,
+            "created_at": state.created_at if state is not None else self.platform_started_at,
+            "updated_at": last_run_at or (state.updated_at if state is not None else self.platform_started_at),
         }
 
     def create_from_manifest(self, skill: Skill) -> SkillSchedule:
@@ -203,6 +285,7 @@ class SchedulerService:
         )
         self.db.add(schedule)
         self.db.flush()
+        self._set_schedule_state(schedule, active_since_at=None)
         return schedule
 
     def update_schedule(self, schedule: SkillSchedule, payload: ScheduleUpdate) -> SkillSchedule:
@@ -219,12 +302,19 @@ class SchedulerService:
             "timezone": schedule.timezone,
             "next_run_at": schedule.next_run_at,
         }
+        previous_fingerprint = self._schedule_definition_fingerprint(schedule)
         schedule.name = payload.name
         schedule.schedule_type = schedule_data.type
         schedule.schedule_json = schedule_data.model_dump(exclude_none=True)
         schedule.input_json = schedule_data.input
         schedule.timezone = schedule_data.timezone
+        definition_changed = previous_fingerprint != self._schedule_definition_fingerprint(schedule)
         try:
+            if definition_changed:
+                self._set_schedule_state(
+                    schedule,
+                    active_since_at=utc_now() if schedule.status == "active" else None,
+                )
             if schedule.status == "active":
                 self.register_job(schedule, commit=False)
             self.db.commit()
@@ -248,6 +338,7 @@ class SchedulerService:
         self.remove_job(schedule.id)
         schedule.status = "paused"
         schedule.next_run_at = None
+        self._set_schedule_state(schedule, active_since_at=None)
         self.db.commit()
         self.db.refresh(schedule)
         return schedule
@@ -258,6 +349,7 @@ class SchedulerService:
             raise ScheduleError("Only paused service schedules can be resumed")
         self._validate_service_ready(schedule.skill, schedule.input_json)
         schedule.status = "active"
+        self._set_schedule_state(schedule, active_since_at=utc_now())
         try:
             self.register_job(schedule)
         except Exception as exc:
@@ -280,6 +372,7 @@ class SchedulerService:
                 replace_existing=True,
                 max_instances=1,
                 coalesce=True,
+                misfire_grace_time=None,
             )
             schedule.next_run_at = getattr(job, "next_run_time", None)
         if commit:
@@ -314,6 +407,9 @@ class SchedulerService:
             return CronTrigger(day_of_week=weekday, hour=hour, minute=minute, timezone=schedule.timezone)
         if schedule.schedule_type == "interval":
             kwargs = {data["unit"]: data["every"], "timezone": schedule.timezone}
+            state = self._ensure_schedule_state(schedule)
+            if state.interval_anchor_at is not None:
+                kwargs["start_date"] = self._as_utc(state.interval_anchor_at)
             if IntervalTrigger is None:
                 return {"type": "interval", **kwargs}
             return IntervalTrigger(**kwargs)
@@ -330,18 +426,86 @@ class SchedulerService:
             schedule = db.get(SkillSchedule, schedule_id)
             if schedule is None or schedule.status != "active":
                 return None
-            try:
-                return service.run_scheduled_service(schedule)
-            except Exception as exc:
-                schedule.last_run_at = utc_now()
-                schedule.last_run_status = "failed"
-                db.commit()
-                print(f"Scheduled service run failed for schedule {schedule_id}: {exc}")
+            now = utc_now()
+            state = service._ensure_schedule_state(schedule, now=now)
+            scheduled_for_at = service._latest_due_at(schedule, state, now)
+            if scheduled_for_at is None:
                 return None
+            occurrence = service._claim_occurrence(
+                schedule_key=service._skill_schedule_key(schedule.id),
+                definition_fingerprint=state.definition_fingerprint,
+                scheduled_for_at=scheduled_for_at,
+                trigger_reason="automatic",
+            )
+            if occurrence is None:
+                return None
+            return service._execute_claimed_schedule_occurrence(schedule, occurrence)
 
-    def run_scheduled_service(self, schedule: SkillSchedule) -> SkillRun:
+    def execute_claimed_schedule_occurrence(self, occurrence_id: int) -> SkillRun | None:
+        with self.session_factory() as db:
+            service = SchedulerService(
+                db,
+                scheduler=self.scheduler,
+                session_factory=self.session_factory,
+                project_root=self.project_root,
+            )
+            occurrence = db.get(ScheduleOccurrence, occurrence_id)
+            if occurrence is None or occurrence.status != "claimed":
+                return None
+            schedule_id = self._schedule_id_from_key(occurrence.schedule_key)
+            schedule = db.get(SkillSchedule, schedule_id) if schedule_id is not None else None
+            if schedule is None or schedule.status != "active":
+                service._finish_occurrence(
+                    occurrence,
+                    "failed",
+                    error_message="Schedule is no longer active",
+                )
+                return None
+            return service._execute_claimed_schedule_occurrence(schedule, occurrence)
+
+    def _execute_claimed_schedule_occurrence(
+        self,
+        schedule: SkillSchedule,
+        occurrence: ScheduleOccurrence,
+    ) -> SkillRun | None:
+        occurrence.status = "running"
+        occurrence.started_at = utc_now()
+        self.db.commit()
+        try:
+            run = self.run_scheduled_service(
+                schedule,
+                schedule_occurrence_key=occurrence.occurrence_key,
+                scheduled_for_at=self._as_utc(occurrence.scheduled_for_at),
+                schedule_trigger=occurrence.trigger_reason,
+            )
+        except Exception as exc:
+            schedule.last_run_at = utc_now()
+            schedule.last_run_status = "failed"
+            self._finish_occurrence(occurrence, "failed", error_message=str(exc))
+            print(f"Scheduled service run failed for schedule {schedule.id}: {exc}")
+            return None
+        occurrence.skill_run_id = run.id
+        self._finish_occurrence(occurrence, run.status, error_message=run.error_message)
+        self.db.refresh(run)
+        return run
+
+    def run_scheduled_service(
+        self,
+        schedule: SkillSchedule,
+        *,
+        schedule_occurrence_key: str | None = None,
+        scheduled_for_at: datetime | None = None,
+        schedule_trigger: str | None = None,
+    ) -> SkillRun:
         self._validate_service(schedule.skill)
-        run = self._run_service_with_checks(schedule.skill, schedule.input_json, schedule.id)
+        run = self._run_service_with_checks(
+            schedule.skill,
+            schedule.input_json,
+            schedule.id,
+            schedule_occurrence_key=schedule_occurrence_key,
+            scheduled_for_at=scheduled_for_at,
+            schedule_trigger=schedule_trigger,
+        )
         schedule.last_run_at = run.ended_at or run.started_at or utc_now()
         schedule.last_run_status = run.status
         self.db.commit()
@@ -353,18 +517,49 @@ class SchedulerService:
         skill: Skill,
         input_json: dict[str, Any],
         schedule_id: int,
+        *,
+        schedule_occurrence_key: str | None = None,
+        scheduled_for_at: datetime | None = None,
+        schedule_trigger: str | None = None,
     ) -> SkillRun:
         if skill.status != "installed":
-            return self._blocked_run(skill, input_json, schedule_id, "Only installed services can run")
+            return self._blocked_run(
+                skill,
+                input_json,
+                schedule_id,
+                "Only installed services can run",
+                schedule_occurrence_key=schedule_occurrence_key,
+                scheduled_for_at=scheduled_for_at,
+                schedule_trigger=schedule_trigger,
+            )
         if skill.runtime != "service":
-            return self._blocked_run(skill, input_json, schedule_id, "Only services can run from schedules")
+            return self._blocked_run(
+                skill,
+                input_json,
+                schedule_id,
+                "Only services can run from schedules",
+                schedule_occurrence_key=schedule_occurrence_key,
+                scheduled_for_at=scheduled_for_at,
+                schedule_trigger=schedule_trigger,
+            )
         permission_decision = PermissionService(self.db, project_root=self.project_root).can_run(skill)
         if not permission_decision.allowed:
-            return self._blocked_run(skill, input_json, schedule_id, permission_decision.reason)
+            return self._blocked_run(
+                skill,
+                input_json,
+                schedule_id,
+                permission_decision.reason,
+                schedule_occurrence_key=schedule_occurrence_key,
+                scheduled_for_at=scheduled_for_at,
+                schedule_trigger=schedule_trigger,
+            )
         return ServiceRuntimeService(self.db, project_root=self.project_root).run(
             skill,
             input_json,
             schedule_id=schedule_id,
+            schedule_occurrence_key=schedule_occurrence_key,
+            scheduled_for_at=scheduled_for_at,
+            schedule_trigger=schedule_trigger,
         )
 
     def _blocked_run(
@@ -373,6 +568,10 @@ class SchedulerService:
         input_json: dict[str, Any],
         schedule_id: int,
         reason: str,
+        *,
+        schedule_occurrence_key: str | None = None,
+        scheduled_for_at: datetime | None = None,
+        schedule_trigger: str | None = None,
     ) -> SkillRun:
         run = SkillRun(
             skill_id=skill.id,
@@ -384,12 +583,415 @@ class SchedulerService:
             error_message=reason,
             invocation_source="schedule",
             source_schedule_id=schedule_id,
+            schedule_occurrence_key=schedule_occurrence_key,
+            scheduled_for_at=scheduled_for_at,
+            schedule_trigger=schedule_trigger,
             initiating_action=f"Scheduled service run {schedule_id}",
         )
         self.db.add(run)
         self.db.commit()
         self.db.refresh(run)
         return run
+
+    def queue_startup_catchups(self, startup_at: datetime) -> None:
+        if self.scheduler is None:
+            return
+        schedules = self.db.scalars(
+            select(SkillSchedule)
+            .join(Skill, Skill.id == SkillSchedule.skill_id)
+            .where(SkillSchedule.status == "active")
+            .where(Skill.runtime == "service")
+        ).all()
+        for schedule in schedules:
+            state = self._ensure_schedule_state(schedule, now=startup_at)
+            scheduled_for_at = self._latest_due_at(schedule, state, startup_at)
+            if scheduled_for_at is None:
+                continue
+            occurrence = self._claim_occurrence(
+                schedule_key=self._skill_schedule_key(schedule.id),
+                definition_fingerprint=state.definition_fingerprint,
+                scheduled_for_at=scheduled_for_at,
+                trigger_reason="startup_catch_up",
+            )
+            if occurrence is not None:
+                self._queue_claimed_occurrence(
+                    self.execute_claimed_schedule_occurrence,
+                    occurrence,
+                )
+
+        platform_state = self._ensure_platform_state(startup_at)
+        platform_due_at = self._latest_platform_due_at(platform_state, startup_at)
+        if platform_due_at is None:
+            return
+        platform_occurrence = self._claim_occurrence(
+            schedule_key=self._platform_schedule_key(NOTION_DONE_CLEANUP_SERVICE_ID),
+            definition_fingerprint=platform_state.definition_fingerprint,
+            scheduled_for_at=platform_due_at,
+            trigger_reason="startup_catch_up",
+        )
+        if platform_occurrence is not None:
+            self._queue_claimed_occurrence(
+                self.execute_claimed_platform_occurrence,
+                platform_occurrence,
+            )
+
+    def _queue_claimed_occurrence(self, func: Any, occurrence: ScheduleOccurrence) -> None:
+        try:
+            self.scheduler.add_job(
+                func,
+                trigger="date",
+                id=f"startup_schedule_occurrence_{occurrence.id}",
+                args=[occurrence.id],
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=None,
+            )
+        except Exception as exc:
+            self._finish_occurrence(
+                occurrence,
+                "failed",
+                error_message=f"Startup catch-up could not be queued: {exc}",
+            )
+
+    def recover_interrupted_occurrences(self, recovered_at: datetime) -> None:
+        interrupted = self.db.scalars(
+            select(ScheduleOccurrence).where(ScheduleOccurrence.status.in_({"claimed", "running"}))
+        ).all()
+        for occurrence in interrupted:
+            occurrence.status = "failed"
+            occurrence.ended_at = recovered_at
+            occurrence.error_message = (
+                "Eidolon restarted after this occurrence was claimed; it will not be retried."
+            )
+
+        interrupted_runs = self.db.scalars(
+            select(SkillRun)
+            .where(SkillRun.invocation_source == "schedule")
+            .where(SkillRun.status.in_({"pending", "running"}))
+            .where(SkillRun.ended_at.is_(None))
+        ).all()
+        interrupted_skill_ids: set[int] = set()
+        for run in interrupted_runs:
+            run.status = "failed"
+            run.ended_at = recovered_at
+            run.error_message = (
+                "Eidolon restarted while this scheduled run was active; it will not be retried."
+            )
+            interrupted_skill_ids.add(run.skill_id)
+        if interrupted_skill_ids:
+            self.db.execute(
+                delete(SkillOperationLock)
+                .where(SkillOperationLock.skill_id.in_(interrupted_skill_ids))
+                .where(SkillOperationLock.operation == "run")
+            )
+        if interrupted or interrupted_runs:
+            self.db.commit()
+
+    def _claim_occurrence(
+        self,
+        *,
+        schedule_key: str,
+        definition_fingerprint: str,
+        scheduled_for_at: datetime,
+        trigger_reason: str,
+    ) -> ScheduleOccurrence | None:
+        scheduled_for_at = self._as_utc(scheduled_for_at)
+        occurrence_key = self._occurrence_key(
+            schedule_key,
+            definition_fingerprint,
+            scheduled_for_at,
+        )
+        occurrence = ScheduleOccurrence(
+            occurrence_key=occurrence_key,
+            schedule_key=schedule_key,
+            definition_fingerprint=definition_fingerprint,
+            scheduled_for_at=scheduled_for_at,
+            trigger_reason=trigger_reason,
+            status="claimed",
+        )
+        self.db.add(occurrence)
+        try:
+            self.db.commit()
+        except IntegrityError:
+            self.db.rollback()
+            return None
+        self.db.refresh(occurrence)
+        return occurrence
+
+    def _finish_occurrence(
+        self,
+        occurrence: ScheduleOccurrence,
+        status: str,
+        *,
+        error_message: str | None = None,
+    ) -> None:
+        occurrence.status = status
+        occurrence.ended_at = utc_now()
+        occurrence.error_message = error_message
+        self.db.commit()
+        self.db.refresh(occurrence)
+
+    def _ensure_schedule_state(
+        self,
+        schedule: SkillSchedule,
+        *,
+        now: datetime | None = None,
+    ) -> ScheduleRuntimeState:
+        now = self._as_utc(now or utc_now())
+        schedule_key = self._skill_schedule_key(schedule.id)
+        fingerprint = self._schedule_definition_fingerprint(schedule)
+        state = self.db.get(ScheduleRuntimeState, schedule_key)
+        if state is None:
+            active_since_at = None
+            if schedule.status == "active":
+                active_since_at = self._as_utc(
+                    schedule.last_run_at or schedule.updated_at or schedule.created_at
+                )
+            state = ScheduleRuntimeState(
+                schedule_key=schedule_key,
+                definition_fingerprint=fingerprint,
+                active_since_at=active_since_at,
+                interval_anchor_at=self._legacy_interval_anchor(schedule, active_since_at),
+            )
+            self.db.add(state)
+            self.db.commit()
+            self.db.refresh(state)
+            return state
+        if state.definition_fingerprint != fingerprint:
+            self._set_schedule_state(
+                schedule,
+                active_since_at=now if schedule.status == "active" else None,
+            )
+            self.db.commit()
+            self.db.refresh(state)
+        elif schedule.status == "active" and state.active_since_at is None:
+            self._set_schedule_state(schedule, active_since_at=now)
+            self.db.commit()
+            self.db.refresh(state)
+        return state
+
+    def _set_schedule_state(
+        self,
+        schedule: SkillSchedule,
+        *,
+        active_since_at: datetime | None,
+    ) -> ScheduleRuntimeState:
+        schedule_key = self._skill_schedule_key(schedule.id)
+        state = self.db.get(ScheduleRuntimeState, schedule_key)
+        if state is None:
+            state = ScheduleRuntimeState(
+                schedule_key=schedule_key,
+                definition_fingerprint=self._schedule_definition_fingerprint(schedule),
+            )
+            self.db.add(state)
+        state.definition_fingerprint = self._schedule_definition_fingerprint(schedule)
+        state.active_since_at = self._as_utc(active_since_at) if active_since_at else None
+        state.interval_anchor_at = (
+            self._as_utc(active_since_at) + self._interval_delta(schedule)
+            if active_since_at is not None and schedule.schedule_type == "interval"
+            else None
+        )
+        return state
+
+    def _ensure_platform_state(self, now: datetime) -> ScheduleRuntimeState:
+        schedule_key = self._platform_schedule_key(NOTION_DONE_CLEANUP_SERVICE_ID)
+        fingerprint = self._platform_definition_fingerprint()
+        state = self.db.get(ScheduleRuntimeState, schedule_key)
+        if state is None:
+            state = ScheduleRuntimeState(
+                schedule_key=schedule_key,
+                definition_fingerprint=fingerprint,
+                active_since_at=self._as_utc(now),
+            )
+            self.db.add(state)
+            self.db.commit()
+            self.db.refresh(state)
+        elif state.definition_fingerprint != fingerprint:
+            state.definition_fingerprint = fingerprint
+            state.active_since_at = self._as_utc(now)
+            state.interval_anchor_at = None
+            self.db.commit()
+            self.db.refresh(state)
+        return state
+
+    def _latest_due_at(
+        self,
+        schedule: SkillSchedule,
+        state: ScheduleRuntimeState,
+        now: datetime,
+    ) -> datetime | None:
+        active_since_at = (
+            self._as_utc(state.active_since_at) if state.active_since_at is not None else None
+        )
+        now = self._as_utc(now)
+        if active_since_at is None or active_since_at > now:
+            return None
+        if schedule.schedule_type == "interval":
+            if state.interval_anchor_at is None:
+                return None
+            anchor = self._as_utc(state.interval_anchor_at)
+            if anchor > now:
+                return None
+            interval = self._interval_delta(schedule)
+            elapsed = now - anchor
+            return anchor + interval * int(elapsed / interval)
+        trigger = self.build_trigger(schedule)
+        horizon = timedelta(days=2 if schedule.schedule_type == "daily" else 8)
+        return self._latest_trigger_due_at(trigger, active_since_at, now, horizon)
+
+    def _latest_platform_due_at(
+        self,
+        state: ScheduleRuntimeState,
+        now: datetime,
+    ) -> datetime | None:
+        if state.active_since_at is None:
+            return None
+        active_since_at = self._as_utc(state.active_since_at)
+        now = self._as_utc(now)
+        if active_since_at > now:
+            return None
+        hour, minute = self._parse_time(NOTION_DONE_CLEANUP_TIME)
+        if CronTrigger is None:
+            trigger: Any = {
+                "type": "daily",
+                "hour": hour,
+                "minute": minute,
+                "timezone": NOTION_DONE_CLEANUP_TIMEZONE,
+            }
+        else:
+            trigger = CronTrigger(
+                hour=hour,
+                minute=minute,
+                timezone=NOTION_DONE_CLEANUP_TIMEZONE,
+            )
+        return self._latest_trigger_due_at(
+            trigger,
+            active_since_at,
+            now,
+            timedelta(days=2),
+        )
+
+    def _latest_trigger_due_at(
+        self,
+        trigger: Any,
+        active_since_at: datetime,
+        now: datetime,
+        horizon: timedelta,
+    ) -> datetime | None:
+        search_from = max(active_since_at, now - horizon)
+        if hasattr(trigger, "get_next_fire_time"):
+            candidate = trigger.get_next_fire_time(None, search_from)
+            latest: datetime | None = None
+            while candidate is not None and self._as_utc(candidate) <= now:
+                candidate_utc = self._as_utc(candidate)
+                if candidate_utc >= active_since_at:
+                    latest = candidate_utc
+                candidate = trigger.get_next_fire_time(candidate, candidate)
+            return latest
+        return self._latest_mapping_trigger_due_at(trigger, active_since_at, now)
+
+    def _latest_mapping_trigger_due_at(
+        self,
+        trigger: dict[str, Any],
+        active_since_at: datetime,
+        now: datetime,
+    ) -> datetime | None:
+        timezone = ZoneInfo(str(trigger["timezone"]))
+        local_now = now.astimezone(timezone)
+        days_back = 0
+        if trigger["type"] == "weekly":
+            days_back = (local_now.weekday() - int(trigger["day_of_week"])) % 7
+        local_date = local_now.date() - timedelta(days=days_back)
+        local_due = datetime(
+            local_date.year,
+            local_date.month,
+            local_date.day,
+            int(trigger["hour"]),
+            int(trigger["minute"]),
+            tzinfo=timezone,
+        )
+        due_at = local_due.astimezone(UTC)
+        if due_at > now:
+            due_at -= timedelta(days=7 if trigger["type"] == "weekly" else 1)
+        return due_at if due_at >= active_since_at else None
+
+    def _legacy_interval_anchor(
+        self,
+        schedule: SkillSchedule,
+        active_since_at: datetime | None,
+    ) -> datetime | None:
+        if schedule.schedule_type != "interval" or active_since_at is None:
+            return None
+        if schedule.next_run_at is not None:
+            return self._as_utc(schedule.next_run_at)
+        return self._as_utc(active_since_at) + self._interval_delta(schedule)
+
+    def _interval_delta(self, schedule: SkillSchedule) -> timedelta:
+        data = schedule.schedule_json
+        return timedelta(**{data["unit"]: data["every"]})
+
+    def _schedule_definition_fingerprint(self, schedule: SkillSchedule) -> str:
+        return self._fingerprint(
+            {
+                "schedule_type": schedule.schedule_type,
+                "schedule": schedule.schedule_json,
+                "input": schedule.input_json,
+                "timezone": schedule.timezone,
+            }
+        )
+
+    def _platform_definition_fingerprint(self) -> str:
+        return self._fingerprint(
+            {
+                "service_id": NOTION_DONE_CLEANUP_SERVICE_ID,
+                "type": "daily",
+                "time": NOTION_DONE_CLEANUP_TIME,
+                "timezone": NOTION_DONE_CLEANUP_TIMEZONE,
+                "input": {},
+            }
+        )
+
+    @staticmethod
+    def _fingerprint(value: dict[str, Any]) -> str:
+        payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _occurrence_key(
+        schedule_key: str,
+        definition_fingerprint: str,
+        scheduled_for_at: datetime,
+    ) -> str:
+        identity = (
+            f"{schedule_key}:{definition_fingerprint}:"
+            f"{scheduled_for_at.astimezone(UTC).isoformat(timespec='microseconds')}"
+        )
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _skill_schedule_key(schedule_id: int) -> str:
+        return f"skill:{schedule_id}"
+
+    @staticmethod
+    def _platform_schedule_key(service_id: str) -> str:
+        return f"platform:{service_id}"
+
+    @staticmethod
+    def _schedule_id_from_key(schedule_key: str) -> int | None:
+        prefix, separator, raw_id = schedule_key.partition(":")
+        if prefix != "skill" or not separator:
+            return None
+        try:
+            return int(raw_id)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _as_utc(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
     def _validate_service(self, skill: Skill) -> None:
         if skill.status != "installed":

@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../api/client";
 import ApprovalRequestsPage from "./ApprovalRequestsPage";
@@ -15,6 +15,19 @@ const permissionPolicy = {
   blocked: ["Shell, subprocess, and arbitrary command execution."],
   web_app: { supported: ["scripts"], blocked: ["popups"] },
 };
+
+beforeEach(() => {
+  const unavailable = () => Promise.reject(new Error("not configured"));
+  vi.spyOn(api, "getGitHubConnection").mockImplementation(unavailable);
+  vi.spyOn(api, "getAtlasStatus").mockImplementation(unavailable);
+  vi.spyOn(api, "getNotionConnection").mockImplementation(unavailable);
+  vi.spyOn(api, "getGoogleOAuthClient").mockImplementation(unavailable);
+  vi.spyOn(api, "getGoogleCalendarConnection").mockImplementation(unavailable);
+  vi.spyOn(api, "getGmailConnection").mockImplementation(unavailable);
+  vi.spyOn(api, "getTelegramConnection").mockImplementation(unavailable);
+  vi.spyOn(api, "getTelegramAgentConnection").mockImplementation(unavailable);
+  vi.spyOn(api, "getCodexMcpStatus").mockImplementation(unavailable);
+});
 
 afterEach(() => {
   cleanup();
@@ -350,6 +363,19 @@ describe("Google Calendar OAuth connection", () => {
       updated_at: "2026-08-29T12:00:00Z",
       error_type: null,
     });
+    vi.spyOn(api, "getTelegramAgentConnection").mockResolvedValue({
+      provider: "telegram",
+      connected: false,
+      status: "disconnected",
+      bot_username: null,
+      paired_chat_id: null,
+      paired_user_id: null,
+      pairing_expires_at: null,
+      last_validated_at: null,
+      created_at: null,
+      updated_at: null,
+      error_type: null,
+    });
     vi.spyOn(api, "getAtlasStatus").mockRejectedValue(new Error("not running"));
     vi.spyOn(api, "getNotionConnection").mockRejectedValue(new Error("not connected"));
     vi.spyOn(api, "getCodexMcpStatus").mockRejectedValue(new Error("not installed"));
@@ -359,7 +385,11 @@ describe("Google Calendar OAuth connection", () => {
     expect(await screen.findByRole("heading", { name: "Google connection" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Google Calendar" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Gmail" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Telegram Notification + Approval bot" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Telegram" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Notification / Approval bot" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Agent bot" })).toBeTruthy();
+    expect(screen.getByLabelText("Replacement Notification/Approval bot token")).toBeTruthy();
+    expect(screen.getByLabelText("Agent bot token")).toBeTruthy();
     expect(screen.getByText("person@example.com")).toBeTruthy();
     expect(screen.getByText("mail@example.com")).toBeTruthy();
     expect(

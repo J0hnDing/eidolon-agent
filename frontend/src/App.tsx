@@ -106,6 +106,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/chat" replace />} />
             <Route path="/chat" element={<ChatPage />} />
+            <Route path="/act" element={<Navigate to="/chat" replace />} />
             <Route path="/memory" element={<MemoryPage />} />
             <Route path="/skills" element={<SkillsPage />} />
             <Route path="/functions" element={<FunctionsPage />} />

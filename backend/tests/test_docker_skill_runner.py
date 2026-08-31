@@ -115,9 +115,11 @@ def test_private_function_capability_command_uses_internal_network_and_relay_url
         capability_token="ephemeral-secret",
         network_mode_override="private-function-network",
         backend_url_override="http://trusted-function-relay:8000",
+        schedule_occurrence_key="c" * 64,
     )
 
     assert command[command.index("--network") + 1] == "private-function-network"
+    assert f"PERSONAL_AGENT_SCHEDULE_IDEMPOTENCY_KEY={'c' * 64}" in command
     assert "api.github.com:127.0.0.1" in command
     assert "github.com:127.0.0.1" in command
     assert "api.notion.com:127.0.0.1" in command

@@ -37,10 +37,13 @@ Settings section navigation stays visible while scrolling and becomes horizontal
 
 ## Chat Page
 
-Chat supports explicit modes:
+Chat supports three explicit, conversation-owned modes:
 
 - `chat`: direct conversation only.
 - `project`: writes the initial message unchanged through the one-time intent placeholder, then starts a resumable `pm_plan_build` session for a reusable skill request. The placeholder does not call Codex. The session may ask a clarification question or reject the request before any blueprint, permission, or task DAG artifacts are created; the next reply in the same chat resumes the same generation request and Codex thread.
+- `act`: binds the local conversation to a backend-owned durable Act session and renders its queued/running/terminal turns in the shared transcript.
+
+Conversation mode is fixed after creation. The sidebar provides separate New Chat, New Project, and New Act actions, and every conversation row plus the transcript header carries a mode badge. There is no in-conversation mode switch and no separate Act page; the legacy `/act` route redirects to `/chat`.
 
 Build-time and runtime approvals are rendered inline in the chat transcript. Approval messages must remain in chat history when the user navigates away and returns. Project chat synchronizes its conversation-scoped generation request, linked agent run, proposed skill, and latest build/runtime approvals from the backend, so a response lost after a committed request or a decision made on the global Approval Requests page is recovered inline without duplicating messages.
 
@@ -51,7 +54,7 @@ Users can delete any chat conversation from the chat list. Deletion removes the 
 
 Approving a Project build-time request from either its inline chat card or the global Approval Requests page continues the linked agent run automatically. A separate Agent Run resume click is reserved for quota pauses, recoverable workflow failures, or explicit user-action blockers rather than ordinary permission approval.
 
-`ChatPage` retains route-level API orchestration. `features/chat/useChatConversations.ts` owns local conversation selection, creation, deletion, drafts, modes, and message transitions; it persists the synthesized first conversation before accepting edits. `features/chat/ChatWorkspace.tsx` owns the sidebar, mode selector, transcript, approval cards, and composer presentation.
+`ChatPage` retains route-level API orchestration, imports active backend Act sessions, and polls only the selected Act conversation while its turn is queued or running. Deleting an Act conversation archives its backend session first; active work can be cancelled from the shared composer. `features/chat/useChatConversations.ts` owns local conversation selection, creation, deletion, drafts, fixed modes, Act-session bindings, and message transitions; it persists the synthesized first conversation before accepting edits. `features/chat/ChatWorkspace.tsx` owns the sidebar, fixed mode display, transcript, approval cards, and composer presentation.
 
 ## Skills Page
 
@@ -114,7 +117,7 @@ The Integrations subpage also includes one shared Notion connection panel. The c
 
 One Google connection panel owns a single write-only OAuth client ID and secret plus the Calendar and Gmail redirect URIs. Within it, Calendar and Gmail have separate sanitized status, verified account, Connect/Choose another account, and Disconnect controls. The shared client fields are disabled while either service is connected; replacing or removing it requires both grants to be disconnected. Starting either service leaves the page for that service's Google consent flow, and callbacks return only a bounded result marker. Calendar and Gmail never share a refresh token, scope grant, or account identity and may use different accounts. The panel documents Google's restricted `gmail.modify` scope. There is no calendar, event, synchronization, webhook, cache, secondary-calendar, or schedule UI.
 
-The Telegram panel shows sanitized bot/pairing state, one-time private-chat instructions, replacement/disconnect controls, and the complete-input cloud privacy disclosure. It distinguishes `Awaiting private chat` from `Pairing expired`, and only reports connected after both private chat and user IDs are bound.
+One Telegram panel contains separate **Notification / Approval bot** and **Agent bot** subsections. Each has its own write-only token, sanitized bot/pairing state, one-time private-chat instructions, and replacement/disconnect controls. The notification bot subsection includes the complete-input cloud privacy disclosure. Pairing distinguishes `Awaiting private chat` from `Pairing expired`, and only reports connected after both private chat and user IDs are bound.
 
 User-facing timestamps are rendered in the browser's system timezone with a short timezone label. Backend and SQLite timestamps without an explicit offset are treated as UTC before conversion; persisted timestamps and scheduler bookkeeping remain UTC internally. On an Eastern-time host this renders EDT or EST according to daylight-saving rules.
 

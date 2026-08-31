@@ -32,6 +32,7 @@ The backend is the safety boundary. The frontend may disable buttons or show war
 The frontend is a local control UI. It exposes:
 
 - Chat with chat/project modes;
+- persistent Act sessions backed by local Codex App Server threads and a controlled shared workspace;
 - Memory CRUD;
 - Skills list and skill detail;
 - Schedules;

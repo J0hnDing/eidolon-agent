@@ -4,7 +4,7 @@ Scheduling uses APScheduler through `SchedulerService` and is exclusive to servi
 
 Generated `service` skills are bounded JSON stdin/stdout endpoints with exactly one required `SkillSchedule`. Functions and web applications cannot declare or create schedules. A service is not a function-catalog entry, an MCP tool, or a callable target for another agent or skill.
 
-The backend also registers the platform-owned `backend.notion.todo.cleanup_done` service every time it starts. It runs daily at 03:00 `America/Toronto`, uses a stable replacement job id, coalesces missed runs, and permits only one concurrent instance. `GET /schedules` includes a read-only platform projection with next/last state. It is not a skill, a function-catalog entry, or a mutable `SkillSchedule` row.
+The backend also registers the platform-owned `backend.notion.todo.cleanup_done` service every time it starts. It runs daily at 03:00 `America/Toronto`, uses a stable replacement job id, coalesces missed runs, and permits only one concurrent instance. `GET /schedules` includes a read-only platform projection with durable next/last state. It is not a skill, a function-catalog entry, or a mutable `SkillSchedule` row.
 
 Startup also reconciles checked-in installed skill packages before loading scheduler rows. The installed `weekly_report_service` therefore reliably appears with its one initially paused schedule: Monday at 08:00 `America/Toronto`. It deterministically calls `github_atlas_project_scout` with `{limit: 10, period: "weekly", atlas_keywords: []}`, validates the exact repository output, formats native Notion blocks, and calls `notion.report.create`. It never calls Codex directly; any bounded analysis remains owned by the Scout function. Scout, validation, or Notion failures fail the service run rather than falling back to model-generated content.
 
@@ -41,3 +41,20 @@ Every run rechecks that:
 The runner creates an attributed `skill_runs` row with `invocation_source = schedule` and `source_schedule_id`. Its ephemeral runtime capability may call only functions, integrations, and Codex declared by the active manifest. The service itself remains unavailable as a callable endpoint outside the scheduler.
 
 Top-level `status: "partial"` or `status: "failed"` output remains a matching backend run result instead of being treated as success merely because the process exited with valid JSON.
+
+## Latest Missed Occurrence
+
+Eidolon gives every intended scheduled time a deterministic idempotency key derived from the stable schedule key, the current schedule-definition fingerprint, and the intended UTC fire time. A durable `schedule_occurrences` claim is committed before the service is invoked. That claim is the at-most-once boundary: an occurrence is never invoked again after it has been claimed, whether its result is succeeded, partial, failed, blocked, or interrupted.
+
+On startup, Eidolon computes the latest intended occurrence at or before one shared startup timestamp for every active generated-service and platform schedule. If that exact occurrence has no durable claim, Eidolon queues one immediate `startup_catch_up` execution. Older missed occurrences are coalesced and never replayed. Failed or interrupted occurrences are not retried. A later intended occurrence still receives its own key and may run normally.
+
+Activation boundaries prevent unwanted backfill:
+
+- creating a paused schedule does not create occurrences;
+- resuming establishes a new active boundary, so times during the paused period are not run;
+- editing timing, timezone, or input establishes a new definition fingerprint and active boundary;
+- interval schedules persist their first-fire anchor so their intended times do not drift across restarts.
+
+Normal APScheduler callbacks and startup catch-ups use the same claim path, so a startup race cannot invoke the same intended time twice. Explicit Run Now actions remain user-triggered and do not consume or reuse scheduled occurrence keys.
+
+Scheduled `skill_runs` expose `schedule_occurrence_key`, `scheduled_for_at`, and `schedule_trigger`. The same non-secret key is provided to local and Docker service entrypoints as `PERSONAL_AGENT_SCHEDULE_IDEMPOTENCY_KEY` so service code can pass it to an external API that supports idempotency. Because the claim is committed before invocation and failures are never retried, the contract is at most once: a crash can leave an occurrence uncompleted, but cannot cause Eidolon to execute it again.

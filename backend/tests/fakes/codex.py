@@ -186,9 +186,20 @@ class DeterministicCodexStub:
             for path in task_node.get("write_paths", []) or []
             if (output_dir / str(path)).is_file()
         ]
+        parent_paths = {
+            str(path)
+            for parent in context.get("parent_interface_artifacts", []) or []
+            if isinstance(parent, dict)
+            for key in ("created_paths", "updated_paths")
+            for path in parent.get(key, []) or []
+        }
         artifact = {
-            "created_paths": [path for path in paths if path != "manifest.json"],
-            "updated_paths": [path for path in paths if path == "manifest.json"],
+            "created_paths": [
+                path for path in paths if path != "manifest.json" and path not in parent_paths
+            ],
+            "updated_paths": [
+                path for path in paths if path == "manifest.json" or path in parent_paths
+            ],
             "interfaces": {
                 "entrypoint": "app:app" if (output_dir / "app.py").is_file() else "skill.py",
                 "input_schema": plan.get("input_schema") or {},

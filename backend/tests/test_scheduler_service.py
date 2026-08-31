@@ -1,16 +1,16 @@
 import json
 from collections.abc import Generator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import Skill, SkillRun, SkillVersion
+from app.models import ScheduleOccurrence, ScheduleRuntimeState, Skill, SkillRun, SkillVersion
 from app.routers.schedules import list_schedules
 from app.schemas.schedule import SchedulePayload, ScheduleUpdate
 from app.services.scheduler_service import (
@@ -38,7 +38,17 @@ class FakeScheduler:
     def shutdown(self, wait: bool = False) -> None:
         self.running = False
 
-    def add_job(self, func, trigger, id: str, args: list[Any], replace_existing: bool, max_instances: int, coalesce: bool):
+    def add_job(
+        self,
+        func,
+        trigger,
+        id: str,
+        args: list[Any],
+        replace_existing: bool,
+        max_instances: int,
+        coalesce: bool,
+        misfire_grace_time: int | None = None,
+    ):
         self.jobs[id] = {
             "func": func,
             "trigger": trigger,
@@ -46,6 +56,7 @@ class FakeScheduler:
             "replace_existing": replace_existing,
             "max_instances": max_instances,
             "coalesce": coalesce,
+            "misfire_grace_time": misfire_grace_time,
         }
         return FakeJob()
 
@@ -274,7 +285,12 @@ def test_run_now_works_while_service_schedule_is_paused(
     schedule = scheduler.create_from_manifest(skill)
     db_session.commit()
 
-    def fake_run(_skill: Skill, input_json: dict[str, Any], schedule_id: int) -> SkillRun:
+    def fake_run(
+        _skill: Skill,
+        input_json: dict[str, Any],
+        schedule_id: int,
+        **_kwargs: Any,
+    ) -> SkillRun:
         run = SkillRun(
             skill_id=skill.id,
             version_id=skill.active_version_id,
@@ -322,3 +338,259 @@ def test_serialize_generated_schedule_uses_service_identity(tmp_path: Path, db_s
     assert listed[0]["schedule_kind"] == "service"
     assert listed[0]["service_id"] == skill.name
     assert listed[0]["read_only"] is False
+
+
+def test_startup_claims_only_latest_missed_occurrence_once(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill = create_skill(db_session, tmp_path)
+    fake_scheduler = FakeScheduler()
+    scheduler = service(db_session, tmp_path, fake_scheduler)
+    schedule = scheduler.create_from_manifest(skill)
+    schedule.status = "active"
+    scheduler._set_schedule_state(
+        schedule,
+        active_since_at=datetime(2026, 8, 28, 10, 0, tzinfo=UTC),
+    )
+    db_session.commit()
+    startup_at = datetime(2026, 8, 30, 13, 0, tzinfo=UTC)
+
+    scheduler.queue_startup_catchups(startup_at)
+    scheduler.queue_startup_catchups(startup_at)
+
+    occurrences = db_session.scalars(select(ScheduleOccurrence)).all()
+    assert len(occurrences) == 1
+    assert occurrences[0].scheduled_for_at.replace(tzinfo=UTC) == datetime(
+        2026,
+        8,
+        30,
+        12,
+        0,
+        tzinfo=UTC,
+    )
+    assert occurrences[0].trigger_reason == "startup_catch_up"
+    assert occurrences[0].occurrence_key
+    assert f"startup_schedule_occurrence_{occurrences[0].id}" in fake_scheduler.jobs
+
+
+def test_failed_occurrence_is_not_retried_but_next_occurrence_can_run(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill = create_skill(db_session, tmp_path)
+    scheduler = service(db_session, tmp_path)
+    schedule = scheduler.create_from_manifest(skill)
+    schedule.status = "active"
+    scheduler._set_schedule_state(
+        schedule,
+        active_since_at=datetime(2026, 8, 29, 10, 0, tzinfo=UTC),
+    )
+    db_session.commit()
+
+    scheduler.queue_startup_catchups(datetime(2026, 8, 30, 13, 0, tzinfo=UTC))
+    first = db_session.scalar(select(ScheduleOccurrence))
+    assert first is not None
+    first.status = "failed"
+    first.ended_at = datetime(2026, 8, 30, 13, 1, tzinfo=UTC)
+    db_session.commit()
+
+    scheduler.queue_startup_catchups(datetime(2026, 8, 30, 14, 0, tzinfo=UTC))
+    schedule_key = f"skill:{schedule.id}"
+    assert len(
+        db_session.scalars(
+            select(ScheduleOccurrence).where(ScheduleOccurrence.schedule_key == schedule_key)
+        ).all()
+    ) == 1
+
+    scheduler.queue_startup_catchups(datetime(2026, 8, 31, 13, 0, tzinfo=UTC))
+    occurrences = db_session.scalars(
+        select(ScheduleOccurrence)
+        .where(ScheduleOccurrence.schedule_key == schedule_key)
+        .order_by(ScheduleOccurrence.scheduled_for_at)
+    ).all()
+    assert len(occurrences) == 2
+    assert occurrences[1].scheduled_for_at.replace(tzinfo=UTC) == datetime(
+        2026,
+        8,
+        31,
+        12,
+        0,
+        tzinfo=UTC,
+    )
+
+
+def test_automatic_callback_executes_one_claim_for_the_intended_time(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import scheduler_service
+
+    skill = create_skill(db_session, tmp_path)
+    scheduler = service(db_session, tmp_path)
+    schedule = scheduler.create_from_manifest(skill)
+    schedule.status = "active"
+    scheduler._set_schedule_state(
+        schedule,
+        active_since_at=datetime(2026, 8, 30, 10, 0, tzinfo=UTC),
+    )
+    db_session.commit()
+    due_check_at = datetime(2026, 8, 30, 12, 0, 5, tzinfo=UTC)
+    monkeypatch.setattr(scheduler_service, "utc_now", lambda: due_check_at)
+
+    def fake_run(
+        runtime: SchedulerService,
+        target_schedule,
+        **kwargs: Any,
+    ) -> SkillRun:
+        run = SkillRun(
+            skill_id=target_schedule.skill_id,
+            version_id=target_schedule.skill.active_version_id,
+            status="succeeded",
+            input_json=target_schedule.input_json,
+            output_json={"ok": True},
+            started_at=due_check_at,
+            ended_at=due_check_at,
+            invocation_source="schedule",
+            source_schedule_id=target_schedule.id,
+            schedule_occurrence_key=kwargs["schedule_occurrence_key"],
+            scheduled_for_at=kwargs["scheduled_for_at"],
+            schedule_trigger=kwargs["schedule_trigger"],
+        )
+        runtime.db.add(run)
+        runtime.db.commit()
+        runtime.db.refresh(run)
+        target_schedule.last_run_at = run.ended_at
+        target_schedule.last_run_status = run.status
+        runtime.db.commit()
+        return run
+
+    monkeypatch.setattr(SchedulerService, "run_scheduled_service", fake_run)
+
+    first = scheduler.execute_schedule(schedule.id)
+    second = scheduler.execute_schedule(schedule.id)
+
+    assert first is not None
+    assert second is None
+    assert first.schedule_occurrence_key
+    assert first.scheduled_for_at.replace(tzinfo=UTC) == datetime(
+        2026,
+        8,
+        30,
+        12,
+        0,
+        tzinfo=UTC,
+    )
+    assert first.schedule_trigger == "automatic"
+    assert len(db_session.scalars(select(ScheduleOccurrence)).all()) == 1
+
+
+def test_interrupted_claim_is_failed_and_never_retried(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill = create_skill(db_session, tmp_path)
+    scheduler = service(db_session, tmp_path)
+    schedule = scheduler.create_from_manifest(skill)
+    schedule.status = "active"
+    scheduler._set_schedule_state(
+        schedule,
+        active_since_at=datetime(2026, 8, 30, 10, 0, tzinfo=UTC),
+    )
+    db_session.commit()
+    startup_at = datetime(2026, 8, 30, 13, 0, tzinfo=UTC)
+    scheduler.queue_startup_catchups(startup_at)
+
+    scheduler.recover_interrupted_occurrences(startup_at + timedelta(minutes=1))
+    scheduler.queue_startup_catchups(startup_at + timedelta(minutes=2))
+
+    occurrences = db_session.scalars(select(ScheduleOccurrence)).all()
+    assert len(occurrences) == 1
+    assert occurrences[0].status == "failed"
+    assert "will not be retried" in occurrences[0].error_message
+
+
+def test_interval_anchor_remains_stable_across_scheduler_instances(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill = create_skill(
+        db_session,
+        tmp_path,
+        schedule={
+            "type": "interval",
+            "every": 5,
+            "unit": "minutes",
+            "timezone": "UTC",
+            "input": {"hello": "world"},
+        },
+    )
+    scheduler = service(db_session, tmp_path)
+    schedule = scheduler.create_from_manifest(skill)
+    schedule.status = "active"
+    activated_at = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    scheduler._set_schedule_state(schedule, active_since_at=activated_at)
+    db_session.commit()
+
+    state = db_session.get(ScheduleRuntimeState, f"skill:{schedule.id}")
+    assert state is not None
+    assert state.interval_anchor_at.replace(tzinfo=UTC) == activated_at + timedelta(minutes=5)
+
+    rebuilt = service(db_session, tmp_path).build_trigger(schedule)
+    assert rebuilt.start_date == activated_at + timedelta(minutes=5)
+
+
+def test_platform_schedule_uses_durable_once_only_occurrences(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    scheduler = service(db_session, tmp_path)
+    first_start = datetime(2026, 8, 30, 13, 0, tzinfo=UTC)
+    scheduler.register_platform_services(now=first_start)
+
+    scheduler.queue_startup_catchups(first_start)
+    assert db_session.scalar(select(ScheduleOccurrence)) is None
+
+    later_start = datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
+    scheduler.queue_startup_catchups(later_start)
+    occurrence = db_session.scalar(
+        select(ScheduleOccurrence).where(
+            ScheduleOccurrence.schedule_key
+            == f"platform:{NOTION_DONE_CLEANUP_SERVICE_ID}"
+        )
+    )
+    assert occurrence is not None
+    occurrence.status = "failed"
+    occurrence.started_at = later_start
+    occurrence.ended_at = later_start
+    db_session.commit()
+
+    scheduler.queue_startup_catchups(later_start + timedelta(hours=1))
+    occurrences = db_session.scalars(
+        select(ScheduleOccurrence).where(
+            ScheduleOccurrence.schedule_key
+            == f"platform:{NOTION_DONE_CLEANUP_SERVICE_ID}"
+        )
+    ).all()
+    assert len(occurrences) == 1
+
+    listed = service(db_session, tmp_path).serialize_notion_done_cleanup_schedule()
+    assert listed["last_run_status"] == "failed"
+    assert listed["last_run_at"].replace(tzinfo=UTC) == later_start
+
+
+def test_paused_schedule_never_claims_a_startup_occurrence(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill = create_skill(db_session, tmp_path)
+    scheduler = service(db_session, tmp_path)
+    scheduler.create_from_manifest(skill)
+    db_session.commit()
+
+    scheduler.queue_startup_catchups(datetime(2026, 8, 31, 13, 0, tzinfo=UTC))
+
+    assert db_session.scalar(
+        select(ScheduleOccurrence).where(ScheduleOccurrence.schedule_key.like("skill:%"))
+    ) is None

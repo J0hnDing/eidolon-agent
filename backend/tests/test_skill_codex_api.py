@@ -142,7 +142,7 @@ def test_skill_codex_call_uses_backend_and_requires_runtime_approval(
         db_session,
     )
 
-    assert response.response == "Fake Codex response."
+    assert response.response == "Deterministic Codex response."
     assert response.model == "gpt-5"
     assert response.internet_access is False
 
@@ -225,7 +225,7 @@ def test_function_codex_capability_resolves_caller_from_ephemeral_token(
         db_session,
     )
 
-    assert response.response == "Fake Codex response."
+    assert response.response == "Deterministic Codex response."
     assert response.internet_access is False
 
 

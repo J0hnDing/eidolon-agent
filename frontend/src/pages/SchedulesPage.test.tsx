@@ -47,7 +47,6 @@ describe("SchedulesPage", () => {
     );
 
     expect(await screen.findByText("Daily Notion Done Cleanup")).toBeTruthy();
-    expect(screen.getByText("Eidolon backend")).toBeTruthy();
     expect(screen.getByText("Managed by Eidolon")).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole("button", { name: "Delete" })).toBeNull());
   });

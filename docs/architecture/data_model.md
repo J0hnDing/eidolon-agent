@@ -16,6 +16,14 @@ Stores the single-user Codex invocation routing document. It contains independen
 
 Stores the single host registration state: whether running MCP processes may invoke tools, the fingerprint of the exact Eidolon-owned `mcp_servers.eidolon` table, bounded last-error metadata, and update time. Removal commits `enabled = false` before editing Codex configuration so already-running MCP processes are revoked immediately.
 
+### act_sessions and act_turns
+
+`act_sessions` stores each durable Codex thread id, title, origin, lifecycle status, and timestamps. `act_turns` stores the user message, queued/running/terminal state, live Codex turn id, concise activity, final answer or bounded failure, cancellation request, and optional Telegram delivery target/status. Only queued turns are safe to retain across restart; running rows are recovered as interrupted.
+
+### act_telegram_bindings
+
+Stores the Act bot connection's single selected-session pointer. Disconnect deletes the binding while preserving Act sessions and their shared workspace.
+
 ### memory_facts
 
 Stores explicit user-editable memory facts. Typical categories include interests, goals, preferences, routines, trusted sources, blocked sources, writing style, and risk tolerance.
@@ -56,6 +64,7 @@ Stores bounded function or service-run results:
 - target active version and invocation source
 - caller skill/version for cross-skill calls
 - schedule id or web-application instance attribution when applicable
+- intended schedule time, trigger reason, and deterministic schedule-occurrence idempotency key
 - a hash of the ephemeral caller capability while the run is active
 
 `skill_runs` is intentionally bounded and is not used to represent a persistent web server.
@@ -72,7 +81,7 @@ Calendar and Gmail use separate connection rows, account identities, OAuth refre
 
 ### telegram_bot_connections
 
-Stores role/default selection, sanitized bot identity and status, paired private chat/user ids, persisted update offset, and hashed one-time pairing state. Bot tokens remain in the operating-system secret store.
+Stores role/default selection for the independent notification/approval and Act bots, sanitized bot identity and status, paired private chat/user ids, persisted update offset, and hashed one-time pairing state. Bot tokens remain in the operating-system secret store.
 
 ### invocation_approvals
 
@@ -109,6 +118,12 @@ Backend-enforced local locks for per-skill operation safety. These prevent overl
 ### skill_schedules
 
 Stores exactly one schedule definition for each installed generated service. `skill_id` is unique. Canonical statuses are `active` and `paused`; installed services begin paused. Functions and web applications have no schedule rows. The manifest seeds initial state, while later edits remain backend runtime state across version activation.
+
+### schedule_runtime_states and schedule_occurrences
+
+`schedule_runtime_states` stores the current definition fingerprint, active-since boundary, and stable interval anchor for both generated-service and platform schedules. Paused schedules have no active boundary.
+
+`schedule_occurrences` is the durable at-most-once ledger. Each row has one deterministic key for a schedule definition and intended UTC fire time, plus its trigger reason, status, timestamps, error, and optional resulting `skill_run`. The unique occurrence key is claimed before execution. Every terminal result consumes the occurrence; failed, blocked, partial, and interrupted occurrences are never retried.
 
 ### approval_requests
 

@@ -152,6 +152,9 @@ class FunctionRunContext:
     caller_skill_id: int | None = None
     caller_version_id: int | None = None
     source_schedule_id: int | None = None
+    schedule_occurrence_key: str | None = None
+    scheduled_for_at: datetime | None = None
+    schedule_trigger: str | None = None
     web_app_instance_id: str | None = None
     initiating_action: str | None = None
     capability_token: str | None = None
@@ -319,6 +322,9 @@ class LocalSkillRunner:
             caller_skill_id=context.caller_skill_id,
             caller_version_id=context.caller_version_id,
             source_schedule_id=context.source_schedule_id,
+            schedule_occurrence_key=context.schedule_occurrence_key,
+            scheduled_for_at=context.scheduled_for_at,
+            schedule_trigger=context.schedule_trigger,
             web_app_instance_id=context.web_app_instance_id,
             initiating_action=context.initiating_action,
             function_capability_token_hash=context.capability_token_hash,
@@ -337,7 +343,14 @@ class LocalSkillRunner:
             validate_supported_permissions(manifest)
             entrypoint = self._resolve_entrypoint(skill_dir, manifest.entrypoint)
             self._run_tests(skill_dir, run)
-            self._run_entrypoint(entrypoint, skill_dir, input_json, run, context.capability_token)
+            self._run_entrypoint(
+                entrypoint,
+                skill_dir,
+                input_json,
+                run,
+                context.capability_token,
+                context.schedule_occurrence_key,
+            )
         except (ManifestValidationError, UnsupportedSkillPermissionError, FileNotFoundError) as exc:
             self._finish_run(run, status="blocked", error_message=str(exc))
         except subprocess.TimeoutExpired as exc:
@@ -407,6 +420,7 @@ class LocalSkillRunner:
         input_json: dict[str, Any],
         run: SkillRun,
         capability_token: str | None = None,
+        schedule_occurrence_key: str | None = None,
     ) -> None:
         result = subprocess.run(
             [sys.executable, str(entrypoint)],
@@ -414,7 +428,12 @@ class LocalSkillRunner:
             input=json.dumps(input_json),
             capture_output=True,
             text=True,
-            env=self._skill_env(skill_dir, run.skill_id, capability_token),
+            env=self._skill_env(
+                skill_dir,
+                run.skill_id,
+                capability_token,
+                schedule_occurrence_key,
+            ),
             timeout=self.timeout_seconds,
             shell=False,
         )
@@ -489,12 +508,20 @@ class LocalSkillRunner:
         run.ended_at = utc_now()
         self.db.commit()
 
-    def _skill_env(self, skill_dir: Path, skill_id: int, capability_token: str | None = None) -> dict[str, str]:
+    def _skill_env(
+        self,
+        skill_dir: Path,
+        skill_id: int,
+        capability_token: str | None = None,
+        schedule_occurrence_key: str | None = None,
+    ) -> dict[str, str]:
         env = os.environ.copy()
         env.setdefault("PERSONAL_AGENT_SKILL_ID", str(skill_id))
         env.setdefault("PERSONAL_AGENT_BACKEND_URL", os.getenv("PERSONAL_AGENT_BACKEND_URL", DEFAULT_LOCAL_BACKEND_URL))
         if capability_token is not None:
             env["PERSONAL_AGENT_FUNCTION_CAPABILITY"] = capability_token
+        if schedule_occurrence_key is not None:
+            env["PERSONAL_AGENT_SCHEDULE_IDEMPOTENCY_KEY"] = schedule_occurrence_key
         deps_dir = skill_dir / ".deps"
         python_paths = [str(Path(__file__).resolve().parents[2])]
         if deps_dir.is_dir():
@@ -543,6 +570,9 @@ class DockerSkillRunner:
             caller_skill_id=context.caller_skill_id,
             caller_version_id=context.caller_version_id,
             source_schedule_id=context.source_schedule_id,
+            schedule_occurrence_key=context.schedule_occurrence_key,
+            scheduled_for_at=context.scheduled_for_at,
+            schedule_trigger=context.schedule_trigger,
             web_app_instance_id=context.web_app_instance_id,
             initiating_action=context.initiating_action,
             function_capability_token_hash=context.capability_token_hash,
@@ -576,6 +606,7 @@ class DockerSkillRunner:
                 input_json,
                 run,
                 context.capability_token,
+                context.schedule_occurrence_key,
             )
         except DockerImageBuildError as exc:
             self._finish_run(run, status="blocked", error_message=str(exc))
@@ -608,6 +639,7 @@ class DockerSkillRunner:
         capability_token: str | None = None,
         network_mode_override: str | None = None,
         backend_url_override: str | None = None,
+        schedule_occurrence_key: str | None = None,
     ) -> list[str]:
         network_mode = network_mode_override or (
             "bridge" if manifest is not None and manifest.permissions.network else "none"
@@ -662,6 +694,11 @@ class DockerSkillRunner:
                 if capability_token is not None
                 else []
             ),
+            *(
+                ["-e", f"PERSONAL_AGENT_SCHEDULE_IDEMPOTENCY_KEY={schedule_occurrence_key}"]
+                if schedule_occurrence_key is not None
+                else []
+            ),
             "-v",
             f"{skill_dir.resolve()}:/skill:ro",
             "-v",
@@ -681,6 +718,7 @@ class DockerSkillRunner:
         capability_token: str | None = None,
         network_mode_override: str | None = None,
         backend_url_override: str | None = None,
+        schedule_occurrence_key: str | None = None,
     ) -> list[str]:
         return self.build_base_docker_command(
             skill_dir,
@@ -690,6 +728,7 @@ class DockerSkillRunner:
             capability_token,
             network_mode_override,
             backend_url_override,
+            schedule_occurrence_key,
         ) + ["python", "-m", "pytest", "/skill/tests"]
 
     def build_entrypoint_command(
@@ -702,6 +741,7 @@ class DockerSkillRunner:
         capability_token: str | None = None,
         network_mode_override: str | None = None,
         backend_url_override: str | None = None,
+        schedule_occurrence_key: str | None = None,
     ) -> list[str]:
         relative_entrypoint = entrypoint.relative_to(skill_dir).as_posix()
         return self.build_base_docker_command(
@@ -712,6 +752,7 @@ class DockerSkillRunner:
             capability_token,
             network_mode_override,
             backend_url_override,
+            schedule_occurrence_key,
         ) + ["python", f"/skill/{relative_entrypoint}"]
 
     def _load_manifest(self, skill_dir: Path) -> SkillManifest:
@@ -791,6 +832,7 @@ class DockerSkillRunner:
         input_json: dict[str, Any],
         run: SkillRun,
         capability_token: str | None = None,
+        schedule_occurrence_key: str | None = None,
     ) -> None:
         relay: tuple[str, str] | None = None
         try:
@@ -806,6 +848,7 @@ class DockerSkillRunner:
                     capability_token,
                     relay[0] if relay is not None else None,
                     f"http://{relay[1]}:8000" if relay is not None else None,
+                    schedule_occurrence_key,
                 ),
                 input=json.dumps(input_json),
                 capture_output=True,

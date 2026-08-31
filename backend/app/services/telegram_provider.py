@@ -884,6 +884,7 @@ class InMemoryTelegramOffsetStore:
 
 
 PairingHandler = Callable[[PairingMessage], Any]
+TextMessageHandler = Callable[[dict[str, Any]], Any]
 CallbackHandler = Callable[[TelegramApprovalCallback], Any]
 ErrorHandler = Callable[[Exception], Any]
 
@@ -900,6 +901,7 @@ class TelegramLongPollWorker:
         expected_user_id: int | None = None,
         on_pairing: PairingHandler | None = None,
         on_callback: CallbackHandler | None = None,
+        on_message: TextMessageHandler | None = None,
         on_error: ErrorHandler | None = None,
         poll_timeout: int = TELEGRAM_LONG_POLL_TIMEOUT_SECONDS,
         max_backoff_seconds: float = 60.0,
@@ -914,6 +916,7 @@ class TelegramLongPollWorker:
         self.expected_user_id = expected_user_id
         self.on_pairing = on_pairing
         self.on_callback = on_callback
+        self.on_message = on_message
         self.on_error = on_error
         self.poll_timeout = poll_timeout
         self.max_backoff_seconds = max_backoff_seconds
@@ -953,6 +956,13 @@ class TelegramLongPollWorker:
         if pairing is not None:
             if self.on_pairing is not None:
                 self.on_pairing(pairing)
+            return
+        message = update.get("message")
+        if isinstance(message, Mapping) and isinstance(message.get("text"), str) and self.on_message is not None:
+            chat = message.get("chat")
+            sender = message.get("from")
+            if isinstance(chat, Mapping) and isinstance(sender, Mapping):
+                self.on_message({"chat_id": chat.get("id"), "user_id": sender.get("id"), "text": message["text"]})
             return
         callback = parse_callback_update(update)
         if callback is None:

@@ -29,7 +29,7 @@ from app.services.integration_service import (
     IntegrationError,
     build_default_integration_service,
 )
-from app.services.telegram_service import TelegramService, TelegramServiceError
+from app.services.telegram_service import TELEGRAM_ACT_ROLE, TelegramService, TelegramServiceError
 
 router = APIRouter(tags=["integrations"])
 
@@ -307,6 +307,33 @@ def remove_telegram_connection(db: Session = Depends(get_db)) -> Response:
     try:
         TelegramService(db).remove()
         FunctionCatalogService(db).refresh()
+    except TelegramServiceError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/settings/integrations/telegram-agent", response_model=TelegramConnectionStatus)
+def telegram_agent_connection_status(db: Session = Depends(get_db)) -> TelegramConnectionStatus:
+    return TelegramService(db, role=TELEGRAM_ACT_ROLE).connection_status()
+
+
+@router.post("/settings/integrations/telegram-agent/pairing/start", response_model=TelegramPairingResponse)
+def start_telegram_agent_pairing(payload: TelegramPairingStart, db: Session = Depends(get_db)) -> TelegramPairingResponse:
+    try:
+        return TelegramService(db, role=TELEGRAM_ACT_ROLE).start_pairing(payload.token.get_secret_value())
+    except TelegramServiceError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
+
+
+@router.post("/settings/integrations/telegram-agent/pairing/refresh", response_model=TelegramConnectionStatus)
+def refresh_telegram_agent_pairing(db: Session = Depends(get_db)) -> TelegramConnectionStatus:
+    return TelegramService(db, role=TELEGRAM_ACT_ROLE).connection_status()
+
+
+@router.delete("/settings/integrations/telegram-agent", status_code=status.HTTP_204_NO_CONTENT)
+def remove_telegram_agent_connection(db: Session = Depends(get_db)) -> Response:
+    try:
+        TelegramService(db, role=TELEGRAM_ACT_ROLE).remove()
     except TelegramServiceError as exc:
         raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
     return Response(status_code=status.HTTP_204_NO_CONTENT)

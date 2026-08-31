@@ -10,8 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from app.models import InvocationApproval, TelegramBotConnection
+from app.models import ActTelegramBinding, InvocationApproval, TelegramBotConnection
 from app.schemas.integration import TelegramConnectionStatus, TelegramPairingResponse
+from app.services.act_session_service import ActSessionError, ActSessionService
 from app.services.invocation_approval_presentation import (
     ApprovalPresentation,
     build_approval_presentation,
@@ -27,6 +28,7 @@ from app.services.telegram_provider import (
     TelegramNotificationProviderAdapter,
     TelegramProviderError,
     UrllibTelegramBotApi,
+    chunk_text_for_telegram,
     create_pairing_code,
     edit_approval_outcome,
     hash_pairing_code,
@@ -36,6 +38,7 @@ from app.services.telegram_provider import (
 
 TELEGRAM_SECRET_NAMESPACE = "telegram"
 TELEGRAM_ROLE = "notification_approval"
+TELEGRAM_ACT_ROLE = "act_agent"
 
 
 class TelegramServiceError(RuntimeError):
@@ -76,6 +79,7 @@ class TelegramService:
         *,
         secret_store: SecretStore | None = None,
         api_factory: Callable[[str], TelegramBotApi] = UrllibTelegramBotApi,
+        role: str = TELEGRAM_ROLE,
     ) -> None:
         self.db = db
         if secret_store is None:
@@ -85,6 +89,7 @@ class TelegramService:
                 secret_store = None
         self.secret_store = secret_store
         self.api_factory = api_factory
+        self.role = role
 
     def connection_status(self) -> TelegramConnectionStatus:
         row = self._connection()
@@ -141,7 +146,7 @@ class TelegramService:
         try:
             if previous is None:
                 row = TelegramBotConnection(
-                    role=TELEGRAM_ROLE,
+                    role=self.role,
                     is_default=True,
                     secret_store_id=self.secret_store.implementation_id,
                     secret_reference=reference,
@@ -195,6 +200,9 @@ class TelegramService:
             raise TelegramServiceError("connection_unavailable", "Operating-system secret storage is unavailable")
         try:
             self.secret_store.delete(row.secret_reference, namespace=TELEGRAM_SECRET_NAMESPACE)
+            binding = self.db.get(ActTelegramBinding, row.id)
+            if binding is not None:
+                self.db.delete(binding)
             self.db.delete(row)
             self.db.commit()
         except SecretStoreError:
@@ -272,6 +280,7 @@ class TelegramService:
                 expected_user_id=int(row.paired_user_id) if row.paired_user_id is not None else None,
                 on_pairing=lambda pairing: self._handle_pairing(connection_id, bot_id, pairing),
                 on_callback=lambda callback: self._handle_callback(connection_id, bot_id, callback),
+                on_message=lambda message: self._handle_message(connection_id, bot_id, message),
                 on_error=lambda _error: None,
             )
             worker.ensure_long_polling_ready()
@@ -318,6 +327,8 @@ class TelegramService:
         row.pairing_expires_at = None
         row.status = "connected"
         self.db.commit()
+        if self.role != TELEGRAM_ROLE:
+            return
         unresolved = self.db.scalars(
             select(InvocationApproval)
             .where(InvocationApproval.decision_status == "pending")
@@ -331,6 +342,8 @@ class TelegramService:
                 self.db.rollback()
 
     def _handle_callback(self, connection_id: int, bot_id: str, callback: TelegramApprovalCallback) -> None:
+        if self.role != TELEGRAM_ROLE:
+            return
         row = self.db.get(TelegramBotConnection, connection_id)
         if row is None:
             return
@@ -371,10 +384,81 @@ class TelegramService:
     def _connection(self) -> TelegramBotConnection | None:
         return self.db.scalar(
             select(TelegramBotConnection)
-            .where(TelegramBotConnection.role == TELEGRAM_ROLE)
+            .where(TelegramBotConnection.role == self.role)
             .where(TelegramBotConnection.is_default.is_(True))
             .order_by(TelegramBotConnection.id.desc())
         )
+
+    def _handle_message(self, connection_id: int, bot_id: str, message: dict[str, Any]) -> None:
+        if self.role != TELEGRAM_ACT_ROLE:
+            return
+        row = self.db.get(TelegramBotConnection, connection_id)
+        if row is None or row.bot_id != bot_id or row.status != "connected":
+            return
+        if str(message.get("chat_id")) != row.paired_chat_id or str(message.get("user_id")) != row.paired_user_id:
+            return
+        text = str(message.get("text") or "").strip()
+        if not text or text.startswith("/start"):
+            return
+        service = ActSessionService(self.db)
+        binding = self.db.get(ActTelegramBinding, connection_id)
+        try:
+            if text == "/new":
+                session = service.create_session(origin="telegram")
+                if binding is None:
+                    binding = ActTelegramBinding(connection_id=connection_id, active_session_id=session.id)
+                    self.db.add(binding)
+                else:
+                    binding.active_session_id = session.id
+                self.db.commit()
+                reply = f"Started Act session #{session.id}."
+            elif text == "/sessions":
+                sessions = service.list_sessions()
+                reply = "\n".join(f"#{item.id} {item.title}" for item in sessions) or "No active Act sessions."
+            elif text.startswith("/use"):
+                selected = text[4:].strip()
+                if not selected.isdigit():
+                    reply = "Usage: /use <session id>"
+                    self._send_act_reply(row, reply)
+                    return
+                session = service.read_session(int(selected))
+                if session.status != "active":
+                    raise ActSessionError("That Act session is archived")
+                if binding is None:
+                    binding = ActTelegramBinding(connection_id=connection_id, active_session_id=session.id)
+                    self.db.add(binding)
+                else:
+                    binding.active_session_id = session.id
+                self.db.commit()
+                reply = f"Using Act session #{session.id}: {session.title}"
+            else:
+                if binding is None or binding.active_session_id is None:
+                    session = service.create_session(origin="telegram")
+                    if binding is None:
+                        binding = ActTelegramBinding(connection_id=connection_id, active_session_id=session.id)
+                        self.db.add(binding)
+                    else:
+                        binding.active_session_id = session.id
+                    self.db.commit()
+                turn = service.enqueue_turn(
+                    binding.active_session_id,
+                    text,
+                    delivery_connection_id=row.id,
+                    delivery_chat_id=row.paired_chat_id,
+                )
+                reply = f"Queued Act turn #{turn.id} in session #{binding.active_session_id}."
+            self._send_act_reply(row, reply)
+        except ActSessionError as exc:
+            self._send_act_reply(row, str(exc))
+
+    def _send_act_reply(self, row: TelegramBotConnection, reply: str) -> None:
+        _row, token = self._connected_api_credential()
+        try:
+            api = self.api_factory(token)
+            for chunk in chunk_text_for_telegram(reply):
+                api.send_message(int(row.paired_chat_id or "0"), chunk)
+        finally:
+            token = ""
 
     def _approval_presentation(self, approval: InvocationApproval) -> ApprovalPresentation:
         snapshot = approval.presentation_json or {}
@@ -407,12 +491,12 @@ class TelegramService:
         return row, token
 
 
-def run_telegram_long_polling(stop_event: threading.Event) -> None:
+def run_telegram_long_polling(stop_event: threading.Event, *, role: str = TELEGRAM_ROLE) -> None:
     failures = 0
     while not stop_event.is_set():
         db = SessionLocal()
         try:
-            TelegramService(db).poll_once()
+            TelegramService(db, role=role).poll_once()
             failures = 0
         except TelegramServiceError as exc:
             if exc.error_type == "connection_unavailable":
@@ -426,3 +510,73 @@ def run_telegram_long_polling(stop_event: threading.Event) -> None:
             stop_event.wait(min(60.0, float(2 ** min(failures, 6))))
         finally:
             db.close()
+
+
+TelegramPollers = tuple[threading.Event, tuple[threading.Thread, ...]]
+
+
+def start_telegram_pollers() -> TelegramPollers:
+    stop_event = threading.Event()
+    workers = tuple(
+        threading.Thread(
+            target=run_telegram_long_polling,
+            kwargs={"stop_event": stop_event, "role": role},
+            name=f"eidolon-telegram-{role}",
+            daemon=True,
+        )
+        for role in (TELEGRAM_ROLE, TELEGRAM_ACT_ROLE)
+    )
+    for worker in workers:
+        worker.start()
+    return stop_event, workers
+
+
+def stop_telegram_pollers(pollers: TelegramPollers) -> None:
+    stop_event, workers = pollers
+    stop_event.set()
+    for worker in workers:
+        worker.join(timeout=35)
+
+
+def deliver_act_turn_result(turn_id: int) -> None:
+    db = SessionLocal()
+    try:
+        from app.models import ActTurn
+
+        turn = db.get(ActTurn, turn_id)
+        if (
+            turn is None
+            or turn.delivery_status != "pending"
+            or turn.delivery_connection_id is None
+            or turn.delivery_chat_id is None
+            or turn.status in {"queued", "running"}
+        ):
+            return
+        connection = db.get(TelegramBotConnection, turn.delivery_connection_id)
+        if (
+            connection is None
+            or connection.role != TELEGRAM_ACT_ROLE
+            or connection.status != "connected"
+            or connection.paired_chat_id != turn.delivery_chat_id
+        ):
+            turn.delivery_status = "failed"
+            db.commit()
+            return
+        service = TelegramService(db, role=TELEGRAM_ACT_ROLE)
+        if turn.status == "succeeded":
+            reply = turn.assistant_message or "Act completed without a text response."
+        elif turn.status == "cancelled":
+            reply = f"Act turn #{turn.id} was cancelled."
+        else:
+            reply = f"Act turn #{turn.id} failed: {turn.error_message or turn.status}"
+        service._send_act_reply(connection, reply)
+        turn.delivery_status = "delivered"
+        db.commit()
+    except Exception:
+        db.rollback()
+        turn = db.get(ActTurn, turn_id)
+        if turn is not None and turn.delivery_status == "pending":
+            turn.delivery_status = "failed"
+            db.commit()
+    finally:
+        db.close()

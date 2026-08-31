@@ -320,7 +320,7 @@ def test_approved_build_uses_pm_builder_tester_and_permission_artifacts(tmp_path
     assert "skill.py" in tester_step.input_json["workspace_paths"]
     assert "code_files" not in tester_step.input_json
     assert "tests/test_core_skill.py" in tester_step.output_json["tests_written"]
-    assert tester_step.output_json["tester_generation"]["stdout"] == "fake tester wrote tests"
+    assert tester_step.output_json["tester_generation"]["stdout"] == "ok"
     task_dag_artifact = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "task_dag.json"
     task_artifact = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "tasks" / "core_skill.json"
     interface_artifact = tmp_path / "runtime" / "agent_runs" / f"run_{agent_run.id}" / "tasks" / "core_skill" / "interface_artifact.json"
@@ -360,7 +360,6 @@ def test_single_codex_workflow_builds_and_validates_web_app_protocol(
     generation_request.plan_json = {
         **generation_request.plan_json,
         "runtime": "web_app",
-        "files_to_generate": ["manifest.json", "README.md", "app.py", "tests/test_app.py"],
         "schedule": None,
     }
     db_session.commit()
@@ -397,7 +396,7 @@ def test_single_codex_workflow_builds_and_validates_web_app_protocol(
     assert manifest["entrypoint"] == "app:app"
     assert not {"risk_level", "created_by", "enabled"} & set(manifest)
     assert (skill_dir / "app.py").is_file()
-    assert (skill_dir / "tests" / "test_app.py").is_file()
+    assert (skill_dir / "tests" / "test_skill.py").is_file()
 
 
 def test_single_codex_static_scan_blocks_runtime_review_without_calling_more_agents(
@@ -883,7 +882,7 @@ def test_builder_and_tester_agents_receive_trimmed_task_context(tmp_path: Path, 
     assert tester_plan["task_node"] == {
         "task_prompt": "Create the core proposed skill package.",
         "acceptance_criteria": agent_run.blueprint_json["expected_behavior"],
-        "test_expectations": ["validate manifest and generated skill behavior"],
+        "test_expectations": ["validate manifest and generated behavior"],
     }
     assert tester_plan["test_file"] == "tests/test_core_skill.py"
     assert tester_plans[-1]["test_file"] == "tests/test_final_e2e.py"

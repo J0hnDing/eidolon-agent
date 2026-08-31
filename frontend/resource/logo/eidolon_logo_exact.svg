@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1000" height="1000" viewBox="0 0 1000 1000"
+     role="img" aria-label="Eidolon balanced four-band concentric arc logo">
+  <defs>
+    <!-- Exact equivalent of:
+         radial-gradient(circle at 12% 88%,
+           #506A91 0% 22%,
+           #2A3C4E 22% 42%,
+           #1A2631 42% 62%,
+           #0F171E 62% 100%)
+         using CSS default size: farthest-corner
+    -->
+    <radialGradient id="eidolonGradient"
+        gradientUnits="userSpaceOnUse"
+        cx="120.0" cy="880.0" r="1244.5079348883237">
+      <stop offset="0" stop-color="#506A91"/>
+      <stop offset="0.22" stop-color="#506A91"/>
+      <stop offset="0.22" stop-color="#2A3C4E"/>
+      <stop offset="0.42" stop-color="#2A3C4E"/>
+      <stop offset="0.42" stop-color="#1A2631"/>
+      <stop offset="0.62" stop-color="#1A2631"/>
+      <stop offset="0.62" stop-color="#0F171E"/>
+      <stop offset="1" stop-color="#0F171E"/>
+    </radialGradient>
+
+    <clipPath id="logoClip">
+      <rect x="0" y="0" width="1000" height="1000" rx="220.0" ry="220.0"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#logoClip)">
+    <rect x="0" y="0" width="1000" height="1000" fill="url(#eidolonGradient)"/>
+  </g>
+</svg>

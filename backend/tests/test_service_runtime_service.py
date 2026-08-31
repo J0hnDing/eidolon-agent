@@ -137,12 +137,23 @@ def test_service_run_is_schedule_attributed_and_schema_validated(
         runner_factory=lambda _db: runner,
     )
 
-    run = runtime.run(skill, {"topic": "AI"}, schedule_id=7)
+    scheduled_for_at = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    run = runtime.run(
+        skill,
+        {"topic": "AI"},
+        schedule_id=7,
+        schedule_occurrence_key="a" * 64,
+        scheduled_for_at=scheduled_for_at,
+        schedule_trigger="startup_catch_up",
+    )
 
     assert run.status == "succeeded"
     assert run.invocation_source == "schedule"
     assert run.source_schedule_id == 7
     assert runner.calls[0].capability_token is not None
+    assert runner.calls[0].schedule_occurrence_key == "a" * 64
+    assert runner.calls[0].scheduled_for_at == scheduled_for_at
+    assert runner.calls[0].schedule_trigger == "startup_catch_up"
 
 
 def test_service_run_blocks_bad_input_and_fails_bad_output(

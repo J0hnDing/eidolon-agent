@@ -1,4 +1,7 @@
 from app.models.entities import (
+    ActSession,
+    ActTelegramBinding,
+    ActTurn,
     AgentRun,
     AgentRunStep,
     ApprovalRequest,
@@ -13,6 +16,8 @@ from app.models.entities import (
     McpAuditRecord,
     MemoryFact,
     Message,
+    ScheduleOccurrence,
+    ScheduleRuntimeState,
     Skill,
     SkillGenerationRequest,
     SkillOperationLock,
@@ -26,6 +31,9 @@ from app.models.entities import (
 )
 
 __all__ = [
+    "ActSession",
+    "ActTelegramBinding",
+    "ActTurn",
     "ApprovalRequest",
     "AgentRun",
     "AgentRunStep",
@@ -43,6 +51,8 @@ __all__ = [
     "Skill",
     "SkillGenerationRequest",
     "SkillOperationLock",
+    "ScheduleOccurrence",
+    "ScheduleRuntimeState",
     "SkillRun",
     "SkillSchedule",
     "SkillVersion",

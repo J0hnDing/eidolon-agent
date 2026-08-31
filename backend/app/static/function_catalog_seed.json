@@ -2,6 +2,20 @@
   "schema_version": 1,
   "functions": [
     {
+      "id": "act.document.download",
+      "category": "backend_core",
+      "title": "Download a safe document",
+      "description": "Download one HTTP(S) document or image into the fixed Eidolon Act workspace downloads folder. Use this instead of direct download commands.",
+      "risk_level": "medium",
+      "mcp_exposed": true,
+      "agent_selectable": false,
+      "mcp_read_only": false,
+      "mcp_destructive": false,
+      "mcp_open_world": true,
+      "input_schema": {"type": "object", "properties": {"source": {"type": "object", "properties": {"kind": {"type": "string", "const": "url"}, "url": {"type": "string", "minLength": 1, "maxLength": 2048}}, "required": ["kind", "url"], "additionalProperties": false}, "filename": {"type": "string", "minLength": 1, "maxLength": 180}}, "required": ["source"], "additionalProperties": false},
+      "output_schema": {"type": "object", "properties": {"path": {"type": "string"}, "filename": {"type": "string"}, "bytes": {"type": "integer", "minimum": 0}, "media_type": {"type": "string"}}, "required": ["path", "filename", "bytes", "media_type"], "additionalProperties": false}
+    },
+    {
       "id": "backend.codex.call",
       "category": "backend_core",
       "title": "Skill Codex Call",

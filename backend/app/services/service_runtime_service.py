@@ -30,22 +30,54 @@ class ServiceRuntimeService:
         self.proposed_service = ProposedSkillService(self.db, project_root=self.project_root)
         self.project_root = self.proposed_service.project_root
 
-    def run(self, skill: Skill, input_json: dict[str, Any], *, schedule_id: int) -> SkillRun:
+    def run(
+        self,
+        skill: Skill,
+        input_json: dict[str, Any],
+        *,
+        schedule_id: int,
+        schedule_occurrence_key: str | None = None,
+        scheduled_for_at: datetime | None = None,
+        schedule_trigger: str | None = None,
+    ) -> SkillRun:
         manifest = validate_manifest_file(
             self.proposed_service.skill_dir_for_record(skill) / "manifest.json"
         )
         if manifest.runtime != "service":
-            return self._blocked_run(skill, input_json, schedule_id, "Only service skills can run from schedules")
+            return self._blocked_run(
+                skill,
+                input_json,
+                schedule_id,
+                "Only service skills can run from schedules",
+                schedule_occurrence_key=schedule_occurrence_key,
+                scheduled_for_at=scheduled_for_at,
+                schedule_trigger=schedule_trigger,
+            )
         input_error = self._schema_error(input_json, manifest.input_schema, "input")
         if input_error:
-            return self._blocked_run(skill, input_json, schedule_id, input_error)
+            return self._blocked_run(
+                skill,
+                input_json,
+                schedule_id,
+                input_error,
+                schedule_occurrence_key=schedule_occurrence_key,
+                scheduled_for_at=scheduled_for_at,
+                schedule_trigger=schedule_trigger,
+            )
 
         capability_token = secrets.token_urlsafe(32)
         context = FunctionRunContext(
             version_id=skill.active_version_id,
             invocation_source="schedule",
             source_schedule_id=schedule_id,
-            initiating_action=f"Scheduled service run {schedule_id}",
+            schedule_occurrence_key=schedule_occurrence_key,
+            scheduled_for_at=scheduled_for_at,
+            schedule_trigger=schedule_trigger,
+            initiating_action=(
+                f"Scheduled service {schedule_trigger} run {schedule_id}"
+                if schedule_trigger
+                else f"Scheduled service run {schedule_id}"
+            ),
             capability_token=capability_token,
         )
         try:
@@ -71,7 +103,15 @@ class ServiceRuntimeService:
                         input_json=input_json,
                     )
         except SkillOperationConflict as exc:
-            return self._blocked_run(skill, input_json, schedule_id, str(exc))
+            return self._blocked_run(
+                skill,
+                input_json,
+                schedule_id,
+                str(exc),
+                schedule_occurrence_key=schedule_occurrence_key,
+                scheduled_for_at=scheduled_for_at,
+                schedule_trigger=schedule_trigger,
+            )
 
         if run.output_json is not None:
             output_error = self._schema_error(run.output_json, manifest.output_schema, "output")
@@ -113,6 +153,10 @@ class ServiceRuntimeService:
         input_json: dict[str, Any],
         schedule_id: int,
         reason: str,
+        *,
+        schedule_occurrence_key: str | None = None,
+        scheduled_for_at: datetime | None = None,
+        schedule_trigger: str | None = None,
     ) -> SkillRun:
         run = SkillRun(
             skill_id=skill.id,
@@ -124,6 +168,9 @@ class ServiceRuntimeService:
             error_message=reason,
             invocation_source="schedule",
             source_schedule_id=schedule_id,
+            schedule_occurrence_key=schedule_occurrence_key,
+            scheduled_for_at=scheduled_for_at,
+            schedule_trigger=schedule_trigger,
             initiating_action=f"Scheduled service run {schedule_id}",
         )
         self.db.add(run)

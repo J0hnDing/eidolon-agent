@@ -173,6 +173,9 @@ class SkillRun(Base):
     caller_skill_id: Mapped[int | None] = mapped_column(ForeignKey("skills.id"), nullable=True, index=True)
     caller_version_id: Mapped[int | None] = mapped_column(ForeignKey("skill_versions.id"), nullable=True, index=True)
     source_schedule_id: Mapped[int | None] = mapped_column(ForeignKey("skill_schedules.id"), nullable=True, index=True)
+    schedule_occurrence_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    scheduled_for_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    schedule_trigger: Mapped[str | None] = mapped_column(String(32), nullable=True)
     web_app_instance_id: Mapped[str | None] = mapped_column(
         ForeignKey("web_app_instances.id"), nullable=True, index=True
     )
@@ -237,6 +240,42 @@ class InvocationApproval(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )
+
+
+class ActSession(Base):
+    __tablename__ = "act_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    codex_thread_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(160), nullable=False, default="New act")
+    origin: Mapped[str] = mapped_column(String(32), nullable=False, default="web")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    turns: Mapped[list["ActTurn"]] = relationship(back_populates="session", cascade="all, delete-orphan")
+
+
+class ActTurn(Base):
+    __tablename__ = "act_turns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("act_sessions.id"), nullable=False, index=True)
+    codex_turn_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    user_message: Mapped[str] = mapped_column(Text, nullable=False)
+    assistant_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    activity_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivery_connection_id: Mapped[int | None] = mapped_column(
+        ForeignKey("telegram_bot_connections.id"), nullable=True, index=True
+    )
+    delivery_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    delivery_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    session: Mapped["ActSession"] = relationship(back_populates="turns")
 
 
 class FunctionAccessApproval(Base):
@@ -321,6 +360,16 @@ class TelegramBotConnection(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )
+
+
+class ActTelegramBinding(Base):
+    __tablename__ = "act_telegram_bindings"
+
+    connection_id: Mapped[int] = mapped_column(
+        ForeignKey("telegram_bot_connections.id", ondelete="CASCADE"), primary_key=True
+    )
+    active_session_id: Mapped[int | None] = mapped_column(ForeignKey("act_sessions.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
 
 class IntegrationAuthorization(Base):
@@ -489,6 +538,45 @@ class SkillSchedule(Base):
     )
 
     skill: Mapped["Skill"] = relationship(back_populates="schedules")
+
+
+class ScheduleRuntimeState(Base):
+    __tablename__ = "schedule_runtime_states"
+
+    schedule_key: Mapped[str] = mapped_column(String(160), primary_key=True)
+    definition_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    active_since_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    interval_anchor_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+
+class ScheduleOccurrence(Base):
+    __tablename__ = "schedule_occurrences"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    occurrence_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    schedule_key: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    definition_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    scheduled_for_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    trigger_reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="claimed", nullable=False, index=True)
+    skill_run_id: Mapped[int | None] = mapped_column(ForeignKey("skill_runs.id"), nullable=True, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
 
 
 class ApprovalRequest(Base):

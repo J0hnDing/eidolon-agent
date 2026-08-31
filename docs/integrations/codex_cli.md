@@ -2,7 +2,7 @@
 
 The backend can use the local Codex CLI for direct chat, the resumable Project-mode planning session, Builder edits, Tester test writing, repairs, updates, and ProductManager summaries. The preceding intent placeholder copies the initial user message and does not invoke Codex.
 
-The backend also starts one persistent local `codex app-server --stdio` child process for account allowance reads. It uses `account/rateLimits/read` to expose the current 5-hour and weekly windows. App Server availability failures are reported by the usage API and do not block normal chat or skill runtime.
+The backend starts one persistent local `codex app-server --stdio` child process for account allowance reads. It uses `account/rateLimits/read` to expose the current 5-hour and weekly windows. App Server availability failures are reported by the usage API and do not block normal chat or skill runtime. Act owns a second dedicated App Server process so its persistent threads, MCP reloads, and long turns cannot interfere with usage or Product Manager traffic.
 
 DAG builds keep a 5% reserve in both account windows. A new ready-node batch is not admitted when either window has less than 5% remaining; already admitted parallel-ready work is allowed to reach its batch boundary before the run pauses.
 
@@ -45,6 +45,7 @@ The backend reads the account-aware model picker through App Server `model/list`
 Routing settings cover:
 
 - normal Chat independently;
+- persistent Act independently, falling back to Chat when its route is unset;
 - ProductManager refine-intent, plan-build, task-DAG, repair, and update actions;
 - Builder single-Codex builds, `easy`, `medium`, and `hard` DAG nodes, plus repair and update actions;
 - Tester task, final end-to-end, and update actions.
@@ -106,6 +107,7 @@ whole-workflow budgets, and partial recovery are not part of these hard limits a
 ## Sandbox Modes
 
 - Chat: read-only project root.
+- Act: persistent resumable threads with `workspace-write` rooted only at `runtime/act/workspace`; the reserved memory directory and managed instructions remain outside that writable root.
 - ProductManager planning: a persistent App Server thread with a final-response JSON Schema for the combined decision/blueprint/permission contract.
 - ProductManager workflow actions: read-only `runtime/product_manager` workspace. ProductManager returns CLI-schema-constrained JSON on stdout; the backend parses and sanitizes it, then writes workflow artifacts such as `blueprint.json`, `permissions.json`, and `task_dag.json`.
 - Builder/Tester skill generation, build, repair, and update: `workspace-write` scoped to the controlled skill or draft-version directory passed with `-C`.

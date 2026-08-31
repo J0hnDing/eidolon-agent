@@ -208,6 +208,9 @@ def ensure_local_schema() -> None:
                 "caller_skill_id": "INTEGER",
                 "caller_version_id": "INTEGER",
                 "source_schedule_id": "INTEGER",
+                "schedule_occurrence_key": "VARCHAR(64)",
+                "scheduled_for_at": "DATETIME",
+                "schedule_trigger": "VARCHAR(32)",
                 "web_app_instance_id": "VARCHAR(64)",
                 "initiating_action": "VARCHAR(128)",
                 "function_capability_token_hash": "VARCHAR(128)",
@@ -221,6 +224,7 @@ def ensure_local_schema() -> None:
                 "caller_skill_id",
                 "caller_version_id",
                 "source_schedule_id",
+                "schedule_occurrence_key",
                 "web_app_instance_id",
                 "function_capability_token_hash",
             ):
@@ -329,6 +333,23 @@ def ensure_local_schema() -> None:
             connection.execute(text("UPDATE agent_run_steps SET step_name = 'product_manager' WHERE step_name IN ('planner', 'reviewer')"))
             connection.execute(text("UPDATE agent_run_steps SET step_name = 'product_manager' WHERE step_name IN ('permission_analyst', 'security_reviewer')"))
             connection.execute(text("UPDATE agent_run_steps SET step_name = 'builder' WHERE step_name = 'repairer'"))
+        if "act_turns" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("act_turns")}
+            additions = {
+                "cancel_requested_at": "DATETIME",
+                "delivery_connection_id": "INTEGER",
+                "delivery_chat_id": "VARCHAR(64)",
+                "delivery_status": "VARCHAR(32)",
+            }
+            for column, definition in additions.items():
+                if column not in columns:
+                    connection.execute(text(f"ALTER TABLE act_turns ADD COLUMN {column} {definition}"))
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_act_turns_delivery_connection_id ON act_turns (delivery_connection_id)")
+            )
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_act_turns_delivery_status ON act_turns (delivery_status)")
+            )
         _remove_retired_product_manager_routing(connection, table_names)
         _remove_retired_skill_contract_json(connection, table_names)
         _remove_retired_manifest_display_name(connection, table_names)

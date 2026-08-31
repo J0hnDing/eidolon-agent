@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { ChatMode } from "../../api/client";
+import { ActSessionSummary, ChatMode } from "../../api/client";
 import {
   appendMessages as appendStoredMessages,
   CHAT_STORAGE_KEY,
@@ -74,8 +74,11 @@ export function useChatConversations() {
     appendMessagesToConversation(activeConversationId, newMessages);
   }
 
-  function createNewConversation(): string {
-    const conversation = createConversation();
+  function createNewConversation(
+    mode: ChatMode = "chat",
+    options: { actSessionId?: number; title?: string } = {},
+  ): string {
+    const conversation = createConversation(mode, options);
     const nextConversations = updateStoredConversations((current) => [conversation, ...current]);
     setConversations(nextConversations);
     selectConversation(conversation.id);
@@ -110,12 +113,29 @@ export function useChatConversations() {
     }));
   }
 
-  function updateMode(value: ChatMode) {
-    updateActiveConversation((conversation) => ({
-      ...conversation,
-      mode: value,
-      updatedAt: new Date().toISOString(),
-    }));
+  function importActSessions(sessions: ActSessionSummary[]) {
+    const nextConversations = updateStoredConversations((current) => {
+      const knownSessionIds = new Set(
+        current
+          .map((conversation) => conversation.actSessionId)
+          .filter((sessionId): sessionId is number => typeof sessionId === "number"),
+      );
+      const imported = sessions
+        .filter((session) => !knownSessionIds.has(session.id))
+        .map((session) => createConversation("act", {
+          id: `act-${session.id}`,
+          title: session.title,
+          actSessionId: session.id,
+          createdAt: session.created_at,
+          updatedAt: session.updated_at,
+        }));
+      return [...imported, ...current].map((conversation) => {
+        if (conversation.mode !== "act" || conversation.actSessionId === undefined) return conversation;
+        const session = sessions.find((item) => item.id === conversation.actSessionId);
+        return session ? { ...conversation, title: session.title, updatedAt: session.updated_at } : conversation;
+      });
+    });
+    setConversations(nextConversations);
   }
 
   function updateMessageInConversation(
@@ -149,10 +169,10 @@ export function useChatConversations() {
     appendMessages,
     appendMessagesToConversation,
     createNewConversation,
+    importActSessions,
     selectConversation,
     deleteConversation,
     updateDraft,
-    updateMode,
     updateMessageInConversation,
     removeMessageFromConversation,
   };

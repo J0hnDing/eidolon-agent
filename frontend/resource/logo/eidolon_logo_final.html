@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Eidolon Logo</title>
+<style>
+  :root{
+    --bg:#060A0E;
+
+    /* Four balanced contiguous bands */
+    --outer:#0F171E;
+    --outer-mid:#1A2631;
+    --middle:#2A3C4E;
+    --inner:#506A91;
+  }
+
+  *{box-sizing:border-box}
+
+  html,body{
+    margin:0;
+    min-height:100%;
+    background:var(--bg);
+  }
+
+  body{
+    min-height:100vh;
+    display:grid;
+    place-items:center;
+  }
+
+  .eidolon-logo{
+    box-shadow:none;
+    filter:none;
+    width:min(46vw,360px);
+    aspect-ratio:1;
+    overflow:hidden;
+    border-radius:22%;
+    background:
+      radial-gradient(
+        circle at 12% 88%,
+        var(--inner)     0% 22%,
+        var(--middle)   22% 42%,
+        var(--outer-mid) 42% 62%,
+        var(--outer)    62% 100%
+      );
+  }
+
+  @media (max-width:520px){
+    .eidolon-logo{
+    box-shadow:none;
+    filter:none;
+      width:64vw;
+      border-radius:20%;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="eidolon-logo" role="img" aria-label="Eidolon balanced four-band concentric arc logo"></div>
+</body>
+</html>

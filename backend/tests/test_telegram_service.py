@@ -6,10 +6,15 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.db import Base
-from app.models import InvocationApproval, TelegramBotConnection
+from app.models import ActSession, ActTelegramBinding, InvocationApproval, TelegramBotConnection
 from app.services.secret_store import FakeSecretStore
 from app.services.telegram_provider import FakeTelegramBotApi, PairingMessage, TelegramProviderError
-from app.services.telegram_service import TelegramService, TelegramServiceError
+from app.services.telegram_service import (
+    TELEGRAM_ACT_ROLE,
+    TelegramService,
+    TelegramServiceError,
+    run_telegram_long_polling,
+)
 
 
 def test_expired_pairing_is_not_reported_as_in_progress() -> None:
@@ -178,3 +183,82 @@ def test_persisted_pairing_delivery_callback_and_replay() -> None:
         db.refresh(approval)
         assert approval.decision_status == "denied"
         assert connection.last_update_id == 3
+
+
+def test_act_bot_has_independent_role_validates_use_and_disconnects_binding() -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        store = FakeSecretStore()
+        api = FakeTelegramBotApi()
+        service = TelegramService(
+            db,
+            secret_store=store,
+            api_factory=lambda _token: api,
+            role=TELEGRAM_ACT_ROLE,
+        )
+        pairing = service.start_pairing("123:telegram-token")
+        connection = db.query(TelegramBotConnection).one()
+        assert connection.role == TELEGRAM_ACT_ROLE
+        service._handle_pairing(
+            connection.id,
+            connection.bot_id,
+            PairingMessage(update_id=1, code=pairing.pairing_code, chat_id=11, user_id=22),
+        )
+        service._handle_message(
+            connection.id,
+            connection.bot_id,
+            {"chat_id": 11, "user_id": 22, "text": "/use nope"},
+        )
+        assert api.sent_messages[-1]["text"] == "Usage: /use <session id>"
+        before = len(api.sent_messages)
+        service._send_act_reply(connection, "x" * 5000)
+        chunks = api.sent_messages[before:]
+        assert len(chunks) == 2
+        assert "".join(chunk["text"] for chunk in chunks) == "x" * 5000
+
+        session = ActSession(codex_thread_id="thread-act")
+        db.add(session)
+        db.flush()
+        db.add(ActTelegramBinding(connection_id=connection.id, active_session_id=session.id))
+        db.commit()
+        service.remove()
+        assert db.query(ActTelegramBinding).count() == 0
+        assert db.query(TelegramBotConnection).count() == 0
+
+
+def test_disconnected_poll_worker_backs_off_instead_of_spinning(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeDb:
+        def close(self) -> None:
+            pass
+
+    class StopAfterWait:
+        def __init__(self) -> None:
+            self.stopped = False
+            self.waits: list[float] = []
+
+        def is_set(self) -> bool:
+            return self.stopped
+
+        def wait(self, delay: float) -> None:
+            self.waits.append(delay)
+            self.stopped = True
+
+    class UnavailableService:
+        def __init__(self, _db, *, role: str) -> None:
+            assert role == TELEGRAM_ACT_ROLE
+
+        def poll_once(self) -> int:
+            raise TelegramServiceError("connection_unavailable", "not paired")
+
+    monkeypatch.setattr("app.services.telegram_service.SessionLocal", FakeDb)
+    monkeypatch.setattr("app.services.telegram_service.TelegramService", UnavailableService)
+    stop = StopAfterWait()
+
+    run_telegram_long_polling(stop, role=TELEGRAM_ACT_ROLE)  # type: ignore[arg-type]
+
+    assert stop.waits == [1.0]

@@ -19,6 +19,8 @@ from app.models import (
     FunctionAccessApproval,
     IntegrationAuditRecord,
     IntegrationAuthorization,
+    ScheduleOccurrence,
+    ScheduleRuntimeState,
     Skill,
     SkillGenerationRequest,
     SkillOperationLock,
@@ -394,6 +396,13 @@ class ProposedSkillService:
                 self.db.scalars(select(SkillSchedule.id).where(SkillSchedule.skill_id == skill.id)).all()
             )
             if schedule_ids:
+                schedule_keys = [f"skill:{schedule_id}" for schedule_id in schedule_ids]
+                self.db.query(ScheduleOccurrence).filter(
+                    ScheduleOccurrence.schedule_key.in_(schedule_keys)
+                ).delete(synchronize_session=False)
+                self.db.query(ScheduleRuntimeState).filter(
+                    ScheduleRuntimeState.schedule_key.in_(schedule_keys)
+                ).delete(synchronize_session=False)
                 self.db.query(SkillRun).filter(SkillRun.source_schedule_id.in_(schedule_ids)).update(
                     {SkillRun.source_schedule_id: None},
                     synchronize_session=False,

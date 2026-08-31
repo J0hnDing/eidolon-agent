@@ -83,7 +83,7 @@ def test_product_manager_contract_keeps_web_app_approval_requests() -> None:
     runtime = blueprint["permission_plan"]["runtime"]  # type: ignore[index]
 
     assert runtime["network"] == ["example.com"]  # type: ignore[index]
-    assert runtime["codex"] == {"internet_access": True}  # type: ignore[index]
+    assert runtime["codex"] == {"call_response": False, "internet_access": True}  # type: ignore[index]
 
 
 def test_product_manager_contract_keeps_schedules_only_for_services() -> None:

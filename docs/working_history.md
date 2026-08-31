@@ -686,3 +686,68 @@ Fixed an in-flight Telegram long-poll race that could compare a fresh pairing co
 ### Limitations
 
 none
+
+## 2026-08-30 13:44 — At-most-once latest missed schedule execution
+
+- Category: feature
+- Area: backend scheduling
+
+### Summary
+
+Added durable schedule runtime state and occurrence claims for generated and platform schedules. Startup now runs only the latest unclaimed due occurrence, normal callbacks share the same deterministic idempotency key, failures and interrupted occurrences are never retried, interval anchors persist across restarts, and scheduled run metadata plus the non-secret idempotency key are exposed to local and Docker service runtimes and run details. Updated scheduling, data-model, and backend documentation with focused backend and frontend validation.
+
+### Limitations
+
+none
+
+## 2026-08-30 00:32 — Backend-owned approval and notification presentation
+
+- Category: feature
+- Area: Invocation approvals and Telegram
+
+### Summary
+
+Added a persisted backend approval-presentation model with an email.send preset and readable generic fallback, kept reason_to_call caller-supplied, updated Telegram notifications, and edit approval messages to terminal executed, denied, or failed outcomes with sanitized error explanations. The local approval page now consumes the same backend presentation instead of recognizing function ids.
+
+### Limitations
+
+Full backend collection is currently blocked by the unrelated missing GOOGLE_OAUTH_CALLBACK_PATH export. The full frontend suite retains three unrelated schedule, settings-loading, and Strict Mode failures. Approval-specific backend tests, related integration tests, Ruff, and the frontend production build pass.
+
+## 2026-08-29 23:22 — Unify Google OAuth client with independent service grants
+
+- Category: feature
+- Area: integrations/settings
+
+### Summary
+
+Refactored Google Calendar and Gmail to share one write-only Google OAuth application client while retaining independent service grants, scopes, refresh tokens, account identities, connect/disconnect controls, and callbacks. Combined both services into one Google Settings section and preserved the existing Calendar connection through a safe legacy credential migration.
+
+### Limitations
+
+none
+
+## 2026-08-29 18:12 — Telegram invocation approvals and Gmail integration
+
+- Category: feature
+- Area: integrations and invocation safety
+
+### Summary
+
+Implemented durable per-call invocation approvals with local and Telegram decisions, Telegram notification and approval pairing/polling, independent Gmail OAuth and provider-neutral email operations, shared effective callable contracts, provider containment, Settings and approval UI, documentation, and focused verification.
+
+### Limitations
+
+Gmail uses the restricted gmail.modify scope and therefore requires appropriate Google OAuth consent/testing-user configuration. Approval previews intentionally send complete bounded action content to Telegram. V1 activates one notification_approval bot; the persistence model supports future bot roles.
+
+## 2026-08-30 18:28 — Reconstruct persistent Act mode and Telegram Agent
+
+- Category: feature
+- Area: Act runtime
+
+### Summary
+
+Rebuilt Act as a durable queued App Server workflow with enforced workspace boundaries, current MCP readiness checks, restart recovery, cancellation, hardened bounded downloads, independent Telegram Agent polling and delivery, and polling-based frontend sessions. Added focused backend and frontend coverage and updated current-behavior documentation.
+
+### Limitations
+
+none

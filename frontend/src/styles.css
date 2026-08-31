@@ -667,7 +667,7 @@ th {
 
 .segmented-control {
   display: inline-grid;
-  grid-template-columns: repeat(2, minmax(84px, 1fr));
+  grid-template-columns: repeat(3, minmax(84px, 1fr));
   border: 1px solid #cfd6e1;
   border-radius: 6px;
   background: #f6f7f9;
@@ -675,11 +675,15 @@ th {
 }
 
 .segmented-control button {
+  align-items: center;
+  display: inline-flex;
+  justify-content: center;
   min-height: 34px;
   border: 0;
   background: transparent;
   color: #344054;
   padding: 0 12px;
+  text-decoration: none;
 }
 
 .segmented-control button.active {
@@ -1887,6 +1891,18 @@ tbody tr:last-child td {
   padding: 12px;
 }
 
+.chat-create-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.chat-create-actions button {
+  min-height: 34px;
+  padding: 6px 4px;
+  font-size: 0.72rem;
+}
+
 .chat-thread-list {
   gap: 5px;
 }
@@ -1903,6 +1919,31 @@ tbody tr:last-child td {
   padding: 10px 11px;
   box-shadow: none;
 }
+
+.chat-thread-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.conversation-mode-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 22px;
+  border: 1px solid #d5dfda;
+  border-radius: 999px;
+  background: #f1f5f3;
+  color: #486159;
+  padding: 2px 8px;
+  font-size: 0.69rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.conversation-mode-badge.project { border-color: #d8c99f; background: #faf4df; color: #6b5520; }
+.conversation-mode-badge.act { border-color: #b9d8ce; background: #e8f5f0; color: #1e6552; }
 
 .chat-thread-select:hover:not(:disabled) {
   border-color: #e1e7e3;

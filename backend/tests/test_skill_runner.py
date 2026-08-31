@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
 from app.models import Skill, SkillRun
-from app.services.skill_runner import SkillRunner, _final_run_outcome, _process_exit_error
+from app.services.skill_runner import (
+    FunctionRunContext,
+    SkillRunner,
+    _final_run_outcome,
+    _process_exit_error,
+)
 
 
 @pytest.fixture
@@ -105,6 +110,37 @@ def test_valid_manifest_passing_tests_and_valid_json_succeeds(
     assert run.output_json == {"ok": True, "input": {"topic": "local"}}
     assert run.started_at is not None
     assert run.ended_at is not None
+
+
+def test_schedule_idempotency_key_is_recorded_and_exposed_to_local_entrypoint(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill_dir = tmp_path / "scheduled_skill"
+    write_skill(
+        skill_dir,
+        skill_source=(
+            "import json, os\n"
+            "print(json.dumps({'key': os.environ.get('PERSONAL_AGENT_SCHEDULE_IDEMPOTENCY_KEY')}))\n"
+        ),
+    )
+    skill = create_skill_record(db_session, skill_dir)
+    occurrence_key = "b" * 64
+
+    run = SkillRunner(db_session).run(
+        skill_id=skill.id,
+        skill_dir=skill_dir,
+        input_json={},
+        context=FunctionRunContext(
+            invocation_source="schedule",
+            schedule_occurrence_key=occurrence_key,
+            schedule_trigger="automatic",
+        ),
+    )
+
+    assert run.schedule_occurrence_key == occurrence_key
+    assert run.schedule_trigger == "automatic"
+    assert run.output_json == {"key": occurrence_key}
 
 
 def test_partial_output_is_reported_as_partial_with_failure_detail(

@@ -260,7 +260,10 @@ export function RunDetail({ run }: { run: SkillRun }) {
         <div><dt>Ended</dt><dd>{formatTimestamp(run.ended_at, "not ended")}</dd></div>
         <div><dt>Runtime Tokens</dt><dd>{formatTokens(run.total_tokens)}</dd></div>
         <div><dt>Codex Calls</dt><dd>{run.codex_invocations_json.length}</dd></div>
+        {run.scheduled_for_at && <div><dt>Scheduled For</dt><dd>{formatTimestamp(run.scheduled_for_at, "unknown")}</dd></div>}
+        {run.schedule_trigger && <div><dt>Schedule Trigger</dt><dd>{run.schedule_trigger}</dd></div>}
       </dl>
+      {run.schedule_occurrence_key && <p className="muted">Idempotency key: <code>{run.schedule_occurrence_key}</code></p>}
       {run.total_tokens > 0 && <p className="muted">{formatTokens(run.input_tokens)} input, {formatTokens(run.cached_input_tokens)} cached input, {formatTokens(run.output_tokens)} output, {formatTokens(run.reasoning_output_tokens)} reasoning output</p>}
       {run.error_message && <div><h3>Error</h3><pre>{run.error_message}</pre></div>}
       {run.output_json && <div><h3>Output JSON</h3><pre>{JSON.stringify(run.output_json, null, 2)}</pre></div>}

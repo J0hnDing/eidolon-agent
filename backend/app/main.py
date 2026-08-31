@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -9,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import SessionLocal, create_db_and_tables
 from app.routers import (
+    act,
     agent_runs,
     atlas_settings,
     chat,
@@ -24,13 +24,14 @@ from app.routers import (
     usage,
     web_apps,
 )
+from app.services.act_turn_dispatcher import act_turn_dispatcher
 from app.services.atlas_lifecycle_service import atlas_lifecycle_service
 from app.services.atlas_settings_service import build_default_atlas_settings_service
 from app.services.codex_usage_service import codex_usage_service
 from app.services.invocation_approval_service import InvocationApprovalService
 from app.services.proposed_skill_service import ProposedSkillService
 from app.services.scheduler_service import SchedulerService
-from app.services.telegram_service import run_telegram_long_polling
+from app.services.telegram_service import start_telegram_pollers, stop_telegram_pollers
 from app.services.web_app_runtime_service import WebAppRuntimeConfig, WebAppRuntimeService
 
 GOOGLE_OAUTH_CALLBACK_PATHS = (
@@ -80,10 +81,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         InvocationApprovalService(recovery_db).recover()
     finally:
         recovery_db.close()
-    telegram_stop = threading.Event()
-    telegram_worker = asyncio.create_task(
-        asyncio.to_thread(run_telegram_long_polling, telegram_stop)
-    )
+    telegram_pollers = start_telegram_pollers()
+    act_turn_dispatcher.start()
     atlas_db = SessionLocal()
     try:
         build_default_atlas_settings_service(atlas_db).startup()
@@ -108,11 +107,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        telegram_stop.set()
-        try:
-            await telegram_worker
-        except asyncio.CancelledError:
-            pass
+        await asyncio.to_thread(stop_telegram_pollers, telegram_pollers)
+        await asyncio.to_thread(act_turn_dispatcher.stop)
         web_app_maintenance.cancel()
         try:
             await web_app_maintenance
@@ -160,6 +156,7 @@ async def enforce_web_app_gateway_origin(request: Request, call_next):
     return await call_next(request)
 
 app.include_router(memory_facts.router)
+app.include_router(act.router)
 app.include_router(functions.router)
 app.include_router(integrations.router)
 app.include_router(atlas_settings.router)

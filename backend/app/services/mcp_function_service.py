@@ -135,6 +135,14 @@ class McpFunctionService:
                     if output.get("status") == "pending_approval"
                     else "succeeded"
                 )
+            elif snapshot.category == "backend_core" and snapshot.function_id == "act.document.download":
+                from app.services.act_download_service import ActDownloadError, download_document
+
+                try:
+                    output = download_document(arguments)
+                except ActDownloadError as exc:
+                    raise McpFunctionError("download_failed", str(exc)) from None
+                status = "succeeded"
             else:
                 raise McpFunctionError("not_exposed", "Backend-core functions require a registered direct MCP handler.")
             response_size = self._json_size(output)

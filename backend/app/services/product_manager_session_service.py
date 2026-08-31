@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -78,12 +79,40 @@ class ProductManagerSessionService:
             self._threads[metadata.thread_id] = metadata
         return metadata.thread_id
 
-    def resume_thread(self, thread_id: str) -> ProductManagerThreadMetadata:
-        response = self.client.request("thread/resume", {"threadId": thread_id})
+    def resume_thread(
+        self,
+        thread_id: str,
+        *,
+        cwd: str | Path | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+        developer_instructions: str | None = None,
+        sandbox: str | None = None,
+        approval_policy: str | None = None,
+    ) -> ProductManagerThreadMetadata:
+        params: dict[str, Any] = {"threadId": thread_id}
+        if cwd is not None:
+            params["cwd"] = str(Path(cwd).resolve())
+        if model is not None:
+            params["model"] = model
+        if reasoning_effort is not None:
+            params["config"] = {"model_reasoning_effort": reasoning_effort}
+        if developer_instructions is not None:
+            params["developerInstructions"] = developer_instructions
+        if sandbox is not None:
+            params["sandbox"] = sandbox
+        if approval_policy is not None:
+            params["approvalPolicy"] = approval_policy
+        response = self.client.request("thread/resume", params)
         metadata = self._metadata(response, expected_thread_id=thread_id)
         with self._threads_lock:
             self._threads[thread_id] = metadata
         return metadata
+
+    def has_thread(self, thread_id: str) -> bool:
+        """Return whether this App Server process already owns the thread."""
+        with self._threads_lock:
+            return thread_id in self._threads
 
     def run_structured_turn(
         self,
@@ -94,6 +123,7 @@ class ProductManagerSessionService:
         timeout_seconds: float,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        on_turn_started: Callable[[str], None] | None = None,
     ) -> ProductManagerTurnResult:
         if not input_text.strip():
             raise ValueError("ProductManager turn input must not be empty")
@@ -128,6 +158,8 @@ class ProductManagerSessionService:
             if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
                 raise ProductManagerSessionError("Codex App Server returned an invalid turn")
             turn_id = turn["id"]
+            if on_turn_started is not None:
+                on_turn_started(turn_id)
             try:
                 result = self._wait_for_turn(
                     events,

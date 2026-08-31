@@ -103,6 +103,32 @@ def test_single_codex_builder_has_independent_route(db_session: Session) -> None
     assert resolved.route_source == "builder.single_codex"
 
 
+def test_act_has_an_independent_route_and_falls_back_to_chat(db_session: Session) -> None:
+    service = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
+    service.update_settings(
+        CodexRoutingSettingsPayload.model_validate(
+            {"chat": {"model": "gpt-fast", "reasoning_effort": "low"}}
+        )
+    )
+    inherited = service.resolve(role="act", action="act")
+    assert inherited.effective_model == "gpt-fast"
+    assert inherited.effective_reasoning_effort == "low"
+    assert inherited.route_source == "chat"
+
+    service.update_settings(
+        CodexRoutingSettingsPayload.model_validate(
+            {
+                "chat": {"model": "gpt-fast", "reasoning_effort": "low"},
+                "act": {"model": "gpt-smart", "reasoning_effort": "high"},
+            }
+        )
+    )
+    explicit = service.resolve(role="act", action="act")
+    assert explicit.effective_model == "gpt-smart"
+    assert explicit.effective_reasoning_effort == "high"
+    assert explicit.route_source == "act"
+
+
 def test_saved_single_codex_route_reaches_real_cli_command(
     tmp_path: Path,
     db_session: Session,

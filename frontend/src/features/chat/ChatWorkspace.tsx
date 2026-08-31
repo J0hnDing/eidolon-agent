@@ -20,10 +20,11 @@ type ChatWorkspaceProps = {
   isSending: boolean;
   isGenerating: boolean;
   error: string | null;
-  onNewChat: () => void;
+  onNewConversation: (mode: ChatMode) => void;
   onSelectConversation: (conversationId: string) => void;
   onDeleteConversation: (conversationId: string) => void;
-  onModeChange: (mode: ChatMode) => void;
+  activeActTurnId: number | null;
+  onCancelAct: () => void;
   onDraftChange: (draft: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onApproveBuild: (message: ChatMessage) => void;
@@ -42,10 +43,11 @@ export function ChatWorkspace({
   isSending,
   isGenerating,
   error,
-  onNewChat,
+  onNewConversation,
   onSelectConversation,
   onDeleteConversation,
-  onModeChange,
+  activeActTurnId,
+  onCancelAct,
   onDraftChange,
   onSubmit,
   onApproveBuild,
@@ -67,12 +69,12 @@ export function ChatWorkspace({
           conversations={conversations}
           activeConversationId={activeConversationId}
           isBusy={isBusy}
-          onNewChat={onNewChat}
+          onNewConversation={onNewConversation}
           onSelectConversation={onSelectConversation}
           onDeleteConversation={onDeleteConversation}
         />
         <div className="chat-panel">
-          <ChatModeBar mode={mode} onModeChange={onModeChange} />
+          <ChatModeBar mode={mode} />
           <MessageList
             messages={messages}
             isSending={isSending}
@@ -89,6 +91,8 @@ export function ChatWorkspace({
             isSending={isSending}
             onDraftChange={onDraftChange}
             onSubmit={onSubmit}
+            activeActTurnId={activeActTurnId}
+            onCancelAct={onCancelAct}
           />
         </div>
       </div>
@@ -101,7 +105,7 @@ function ChatSidebar({
   conversations,
   activeConversationId,
   isBusy,
-  onNewChat,
+  onNewConversation,
   onSelectConversation,
   onDeleteConversation,
 }: Pick<
@@ -109,13 +113,19 @@ function ChatSidebar({
   | "conversations"
   | "activeConversationId"
   | "isBusy"
-  | "onNewChat"
+  | "onNewConversation"
   | "onSelectConversation"
   | "onDeleteConversation"
 >) {
   return (
     <aside className="chat-sidebar" aria-label="Chats">
-      <button type="button" onClick={onNewChat}>New Chat</button>
+      <div className="chat-create-actions" aria-label="Create conversation">
+        {(["chat", "project", "act"] as ChatMode[]).map((mode) => (
+          <button key={mode} type="button" onClick={() => onNewConversation(mode)}>
+            New {mode === "chat" ? "Chat" : mode === "project" ? "Project" : "Act"}
+          </button>
+        ))}
+      </div>
       <div className="chat-thread-list">
         {conversations.map((conversation) => (
           <div
@@ -127,7 +137,10 @@ function ChatSidebar({
               className="chat-thread-select"
               onClick={() => onSelectConversation(conversation.id)}
             >
-              <strong>{conversation.title}</strong>
+              <span className="chat-thread-heading">
+                <strong>{conversation.title}</strong>
+                <small className={`conversation-mode-badge ${conversation.mode}`}>{modeLabel(conversation.mode)}</small>
+              </span>
               <span>{formatSystemDateTime(conversation.updatedAt)}</span>
             </button>
             <button
@@ -135,8 +148,8 @@ function ChatSidebar({
               className="chat-thread-delete"
               onClick={() => onDeleteConversation(conversation.id)}
               disabled={isBusy}
-              aria-label={`Delete chat ${conversation.title}`}
-              title="Delete chat"
+              aria-label={`Delete ${conversation.mode} conversation ${conversation.title}`}
+              title={`Delete ${modeLabel(conversation.mode)} conversation`}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M5 7h14M9 7V4h6v3m2 0-1 13H8L7 7m3 4v5m4-5v5" />
@@ -149,27 +162,17 @@ function ChatSidebar({
   );
 }
 
-function ChatModeBar({ mode, onModeChange }: Pick<ChatWorkspaceProps, "mode" | "onModeChange">) {
+function ChatModeBar({ mode }: Pick<ChatWorkspaceProps, "mode">) {
   return (
     <div className="chat-mode-bar">
       <span className="muted">
         {mode === "project"
           ? "Project mode creates proposed skills after approval."
-          : "Chat mode asks Codex for normal answers and will not build skills."}
+          : mode === "act"
+            ? "Act works persistently in the shared workspace with Eidolon tools."
+            : "Chat mode asks Codex for normal answers and will not build skills."}
       </span>
-      <div className="segmented-control" aria-label="Chat mode">
-        {(["chat", "project"] as ChatMode[]).map((value) => (
-          <button
-            key={value}
-            type="button"
-            className={mode === value ? "active" : ""}
-            onClick={() => onModeChange(value)}
-            aria-pressed={mode === value}
-          >
-            {value === "chat" ? "Chat" : "Project"}
-          </button>
-        ))}
-      </div>
+      <span className={`conversation-mode-badge ${mode}`}>{modeLabel(mode)}</span>
     </div>
   );
 }
@@ -227,9 +230,11 @@ function ChatComposer({
   isSending,
   onDraftChange,
   onSubmit,
+  activeActTurnId,
+  onCancelAct,
 }: Pick<
   ChatWorkspaceProps,
-  "draft" | "mode" | "isBusy" | "isSending" | "onDraftChange" | "onSubmit"
+  "draft" | "mode" | "isBusy" | "isSending" | "onDraftChange" | "onSubmit" | "activeActTurnId" | "onCancelAct"
 >) {
   return (
     <form className="composer" onSubmit={onSubmit}>
@@ -241,14 +246,23 @@ function ChatComposer({
             ? "Project build is running..."
             : mode === "project"
               ? "Describe the skill you want to propose"
-              : "Type a message"
+              : mode === "act"
+                ? "Ask Act to work in its workspace"
+                : "Type a message"
         }
         aria-label="Chat message"
         disabled={isBusy && mode === "project"}
       />
       <button type="submit" disabled={isBusy}>{isSending ? "Sending..." : "Send"}</button>
+      {mode === "act" && activeActTurnId !== null && (
+        <button type="button" className="secondary" onClick={onCancelAct}>Cancel</button>
+      )}
     </form>
   );
+}
+
+function modeLabel(mode: ChatMode): string {
+  return mode === "chat" ? "Chat" : mode === "project" ? "Project" : "Act";
 }
 
 function MessageBody({

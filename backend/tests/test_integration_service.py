@@ -17,7 +17,7 @@ from app.models import (
     Skill,
     SkillVersion,
 )
-from app.schemas.manifest import SkillManifest
+from app.schemas.manifest import SkillManifest, manifest_permission_requests
 from app.services.atlas_provider import FakeAtlasProviderAdapter
 from app.services.github_provider import FakeGitHubProviderAdapter
 from app.services.integration_service import IntegrationCaller, IntegrationError, IntegrationService
@@ -131,7 +131,7 @@ def create_installed_skill(
             request_scope="runtime",
             request_type="install",
             risk_level="low",
-            requested_permissions_json=manifest.permissions.model_dump(mode="json"),
+            requested_permissions_json=manifest_permission_requests(manifest.permissions),
             reason="Runtime permissions approved.",
             user_explanation="Runtime permissions approved.",
             status="approved",

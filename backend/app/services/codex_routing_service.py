@@ -150,6 +150,7 @@ class CodexRoutingService:
     def _validate_all(self, payload: CodexRoutingSettingsPayload, catalog: dict[str, Any]) -> None:
         routes = [
             ("chat", "chat", None),
+            ("act", "act", None),
             *[("product_manager", action, None) for action in _PM_ACTIONS],
             ("builder", "single_codex_build", None),
             *[("builder", "skill_build_task", difficulty) for difficulty in ("easy", "medium", "hard")],
@@ -182,6 +183,8 @@ class CodexRoutingService:
         empty = InvocationChoice()
         if role == "chat":
             return empty, payload.chat, "chat"
+        if role == "act":
+            return payload.chat, payload.act, "act" if (payload.act.model or payload.act.reasoning_effort) else "chat"
         if role == "product_manager":
             route = _PM_ACTIONS.get(action)
             specific = getattr(payload.product_manager, route) if route else empty
