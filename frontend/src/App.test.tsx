@@ -26,6 +26,7 @@ describe("App navigation", () => {
     expect(within(navigation).getByRole("link", { name: "Applications" }).getAttribute("href")).toBe("/apps");
     expect(within(navigation).getByRole("link", { name: "Approvals" }).getAttribute("href")).toBe("/approval-requests");
     expect(within(navigation).getByRole("link", { name: "Settings" }).getAttribute("href")).toBe("/settings");
+    expect(navigation.querySelectorAll(".nav-active-indicator")).toHaveLength(1);
     expect(screen.getByRole("link", { name: "Skip to content" }).getAttribute("href")).toBe("#main-content");
   });
 });

@@ -100,7 +100,7 @@ def download_document(
         if temp_path is not None and temp_path.exists():
             temp_path.unlink()
     return {
-        "path": (Path("downloads") / target.name).as_posix(),
+        "path": (Path("workspace") / "downloads" / target.name).as_posix(),
         "filename": target.name,
         "bytes": target.stat().st_size,
         "media_type": media_type or _canonical_media_type(suffix),

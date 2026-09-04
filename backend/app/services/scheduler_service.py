@@ -20,13 +20,19 @@ from app.models import (
     SkillSchedule,
 )
 from app.schemas.schedule import SchedulePayload, ScheduleUpdate
+from app.services.permission_service import PermissionError as RuntimePermissionError
 from app.services.permission_service import PermissionService
 from app.services.platform_service import (
     NOTION_DONE_CLEANUP_SERVICE_ID,
+    PLATFORM_SCHEDULE_BY_ID,
+    PLATFORM_SCHEDULES,
+    PlatformScheduleDefinition,
     PlatformServiceDispatcher,
 )
 from app.services.proposed_skill_service import ProposedSkillService
+from app.services.runtime_state_service import RuntimeStateService
 from app.services.service_runtime_service import ServiceRuntimeService
+from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
 
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
@@ -56,10 +62,10 @@ KNOWN_TIMEZONES = {
     "America/Los_Angeles",
     "Europe/London",
 }
-NOTION_DONE_CLEANUP_JOB_ID = "backend_notion_todo_cleanup_daily"
-NOTION_DONE_CLEANUP_SCHEDULE_ID = 0
-NOTION_DONE_CLEANUP_TIME = "03:00"
-NOTION_DONE_CLEANUP_TIMEZONE = "America/Toronto"
+NOTION_DONE_CLEANUP_JOB_ID = PLATFORM_SCHEDULE_BY_ID[NOTION_DONE_CLEANUP_SERVICE_ID].job_id
+NOTION_DONE_CLEANUP_SCHEDULE_ID = PLATFORM_SCHEDULE_BY_ID[NOTION_DONE_CLEANUP_SERVICE_ID].schedule_id
+NOTION_DONE_CLEANUP_TIME = PLATFORM_SCHEDULE_BY_ID[NOTION_DONE_CLEANUP_SERVICE_ID].time
+NOTION_DONE_CLEANUP_TIMEZONE = PLATFORM_SCHEDULE_BY_ID[NOTION_DONE_CLEANUP_SERVICE_ID].timezone
 
 
 class ScheduleError(ValueError):
@@ -86,6 +92,7 @@ class SchedulerService:
         self.proposed_service = ProposedSkillService(self.db, project_root=self.project_root)
 
     def start(self) -> None:
+        self.reconcile_service_availability()
         if self.scheduler is None:
             return
         startup_at = utc_now()
@@ -106,11 +113,13 @@ class SchedulerService:
             .join(Skill, Skill.id == SkillSchedule.skill_id)
             .where(SkillSchedule.status == "active")
             .where(Skill.runtime == "service")
+            .where(Skill.enabled.is_(True))
         ).all()
         for schedule in schedules:
             try:
                 self.register_job(schedule)
             except Exception:
+                schedule.skill.enabled = False
                 schedule.status = "paused"
                 schedule.next_run_at = None
                 self._set_schedule_state(schedule, active_since_at=None)
@@ -119,28 +128,30 @@ class SchedulerService:
     def register_platform_services(self, *, now: datetime | None = None) -> None:
         if self.scheduler is None:
             return
-        self._ensure_platform_state(now or utc_now())
-        hour, minute = self._parse_time(NOTION_DONE_CLEANUP_TIME)
-        trigger: Any
-        if CronTrigger is None:
-            trigger = {
-                "type": "daily",
-                "hour": hour,
-                "minute": minute,
-                "timezone": NOTION_DONE_CLEANUP_TIMEZONE,
-            }
-        else:
-            trigger = CronTrigger(hour=hour, minute=minute, timezone=NOTION_DONE_CLEANUP_TIMEZONE)
-        self.scheduler.add_job(
-            self.execute_platform_service,
-            trigger=trigger,
-            id=NOTION_DONE_CLEANUP_JOB_ID,
-            args=[NOTION_DONE_CLEANUP_SERVICE_ID],
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-            misfire_grace_time=None,
-        )
+        started_at = now or utc_now()
+        for definition in PLATFORM_SCHEDULES:
+            self._ensure_platform_state(definition.service_id, started_at)
+            hour, minute = self._parse_time(definition.time)
+            trigger: Any
+            if CronTrigger is None:
+                trigger = {
+                    "type": "daily",
+                    "hour": hour,
+                    "minute": minute,
+                    "timezone": definition.timezone,
+                }
+            else:
+                trigger = CronTrigger(hour=hour, minute=minute, timezone=definition.timezone)
+            self.scheduler.add_job(
+                self.execute_platform_service,
+                trigger=trigger,
+                id=definition.job_id,
+                args=[definition.service_id],
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=None,
+            )
 
     def execute_platform_service(self, service_id: str) -> dict[str, Any] | None:
         with self.session_factory() as db:
@@ -151,8 +162,11 @@ class SchedulerService:
                 project_root=self.project_root,
             )
             now = utc_now()
-            state = service._ensure_platform_state(now)
-            scheduled_for_at = service._latest_platform_due_at(state, now)
+            definition = PLATFORM_SCHEDULE_BY_ID.get(service_id)
+            if definition is None:
+                return None
+            state = service._ensure_platform_state(service_id, now)
+            scheduled_for_at = service._latest_platform_due_at(definition, state, now)
             if scheduled_for_at is None:
                 return None
             occurrence = service._claim_occurrence(
@@ -186,14 +200,15 @@ class SchedulerService:
         occurrence.started_at = utc_now()
         self.db.commit()
         try:
-            result = PlatformServiceDispatcher(self.db).invoke(NOTION_DONE_CLEANUP_SERVICE_ID)
+            service_id = occurrence.schedule_key.removeprefix("platform:")
+            result = PlatformServiceDispatcher(self.db).invoke(service_id)
         except Exception as exc:
             self._finish_occurrence(occurrence, "failed", error_message=str(exc))
             self.platform_last_run_at = occurrence.ended_at
             self.platform_last_run_status = "failed"
             print(
                 "Scheduled platform service "
-                f"{NOTION_DONE_CLEANUP_SERVICE_ID} failed safely: {type(exc).__name__}"
+                f"{service_id} failed safely: {type(exc).__name__}"
             )
             return None
         status = str(result["status"])
@@ -201,30 +216,35 @@ class SchedulerService:
         self.platform_last_run_at = occurrence.ended_at
         self.platform_last_run_status = status
         print(
-            f"Scheduled platform service {NOTION_DONE_CLEANUP_SERVICE_ID} completed with status "
-            f"{status}; scanned={result['scanned_count']}; deleted={result['deleted_count']}"
+            f"Scheduled platform service {service_id} completed with status {status}"
         )
         return result
 
     def serialize_notion_done_cleanup_schedule(self) -> dict[str, Any]:
+        return self.serialize_platform_schedule(PLATFORM_SCHEDULE_BY_ID[NOTION_DONE_CLEANUP_SERVICE_ID])
+
+    def serialize_platform_schedules(self) -> list[dict[str, Any]]:
+        return [self.serialize_platform_schedule(definition) for definition in PLATFORM_SCHEDULES]
+
+    def serialize_platform_schedule(self, definition: PlatformScheduleDefinition) -> dict[str, Any]:
         job = None
         if self.scheduler is not None and hasattr(self.scheduler, "get_job"):
             try:
-                job = self.scheduler.get_job(NOTION_DONE_CLEANUP_JOB_ID)
+                job = self.scheduler.get_job(definition.job_id)
             except Exception:
                 job = None
         latest_occurrence = self.db.scalar(
             select(ScheduleOccurrence)
             .where(
                 ScheduleOccurrence.schedule_key
-                == self._platform_schedule_key(NOTION_DONE_CLEANUP_SERVICE_ID)
+                == self._platform_schedule_key(definition.service_id)
             )
             .order_by(ScheduleOccurrence.scheduled_for_at.desc(), ScheduleOccurrence.id.desc())
             .limit(1)
         )
         state = self.db.get(
             ScheduleRuntimeState,
-            self._platform_schedule_key(NOTION_DONE_CLEANUP_SERVICE_ID),
+            self._platform_schedule_key(definition.service_id),
         )
         last_run_at = (
             latest_occurrence.ended_at or latest_occurrence.started_at
@@ -232,23 +252,27 @@ class SchedulerService:
             else None
         )
         return {
-            "id": NOTION_DONE_CLEANUP_SCHEDULE_ID,
+            "id": definition.schedule_id,
             "schedule_kind": "platform",
-            "service_id": NOTION_DONE_CLEANUP_SERVICE_ID,
+            "service_id": definition.service_id,
             "read_only": True,
             "skill_id": None,
             "skill_name": None,
-            "name": "Daily Notion Done Cleanup",
+            "skill_enabled": None,
+            "is_running": RuntimeStateService(self.db).platform_service_is_running(
+                definition.service_id
+            ),
+            "name": definition.name,
             "status": "active" if job is not None else "paused",
             "schedule_type": "daily",
             "schedule_json": {
                 "type": "daily",
-                "time": NOTION_DONE_CLEANUP_TIME,
-                "timezone": NOTION_DONE_CLEANUP_TIMEZONE,
+                "time": definition.time,
+                "timezone": definition.timezone,
                 "input": {},
             },
             "input_json": {},
-            "timezone": NOTION_DONE_CLEANUP_TIMEZONE,
+            "timezone": definition.timezone,
             "next_run_at": getattr(job, "next_run_time", None),
             "last_run_at": last_run_at,
             "last_run_status": latest_occurrence.status if latest_occurrence is not None else None,
@@ -278,11 +302,13 @@ class SchedulerService:
             skill_id=skill.id,
             name=payload.name,
             status="paused",
+            availability_migrated=True,
             schedule_type=schedule_data.type,
             schedule_json=schedule_data.model_dump(exclude_none=True),
             input_json=schedule_data.input,
             timezone=schedule_data.timezone,
         )
+        skill.enabled = False
         self.db.add(schedule)
         self.db.flush()
         self._set_schedule_state(schedule, active_since_at=None)
@@ -291,7 +317,7 @@ class SchedulerService:
     def update_schedule(self, schedule: SkillSchedule, payload: ScheduleUpdate) -> SkillSchedule:
         self._validate_service(schedule.skill)
         schedule_data = self._validated_schedule(payload.schedule)
-        if schedule.status == "active":
+        if schedule.skill.enabled:
             self._validate_service_ready(schedule.skill, schedule_data.input)
 
         previous = {
@@ -313,9 +339,10 @@ class SchedulerService:
             if definition_changed:
                 self._set_schedule_state(
                     schedule,
-                    active_since_at=utc_now() if schedule.status == "active" else None,
+                    active_since_at=utc_now() if schedule.skill.enabled else None,
                 )
-            if schedule.status == "active":
+            if schedule.skill.enabled:
+                schedule.status = "active"
                 self.register_job(schedule, commit=False)
             self.db.commit()
             self.db.refresh(schedule)
@@ -324,7 +351,7 @@ class SchedulerService:
             self.db.rollback()
             for key, value in previous.items():
                 setattr(schedule, key, value)
-            if schedule.status == "active":
+            if schedule.skill.enabled:
                 try:
                     self.register_job(schedule)
                 except Exception:
@@ -332,31 +359,73 @@ class SchedulerService:
             raise ScheduleError(f"Schedule could not be updated: {exc}") from exc
 
     def pause_schedule(self, schedule: SkillSchedule) -> SkillSchedule:
+        return self.disable_service(schedule)
+
+    def resume_schedule(self, schedule: SkillSchedule) -> SkillSchedule:
+        return self.enable_service(schedule)
+
+    def disable_service(self, schedule: SkillSchedule) -> SkillSchedule:
         self._validate_service(schedule.skill)
-        if schedule.status != "active":
-            raise ScheduleError("Only active service schedules can be paused")
-        self.remove_job(schedule.id)
-        schedule.status = "paused"
-        schedule.next_run_at = None
-        self._set_schedule_state(schedule, active_since_at=None)
-        self.db.commit()
+        try:
+            with SkillOperationGuard(self.db).locked(
+                schedule.skill,
+                "disable",
+                reason="Disabling service",
+            ):
+                self.remove_job(schedule.id)
+                schedule.skill.enabled = False
+                schedule.status = "paused"
+                schedule.availability_migrated = True
+                schedule.next_run_at = None
+                self._set_schedule_state(schedule, active_since_at=None)
+                self.db.commit()
+        except SkillOperationConflict as exc:
+            raise ScheduleError(str(exc)) from exc
         self.db.refresh(schedule)
         return schedule
 
-    def resume_schedule(self, schedule: SkillSchedule) -> SkillSchedule:
+    def enable_service(self, schedule: SkillSchedule) -> SkillSchedule:
         self._validate_service(schedule.skill)
-        if schedule.status != "paused":
-            raise ScheduleError("Only paused service schedules can be resumed")
         self._validate_service_ready(schedule.skill, schedule.input_json)
-        schedule.status = "active"
-        self._set_schedule_state(schedule, active_since_at=utc_now())
         try:
-            self.register_job(schedule)
+            with SkillOperationGuard(self.db).locked(
+                schedule.skill,
+                "enable",
+                reason="Enabling service",
+            ):
+                schedule.skill.enabled = True
+                schedule.status = "active"
+                schedule.availability_migrated = True
+                self._set_schedule_state(schedule, active_since_at=utc_now())
+                self.register_job(schedule)
+        except SkillOperationConflict as exc:
+            raise ScheduleError(str(exc)) from exc
         except Exception as exc:
             self.db.rollback()
             raise ScheduleError(f"Service schedule could not be activated: {exc}") from exc
         self.db.refresh(schedule)
         return schedule
+
+    def reconcile_service_availability(self) -> None:
+        schedules = self.db.scalars(
+            select(SkillSchedule).join(Skill, Skill.id == SkillSchedule.skill_id)
+            .where(Skill.runtime == "service")
+        ).all()
+        changed = False
+        for schedule in schedules:
+            if not schedule.availability_migrated:
+                schedule.skill.enabled = schedule.status == "active"
+                schedule.availability_migrated = True
+                changed = True
+                continue
+            expected_status = "active" if schedule.skill.enabled else "paused"
+            if schedule.status != expected_status:
+                schedule.status = expected_status
+                if not schedule.skill.enabled:
+                    schedule.next_run_at = None
+                changed = True
+        if changed:
+            self.db.commit()
 
     def register_job(self, schedule: SkillSchedule, *, commit: bool = True) -> None:
         self._validate_service(schedule.skill)
@@ -424,7 +493,11 @@ class SchedulerService:
                 project_root=self.project_root,
             )
             schedule = db.get(SkillSchedule, schedule_id)
-            if schedule is None or schedule.status != "active":
+            if (
+                schedule is None
+                or schedule.status != "active"
+                or not schedule.skill.enabled
+            ):
                 return None
             now = utc_now()
             state = service._ensure_schedule_state(schedule, now=now)
@@ -454,7 +527,11 @@ class SchedulerService:
                 return None
             schedule_id = self._schedule_id_from_key(occurrence.schedule_key)
             schedule = db.get(SkillSchedule, schedule_id) if schedule_id is not None else None
-            if schedule is None or schedule.status != "active":
+            if (
+                schedule is None
+                or schedule.status != "active"
+                or not schedule.skill.enabled
+            ):
                 service._finish_occurrence(
                     occurrence,
                     "failed",
@@ -498,6 +575,8 @@ class SchedulerService:
         schedule_trigger: str | None = None,
     ) -> SkillRun:
         self._validate_service(schedule.skill)
+        if not schedule.skill.enabled or schedule.status != "active":
+            raise ScheduleError("Service is disabled")
         run = self._run_service_with_checks(
             schedule.skill,
             schedule.input_json,
@@ -538,6 +617,16 @@ class SchedulerService:
                 input_json,
                 schedule_id,
                 "Only services can run from schedules",
+                schedule_occurrence_key=schedule_occurrence_key,
+                scheduled_for_at=scheduled_for_at,
+                schedule_trigger=schedule_trigger,
+            )
+        if not skill.enabled:
+            return self._blocked_run(
+                skill,
+                input_json,
+                schedule_id,
+                "Service is disabled",
                 schedule_occurrence_key=schedule_occurrence_key,
                 scheduled_for_at=scheduled_for_at,
                 schedule_trigger=schedule_trigger,
@@ -601,6 +690,7 @@ class SchedulerService:
             .join(Skill, Skill.id == SkillSchedule.skill_id)
             .where(SkillSchedule.status == "active")
             .where(Skill.runtime == "service")
+            .where(Skill.enabled.is_(True))
         ).all()
         for schedule in schedules:
             state = self._ensure_schedule_state(schedule, now=startup_at)
@@ -619,21 +709,22 @@ class SchedulerService:
                     occurrence,
                 )
 
-        platform_state = self._ensure_platform_state(startup_at)
-        platform_due_at = self._latest_platform_due_at(platform_state, startup_at)
-        if platform_due_at is None:
-            return
-        platform_occurrence = self._claim_occurrence(
-            schedule_key=self._platform_schedule_key(NOTION_DONE_CLEANUP_SERVICE_ID),
-            definition_fingerprint=platform_state.definition_fingerprint,
-            scheduled_for_at=platform_due_at,
-            trigger_reason="startup_catch_up",
-        )
-        if platform_occurrence is not None:
-            self._queue_claimed_occurrence(
-                self.execute_claimed_platform_occurrence,
-                platform_occurrence,
+        for definition in PLATFORM_SCHEDULES:
+            platform_state = self._ensure_platform_state(definition.service_id, startup_at)
+            platform_due_at = self._latest_platform_due_at(definition, platform_state, startup_at)
+            if platform_due_at is None:
+                continue
+            platform_occurrence = self._claim_occurrence(
+                schedule_key=self._platform_schedule_key(definition.service_id),
+                definition_fingerprint=platform_state.definition_fingerprint,
+                scheduled_for_at=platform_due_at,
+                trigger_reason="startup_catch_up",
             )
+            if platform_occurrence is not None:
+                self._queue_claimed_occurrence(
+                    self.execute_claimed_platform_occurrence,
+                    platform_occurrence,
+                )
 
     def _queue_claimed_occurrence(self, func: Any, occurrence: ScheduleOccurrence) -> None:
         try:
@@ -794,9 +885,10 @@ class SchedulerService:
         )
         return state
 
-    def _ensure_platform_state(self, now: datetime) -> ScheduleRuntimeState:
-        schedule_key = self._platform_schedule_key(NOTION_DONE_CLEANUP_SERVICE_ID)
-        fingerprint = self._platform_definition_fingerprint()
+    def _ensure_platform_state(self, service_id: str, now: datetime) -> ScheduleRuntimeState:
+        definition = PLATFORM_SCHEDULE_BY_ID[service_id]
+        schedule_key = self._platform_schedule_key(service_id)
+        fingerprint = self._platform_definition_fingerprint(definition)
         state = self.db.get(ScheduleRuntimeState, schedule_key)
         if state is None:
             state = ScheduleRuntimeState(
@@ -842,6 +934,7 @@ class SchedulerService:
 
     def _latest_platform_due_at(
         self,
+        definition: PlatformScheduleDefinition,
         state: ScheduleRuntimeState,
         now: datetime,
     ) -> datetime | None:
@@ -851,19 +944,19 @@ class SchedulerService:
         now = self._as_utc(now)
         if active_since_at > now:
             return None
-        hour, minute = self._parse_time(NOTION_DONE_CLEANUP_TIME)
+        hour, minute = self._parse_time(definition.time)
         if CronTrigger is None:
             trigger: Any = {
                 "type": "daily",
                 "hour": hour,
                 "minute": minute,
-                "timezone": NOTION_DONE_CLEANUP_TIMEZONE,
+                "timezone": definition.timezone,
             }
         else:
             trigger = CronTrigger(
                 hour=hour,
                 minute=minute,
-                timezone=NOTION_DONE_CLEANUP_TIMEZONE,
+                timezone=definition.timezone,
             )
         return self._latest_trigger_due_at(
             trigger,
@@ -941,13 +1034,13 @@ class SchedulerService:
             }
         )
 
-    def _platform_definition_fingerprint(self) -> str:
+    def _platform_definition_fingerprint(self, definition: PlatformScheduleDefinition) -> str:
         return self._fingerprint(
             {
-                "service_id": NOTION_DONE_CLEANUP_SERVICE_ID,
+                "service_id": definition.service_id,
                 "type": "daily",
-                "time": NOTION_DONE_CLEANUP_TIME,
-                "timezone": NOTION_DONE_CLEANUP_TIMEZONE,
+                "time": definition.time,
+                "timezone": definition.timezone,
                 "input": {},
             }
         )
@@ -1001,8 +1094,17 @@ class SchedulerService:
 
     def _validate_service_ready(self, skill: Skill, input_json: dict[str, Any]) -> None:
         self._validate_service(skill)
-        permission_decision = PermissionService(self.db, project_root=self.project_root).can_run(skill)
+        permission_service = PermissionService(self.db, project_root=self.project_root)
+        permission_decision = permission_service.can_run(skill)
         if not permission_decision.allowed:
+            if permission_decision.reason == "Runtime permissions do not match the current manifest":
+                try:
+                    permission_service.create_runtime_request(skill)
+                except RuntimePermissionError as exc:
+                    raise ScheduleError(str(exc)) from exc
+                raise ScheduleError(
+                    "Runtime permissions changed. Review the new runtime permission request before enabling this service."
+                )
             raise ScheduleError(permission_decision.reason)
         self._validate_input(skill, input_json)
 
@@ -1035,7 +1137,11 @@ class SchedulerService:
         return f"service_schedule_{schedule_id}"
 
 
-def serialize_schedule(schedule: SkillSchedule) -> dict[str, Any]:
+def serialize_schedule(
+    schedule: SkillSchedule,
+    *,
+    is_running: bool = False,
+) -> dict[str, Any]:
     return {
         "id": schedule.id,
         "schedule_kind": "service",
@@ -1043,6 +1149,8 @@ def serialize_schedule(schedule: SkillSchedule) -> dict[str, Any]:
         "read_only": False,
         "skill_id": schedule.skill_id,
         "skill_name": schedule.skill.name if schedule.skill else None,
+        "skill_enabled": schedule.skill.enabled if schedule.skill else None,
+        "is_running": is_running,
         "name": schedule.name,
         "status": schedule.status,
         "schedule_type": schedule.schedule_type,

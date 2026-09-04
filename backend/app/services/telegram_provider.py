@@ -771,11 +771,14 @@ def validate_notification(
     title: Any,
     description: Any,
     link: Any = None,
-) -> tuple[str, str, str | None]:
+    alert: Any = False,
+) -> tuple[str, str, str | None, bool]:
     normalized_title = _require_text(title, "title", maximum=TELEGRAM_MAX_TITLE_CHARS)
     normalized_description = _require_text(description, "description", maximum=TELEGRAM_MAX_DESCRIPTION_CHARS)
     normalized_link = None if link is None else _validate_link_url(link)
-    return normalized_title, normalized_description, normalized_link
+    if not isinstance(alert, bool):
+        raise TelegramProviderError("invalid_input", "Telegram notification alert flag is invalid")
+    return normalized_title, normalized_description, normalized_link, alert
 
 
 def send_notification(
@@ -785,15 +788,17 @@ def send_notification(
     title: Any,
     description: Any,
     link: Any = None,
+    alert: Any = False,
 ) -> dict[str, Any]:
-    """Send a bounded HTML-escaped notification with an optional URL button."""
+    """Send a bounded HTML-escaped notification or alert with an optional URL button."""
 
     _require_chat_id(chat_id)
-    normalized_title, normalized_description, normalized_link = validate_notification(
-        title=title, description=description, link=link
+    normalized_title, normalized_description, normalized_link, normalized_alert = validate_notification(
+        title=title, description=description, link=link, alert=alert
     )
+    marker = "❗" if normalized_alert else "🔔"
     text = (
-        f"🔔 <b>{html.escape(normalized_title, quote=False)}</b>\n"
+        f"{marker} <b>{html.escape(normalized_title, quote=False)}</b>\n"
         f"{html.escape(normalized_description, quote=False)}"
     )
     _validate_message_text(text)
@@ -848,6 +853,7 @@ class TelegramNotificationProviderAdapter:
             title=input_json.get("title"),
             description=input_json.get("description"),
             link=input_json.get("link"),
+            alert=input_json.get("alert", False),
         )
 
 

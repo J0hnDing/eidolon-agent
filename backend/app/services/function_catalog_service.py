@@ -37,12 +37,26 @@ class FunctionCatalogService:
         self.project_root = self.project_root.resolve()
         self.catalog_path = self.project_root / "runtime" / "function_catalog.json"
 
-    def list_entries(self, *, refresh: bool = True) -> list[dict[str, Any]]:
+    def list_entries(
+        self,
+        *,
+        refresh: bool = False,
+        include_runtime_state: bool = False,
+    ) -> list[dict[str, Any]]:
         if refresh:
             self.refresh()
         payload = self._read_catalog()
         entries = payload.get("functions", [])
-        return [dict(entry) for entry in entries if isinstance(entry, dict)]
+        result = [dict(entry) for entry in entries if isinstance(entry, dict)]
+        if not include_runtime_state:
+            return result
+        from app.services.runtime_state_service import RuntimeStateService
+
+        running_ids = RuntimeStateService(self.db).running_function_ids()
+        return [
+            {**entry, "is_running": str(entry.get("id")) in running_ids}
+            for entry in result
+        ]
 
     def available_index(self) -> list[dict[str, str]]:
         return [
@@ -153,12 +167,25 @@ class FunctionCatalogService:
                 )
             )
         integrations = build_default_integration_service(self.db)
+        integration_availability: dict[tuple[str, str], bool] = {}
         approval_available = InvocationApprovalService(
             self.db, project_root=self.project_root
         ).approval_available()
         atlas_codex_available = codex_available()
         for operation in OPERATIONS.values():
-            connected = integrations.operation_available(operation.operation_id)
+            availability_group = (
+                "report"
+                if operation.operation_id.startswith("notion.report.")
+                else "todo"
+                if operation.provider == "notion"
+                else "provider"
+            )
+            availability_key = (operation.provider, availability_group)
+            if availability_key not in integration_availability:
+                integration_availability[availability_key] = integrations.operation_available(
+                    operation.operation_id
+                )
+            connected = integration_availability[availability_key]
             unavailable_reason = {
                 "github": "GitHub connection is not configured",
                 "atlas": "Atlas is not running and unlocked",
@@ -168,9 +195,7 @@ class FunctionCatalogService:
                 "telegram": "Telegram bot is not paired",
             }.get(operation.provider, f"{operation.provider} connection is not configured")
             reasons = [] if connected else [unavailable_reason]
-            requires_invocation_approval = bool(
-                getattr(operation, "requires_invocation_approval", False)
-            )
+            requires_invocation_approval = operation.invocation_approval_required
             effective = effective_invocation_contract(
                 description=operation.description,
                 input_schema=operation.input_schema,
@@ -221,11 +246,6 @@ class FunctionCatalogService:
 
     def _user_entries(self) -> list[dict[str, Any]]:
         from app.services.function_registry_service import FunctionRegistryService
-        from app.services.proposed_skill_service import ProposedSkillService
-
-        ProposedSkillService(self.db, project_root=self.project_root).sync_installed_from_filesystem(
-            reconcile_schedules=False
-        )
         registry = FunctionRegistryService(self.db, project_root=self.project_root)
         approval_available = InvocationApprovalService(
             self.db, project_root=self.project_root

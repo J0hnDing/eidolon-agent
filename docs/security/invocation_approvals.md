@@ -1,6 +1,6 @@
 # Invocation Approvals
 
-Invocation approval is a durable per-call control plane separate from build-time permissions, runtime permissions, caller-to-function access, and provider integration authorization. It applies only to callable user functions and integration operations explicitly marked `requires_invocation_approval`; services and web applications cannot set the manifest flag.
+Invocation approval is a durable per-call control plane separate from build-time permissions, runtime permissions, caller-to-function access, and provider integration authorization. It applies to callable user functions and integration operations whose effective contract requires approval. For user functions this means `requires_invocation_approval=true` or effective high risk; the manifest flag itself is valid only for functions and forces high risk during validation. Services and web applications cannot set it.
 
 The backend projects one effective public contract without modifying the authored business contract. It appends exactly: “Requires per-call approval. Calling this function sends an approval request to Telegram; the action executes only after user approval. Approval and execution are managed entirely by Eidolon's backend.” It also adds required `reason_to_call` (1-500 characters) and projects the immediate output as `{status: "pending_approval", approval_id}`. Authored schemas may not reserve `reason_to_call`; the backend strips it before business validation and execution.
 

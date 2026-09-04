@@ -49,6 +49,7 @@ class WindowsCredentialSecretStore:
         "gmail": "Eidolon/Gmail/",
         "google_oauth": "Eidolon/GoogleOAuth/",
         "telegram": "Eidolon/Telegram/",
+        "quercus": "Eidolon/Quercus/",
         "atlas_api_key": "Eidolon/Atlas/APIKey/",
         "atlas_passphrase": "Eidolon/Atlas/Passphrase/",
     }

@@ -29,7 +29,7 @@ The callback requires the Gmail scope and a refresh token, then retrieves the ve
 | `email.search` | Requires at least one keyword/filter. Returns one page of at most 25 normalized conversation summaries and an opaque continuation token. |
 | `email.conversation.get` | Fetches one Gmail thread in full format and returns at most 100 normalized messages. HTML-only bodies are converted to text. Attachments expose only filename, MIME type, and size. |
 | `email.read_new` | Fetches at most 50 unread Primary Inbox messages newer than one year. It excludes Promotions, Social, Updates, Forums, Spam, and Trash. Every selected message must be fetched and the combined normalized result must fit 4 MiB before Eidolon removes the `UNREAD` label from the batch. |
-| `email.send` | Sends one plain-text email to 1-10 direct recipients and at most 20 total recipients. Subject and body are bounded, and HTML and attachments are not accepted. Every invocation requires the separate per-call approval workflow. |
+| `email.send` | High risk. Sends one plain-text email to 1-10 direct recipients and at most 20 total recipients. Subject and body are bounded, and HTML and attachments are not accepted. Every invocation requires the separate per-call approval workflow. |
 
 Normalized messages contain message/conversation IDs, bounded sender and recipient headers, subject, date, snippet, text, unread state, and attachment metadata. Eidolon never returns raw MIME, attachment bytes, OAuth responses, authorization headers, or provider credentials.
 

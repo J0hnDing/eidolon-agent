@@ -10,9 +10,11 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import ScheduleOccurrence, ScheduleRuntimeState, Skill, SkillRun, SkillVersion
+from app.models import ApprovalRequest, ScheduleOccurrence, ScheduleRuntimeState, Skill, SkillRun, SkillVersion
 from app.routers.schedules import list_schedules
 from app.schemas.schedule import SchedulePayload, ScheduleUpdate
+from app.services.permission_service import PermissionService
+from app.services.platform_service import PLATFORM_SCHEDULE_BY_ID, QUERCUS_SYNC_SERVICE_ID
 from app.services.scheduler_service import (
     NOTION_DONE_CLEANUP_JOB_ID,
     NOTION_DONE_CLEANUP_SERVICE_ID,
@@ -171,7 +173,7 @@ def service(db: Session, project_root: Path, fake_scheduler: FakeScheduler | Non
     )
 
 
-def test_start_registers_backend_owned_notion_service(
+def test_start_registers_backend_owned_platform_services(
     tmp_path: Path,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -189,11 +191,34 @@ def test_start_registers_backend_owned_notion_service(
     assert job["trigger"]["timezone"] == NOTION_DONE_CLEANUP_TIMEZONE
     assert job["max_instances"] == 1
     assert job["coalesce"] is True
+    quercus_definition = PLATFORM_SCHEDULE_BY_ID[QUERCUS_SYNC_SERVICE_ID]
+    quercus_job = fake_scheduler.jobs[quercus_definition.job_id]
+    assert quercus_job["args"] == [QUERCUS_SYNC_SERVICE_ID]
+    assert quercus_job["trigger"]["hour"] == 10
+    assert quercus_job["trigger"]["timezone"] == "America/Toronto"
+    assert quercus_job["max_instances"] == 1
+    assert quercus_job["coalesce"] is True
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(scheduler_service=scheduler)))
     listed = list_schedules(request, skill_id=None, db=db_session)  # type: ignore[arg-type]
     assert listed[0]["schedule_kind"] == "platform"
     assert listed[0]["service_id"] == NOTION_DONE_CLEANUP_SERVICE_ID
     assert listed[0]["read_only"] is True
+    assert [item["service_id"] for item in listed[:2]] == [
+        NOTION_DONE_CLEANUP_SERVICE_ID,
+        QUERCUS_SYNC_SERVICE_ID,
+    ]
+
+
+def test_quercus_platform_schedule_follows_toronto_dst(tmp_path: Path, db_session: Session) -> None:
+    scheduler = service(db_session, tmp_path)
+    definition = PLATFORM_SCHEDULE_BY_ID[QUERCUS_SYNC_SERVICE_ID]
+    state = scheduler._ensure_platform_state(QUERCUS_SYNC_SERVICE_ID, datetime(2025, 1, 1, tzinfo=UTC))
+
+    winter = scheduler._latest_platform_due_at(definition, state, datetime(2026, 1, 15, 15, 5, tzinfo=UTC))
+    summer = scheduler._latest_platform_due_at(definition, state, datetime(2026, 7, 15, 14, 5, tzinfo=UTC))
+
+    assert winter == datetime(2026, 1, 15, 15, 0, tzinfo=UTC)
+    assert summer == datetime(2026, 7, 15, 14, 0, tzinfo=UTC)
 
 
 def test_manifest_creates_exactly_one_paused_service_schedule(tmp_path: Path, db_session: Session) -> None:
@@ -237,7 +262,7 @@ def test_service_schedule_input_must_match_manifest_schema(tmp_path: Path, db_se
         service(db_session, tmp_path).create_from_manifest(skill)
 
 
-def test_pause_resume_and_edit_manage_one_service_job(
+def test_enable_disable_and_edit_manage_one_service_job(
     tmp_path: Path,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -249,8 +274,9 @@ def test_pause_resume_and_edit_manage_one_service_job(
     db_session.commit()
     monkeypatch.setattr(scheduler, "_validate_service_ready", lambda *_args: None)
 
-    resumed = scheduler.resume_schedule(schedule)
-    assert resumed.status == "active"
+    enabled = scheduler.enable_service(schedule)
+    assert enabled.status == "active"
+    assert skill.enabled is True
     assert scheduler.job_id(schedule.id) in fake_scheduler.jobs
 
     updated = scheduler.update_schedule(
@@ -270,12 +296,49 @@ def test_pause_resume_and_edit_manage_one_service_job(
     assert updated.schedule_json["day"] == "friday"
     assert scheduler.job_id(schedule.id) in fake_scheduler.jobs
 
-    paused = scheduler.pause_schedule(schedule)
-    assert paused.status == "paused"
+    disabled = scheduler.disable_service(schedule)
+    assert disabled.status == "paused"
+    assert skill.enabled is False
     assert scheduler.job_id(schedule.id) not in fake_scheduler.jobs
 
 
-def test_run_now_works_while_service_schedule_is_paused(
+def test_enable_refreshes_stale_runtime_permission_request(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill = create_skill(db_session, tmp_path)
+    scheduler = service(db_session, tmp_path)
+    schedule = scheduler.create_from_manifest(skill)
+    db_session.commit()
+    permission_service = PermissionService(db_session, project_root=tmp_path)
+    approved = permission_service.create_runtime_request(skill)
+    permission_service.approve_request(approved)
+
+    manifest_path = tmp_path / skill.manifest_path
+    manifest_json = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_json["permissions"]["codex"] = {
+        "call_response": True,
+        "internet_access": False,
+    }
+    manifest_path.write_text(json.dumps(manifest_json), encoding="utf-8")
+
+    with pytest.raises(ScheduleError, match="Review the new runtime permission request"):
+        scheduler.enable_service(schedule)
+
+    requests = db_session.scalars(
+        select(ApprovalRequest)
+        .where(
+            ApprovalRequest.skill_id == skill.id,
+            ApprovalRequest.request_scope == "runtime",
+        )
+        .order_by(ApprovalRequest.id)
+    ).all()
+    assert [request.status for request in requests] == ["superseded", "pending"]
+    assert requests[-1].requested_permissions_json["codex"]["call_response"] is True
+    assert skill.enabled is False
+
+
+def test_run_now_requires_enabled_service(
     tmp_path: Path,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -308,9 +371,15 @@ def test_run_now_works_while_service_schedule_is_paused(
         return run
 
     monkeypatch.setattr(scheduler, "_run_service_with_checks", fake_run)
+    with pytest.raises(ScheduleError, match="disabled"):
+        scheduler.run_scheduled_service(schedule)
+
+    monkeypatch.setattr(scheduler, "_validate_service_ready", lambda *_args: None)
+    scheduler.enable_service(schedule)
     run = scheduler.run_scheduled_service(schedule)
 
-    assert schedule.status == "paused"
+    assert schedule.status == "active"
+    assert skill.enabled is True
     assert run.status == "succeeded"
     assert run.source_schedule_id == schedule.id
     assert schedule.last_run_status == "succeeded"
@@ -349,6 +418,7 @@ def test_startup_claims_only_latest_missed_occurrence_once(
     scheduler = service(db_session, tmp_path, fake_scheduler)
     schedule = scheduler.create_from_manifest(skill)
     schedule.status = "active"
+    skill.enabled = True
     scheduler._set_schedule_state(
         schedule,
         active_since_at=datetime(2026, 8, 28, 10, 0, tzinfo=UTC),
@@ -382,6 +452,7 @@ def test_failed_occurrence_is_not_retried_but_next_occurrence_can_run(
     scheduler = service(db_session, tmp_path)
     schedule = scheduler.create_from_manifest(skill)
     schedule.status = "active"
+    skill.enabled = True
     scheduler._set_schedule_state(
         schedule,
         active_since_at=datetime(2026, 8, 29, 10, 0, tzinfo=UTC),
@@ -431,6 +502,7 @@ def test_automatic_callback_executes_one_claim_for_the_intended_time(
     scheduler = service(db_session, tmp_path)
     schedule = scheduler.create_from_manifest(skill)
     schedule.status = "active"
+    skill.enabled = True
     scheduler._set_schedule_state(
         schedule,
         active_since_at=datetime(2026, 8, 30, 10, 0, tzinfo=UTC),
@@ -494,6 +566,7 @@ def test_interrupted_claim_is_failed_and_never_retried(
     scheduler = service(db_session, tmp_path)
     schedule = scheduler.create_from_manifest(skill)
     schedule.status = "active"
+    skill.enabled = True
     scheduler._set_schedule_state(
         schedule,
         active_since_at=datetime(2026, 8, 30, 10, 0, tzinfo=UTC),
@@ -529,6 +602,7 @@ def test_interval_anchor_remains_stable_across_scheduler_instances(
     scheduler = service(db_session, tmp_path)
     schedule = scheduler.create_from_manifest(skill)
     schedule.status = "active"
+    skill.enabled = True
     activated_at = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
     scheduler._set_schedule_state(schedule, active_since_at=activated_at)
     db_session.commit()

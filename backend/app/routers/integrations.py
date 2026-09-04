@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,13 @@ from app.schemas.integration import (
     NotionConnectionStatus,
     NotionCredentialWrite,
     NotionDataSourcesWrite,
+    QuercusConnectionStatus,
+    QuercusCourseRead,
+    QuercusCourseSelectionWrite,
+    QuercusCredentialWrite,
+    QuercusProcessingReprocessResult,
+    QuercusProcessingStatus,
+    QuercusProcessingWrite,
     TelegramConnectionStatus,
     TelegramPairingResponse,
     TelegramPairingStart,
@@ -29,9 +36,23 @@ from app.services.integration_service import (
     IntegrationError,
     build_default_integration_service,
 )
+from app.services.quercus_processing_service import (
+    PROCESSING_MARKER,
+    QuercusProcessingService,
+)
+from app.services.quercus_service import QuercusError, QuercusService
 from app.services.telegram_service import TELEGRAM_ACT_ROLE, TelegramService, TelegramServiceError
 
 router = APIRouter(tags=["integrations"])
+
+
+def _quercus_service(request: Request, db: Session) -> QuercusService:
+    dispatcher = getattr(request.app.state, "quercus_sync_dispatcher", None)
+    return QuercusService(db, queue_sync=getattr(dispatcher, "request", None))
+
+
+def _quercus_processing_service(db: Session) -> QuercusProcessingService:
+    return QuercusProcessingService(db)
 
 
 @router.get("/settings/integrations/github", response_model=GitHubConnectionStatus)
@@ -120,6 +141,124 @@ def remove_notion_connection(db: Session = Depends(get_db)) -> Response:
         build_default_integration_service(db).remove_notion_connection()
         FunctionCatalogService(db).refresh()
     except IntegrationError as exc:
+        raise _http_error(exc) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/settings/integrations/quercus", response_model=QuercusConnectionStatus)
+def quercus_connection_status(request: Request, db: Session = Depends(get_db)) -> QuercusConnectionStatus:
+    return _quercus_service(request, db).status()
+
+
+@router.put("/settings/integrations/quercus", response_model=QuercusConnectionStatus)
+def put_quercus_connection(
+    payload: QuercusCredentialWrite,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> QuercusConnectionStatus:
+    try:
+        return _quercus_service(request, db).put_connection(payload.token.get_secret_value())
+    except QuercusError as exc:
+        raise _http_error(exc) from None
+
+
+@router.delete("/settings/integrations/quercus", response_model=QuercusConnectionStatus)
+def remove_quercus_connection(request: Request, db: Session = Depends(get_db)) -> QuercusConnectionStatus:
+    try:
+        return _quercus_service(request, db).remove_connection()
+    except QuercusError as exc:
+        raise _http_error(exc) from None
+
+
+@router.get(
+    "/settings/integrations/quercus/processing",
+    response_model=QuercusProcessingStatus,
+)
+def quercus_processing_status(db: Session = Depends(get_db)) -> QuercusProcessingStatus:
+    return QuercusProcessingStatus(**_quercus_processing_service(db).status())
+
+
+@router.put(
+    "/settings/integrations/quercus/processing",
+    response_model=QuercusProcessingStatus,
+)
+def put_quercus_processing(
+    payload: QuercusProcessingWrite,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> QuercusProcessingStatus:
+    service = _quercus_processing_service(db)
+    try:
+        service.configure(payload.method, payload.llama_cpp_directory)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"type": "invalid_directory", "message": str(exc)},
+        ) from None
+    if payload.method == PROCESSING_MARKER:
+        dispatcher = getattr(request.app.state, "quercus_processing_dispatcher", None)
+        if dispatcher is not None:
+            dispatcher.request()
+    return QuercusProcessingStatus(**service.status())
+
+
+@router.post(
+    "/settings/integrations/quercus/processing/reprocess-failed",
+    response_model=QuercusProcessingReprocessResult,
+)
+def reprocess_failed_quercus_files(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> QuercusProcessingReprocessResult:
+    service = _quercus_processing_service(db)
+    try:
+        queued_file_count = service.requeue_failed()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"type": "processing_disabled", "message": str(exc)},
+        ) from None
+    dispatcher = getattr(request.app.state, "quercus_processing_dispatcher", None)
+    if queued_file_count and dispatcher is not None:
+        dispatcher.request()
+    return QuercusProcessingReprocessResult(
+        **service.status(),
+        queued_file_count=queued_file_count,
+    )
+
+
+@router.get("/settings/integrations/quercus/courses", response_model=list[QuercusCourseRead])
+def list_quercus_courses(request: Request, db: Session = Depends(get_db)) -> list[QuercusCourseRead]:
+    try:
+        return _quercus_service(request, db).courses()
+    except QuercusError as exc:
+        raise _http_error(exc) from None
+
+
+@router.put("/settings/integrations/quercus/courses", response_model=list[QuercusCourseRead])
+def select_quercus_courses(
+    payload: QuercusCourseSelectionWrite,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> list[QuercusCourseRead]:
+    try:
+        return _quercus_service(request, db).select_courses(payload.course_ids)
+    except QuercusError as exc:
+        raise _http_error(exc) from None
+
+
+@router.delete(
+    "/settings/integrations/quercus/courses/{course_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_quercus_course(
+    course_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    try:
+        _quercus_service(request, db).delete_course(course_id)
+    except QuercusError as exc:
         raise _http_error(exc) from None
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -381,7 +520,7 @@ def _bearer_token(authorization: str | None) -> str:
     return token.strip()
 
 
-def _http_error(exc: IntegrationError) -> HTTPException:
+def _http_error(exc: IntegrationError | QuercusError) -> HTTPException:
     status_code = {
         "invalid_input": status.HTTP_422_UNPROCESSABLE_CONTENT,
         "invalid_credential": status.HTTP_401_UNAUTHORIZED,
@@ -391,10 +530,13 @@ def _http_error(exc: IntegrationError) -> HTTPException:
         "provider_timeout": status.HTTP_504_GATEWAY_TIMEOUT,
         "response_too_large": status.HTTP_413_CONTENT_TOO_LARGE,
         "provider_unavailable": status.HTTP_503_SERVICE_UNAVAILABLE,
+        "identity_conflict": status.HTTP_409_CONFLICT,
+        "connection_unavailable": status.HTTP_409_CONFLICT,
     }.get(exc.error_type, status.HTTP_409_CONFLICT)
+    retry_after_seconds = getattr(exc, "retry_after_seconds", None)
     headers = (
-        {"Retry-After": str(exc.retry_after_seconds)}
-        if exc.error_type == "rate_limited" and exc.retry_after_seconds is not None
+        {"Retry-After": str(retry_after_seconds)}
+        if exc.error_type == "rate_limited" and retry_after_seconds is not None
         else None
     )
     return HTTPException(

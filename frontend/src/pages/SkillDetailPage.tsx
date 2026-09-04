@@ -5,6 +5,7 @@ import PermissionRequestModal from "../components/PermissionRequestModal";
 import {
   RunHistory,
   RunOutput,
+  SkillFilesDisclosure,
   UpdateChatMessage,
   UpdateSuggestionChat,
   ValidationResult,
@@ -460,6 +461,14 @@ export default function SkillDetailPage() {
     setIsWorking(true);
     setError(null);
     try {
+      if (skill.runtime === "service" && !skill.enabled) {
+        const permissionRequest = await api.analyzeRuntimePermissions(skill.id);
+        setRuntimePermission(permissionRequest);
+        if (!runtimePermissionsApproved(permissionRequest)) {
+          setShowRuntimeModal(true);
+          return;
+        }
+      }
       setSkill(await api.updateSkill(skill.id, { enabled: !skill.enabled }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not update skill");
@@ -475,7 +484,11 @@ export default function SkillDetailPage() {
   if (error || !skill) {
     return (
       <section className="page stack">
-        <Link to="/skills">Back to skills</Link>
+        <Link className="skill-back-button" to="/skills" aria-label="Back to skills" title="Back to skills">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m14 6-6 6 6 6M8 12h10" />
+          </svg>
+        </Link>
         <p className="error-text">{error ?? "Skill not found"}</p>
       </section>
     );
@@ -493,12 +506,24 @@ export default function SkillDetailPage() {
   const displayName = formatDisplayName(skill.name);
 
   return (
-    <section className="page stack">
-      <header className="page-header">
-        <div>
+    <section className="page stack skill-detail-page">
+      <header className="skill-detail-header">
+        <div className="skill-detail-title">
+          <Link className="skill-back-button" to="/skills" aria-label="Back to skills" title="Back to skills">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m14 6-6 6 6 6M8 12h10" />
+            </svg>
+          </Link>
           <h1>{displayName}</h1>
         </div>
-        <Link to="/skills">Back to skills</Link>
+        <button
+          type="button"
+          className="danger"
+          onClick={isProposed ? handleReject : handleDelete}
+          disabled={isWorking}
+        >
+          Delete Skill
+        </button>
       </header>
 
       <section className="detail-panel">
@@ -516,10 +541,10 @@ export default function SkillDetailPage() {
             <dt>Risk Level</dt>
             <dd>{skill.risk_level}</dd>
           </div>
-          {!isService && <div>
+          <div>
             <dt>Enabled</dt>
             <dd>{skill.enabled ? "enabled" : "disabled"}</dd>
-          </div>}
+          </div>
           <div>
             <dt>Manifest Path</dt>
             <dd>{skill.manifest_path}</dd>
@@ -545,6 +570,38 @@ export default function SkillDetailPage() {
             <dd>{skill.output_schema_json ? "declared" : "none"}</dd>
           </div>
         </dl>
+        {isProposed ? (
+          <div className="button-row skill-primary-actions">
+            <button type="button" onClick={handleValidate} disabled={isWorking}>
+              Validate/Test
+            </button>
+            <button type="button" onClick={handleInstall} disabled={isWorking}>
+              Install
+            </button>
+            <button type="button" className="secondary" onClick={handleRepair} disabled={isWorking}>
+              Ask Agents to Repair
+            </button>
+          </div>
+        ) : (
+          <div className="button-row skill-primary-actions">
+            {isWebApp && isInstalled && skill.enabled && runtimeApproved && (
+              <Link className="button-link" to={`/apps/${skill.id}`}>Open Application</Link>
+            )}
+            {isInstalled && skill.enabled && !runtimeApproved && (
+              <button type="button" onClick={() => handleReviewRuntimePermissions(true)} disabled={isWorking}>
+                {isService ? "Review Before Activation" : "Review Before Run"}
+              </button>
+            )}
+            {isInstalled && !skill.enabled && !isService && (
+              <button type="button" disabled>
+                Run Disabled
+              </button>
+            )}
+            <button type="button" onClick={handleToggleEnabled} disabled={isWorking}>
+              {skill.enabled ? "Disable" : "Enable"}
+            </button>
+          </div>
+        )}
       </section>
 
       <section className="detail-panel">
@@ -560,9 +617,21 @@ export default function SkillDetailPage() {
         {versions.length >= 3 && (
           <p className="error-text">Maximum 3 versions reached. Discard a draft or proposed update before creating another.</p>
         )}
+        <VersionList
+          versions={versions}
+          activeVersionId={skill.active_version_id}
+          isWorking={isWorking}
+          onCompare={handleCompareVersion}
+          onActivate={handleActivateVersion}
+          onDiscard={handleDiscardVersion}
+        />
+        {versionComparison && <VersionComparisonPanel comparison={versionComparison} />}
         {skill.status === "installed" && (
-          <form className="form-panel" onSubmit={handleSuggestUpdate}>
-            <h3>Suggest an Improvement</h3>
+          <form className="skill-improvement-form" onSubmit={handleSuggestUpdate}>
+            <div>
+              <h3>Suggest an Improvement</h3>
+              <p className="muted">Describe a focused change, or ask the agents to repair the current skill.</p>
+            </div>
             <textarea
               value={updateSuggestion}
               onChange={(event) => setUpdateSuggestion(event.target.value)}
@@ -574,6 +643,9 @@ export default function SkillDetailPage() {
               <button type="submit" disabled={isWorking || versions.length >= 3}>
                 Start Update Workflow
               </button>
+              <button type="button" className="secondary" onClick={handleRepair} disabled={isWorking}>
+                Ask Agents to Repair
+              </button>
             </div>
           </form>
         )}
@@ -584,15 +656,6 @@ export default function SkillDetailPage() {
           onApprove={handleApproveUpdatePermission}
           onDeny={handleDenyUpdatePermission}
         />
-        <VersionList
-          versions={versions}
-          activeVersionId={skill.active_version_id}
-          isWorking={isWorking}
-          onCompare={handleCompareVersion}
-          onActivate={handleActivateVersion}
-          onDiscard={handleDiscardVersion}
-        />
-        {versionComparison && <VersionComparisonPanel comparison={versionComparison} />}
       </section>
 
       <section className="detail-panel">
@@ -605,18 +668,20 @@ export default function SkillDetailPage() {
                 : "Runtime permissions have not been analyzed yet."}
             </p>
           </div>
-          <span className={`badge ${runtimePermission ? `risk-${runtimePermission.risk_level}` : ""}`}>
+          <span className={`badge status-${runtimeStatus}`}>
             {runtimeStatus.replace("_", " ")}
           </span>
         </header>
         {isNonEmptyObject(runtimePermission?.reason_json?.permission_expansion) && (
           <p className="error-text">Permission expansion detected. Review the generated manifest before approving.</p>
         )}
-        <div className="button-row">
-          <button type="button" className="secondary" onClick={() => handleReviewRuntimePermissions(true)} disabled={isWorking}>
-            Review Runtime Permissions
-          </button>
-        </div>
+        {!runtimeApproved && (
+          <div className="button-row">
+            <button type="button" className="secondary" onClick={() => handleReviewRuntimePermissions(true)} disabled={isWorking}>
+              Review Runtime Permissions
+            </button>
+          </div>
+        )}
       </section>
 
       <section className="detail-panel">
@@ -680,48 +745,6 @@ export default function SkillDetailPage() {
         )}
       </section>
 
-      {isProposed ? (
-        <div className="button-row">
-          <button type="button" onClick={handleValidate} disabled={isWorking}>
-            Validate/Test
-          </button>
-          <button type="button" onClick={handleInstall} disabled={isWorking}>
-            Install
-          </button>
-          <button type="button" className="danger" onClick={handleReject} disabled={isWorking}>
-            Reject/Delete
-          </button>
-          <button type="button" className="secondary" onClick={handleRepair} disabled={isWorking}>
-            Ask Agents to Repair
-          </button>
-        </div>
-      ) : (
-        <div className="button-row">
-          {isWebApp && isInstalled && skill.enabled && runtimeApproved && (
-            <Link className="button-link" to={`/apps/${skill.id}`}>Open Application</Link>
-          )}
-          {isInstalled && skill.enabled && !runtimeApproved && (
-            <button type="button" onClick={() => handleReviewRuntimePermissions(true)} disabled={isWorking}>
-              {isService ? "Review Before Activation" : "Review Before Run"}
-            </button>
-          )}
-          {isInstalled && !isService && !skill.enabled && (
-            <button type="button" disabled>
-              Run Disabled
-            </button>
-          )}
-          {!isService && <button type="button" onClick={handleToggleEnabled} disabled={isWorking}>
-            {skill.enabled ? "Disable" : "Enable"}
-          </button>}
-          <button type="button" className="secondary" onClick={handleRepair} disabled={isWorking}>
-            Ask Agents to Repair
-          </button>
-          <button type="button" className="danger" onClick={handleDelete} disabled={isWorking}>
-            Delete
-          </button>
-        </div>
-      )}
-
       {error && <p className="error-text">{error}</p>}
 
       {runtimePermission && showRuntimeModal && (
@@ -752,7 +775,7 @@ export default function SkillDetailPage() {
               </p>
             )}
           </div>
-          <Link to="/agent-runs">All agent runs</Link>
+          <Link className="button-link secondary compact" to="/agent-runs">All Agent Runs</Link>
         </header>
         {agentRuns.length > 0 ? (
           <div className="run-list">
@@ -760,7 +783,9 @@ export default function SkillDetailPage() {
               <article key={agentRun.id} className="run-row">
                 <div>
                   <strong>
-                    <Link to={`/agent-runs/${agentRun.id}`}>Agent Run #{agentRun.id}</Link>
+                    <Link className="button-link secondary compact" to={`/agent-runs/${agentRun.id}`}>
+                      Agent Run #{agentRun.id}
+                    </Link>
                   </strong>
                   <span>{agentRun.run_type} / {agentRun.current_step ?? "none"}</span>
                   <span>{new Intl.NumberFormat().format(agentRun.total_tokens)} Codex tokens</span>
@@ -781,7 +806,7 @@ export default function SkillDetailPage() {
             <h2>Service Schedule</h2>
             <p className="muted">This service runs only through its required schedule. Manage timing, input, activation, and Run Now from Schedules.</p>
           </div>
-          <Link to="/schedules">Manage Schedule</Link>
+          <Link className="button-link secondary compact" to="/schedules">Manage Schedule</Link>
         </header>
         {serviceSchedule ? (
           <dl className="detail-grid">
@@ -797,21 +822,7 @@ export default function SkillDetailPage() {
         )}
       </section>}
 
-      <section className="detail-panel">
-        <h2>Skill Files</h2>
-        {files.length > 0 ? (
-          <div className="file-list">
-            {files.map((file) => (
-              <article key={file.path}>
-                <h3>{file.path}</h3>
-                <pre>{file.content}</pre>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <p className="muted">No readable skill files found.</p>
-        )}
-      </section>
+      <SkillFilesDisclosure files={files} />
 
       {isInstalled && isFunction && (
         <section className="detail-panel">
@@ -847,10 +858,14 @@ export default function SkillDetailPage() {
           <section className="detail-panel">
             <h2>Output</h2>
             {pendingApproval ? (
-              <p>
-                Waiting for per-call approval #{pendingApproval.approval_id}.{" "}
-                <Link to="/approval-requests">Open Invocation approvals</Link>
-              </p>
+              <div className="stack compact-action-stack">
+                <p>Waiting for per-call approval #{pendingApproval.approval_id}.</p>
+                <div className="button-row">
+                  <Link className="button-link secondary compact" to="/approval-requests">
+                    Open Invocation Approvals
+                  </Link>
+                </div>
+              </div>
             ) : <RunOutput run={runOutput} />}
           </section>
 

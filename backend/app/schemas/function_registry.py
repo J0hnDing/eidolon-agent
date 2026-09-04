@@ -6,7 +6,7 @@ from app.schemas.common import RiskLevel
 from app.schemas.invocation_approval import PendingApprovalReceipt
 from app.schemas.skill_run import SkillRunRead
 
-FunctionAvailability = Literal["available", "disabled", "unavailable"]
+FunctionAvailability = Literal["available", "disabled", "unavailable", "error"]
 FunctionAccessState = Literal[
     "not_requested",
     "not_declared",
@@ -34,6 +34,7 @@ class FunctionCatalogEntryRead(BaseModel):
     provider: str | None = None
     skill_id: int | None = None
     active_version: str | None = None
+    is_running: bool = False
     mcp_exposed: bool = True
     agent_selectable: bool = True
     mcp_read_only: bool | None = None

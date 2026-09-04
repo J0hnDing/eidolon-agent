@@ -12,6 +12,7 @@ from app.models import AgentRun, AgentRunStep, ApprovalRequest, Skill, SkillGene
 from app.schemas.manifest import manifest_permission_requests
 from app.services.manifest_validator import validate_manifest_file
 from app.services.proposed_skill_service import ProposedSkillService
+from app.services.skill_graph_service import SkillGraphError, SkillGraphService
 
 
 class PermissionError(ValueError):
@@ -242,17 +243,34 @@ class PermissionService:
             )
         skill_dir = self.proposed_service.skill_dir_for_record(skill)
         manifest = validate_manifest_file(skill_dir / "manifest.json")
-        manifest_fingerprint = self._runtime_manifest_fingerprint(manifest)
+        try:
+            graph = SkillGraphService(
+                self.db,
+                project_root=self.project_root,
+            ).effective_contract(
+                skill,
+                manifest=manifest,
+                strict=True,
+            )
+        except SkillGraphError as exc:
+            raise PermissionError(str(exc)) from exc
+        manifest_fingerprint = self._runtime_manifest_fingerprint(skill, manifest)
         existing = self._latest_request(skill_id=skill.id, scope="runtime", request_type="install")
         if existing and existing.status in {"pending", "approved"}:
             reason_json = dict(existing.reason_json or {})
             existing_fingerprint = reason_json.get("manifest_permission_fingerprint")
-            if existing_fingerprint is None and self._runtime_request_matches_manifest(existing, manifest):
+            if existing_fingerprint is None and self._runtime_request_matches_manifest(existing, skill, manifest):
                 reason_json["manifest_permission_fingerprint"] = manifest_fingerprint
                 existing.reason_json = reason_json
                 self.db.commit()
                 self.db.refresh(existing)
                 existing_fingerprint = manifest_fingerprint
+            existing_fingerprint = self._migrate_legacy_runtime_fingerprint(
+                existing,
+                manifest,
+                graph,
+                current_fingerprint=manifest_fingerprint,
+            )
             if existing_fingerprint == manifest_fingerprint:
                 request = self._attach_function_requirement_review(existing, skill, manifest=manifest)
                 return self._attach_integration_review(request, skill, manifest)
@@ -262,9 +280,13 @@ class PermissionService:
             existing.decision_notes = "The final manifest permission or dependency contract changed."
             self.db.commit()
 
-        permissions = manifest_permission_requests(manifest.permissions)
+        permissions = graph.permissions
         dependencies = list(manifest.dependencies)
         risk_level, blocked_reasons = self._risk_for_permissions(permissions, dependencies=dependencies)
+        risk_level = max(
+            (risk_level, graph.risk_level),
+            key={"low": 0, "medium": 1, "high": 2, "blocked": 3}.__getitem__,
+        )
         expansion = self.detect_permission_expansion(skill, permissions)
         dependency_expansion = self.detect_dependency_expansion(skill, dependencies)
         if expansion:
@@ -294,6 +316,8 @@ class PermissionService:
                 "dependency_expansion": dependency_expansion,
                 "base_risk_level": risk_level,
                 "manifest_permission_fingerprint": manifest_fingerprint,
+                "function_graph_fingerprint": graph.fingerprint,
+                "effective_function_permissions": graph.permissions,
                 "runner_unsupported": self.unsupported_runtime_reasons(permissions),
                 "runner_network_enforcement": (
                     "Approved network domains enable container network access for this MVP; "
@@ -385,6 +409,7 @@ class PermissionService:
         self.db.commit()
         self.db.refresh(request)
         self._sync_agent_permission_steps(request, approved=True)
+        self._refresh_function_catalog_if_runtime(request)
         return request
 
     def deny_request(self, request: ApprovalRequest, notes: str | None = None) -> ApprovalRequest:
@@ -402,6 +427,7 @@ class PermissionService:
         self.db.commit()
         self.db.refresh(request)
         self._sync_agent_permission_steps(request, approved=False)
+        self._refresh_function_catalog_if_runtime(request)
         return request
 
     def approve_runtime_bundle(self, skill: Skill, notes: str | None = None) -> ApprovalRequest:
@@ -428,7 +454,9 @@ class PermissionService:
         for component in changed:
             self.db.refresh(component)
             self._sync_agent_permission_steps(component, approved=True)
-        return self._refresh_integration_review(request, skill)
+        request = self._refresh_integration_review(request, skill)
+        self._refresh_function_catalog()
+        return request
 
     def deny_runtime_bundle(self, skill: Skill, notes: str | None = None) -> ApprovalRequest:
         request, integration_requests = self._runtime_bundle_requests(skill)
@@ -445,7 +473,18 @@ class PermissionService:
         for component in pending:
             self.db.refresh(component)
             self._sync_agent_permission_steps(component, approved=False)
-        return self._refresh_integration_review(request, skill)
+        request = self._refresh_integration_review(request, skill)
+        self._refresh_function_catalog()
+        return request
+
+    def _refresh_function_catalog_if_runtime(self, request: ApprovalRequest) -> None:
+        if request.request_scope == "runtime":
+            self._refresh_function_catalog()
+
+    def _refresh_function_catalog(self) -> None:
+        from app.services.function_catalog_service import FunctionCatalogService
+
+        FunctionCatalogService(self.db, project_root=self.project_root).refresh()
 
     def can_generate(self, generation_request: SkillGenerationRequest) -> PermissionDecision:
         request = self._latest_request(generation_request_id=generation_request.id, scope="build_time")
@@ -469,15 +508,28 @@ class PermissionService:
             manifest = validate_manifest_file(self.proposed_service.skill_dir_for_record(skill) / "manifest.json")
         except Exception:
             return PermissionDecision(False, "Active runtime manifest is invalid")
+        graph = SkillGraphService(
+            self.db,
+            project_root=self.project_root,
+        ).effective_contract(skill, manifest=manifest)
+        if graph.availability == "error":
+            return PermissionDecision(False, "; ".join(graph.availability_reasons))
         approved_fingerprint = (request.reason_json or {}).get("manifest_permission_fingerprint")
-        if approved_fingerprint is None and self._runtime_request_matches_manifest(request, manifest):
+        if approved_fingerprint is None and self._runtime_request_matches_manifest(request, skill, manifest):
             reason_json = dict(request.reason_json or {})
-            approved_fingerprint = self._runtime_manifest_fingerprint(manifest)
+            approved_fingerprint = self._runtime_manifest_fingerprint(skill, manifest)
             reason_json["manifest_permission_fingerprint"] = approved_fingerprint
             request.reason_json = reason_json
             self.db.commit()
             self.db.refresh(request)
-        if approved_fingerprint != self._runtime_manifest_fingerprint(manifest):
+        current_fingerprint = self._runtime_manifest_fingerprint(skill, manifest)
+        approved_fingerprint = self._migrate_legacy_runtime_fingerprint(
+            request,
+            manifest,
+            graph,
+            current_fingerprint=current_fingerprint,
+        )
+        if approved_fingerprint != current_fingerprint:
             return PermissionDecision(False, "Runtime permissions do not match the current manifest")
         if include_integrations and manifest.integration_requirements:
             from app.services.integration_service import build_default_integration_service
@@ -544,6 +596,12 @@ class PermissionService:
         install_decision = self.can_install(skill, include_integrations=include_integrations)
         if not install_decision.allowed:
             return install_decision
+        graph = SkillGraphService(
+            self.db,
+            project_root=self.project_root,
+        ).effective_contract(skill)
+        if graph.availability != "available":
+            return PermissionDecision(False, "; ".join(graph.availability_reasons))
         request = self._latest_active_runtime_request(skill)
         unsupported = self.unsupported_runtime_reasons(request.requested_permissions_json if request else {})
         if unsupported:
@@ -566,8 +624,22 @@ class PermissionService:
                 return request
         return None
 
+    def _runtime_manifest_fingerprint(self, skill: Skill, manifest: Any) -> str:
+        graph = SkillGraphService(
+            self.db,
+            project_root=self.project_root,
+        ).effective_contract(skill, manifest=manifest)
+        contract = {
+            "permissions": graph.permissions,
+            "dependencies": list(manifest.dependencies),
+            "risk_level": graph.risk_level,
+            "function_graph_fingerprint": graph.fingerprint,
+        }
+        encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
     @staticmethod
-    def _runtime_manifest_fingerprint(manifest: Any) -> str:
+    def _legacy_runtime_manifest_fingerprint(manifest: Any) -> str:
         contract = {
             "permissions": manifest_permission_requests(manifest.permissions),
             "dependencies": list(manifest.dependencies),
@@ -575,10 +647,45 @@ class PermissionService:
         encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
-    @staticmethod
-    def _runtime_request_matches_manifest(request: ApprovalRequest, manifest: Any) -> bool:
+    def _migrate_legacy_runtime_fingerprint(
+        self,
+        request: ApprovalRequest,
+        manifest: Any,
+        graph: Any,
+        *,
+        current_fingerprint: str,
+    ) -> str | None:
+        approved_fingerprint = (request.reason_json or {}).get("manifest_permission_fingerprint")
+        if (
+            approved_fingerprint != current_fingerprint
+            and not manifest.function_requirements
+            and approved_fingerprint == self._legacy_runtime_manifest_fingerprint(manifest)
+            and (request.requested_permissions_json or {}) == graph.permissions
+            and list(request.requested_dependencies_json or []) == list(manifest.dependencies)
+            and {"low": 0, "medium": 1, "high": 2, "blocked": 3}[request.risk_level]
+            >= {"low": 0, "medium": 1, "high": 2, "blocked": 3}[graph.risk_level]
+        ):
+            reason_json = dict(request.reason_json or {})
+            reason_json["manifest_permission_fingerprint"] = current_fingerprint
+            reason_json["function_graph_fingerprint"] = graph.fingerprint
+            request.reason_json = reason_json
+            self.db.commit()
+            self.db.refresh(request)
+            return current_fingerprint
+        return approved_fingerprint
+
+    def _runtime_request_matches_manifest(
+        self,
+        request: ApprovalRequest,
+        skill: Skill,
+        manifest: Any,
+    ) -> bool:
+        graph = SkillGraphService(
+            self.db,
+            project_root=self.project_root,
+        ).effective_contract(skill, manifest=manifest)
         return (
-            request.requested_permissions_json == manifest_permission_requests(manifest.permissions)
+            (request.requested_permissions_json or {}) == graph.permissions
             and list(request.requested_dependencies_json or []) == list(manifest.dependencies)
         )
 

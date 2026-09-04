@@ -234,6 +234,16 @@ def test_manifest_network_and_dependencies_are_deterministically_medium_risk() -
     ) == "medium"
 
 
+def test_invocation_approval_flag_forces_high_risk() -> None:
+    manifest = validate_manifest(valid_manifest())
+
+    assert classify_permission_risk(
+        manifest.permissions,
+        manifest.dependencies,
+        requires_invocation_approval=True,
+    ) == "high"
+
+
 def test_manifest_legacy_backend_state_is_not_part_of_canonical_output() -> None:
     data = valid_manifest()
     data["risk_level"] = "medium"

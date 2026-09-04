@@ -349,8 +349,10 @@ class SkillManifest(BaseModel):
 def classify_permission_risk(
     permissions: ManifestPermissions,
     dependencies: list[str] | None = None,
+    *,
+    requires_invocation_approval: bool = False,
 ) -> RiskLevel:
-    if permissions.shell or permissions.secrets:
+    if requires_invocation_approval or permissions.shell or permissions.secrets:
         return "high"
     read_paths = {
         path.replace("\\", "/").removeprefix("./").rstrip("/")

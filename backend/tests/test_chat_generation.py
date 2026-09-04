@@ -29,6 +29,7 @@ from app.services.codex_service import (
     codex_process_registry,
     default_codex_adapter,
 )
+from app.services.manifest_validator import validate_manifest_file
 from app.services.permission_service import PermissionService
 from app.services.product_manager_contract_service import ProductManagerContractError
 from app.services.product_manager_session_service import ProductManagerTurnResult
@@ -921,6 +922,41 @@ def test_runtime_approval_is_superseded_when_manifest_permissions_change(
     assert replacement.id != approved.id
     assert replacement.status == "pending"
     assert replacement.requested_permissions_json["network"] == ["example.com"]
+
+
+def test_runtime_approval_migrates_legacy_fingerprint_when_contract_is_unchanged(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    generation_request = ChatOrchestrator(db_session).create_generation_request(
+        "Create a reusable local workflow skill."
+    )
+    approve_build_time_permissions(db_session, generation_request)
+    skill, _validation = CodexService(
+        db_session,
+        adapter=RecordingCodexAdapter(),
+        project_root=tmp_path,
+    ).generate_from_request(generation_request)
+    permission_service = PermissionService(db_session, project_root=tmp_path)
+    approved = permission_service.create_runtime_request(skill)
+    permission_service.approve_request(approved)
+    manifest = validate_manifest_file(tmp_path / skill.manifest_path)
+    reason_json = dict(approved.reason_json or {})
+    reason_json["manifest_permission_fingerprint"] = (
+        permission_service._legacy_runtime_manifest_fingerprint(manifest)
+    )
+    reason_json.pop("function_graph_fingerprint", None)
+    approved.reason_json = reason_json
+    db_session.commit()
+
+    decision = permission_service.can_install(skill)
+
+    assert decision.allowed is True
+    db_session.refresh(approved)
+    assert (approved.reason_json or {}).get("manifest_permission_fingerprint") == (
+        permission_service._runtime_manifest_fingerprint(skill, manifest)
+    )
+    assert (approved.reason_json or {}).get("function_graph_fingerprint")
 
 
 def test_runtime_permissions_cannot_be_reviewed_for_unfinalized_skill(

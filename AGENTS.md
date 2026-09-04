@@ -143,9 +143,9 @@ Reading and writing a skill's own `./cache` directory is allowed as low-risk loc
 
 Skills must include tests. Proposed skills cannot be installed unless their manifest validates, permissions are understood, tests pass, and required approvals are satisfied.
 
-### Version Safety
+### Direct Codex Work and Update Builder
 
-Never modify the active installed skill version in place. Updates must copy the active version into a new draft/proposed version folder. Activation only switches pointers after validation/tests pass and changed permissions are approved. Keep at most three non-discarded versions per skill.
+The application-managed update Builder must never modify an active installed skill version. The backend copies the active version, and Builder may modify only that copied draft/proposed version. This restriction does not apply to direct Codex repository work requested by the user; Codex may modify an active version directly and should not create another version solely because the target is active.
 
 ### Per-Skill Operation Safety
 
@@ -175,6 +175,7 @@ Agents must not install skills, run skills, approve permissions, install package
 ## Implementation Rules
 
 - Keep changes small, reviewable, and testable.
+- Use Eidolon-rendered modal dialogs for confirmations. Never use browser-native confirmation requests such as `window.confirm`, `window.prompt`, or `window.alert`.
 - Follow existing backend/frontend patterns before introducing new abstractions.
 - Add or update tests when behavior changes.
 - Keep generated-skill code isolated from application code.

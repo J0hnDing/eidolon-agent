@@ -3,6 +3,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from app.services import google_calendar_provider as provider_module
 from app.services.github_provider import IntegrationProviderError
 from app.services.google_calendar_provider import (
     GOOGLE_CALENDAR_SCOPE,
@@ -36,6 +37,22 @@ def credential() -> str:
     return json.dumps(
         {"client_id": "client-id", "client_secret": "client-secret", "refresh_token": "refresh-token"}
     )
+
+
+def test_http_opener_is_lazy_for_non_network_status_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    build_calls = 0
+
+    def build_opener(*_args):
+        nonlocal build_calls
+        build_calls += 1
+        return object()
+
+    monkeypatch.setattr(provider_module, "build_opener", build_opener)
+    adapter = UrllibGoogleCalendarProviderAdapter()
+
+    adapter.authorization_url("client-id", "state-value")
+
+    assert build_calls == 0
 
 
 def test_oauth_url_exchange_and_identity_use_exact_local_contract(monkeypatch: pytest.MonkeyPatch) -> None:

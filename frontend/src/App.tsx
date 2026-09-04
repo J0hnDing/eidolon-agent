@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import ApprovalRequestsPage from "./pages/ApprovalRequestsPage";
@@ -57,6 +58,35 @@ const navGroups: Array<{
 
 export default function App() {
   const location = useLocation();
+  const navigationRef = useRef<HTMLElement>(null);
+
+  useLayoutEffect(() => {
+    const navigation = navigationRef.current;
+    const activeLink = navigation?.querySelector<HTMLElement>(".nav-link.active");
+    if (!navigation || !activeLink) return;
+
+    const positionIndicator = () => {
+      const x = activeLink.offsetLeft + activeLink.offsetWidth - 10;
+      const y = activeLink.offsetTop + (activeLink.offsetHeight - 16) / 2;
+      navigation.style.setProperty("--nav-indicator-x", `${x}px`);
+      navigation.style.setProperty("--nav-indicator-y", `${y}px`);
+      navigation.dataset.indicatorReady = "true";
+    };
+
+    positionIndicator();
+    window.addEventListener("resize", positionIndicator);
+
+    const resizeObserver = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(positionIndicator);
+    resizeObserver?.observe(navigation);
+    resizeObserver?.observe(activeLink);
+
+    return () => {
+      window.removeEventListener("resize", positionIndicator);
+      resizeObserver?.disconnect();
+    };
+  }, [location.pathname]);
 
   return (
     <div className="app-shell">
@@ -72,7 +102,7 @@ export default function App() {
           </div>
         </div>
 
-        <nav className="nav-list" aria-label="Primary navigation">
+        <nav ref={navigationRef} className="nav-list" aria-label="Primary navigation">
           {navGroups.map((group) => (
             <div className="nav-group" key={group.label}>
               <p className="nav-group-label">{group.label}</p>
@@ -85,12 +115,12 @@ export default function App() {
                   >
                     <NavigationIcon name={item.icon} />
                     <span>{item.label}</span>
-                    <span className="nav-link-indicator" aria-hidden="true" />
                   </NavLink>
                 ))}
               </div>
             </div>
           ))}
+          <span className="nav-active-indicator" aria-hidden="true" />
         </nav>
 
         <div className="sidebar-foot">

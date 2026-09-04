@@ -6,6 +6,7 @@ from app.db import get_db
 from app.models import SkillRun, SkillSchedule
 from app.schemas.schedule import ScheduleRead, ScheduleUpdate
 from app.schemas.skill_run import SkillRunRead
+from app.services.runtime_state_service import RuntimeStateService
 from app.services.scheduler_service import ScheduleError, SchedulerService, serialize_schedule
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
@@ -26,17 +27,25 @@ def list_schedules(
     query = select(SkillSchedule).order_by(SkillSchedule.created_at.desc())
     if skill_id is not None:
         query = query.where(SkillSchedule.skill_id == skill_id)
-    serialized = [serialize_schedule(schedule) for schedule in db.scalars(query).all()]
+    running_ids = RuntimeStateService(db).running_schedule_ids()
+    serialized = [
+        serialize_schedule(schedule, is_running=schedule.id in running_ids)
+        for schedule in db.scalars(query).all()
+    ]
     if skill_id is None:
         lifespan_service = getattr(request.app.state, "scheduler_service", None)
         if isinstance(lifespan_service, SchedulerService):
-            serialized.insert(0, lifespan_service.serialize_notion_done_cleanup_schedule())
+            serialized[0:0] = lifespan_service.serialize_platform_schedules()
     return serialized
 
 
 @router.get("/{schedule_id}", response_model=ScheduleRead)
 def get_schedule(schedule_id: int, db: Session = Depends(get_db)) -> dict:
-    return serialize_schedule(get_schedule_or_404(schedule_id, db))
+    schedule = get_schedule_or_404(schedule_id, db)
+    return serialize_schedule(
+        schedule,
+        is_running=schedule.id in RuntimeStateService(db).running_schedule_ids(),
+    )
 
 
 @router.put("/{schedule_id}", response_model=ScheduleRead)
@@ -49,34 +58,6 @@ def update_schedule(
     schedule = get_schedule_or_404(schedule_id, db)
     try:
         updated = scheduler_service.update_schedule(schedule, payload)
-    except ScheduleError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    return serialize_schedule(updated)
-
-
-@router.post("/{schedule_id}/pause", response_model=ScheduleRead)
-def pause_schedule(
-    schedule_id: int,
-    db: Session = Depends(get_db),
-    scheduler_service: SchedulerService = Depends(get_scheduler_service),
-) -> dict:
-    schedule = get_schedule_or_404(schedule_id, db)
-    try:
-        updated = scheduler_service.pause_schedule(schedule)
-    except ScheduleError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    return serialize_schedule(updated)
-
-
-@router.post("/{schedule_id}/resume", response_model=ScheduleRead)
-def resume_schedule(
-    schedule_id: int,
-    db: Session = Depends(get_db),
-    scheduler_service: SchedulerService = Depends(get_scheduler_service),
-) -> dict:
-    schedule = get_schedule_or_404(schedule_id, db)
-    try:
-        updated = scheduler_service.resume_schedule(schedule)
     except ScheduleError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return serialize_schedule(updated)

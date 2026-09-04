@@ -7,6 +7,7 @@ import {
   ConversationMode,
   ProposedSkillValidation,
 } from "../../api/client";
+import { DeleteIconButton } from "../../components/DeleteIconButton";
 import { ChatConversation, ChatMessage } from "../../lib/chatStore";
 
 type ChatWorkspaceProps = {
@@ -164,18 +165,11 @@ function ConversationModeBar({
           ? "Project mode creates proposed skills after approval."
           : "Act works persistently in the shared workspace with Eidolon tools."}
       </span>
-      <button
-        type="button"
-        className="chat-current-delete"
+      <DeleteIconButton
         onClick={() => onDeleteConversation(activeConversationId)}
         disabled={isBusy}
-        aria-label="Delete conversation"
-        title="Delete conversation"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
-        </svg>
-      </button>
+        label="Delete conversation"
+      />
     </div>
   );
 }

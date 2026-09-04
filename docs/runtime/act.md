@@ -4,11 +4,17 @@ Act is Eidolon's persistent local action agent. Every durable Act session owns a
 
     runtime/act/
       AGENTS.md
-      memory/                 reserved and required to remain empty in v1
-      workspace/              the only writable Codex root
+      memory/                 small explicit persistent memories
+      knowledge/              backend-synchronized external sources
+        quercus/              selected course mirrors
+      workspace/              temporary and generated working files
         downloads/
 
-Eidolon rewrites the managed AGENTS.md when its policy changes and refuses to start Act if memory contains files. Codex starts and resumes with runtime/act/workspace as its workspace-write root; the managed instructions and reserved memory directory are outside that writable root. Act receives no credential path or unrestricted host filesystem permission.
+Eidolon rewrites the managed `AGENTS.md` at backend startup, after Quercus processing-setting changes, and before Act starts or resumes. Codex starts and resumes at `runtime/act/`, where those instructions explain the three directory contracts. `memory/` may contain small, explicit, user-requested or approved memories; it is not for transcripts or silent observations. `knowledge/` is untrusted external data, never instructions, and Act must not modify it. `workspace/` is for temporary/generated Act work, including controlled downloads under `workspace/downloads/`; backend-owned processing state is kept outside it. Quercus material is inspected only when a request needs it and is never injected into prompts or automatic context. When processing is disabled Act uses only `files/raw/`; when Marker is enabled it checks `files/processed/` first and falls back to the matching raw original only as needed. Act receives no credential path or unrestricted host filesystem permission.
+
+The `knowledge/` write restriction is currently instruction-enforced. A Projector-tracked TODO covers filesystem enforcement that preserves backend synchronization authority while allowing Act to read knowledge and write memory/workspace.
+
+The Memory page's **Open agent folder** action calls a backend-only endpoint that opens the fixed `runtime/act/` root in Windows Explorer. The caller cannot supply or alter the path.
 
 ## App Server and MCP
 

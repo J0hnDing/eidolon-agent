@@ -4,7 +4,7 @@
 
 ## Registry Contract
 
-`GET /functions/catalog` returns all catalog entries with category, description, input/output JSON Schemas, invocation guidance, derived risk, availability state, and availability reasons. This is the source for the ProductManager catalog and Functions UI. Only available entries are included in ProductManager prompts.
+`GET /functions/catalog` reads the persisted projection and returns all catalog entries with category, description, input/output JSON Schemas, invocation guidance, derived risk, availability state, availability reasons, and an `is_running` projection for active user-function runs and function audit records. It does not reconcile installed skill files, probe providers, or rewrite the catalog. Startup reconciles installed skills once and rebuilds the projection; skill lifecycle, runtime approval, active-version, and integration mutations rebuild it when relevant state changes. The transient running projection is added only to the UI response; only available entries and their stable contracts are included in ProductManager prompts.
 
 The platform-owned `backend.notion.todo.cleanup_done` service is intentionally absent from the function catalog. `SchedulerService` registers and dispatches it through the endpoint-only platform-service boundary.
 
@@ -44,19 +44,21 @@ The backend evaluates the direct caller-to-target relationship on every call:
 - medium- and high-risk targets need an approved caller-target relationship;
 - unsupported or blocked target permissions remain unavailable regardless of relationship approval.
 
-Function-access approval is specific to one caller skill and one target function. Its fingerprint covers target risk, permissions, dependencies, and input/output schemas. Code-only target version changes retain approval; a changed fingerprint makes the relationship stale and requires review. Approval does not authorize other callers or inherit the target's permissions.
+Function-access approval is specific to one caller skill and one target function. Its fingerprint covers target risk, permissions, dependencies, input/output schemas, and the target's transitive function graph. Code-only target version changes retain approval; a changed fingerprint makes the relationship stale and requires review. Approval does not authorize other callers. The parent's runtime review inherits the transitive permission union, while execution still gives each process only its own manifest permissions.
 
 Direct user runs and backend actions keep their existing authorization boundaries. A scheduled service receives caller authority only for its schedule-attributed run. None of these paths creates a synthetic caller skill. Function-target paths converge on the registry service for availability checks, operation locking, bounded execution, and audit attribution.
 
 ## Runtime and Audit
 
-The target still runs through the disposable function runner and creates its normal `skill_runs` record. Runs record target version, invocation source, caller skill/version when applicable, schedule id or web-app instance when applicable, and a bounded initiating-action label. Runtime Codex usage remains attached to that target run and separate from Project build totals.
+The target still runs through the disposable function runner and creates its normal `skill_runs` record. Runs record target version, invocation source, caller skill/version, parent run id when applicable, schedule id or web-app instance when applicable, and a bounded initiating-action label. Runtime Codex usage remains attached to that target run and separate from Project build totals.
 
 No-internet Docker callers receive backend Function and integration capability access through a transient allowlisted relay on an internal Docker network. The caller cannot use those exact paths for general backend access or internet egress. Functions with approved runtime network domains continue to use the existing bridge behavior, but direct GitHub, Atlas, and Notion access is still prohibited; domain-level egress filtering remains separately disclosed.
 
 Input mismatch blocks before entrypoint execution and is audited as a blocked target run. Output mismatch changes the completed target run to failed while preserving its output and process diagnostics.
 
-Functions invoked by a service, function, or web application receive a new scoped capability while their target run is active, so declared chains have no numeric depth limit. Every edge independently rechecks the immediate caller's active manifest, caller and target versions, target availability, input/output schemas, caller-specific approval when required, per-skill operation lock, and the target's own permissions and integration approvals. Capabilities expire with their owning run. Services remain scheduler-only and cannot become call targets. Re-entering an already-running function is rejected by the existing per-skill operation lock, including direct cycles. The still-open cumulative budget, cancellation, permission-visibility, cycle-diagnostics, and parent/child audit design is tracked in Projector.
+Functions invoked by a service, function, or web application receive a new scoped capability while their target run is active. The backend validates the complete directed graph as finite and acyclic; there is no arbitrary numeric depth cap. Every edge independently rechecks the immediate caller's active manifest, caller and target versions, target availability, input/output schemas, caller-specific approval when required, per-skill operation lock, and the target's own permissions and integration approvals. Capabilities expire with their owning run. Services remain scheduler-only and cannot become call targets.
+
+Each node keeps its ordinary bounded runner timeout and resource limits. A child failure is returned synchronously to its immediate caller; callers decide whether that makes their own result fail. There is no separate chain-wide cancellation token or shared resource pool. Parent/child run ids provide the complete audit chain, while the graph fingerprint makes descendant risk, permission, availability, and contract changes stale before execution. Disabling a child makes every transitive parent unavailable; deleting or invalidating a child places every transitive parent in the explicit `error` availability state until its declaration is repaired.
 
 ## Compatibility
 

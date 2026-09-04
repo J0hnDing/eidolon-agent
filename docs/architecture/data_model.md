@@ -44,11 +44,11 @@ The central skill record. Important fields:
 - `active_version_id`
 - `enabled`
 
-Enabled state is represented only by `enabled`; `disabled` is not a lifecycle status. Local schema migration converts legacy `status = disabled` rows to `status = installed, enabled = false`. Existing rows created before the runtime split migrate to `runtime = function`; filesystem synchronization refreshes installed records from the active manifest.
+Enabled state is represented only by `enabled`; `disabled` is not a lifecycle status. For services this field is canonical and the required schedule's active/paused status is a compatibility projection. Local schema migration converts legacy `status = disabled` rows to `status = installed, enabled = false`. Existing rows created before the runtime split migrate to `runtime = function`; filesystem synchronization refreshes installed records from the active manifest. Active manifests form a directed function graph used to derive transitive risk, permission review, and availability.
 
 ### skill_versions
 
-Tracks versioned installed skill folders. Active installed skills point to an active version folder. Updates create draft/proposed versions and do not mutate the active folder in place.
+Tracks versioned installed skill folders. Active installed skills point to an active version folder.
 
 ### skill_runs
 
@@ -62,7 +62,7 @@ Stores bounded function or service-run results:
 - ordered runtime Codex invocation records with success/failure status, adapter/model identity, CLI diagnostics, and token breakdowns
 - aggregate input, cached-input, output, reasoning-output, and total token counts
 - target active version and invocation source
-- caller skill/version for cross-skill calls
+- caller skill/version and parent run id for cross-skill call chains
 - schedule id or web-application instance attribution when applicable
 - intended schedule time, trigger reason, and deterministic schedule-occurrence idempotency key
 - a hash of the ephemeral caller capability while the run is active
@@ -75,7 +75,15 @@ Links one caller skill, one target function, the user-facing approval request, a
 
 ### integration_connections
 
-Stores one sanitized connection row per provider. GitHub stores validated account identity. Notion additionally stores sanitized bot/workspace identity plus separate non-secret configured Todo and Reports data-source IDs under one credential reference. The Reports ID is nullable for compatibility with legacy Todo-only connections. Atlas may use the row for its optional owned-process passphrase lifecycle. Every secret-bearing provider stores only the operating-system secret-store implementation id and opaque reference; credential plaintext, authorization headers, provider responses, todos, and reports are never stored.
+Stores one sanitized connection row per provider. GitHub and Quercus store validated account identity. Notion additionally stores sanitized bot/workspace identity plus separate non-secret configured Todo and Reports data-source IDs under one credential reference. The Reports ID is nullable for compatibility with legacy Todo-only connections. Atlas may use the row for its optional owned-process passphrase lifecycle. Every secret-bearing provider stores only the operating-system secret-store implementation id and opaque reference; credential plaintext and authorization headers are never stored.
+
+### quercus_courses, quercus_course_exclusions, and quercus_sync_resources
+
+`quercus_courses` stores selected or retained course identity, stable title-based local path, owning Canvas account, course presentation fields, sync generation/status, skipped-file counts, and independent processing status and success/failure counts. Deselection stops updates without deleting the retained mirror. Connecting a different account is rejected while any retained course rows remain.
+
+`quercus_course_exclusions` stores only the Canvas account and course identifiers needed to keep explicitly deleted tracked or untracked courses out of later provider listings. Exclusions are account-scoped and do not count as retained local copies.
+
+`quercus_sync_resources` owns every remote Canvas resource identity and parent, stable collision-resolved raw and processed relative paths, remote version/update fields, normalized source/processing fingerprints, size/type, download and processing state, processor/error/completion fields, and last-seen generation. `quercus_processing_settings` is the singleton global processing-method selection and user-selected llama.cpp installation directory. This bookkeeping remains in SQLite; synchronized knowledge directories contain readable course material only, with no manifests, sidecars, frontmatter, or ID-bearing filenames.
 
 Calendar and Gmail use separate connection rows, account identities, OAuth refresh-token references, and service secret namespaces. They may authorize different Google accounts. One singleton `google_oauth_client_configs` row references their shared Google OAuth application client in the OS secret store; it contains no service grant or account identity.
 

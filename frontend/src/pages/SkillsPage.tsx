@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Skill, api } from "../api/client";
+import RunningStateDot from "../components/RunningStateDot";
 import { formatDisplayName } from "../lib/displayName";
 import { usePolling } from "../lib/usePolling";
 
@@ -47,7 +48,7 @@ export default function SkillsPage() {
   );
 }
 
-function SkillTable({ skills }: { skills: Skill[] }) {
+export function SkillTable({ skills }: { skills: Skill[] }) {
   const navigate = useNavigate();
 
   return (
@@ -77,10 +78,15 @@ function SkillTable({ skills }: { skills: Skill[] }) {
                 }}
               >
                 <td>
-                  <strong className="clickable-row-title">
-                    {formatDisplayName(skill.name)}
-                    <span aria-hidden="true">→</span>
-                  </strong>
+                  <span className="entry-title-line">
+                    <span className="running-state-slot">
+                      {skill.is_running && <RunningStateDot />}
+                    </span>
+                    <strong className="clickable-row-title">
+                      {formatDisplayName(skill.name)}
+                      <span className="row-reveal-arrow" aria-hidden="true">→</span>
+                    </strong>
+                  </span>
                   <span className="table-subtitle">{skill.description}</span>
                 </td>
                 <td>
@@ -90,7 +96,7 @@ function SkillTable({ skills }: { skills: Skill[] }) {
                 <td>
                   <span className={`badge risk-${skill.risk_level}`}>{skill.risk_level}</span>
                 </td>
-                <td>{skill.runtime === "service" ? "schedule-managed" : skill.enabled ? "enabled" : "disabled"}</td>
+                <td>{skill.enabled ? "enabled" : "disabled"}</td>
               </tr>
             ))}
             {skills.length === 0 && (

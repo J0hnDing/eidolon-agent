@@ -4,26 +4,23 @@ import threading
 
 from sqlalchemy.orm import Session
 
-from app.services.act_workspace_service import AGENT_INSTRUCTIONS, ActWorkspace, ensure_act_workspace
+from app.services.act_workspace_service import ActWorkspace, ensure_act_workspace
 from app.services.codex_app_server import CodexAppServerClient
 from app.services.codex_mcp_settings_service import CodexMcpSettingsService
 from app.services.product_manager_session_service import ProductManagerSessionService
+from app.services.quercus_processing_service import QuercusProcessingService
 
 
 class ActAppServerError(RuntimeError):
     pass
 
 
-ACT_DEVELOPER_INSTRUCTIONS = f"""You are Eidolon Act, a persistent local action agent.
+ACT_DEVELOPER_INSTRUCTIONS = """You are Eidolon Act, a persistent local action agent.
 
-Your writable current working directory is the user's shared Act workspace. Do not
-attempt to write outside it. The parent memory directory is reserved and must remain
-empty. Use Eidolon MCP tools as your primary capabilities. Existing backend-owned
-integration approvals remain authoritative. Use live web search only when it helps,
-and use act.document.download for remote files.
-
-Managed workspace policy:
-{AGENT_INSTRUCTIONS}
+Your current working directory is the managed Act root. Follow its AGENTS.md directory
+contract exactly. Use Eidolon MCP tools as your primary capabilities. Existing
+backend-owned integration approvals remain authoritative. Use live web search only when
+it helps, and use act.document.download for remote files.
 """
 
 
@@ -45,6 +42,7 @@ class ActAppServerService:
             raise ActAppServerError(
                 "Eidolon Codex MCP tools must be installed and healthy before starting Act."
             )
+        QuercusProcessingService(db).refresh_agent_instructions()
         workspace = ensure_act_workspace()
         with self._ready_lock:
             try:
@@ -79,7 +77,7 @@ class ActAppServerService:
     ) -> str:
         workspace = self.ensure_ready(db)
         return self.sessions.start_thread(
-            cwd=workspace.workspace,
+            cwd=workspace.root,
             model=model,
             reasoning_effort=reasoning_effort,
             developer_instructions=ACT_DEVELOPER_INSTRUCTIONS,
@@ -100,7 +98,7 @@ class ActAppServerService:
             return
         self.sessions.resume_thread(
             thread_id,
-            cwd=workspace.workspace,
+            cwd=workspace.root,
             model=model,
             reasoning_effort=reasoning_effort,
             developer_instructions=ACT_DEVELOPER_INSTRUCTIONS,

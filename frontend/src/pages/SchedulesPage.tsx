@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { SchedulePayload, ScheduleType, SkillSchedule, api } from "../api/client";
+import RunningStateDot from "../components/RunningStateDot";
 import { parseBackendDateTime } from "../lib/dateTime";
 import { formatDisplayName } from "../lib/displayName";
 import { usePolling } from "../lib/usePolling";
@@ -19,7 +20,9 @@ export default function SchedulesPage() {
 
   usePolling(
     () => loadSchedules({ showLoading: false }),
-    schedules.some((schedule) => schedule.status === "active"),
+    schedules.some((schedule) => schedule.read_only
+      ? schedule.status === "active"
+      : schedule.skill_enabled === true),
     5000,
   );
 
@@ -87,16 +90,26 @@ export default function SchedulesPage() {
               {schedules.map((schedule) => (
                 <tr key={`${schedule.schedule_kind}-${schedule.id}`}>
                   <td>
-                    <strong>
-                      {schedule.skill_id !== null ? (
-                        <Link className="table-title-link" to={`/skills/${schedule.skill_id}`}>
-                          {formatDisplayName(schedule.skill_name ?? `Service #${schedule.skill_id}`)}
-                        </Link>
-                      ) : formatDisplayName(schedule.name)}
-                    </strong>
+                    <span className="entry-title-line">
+                      <span className="running-state-slot">
+                        {schedule.is_running && <RunningStateDot />}
+                      </span>
+                      <strong>
+                        {schedule.skill_id !== null ? (
+                          <Link className="table-title-link reveal-arrow-link" to={`/skills/${schedule.skill_id}`}>
+                            {formatDisplayName(schedule.skill_name ?? `Service #${schedule.skill_id}`)}
+                            <span className="row-reveal-arrow" aria-hidden="true">→</span>
+                          </Link>
+                        ) : formatDisplayName(schedule.name)}
+                      </strong>
+                    </span>
                   </td>
                   <td>{humanSchedule(schedule)}</td>
-                  <td><span className={`badge status-${schedule.status}`}>{schedule.status}</span></td>
+                  <td>
+                    <span className={`badge status-${schedule.read_only ? schedule.status : schedule.skill_enabled ? "active" : "paused"}`}>
+                      {schedule.read_only ? schedule.status : schedule.skill_enabled ? "active" : "paused"}
+                    </span>
+                  </td>
                   <td>{formatTimestamp(schedule.next_run_at, "not scheduled")}</td>
                   <td>
                     <span className="schedule-last-run">
@@ -115,16 +128,16 @@ export default function SchedulesPage() {
                       <span className="muted">Managed by Eidolon</span>
                     ) : (
                       <div className="button-row schedule-actions">
-                        {schedule.status === "active" ? (
-                          <button type="button" className="secondary schedule-state-action" onClick={() => act(() => api.pauseSchedule(schedule.id))} disabled={isWorking}>
-                            Pause
+                        {schedule.skill_enabled ? (
+                          <button type="button" className="secondary schedule-state-action" onClick={() => act(() => api.updateSkill(schedule.skill_id!, { enabled: false }))} disabled={isWorking}>
+                            Disable
                           </button>
                         ) : (
-                          <button type="button" className="schedule-state-action" onClick={() => act(() => api.resumeSchedule(schedule.id))} disabled={isWorking}>
-                            Resume
+                          <button type="button" className="schedule-state-action" onClick={() => act(() => api.updateSkill(schedule.skill_id!, { enabled: true }))} disabled={isWorking}>
+                            Enable
                           </button>
                         )}
-                        <button type="button" className="secondary" onClick={() => act(() => api.runScheduleNow(schedule.id))} disabled={isWorking}>
+                        <button type="button" className="secondary" onClick={() => act(() => api.runScheduleNow(schedule.id))} disabled={isWorking || !schedule.skill_enabled}>
                           Run Now
                         </button>
                         <button type="button" className="secondary" onClick={() => setEditingId(schedule.id)} disabled={isWorking}>

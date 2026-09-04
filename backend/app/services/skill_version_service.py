@@ -18,6 +18,7 @@ from app.schemas.proposed_skill import ProposedSkillValidationRead
 from app.services.manifest_validator import classify_permission_risk, validate_manifest_file
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
+from app.services.skill_graph_service import SkillGraphError, SkillGraphService
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
 from app.services.skill_package_files import snapshot_skill_files
 
@@ -104,7 +105,7 @@ class SkillVersionService:
             changelog=changelog,
             created_by=created_by,
             parent_version_id=active.id,
-            permission_fingerprint=self.permission_fingerprint(manifest.model_dump(mode="json")),
+            permission_fingerprint=self.permission_fingerprint(skill, manifest.model_dump(mode="json")),
             test_status="not_run",
             validation_status="not_run",
         )
@@ -114,9 +115,16 @@ class SkillVersionService:
         return version
 
     def validate_version(self, version: SkillVersion) -> ProposedSkillValidationRead:
+        skill = self.db.get(Skill, version.skill_id)
+        if skill is None:
+            raise SkillVersionError("Version skill not found")
         skill_dir = self._version_dir(version)
         try:
             manifest = validate_manifest_file(skill_dir / "manifest.json")
+            SkillGraphService(
+                self.db,
+                project_root=self.project_root,
+            ).effective_contract(skill, manifest=manifest, strict=True)
         except Exception as exc:
             version.validation_status = "failed"
             version.test_status = "not_run"
@@ -124,7 +132,7 @@ class SkillVersionService:
             return ProposedSkillValidationRead(ok=False, manifest_valid=False, error_message=str(exc))
 
         version.manifest_json = manifest.model_dump(mode="json")
-        version.permission_fingerprint = self.permission_fingerprint(version.manifest_json)
+        version.permission_fingerprint = self.permission_fingerprint(skill, version.manifest_json)
         version.validation_status = "passed"
         tests_dir = skill_dir / "tests"
         if not tests_dir.is_dir():
@@ -172,17 +180,43 @@ class SkillVersionService:
                 candidate_manifest,
                 version_id=version.id,
             )
-        if active.permission_fingerprint == version.permission_fingerprint:
+        manifest = version.manifest_json
+        graph = SkillGraphService(
+            self.db,
+            project_root=self.project_root,
+        ).effective_contract(
+            skill,
+            manifest=candidate_manifest,
+            strict=True,
+        )
+        current_fingerprint = self.permission_fingerprint(skill, manifest)
+        active_fingerprint = self.permission_fingerprint(skill, active.manifest_json)
+        if active.permission_fingerprint != active_fingerprint:
+            active.permission_fingerprint = active_fingerprint
+            self.db.commit()
+        if version.permission_fingerprint != current_fingerprint:
+            version.permission_fingerprint = current_fingerprint
+            self.db.commit()
+        if active_fingerprint == current_fingerprint:
             return None
         existing = self._latest_version_permission_request(skill, version)
         if existing and existing.status in {"pending", "approved", "denied"}:
-            return existing
-
-        manifest = version.manifest_json
-        permissions = dict(manifest.get("permissions", {}))
+            if (existing.reason_json or {}).get("function_graph_fingerprint") == graph.fingerprint:
+                return existing
+            if existing.status in {"pending", "approved"}:
+                existing.status = "superseded"
+                existing.resolved_at = utc_now()
+                existing.resolved_by = "backend_function_graph_change"
+                existing.decision_notes = "A required function contract changed."
+                self.db.commit()
+        permissions = graph.permissions
         dependencies = list(manifest.get("dependencies", []) or [])
         permission_service = PermissionService(self.db, project_root=self.project_root)
         risk_level, blocked_reasons = permission_service._risk_for_permissions(permissions, dependencies=dependencies)
+        risk_level = max(
+            (risk_level, graph.risk_level),
+            key={"low": 0, "medium": 1, "high": 2, "blocked": 3}.__getitem__,
+        )
         explanation = (
             f"Version {version.version} changes runtime permissions for {skill.name}. "
             "Approve this before activating the new version. Activation will not run the skill automatically."
@@ -205,6 +239,8 @@ class SkillVersionService:
                 "permission_fingerprint_changed": True,
                 "blocked_reasons": blocked_reasons,
                 "runner_unsupported": permission_service.unsupported_runtime_reasons(permissions),
+                "function_graph_fingerprint": graph.fingerprint,
+                "effective_function_permissions": graph.permissions,
             },
             reason=explanation,
             user_explanation=explanation,
@@ -234,13 +270,33 @@ class SkillVersionService:
         if version.validation_status != "passed" or version.test_status != "passed":
             raise SkillVersionError("Version must pass validation and tests before activation")
         active = self.ensure_active_version(skill)
-        if active.permission_fingerprint != version.permission_fingerprint:
+        candidate_manifest = SkillManifest.model_validate(version.manifest_json)
+        active_fingerprint = self.permission_fingerprint(skill, active.manifest_json)
+        if active.permission_fingerprint != active_fingerprint:
+            active.permission_fingerprint = active_fingerprint
+            self.db.commit()
+        current_fingerprint = self.permission_fingerprint(skill, version.manifest_json)
+        if version.permission_fingerprint != current_fingerprint:
+            version.permission_fingerprint = current_fingerprint
+            self.db.commit()
+        if active_fingerprint != version.permission_fingerprint:
             request = self._latest_version_permission_request(skill, version)
             if request is None or request.status != "approved":
                 self.create_runtime_request_if_needed(skill, version)
                 raise SkillVersionError("Runtime permission approval is required before activating this version")
-        candidate_manifest = SkillManifest.model_validate(version.manifest_json)
         self._validate_candidate_runtime(skill, candidate_manifest)
+        candidate_graph = SkillGraphService(
+            self.db,
+            project_root=self.project_root,
+        ).effective_contract(skill, manifest=candidate_manifest, strict=True)
+        if active.permission_fingerprint != version.permission_fingerprint:
+            request = self._latest_version_permission_request(skill, version)
+            approved_graph = (request.reason_json or {}).get("function_graph_fingerprint") if request else None
+            if approved_graph != candidate_graph.fingerprint:
+                self.create_runtime_request_if_needed(skill, version)
+                raise SkillVersionError(
+                    "Runtime permission approval is stale because a required function changed"
+                )
         if candidate_manifest.integration_requirements:
             from app.services.integration_service import build_default_integration_service
 
@@ -273,6 +329,9 @@ class SkillVersionService:
                 self._point_skill_at_version(skill, version)
                 self.db.commit()
                 self.db.refresh(skill)
+                from app.services.function_catalog_service import FunctionCatalogService
+
+                FunctionCatalogService(self.db, project_root=self.project_root).refresh()
                 return skill
         except SkillOperationConflict as exc:
             raise SkillVersionError(str(exc)) from exc
@@ -308,11 +367,18 @@ class SkillVersionService:
         ]
         return {"active_version": active, "candidate_version": version, "files": files}
 
-    def permission_fingerprint(self, manifest_json: dict[str, Any]) -> str:
+    def permission_fingerprint(self, skill: Skill, manifest_json: dict[str, Any]) -> str:
+        manifest = SkillManifest.model_validate(manifest_json)
+        graph = SkillGraphService(
+            self.db,
+            project_root=self.project_root,
+        ).effective_contract(skill, manifest=manifest)
         payload = {
-            "permissions": manifest_json.get("permissions", {}),
+            "permissions": graph.permissions,
             "dependencies": manifest_json.get("dependencies", []),
             "function_requirements": manifest_json.get("function_requirements", []),
+            "risk_level": graph.risk_level,
+            "function_graph_fingerprint": graph.fingerprint,
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
@@ -320,6 +386,17 @@ class SkillVersionService:
     def _validate_candidate_runtime(self, skill: Skill, manifest: SkillManifest) -> None:
         if manifest.runtime != skill.runtime:
             raise SkillVersionError("Skill updates cannot change runtime type")
+        try:
+            SkillGraphService(
+                self.db,
+                project_root=self.project_root,
+            ).effective_contract(
+                skill,
+                manifest=manifest,
+                strict=True,
+            )
+        except SkillGraphError as exc:
+            raise SkillVersionError(str(exc)) from exc
         if manifest.runtime != "service":
             return
         schedule = self.db.scalar(
@@ -350,7 +427,7 @@ class SkillVersionService:
             change_summary="Initial active version.",
             changelog="Initial active version.",
             created_by="system",
-            permission_fingerprint=self.permission_fingerprint(manifest.model_dump(mode="json")),
+            permission_fingerprint=self.permission_fingerprint(skill, manifest.model_dump(mode="json")),
             test_status="not_run",
             validation_status="passed",
             activated_at=utc_now(),
@@ -368,7 +445,11 @@ class SkillVersionService:
         skill.manifest_path = self._relative_path(folder / "manifest.json")
         skill.description = manifest.description
         skill.runtime = manifest.runtime
-        skill.risk_level = classify_permission_risk(manifest.permissions, manifest.dependencies)
+        skill.risk_level = classify_permission_risk(
+            manifest.permissions,
+            manifest.dependencies,
+            requires_invocation_approval=manifest.requires_invocation_approval,
+        )
         skill.instructions_path = manifest.instructions_path
         skill.input_schema_json = manifest.input_schema
         skill.output_schema_json = manifest.output_schema
@@ -376,6 +457,11 @@ class SkillVersionService:
         skill.integration_requirements_json = [
             item.model_dump(mode="json") for item in manifest.integration_requirements
         ]
+        self.db.flush()
+        SkillGraphService(
+            self.db,
+            project_root=self.project_root,
+        ).refresh_effective_risks()
         self.db.commit()
         self.db.refresh(skill)
 

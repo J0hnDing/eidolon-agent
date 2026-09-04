@@ -4,9 +4,9 @@ Scheduling uses APScheduler through `SchedulerService` and is exclusive to servi
 
 Generated `service` skills are bounded JSON stdin/stdout endpoints with exactly one required `SkillSchedule`. Functions and web applications cannot declare or create schedules. A service is not a function-catalog entry, an MCP tool, or a callable target for another agent or skill.
 
-The backend also registers the platform-owned `backend.notion.todo.cleanup_done` service every time it starts. It runs daily at 03:00 `America/Toronto`, uses a stable replacement job id, coalesces missed runs, and permits only one concurrent instance. `GET /schedules` includes a read-only platform projection with durable next/last state. It is not a skill, a function-catalog entry, or a mutable `SkillSchedule` row.
+The backend registers a fixed platform-service schedule registry every time it starts. It contains `backend.notion.todo.cleanup_done` daily at 03:00 and `backend.quercus.knowledge.sync` daily at 10:00, both in `America/Toronto`. Each uses a stable replacement job id, coalesces missed runs, and permits only one concurrent instance. `GET /schedules` includes read-only platform projections with durable next/last state and an `is_running` projection derived from active occurrences. Generated schedule rows derive the same field from active attributed runs or occurrences. Platform services are not skills, function-catalog entries, MCP tools, or mutable `SkillSchedule` rows.
 
-Startup also reconciles checked-in installed skill packages before loading scheduler rows. The installed `weekly_report_service` therefore reliably appears with its one initially paused schedule: Monday at 08:00 `America/Toronto`. It deterministically calls `github_atlas_project_scout` with `{limit: 10, period: "weekly", atlas_keywords: []}`, validates the exact repository output, formats native Notion blocks, and calls `notion.report.create`. It never calls Codex directly; any bounded analysis remains owned by the Scout function. Scout, validation, or Notion failures fail the service run rather than falling back to model-generated content.
+Startup also reconciles checked-in installed skill packages before loading scheduler rows. The installed `weekly_report_service` therefore reliably appears with its one initially disabled schedule: Monday at 08:00 `America/Toronto`. It deterministically calls `github_atlas_project_scout` with `{limit: 10, period: "weekly", atlas_keywords: []}`, validates the exact repository output, formats native Notion blocks, and calls `notion.report.create`. Version v2 adds `telegram.notification.send`: after all reports are created, it sends `Your weekly reports are ready` with a list of the created reports. A failed run attempts a Telegram alert titled `Weekly report failed` whose description contains the normalized error code and message; an alert-delivery failure never replaces the original run failure. Because Telegram is a new integration requirement, v2 remains inactive until its runtime approval is granted and the version is activated. The service never calls Codex directly; any bounded analysis remains owned by the Scout function. Scout, validation, Notion, or completion-notification failures fail the service run rather than falling back to model-generated content.
 
 ## Schedule Types
 
@@ -20,15 +20,15 @@ Each schedule also stores one JSON object input that must validate against the a
 
 ## Creation and State
 
-ProductManager includes required initial schedule intent only when `runtime = service`. During installation, the backend creates one paused schedule from the installed manifest. Installation never activates it automatically.
+ProductManager includes required initial schedule intent only when `runtime = service`. During installation, the backend creates one disabled service with one paused compatibility schedule row from the installed manifest. Installation never enables it automatically.
 
 The schedule row becomes backend-owned runtime state after installation. Users edit timing, timezone, and input on the shared Schedules page. Version updates do not replace those edits; activation fails if the existing input is incompatible with the candidate service schema.
 
-Canonical statuses are `active` and `paused`. There is no separate enabled state or schedule-approval lifecycle for services. Runtime permission and integration approvals remain independent and are checked before a paused schedule can be resumed.
+`Skill.enabled` is the canonical service-availability control. Enabling a service activates and registers its required schedule; disabling it pauses and unregisters that schedule. Existing `active`/`paused` schedule rows are reconciled into enabled state at startup for compatibility. Runtime permission and integration approvals remain independent and are checked before a service can be enabled.
 
 ## Execution
 
-Automatic execution occurs only while the schedule is active. Run Now is allowed for either active or paused generated-service schedules and does not resume a paused schedule.
+Automatic execution and Run Now are allowed only while the service is enabled and its required schedule is active. Run Now does not change availability.
 
 Every run rechecks that:
 
@@ -50,8 +50,8 @@ On startup, Eidolon computes the latest intended occurrence at or before one sha
 
 Activation boundaries prevent unwanted backfill:
 
-- creating a paused schedule does not create occurrences;
-- resuming establishes a new active boundary, so times during the paused period are not run;
+- creating a disabled service does not create occurrences;
+- enabling establishes a new active boundary, so times during the disabled period are not run;
 - editing timing, timezone, or input establishes a new definition fingerprint and active boundary;
 - interval schedules persist their first-fire anchor so their intended times do not drift across restarts.
 

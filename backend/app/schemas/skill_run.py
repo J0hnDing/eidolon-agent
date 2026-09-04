@@ -27,6 +27,7 @@ class SkillRunBase(BaseModel):
     invocation_source: str = "internal"
     caller_skill_id: int | None = None
     caller_version_id: int | None = None
+    parent_run_id: int | None = None
     source_schedule_id: int | None = None
     schedule_occurrence_key: str | None = None
     scheduled_for_at: datetime | None = None

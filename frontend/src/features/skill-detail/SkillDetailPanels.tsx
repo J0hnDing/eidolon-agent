@@ -3,11 +3,13 @@ import { Link } from "react-router-dom";
 import {
   ApprovalRequest,
   ProposedSkillValidation,
+  SkillFile,
   SkillRun,
   SkillUpdateResponse,
   SkillVersion,
   SkillVersionComparison,
 } from "../../api/client";
+import { DeleteIconButton } from "../../components/DeleteIconButton";
 import { formatSystemDateTime } from "../../lib/dateTime";
 
 export type UpdateChatMessage = {
@@ -90,10 +92,13 @@ export function UpdateSuggestionChat({
         </article>
       ))}
       {latestResponse && (
-        <p className="muted">
-          Agent Run: <Link to={`/agent-runs/${latestResponse.agent_run_id}`}>#{latestResponse.agent_run_id}</Link>
-          {latestResponse.version ? ` / Draft version: ${latestResponse.version.version}` : ""}
-        </p>
+        <div className="update-response-meta muted">
+          <span>Agent Run:</span>
+          <Link className="button-link secondary compact" to={`/agent-runs/${latestResponse.agent_run_id}`}>
+            #{latestResponse.agent_run_id}
+          </Link>
+          {latestResponse.version && <span>Draft version: {latestResponse.version.version}</span>}
+        </div>
       )}
     </div>
   );
@@ -179,32 +184,88 @@ export function VersionList({
 }) {
   if (versions.length === 0) return <p className="muted">No versions have been initialized for this skill yet.</p>;
   return (
-    <div className="run-list">
+    <div className="run-list version-list">
       {versions.map((version) => {
         const isActive = version.id === activeVersionId || version.status === "active";
         const canActivate = !isActive && (version.status === "proposed_update" || version.status === "archived");
         return (
-          <article key={version.id} className="run-row">
-            <div>
-              <strong>{version.version}</strong>
+          <article key={version.id} className="run-row version-row">
+            <div className="version-copy">
+              <div className="version-heading">
+                <strong>{version.version}</strong>
+                <span className={`badge status-${version.status}`}>{version.status.replace("_", " ")}</span>
+              </div>
               <span>{version.changelog || version.change_summary || "No changelog provided."}</span>
-              <span>Validation: {version.validation_status} / Tests: {version.test_status}</span>
-              <span>{version.folder_path}</span>
+              <div className="version-health" aria-label={`Version ${version.version} checks`}>
+                <VersionCheck label="Validation" status={version.validation_status} />
+                <VersionCheck label="Tests" status={version.test_status} />
+              </div>
+              <code className="version-path">{version.folder_path}</code>
             </div>
-            <div className="button-row">
-              <span className={`badge status-${version.status}`}>{version.status}</span>
+            <div className="button-row version-actions">
               <button type="button" className="secondary" onClick={() => onCompare(version.id)} disabled={isWorking}>Compare</button>
               {canActivate && (
                 <button type="button" onClick={() => onActivate(version.id)} disabled={isWorking}>
                   {version.status === "archived" ? "Switch Back" : "Activate"}
                 </button>
               )}
-              {!isActive && <button type="button" className="danger" onClick={() => onDiscard(version.id)} disabled={isWorking}>Delete Version</button>}
+              {!isActive && (
+                <DeleteIconButton
+                  label={`Delete version ${version.version}`}
+                  onClick={() => onDiscard(version.id)}
+                  disabled={isWorking}
+                />
+              )}
             </div>
           </article>
         );
       })}
     </div>
+  );
+}
+
+function VersionCheck({ label, status }: { label: string; status: string }) {
+  const readableStatus = status.replace(/_/g, " ");
+  return (
+    <span
+      className={`version-check status-${status}`}
+      aria-label={`${label}: ${readableStatus}`}
+      title={`${label}: ${readableStatus}`}
+    >
+      <span className="status-dot" aria-hidden="true" />
+      <span aria-hidden="true">{label}</span>
+    </span>
+  );
+}
+
+export function SkillFilesDisclosure({ files }: { files: SkillFile[] }) {
+  return (
+    <section className="detail-panel skill-files-panel">
+      <header className="page-header">
+        <div>
+          <h2>Skill Files</h2>
+          <p className="muted">Inspect the generated package only when you need its implementation details.</p>
+        </div>
+        <span className="badge">{files.length} {files.length === 1 ? "file" : "files"}</span>
+      </header>
+      {files.length > 0 ? (
+        <div className="file-list">
+          {files.map((file) => (
+            <details key={file.path} className="skill-file-disclosure">
+              <summary>
+                <span>{file.path}</span>
+                <svg className="disclosure-chevron skill-file-chevron" viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="m7 4 6 6-6 6" />
+                </svg>
+              </summary>
+              <pre>{file.content}</pre>
+            </details>
+          ))}
+        </div>
+      ) : (
+        <p className="muted">No readable skill files found.</p>
+      )}
+    </section>
   );
 }
 
@@ -301,16 +362,23 @@ export function RunHistory({ runs }: { runs: SkillRun[] }) {
   return (
     <div className="run-history-list">
       {runs.map((run) => (
-        <article key={run.id} className="run-history-entry">
-          <header className="run-history-header">
+        <details key={run.id} className="run-history-entry">
+          <summary className="run-history-header">
             <div>
               <h3>Run #{run.id}</h3>
               <span>{formatTimestamp(run.started_at, "not started")}</span>
             </div>
-            <span className={`badge run-${run.status}`}>{run.status}</span>
-          </header>
-          <RunDetail run={run} />
-        </article>
+            <span className="run-history-summary-status">
+              <span className={`badge run-${run.status}`}>{run.status}</span>
+              <svg className="disclosure-chevron run-history-chevron" viewBox="0 0 20 20" aria-hidden="true">
+                <path d="m7 4 6 6-6 6" />
+              </svg>
+            </span>
+          </summary>
+          <div className="run-history-content">
+            <RunDetail run={run} />
+          </div>
+        </details>
       ))}
     </div>
   );

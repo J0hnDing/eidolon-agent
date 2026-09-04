@@ -52,6 +52,76 @@ class NotionConnectionStatus(BaseModel):
     error_type: str | None = None
 
 
+class QuercusCredentialWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: SecretStr
+
+
+class QuercusCourseSelectionWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    course_ids: list[str] = Field(max_length=500)
+
+
+class QuercusProcessingWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    method: Literal["none", "marker_surya_llamacpp"]
+    llama_cpp_directory: str | None = Field(default=None, max_length=2048)
+
+
+class QuercusProcessingStatus(BaseModel):
+    method: Literal["none", "marker_surya_llamacpp"]
+    llama_cpp_directory: str | None = None
+    llama_cpp_available: bool
+    inference_url: str | None = None
+    marker_available: bool
+    inference_available: bool
+    status: Literal["disabled", "idle", "pending", "running", "succeeded", "partial", "failed"]
+    processed_file_count: int = 0
+    failed_file_count: int = 0
+
+
+class QuercusProcessingReprocessResult(QuercusProcessingStatus):
+    queued_file_count: int = 0
+
+
+class QuercusCourseRead(BaseModel):
+    course_id: str
+    name: str
+    course_code: str | None = None
+    term_name: str | None = None
+    enrollment_state: str | None = None
+    selected: bool = False
+    retained: bool = False
+    local_path: str | None = None
+    last_sync_started_at: datetime | None = None
+    last_sync_completed_at: datetime | None = None
+    last_sync_status: str | None = None
+    last_error_type: str | None = None
+    skipped_file_count: int = 0
+    last_processing_started_at: datetime | None = None
+    last_processing_completed_at: datetime | None = None
+    last_processing_status: str | None = None
+    last_processing_error_type: str | None = None
+    processed_file_count: int = 0
+    failed_processing_count: int = 0
+
+
+class QuercusConnectionStatus(BaseModel):
+    provider: Literal["quercus"] = "quercus"
+    connected: bool
+    status: Literal["connected", "disconnected", "unavailable", "invalid"]
+    account_name: str | None = None
+    account_id: str | None = None
+    last_validated_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    error_type: str | None = None
+    courses: list[QuercusCourseRead] = Field(default_factory=list)
+
+
 class GoogleOAuthClientWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

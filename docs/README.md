@@ -49,6 +49,7 @@ The product and repository are named **Eidolon**. Existing environment variables
 - [Google Calendar OAuth integration](integrations/google_calendar.md)
 - [Gmail OAuth integration](integrations/gmail.md)
 - [Telegram Notification and Approval bot](integrations/telegram.md)
+- [Quercus knowledge synchronization](integrations/quercus.md)
 - [Codex CLI integration](integrations/codex_cli.md)
 - [Codex MCP tools](integrations/codex_mcp.md)
 - [Working history file](working_history.md)

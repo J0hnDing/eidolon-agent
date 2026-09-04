@@ -2,6 +2,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 
 import { AgentRunDetail, SkillRun, api } from "../api/client";
+import { DeleteIconButton } from "../components/DeleteIconButton";
 import { canRetryAgentRun } from "../features/agent-run/agentRunActions";
 import { formatSystemDateTime } from "../lib/dateTime";
 import { usePolling } from "../lib/usePolling";
@@ -252,9 +253,7 @@ export default function AgentRunDetailPage() {
           >
             Cancel
           </button>
-          <button type="button" className="danger" onClick={handleDelete} disabled={isWorking}>
-            Delete Run
-          </button>
+          <DeleteIconButton label="Delete run" onClick={handleDelete} disabled={isWorking} />
         </div>
       </section>
 

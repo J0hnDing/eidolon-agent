@@ -1,5 +1,9 @@
 import asyncio
 import logging
+import os
+import signal
+import sys
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -28,8 +32,15 @@ from app.services.act_turn_dispatcher import act_turn_dispatcher
 from app.services.atlas_lifecycle_service import atlas_lifecycle_service
 from app.services.atlas_settings_service import build_default_atlas_settings_service
 from app.services.codex_usage_service import codex_usage_service
+from app.services.function_catalog_service import FunctionCatalogService
 from app.services.invocation_approval_service import InvocationApprovalService
 from app.services.proposed_skill_service import ProposedSkillService
+from app.services.quercus_processing_service import (
+    PROCESSING_MARKER,
+    QuercusProcessingDispatcher,
+    QuercusProcessingService,
+)
+from app.services.quercus_service import QuercusSyncDispatcher
 from app.services.scheduler_service import SchedulerService
 from app.services.telegram_service import start_telegram_pollers, stop_telegram_pollers
 from app.services.web_app_runtime_service import WebAppRuntimeConfig, WebAppRuntimeService
@@ -57,6 +68,40 @@ class OAuthCallbackAccessLogFilter(logging.Filter):
 
 
 logging.getLogger("uvicorn.access").addFilter(OAuthCallbackAccessLogFilter())
+logger = logging.getLogger(__name__)
+
+
+def install_shutdown_signal_logging() -> dict[int, object]:
+    if threading.current_thread() is not threading.main_thread():
+        return {}
+    original_handlers: dict[int, object] = {}
+    for handled_signal in (signal.SIGINT, signal.SIGTERM):
+        original_handler = signal.getsignal(handled_signal)
+        if not callable(original_handler):
+            continue
+
+        def traced_handler(
+            received_signal: int,
+            frame: object,
+            *,
+            previous_handler=original_handler,
+        ) -> None:
+            logger.warning(
+                "Eidolon backend received signal=%s pid=%s parent_pid=%s",
+                signal.Signals(received_signal).name,
+                os.getpid(),
+                os.getppid(),
+            )
+            previous_handler(received_signal, frame)
+
+        original_handlers[handled_signal] = original_handler
+        signal.signal(handled_signal, traced_handler)
+    return original_handlers
+
+
+def restore_shutdown_signal_handlers(original_handlers: dict[int, object]) -> None:
+    for handled_signal, original_handler in original_handlers.items():
+        signal.signal(handled_signal, original_handler)
 
 
 def stop_idle_web_app_instances(config: WebAppRuntimeConfig) -> None:
@@ -75,7 +120,19 @@ async def web_app_runtime_maintenance(config: WebAppRuntimeConfig) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    logger.info(
+        "Eidolon backend startup pid=%s parent_pid=%s executable=%s argv=%r",
+        os.getpid(),
+        os.getppid(),
+        sys.executable,
+        sys.argv,
+    )
     create_db_and_tables()
+    quercus_db = SessionLocal()
+    try:
+        quercus_processing_method = QuercusProcessingService(quercus_db).initialize()
+    finally:
+        quercus_db.close()
     recovery_db = SessionLocal()
     try:
         InvocationApprovalService(recovery_db).recover()
@@ -95,18 +152,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.atlas_lifecycle_service = atlas_lifecycle_service
     scheduler_db = SessionLocal()
     ProposedSkillService(scheduler_db).sync_installed_from_filesystem()
+    FunctionCatalogService(scheduler_db).refresh()
     scheduler_service = SchedulerService(scheduler_db)
     scheduler_service.start()
     app.state.scheduler_service = scheduler_service
+    app.state.quercus_sync_dispatcher = QuercusSyncDispatcher(SessionLocal)
+    quercus_processing_dispatcher = QuercusProcessingDispatcher(SessionLocal)
+    app.state.quercus_processing_dispatcher = quercus_processing_dispatcher
+    if quercus_processing_method == PROCESSING_MARKER:
+        quercus_processing_dispatcher.request()
     codex_usage_service.start()
     app.state.codex_usage_service = codex_usage_service
     web_app_config = WebAppRuntimeConfig.from_env()
     web_app_db = SessionLocal()
     WebAppRuntimeService(web_app_db, config=web_app_config).recover_stale_instances()
     web_app_maintenance = asyncio.create_task(web_app_runtime_maintenance(web_app_config))
+    original_signal_handlers = install_shutdown_signal_logging()
     try:
         yield
     finally:
+        logger.warning(
+            "Eidolon backend shutdown started pid=%s parent_pid=%s "
+            "quercus_processing_running=%s",
+            os.getpid(),
+            os.getppid(),
+            quercus_processing_dispatcher.running,
+        )
+        await asyncio.to_thread(quercus_processing_dispatcher.stop, 45)
         await asyncio.to_thread(stop_telegram_pollers, telegram_pollers)
         await asyncio.to_thread(act_turn_dispatcher.stop)
         web_app_maintenance.cancel()
@@ -120,6 +192,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         scheduler_service.shutdown()
         scheduler_db.close()
         atlas_lifecycle_service.stop()
+        restore_shutdown_signal_handlers(original_signal_handlers)
+        logger.info("Eidolon backend shutdown completed pid=%s", os.getpid())
 
 
 app = FastAPI(
@@ -131,8 +205,8 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
     ],
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,

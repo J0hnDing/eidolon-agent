@@ -1,6 +1,6 @@
 # Skill Update Workflow
 
-Updates are version-safe and do not use the new skill DAG build workflow in the MVP unless a future update explicitly opts into a small task DAG.
+Updates do not use the new skill DAG build workflow in the MVP unless a future update explicitly opts into a small task DAG.
 
 ## Flow
 
@@ -13,16 +13,16 @@ Updates are version-safe and do not use the new skill DAG build workflow in the 
    - unsupported or blocked.
 4. If build-time approval is required, backend creates a separate `backend` step and a `build_time` approval request with `request_type = "update"`, then pauses without relabeling the completed ProductManager step.
 5. If approved, or if no extra build-time approval is needed, backend copies the active version into a draft/proposed version folder.
-6. Builder modifies only the draft.
-7. Tester writes/updates runtime-appropriate tests and validates the draft.
-8. Permission review compares active and draft manifest/dependencies and the normalized integration contract.
+6. Builder modifies only the copied draft/proposed version.
+7. Tester writes or updates runtime-appropriate tests and validates the draft.
+8. Permission review compares the active and draft manifest/dependencies and the normalized integration contract.
 9. If runtime permissions are unchanged, activation can skip runtime reapproval.
 10. If permissions changed, user must approve runtime permissions before activation.
 11. User compares, activates, or discards.
 
 ## Important Rules
 
-- Active version is never edited in place. A running web application remains pinned to that active version while a draft is updated or repaired.
+- Update Builder never modifies the active installed version; this workflow rule does not constrain direct Codex repository work requested by the user.
 - Update/repair preserves the existing `function`, `service`, or `web_app` execution protocol.
 - Service updates preserve the backend-owned schedule state. They cannot change runtime type or replace edited timing/input; activation rejects a candidate whose input schema no longer accepts the stored schedule input.
 - Activating another web-app version stops old-version instances before the pointer changes; a later open starts the new version.

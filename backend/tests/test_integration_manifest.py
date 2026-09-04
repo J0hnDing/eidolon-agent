@@ -216,6 +216,13 @@ def test_manifest_accepts_google_calendar_with_primary_calendar_scope_only() -> 
     ]
 
 
+def test_email_send_is_high_risk_and_requires_per_call_approval() -> None:
+    operation = OPERATIONS["email.send"]
+
+    assert operation.risk == "high"
+    assert operation.invocation_approval_required is True
+
+
 def test_manifest_rejects_notion_operation_under_another_provider() -> None:
     with pytest.raises(ManifestValidationError, match="must match"):
         validate_manifest(

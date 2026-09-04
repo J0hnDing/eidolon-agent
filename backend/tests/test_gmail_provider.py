@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from app.services import gmail_provider as provider_module
 from app.services.gmail_provider import (
     GMAIL_OAUTH_REDIRECT_URI,
     GMAIL_SCOPE,
@@ -20,6 +21,22 @@ def credential() -> str:
     return json.dumps(
         {"client_id": "gmail-client", "client_secret": "gmail-secret", "refresh_token": "gmail-refresh"}
     )
+
+
+def test_http_opener_is_lazy_for_non_network_status_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    build_calls = 0
+
+    def build_opener(*_args):
+        nonlocal build_calls
+        build_calls += 1
+        return object()
+
+    monkeypatch.setattr(provider_module, "build_opener", build_opener)
+    adapter = UrllibGmailProviderAdapter()
+
+    adapter.authorization_url("client-id", "state-value")
+
+    assert build_calls == 0
 
 
 def encoded(value: str) -> str:

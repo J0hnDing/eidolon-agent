@@ -52,7 +52,7 @@ If a blocker requires user action, Builder must return a user-action-required re
 
 ## Update Mode
 
-Builder modifies only the copied draft version folder. It must never modify the active installed version in place.
+The application-managed update workflow copies the active installed version before Builder runs. Builder modifies only that copied draft/proposed version and must never modify the active installed version. This is a constraint on Builder inside the update workflow, not on direct Codex repository work requested by the user.
 
 ## Builder Must Not
 

@@ -751,3 +751,94 @@ Rebuilt Act as a durable queued App Server workflow with enforced workspace boun
 ### Limitations
 
 none
+
+## 2026-08-30 23:54 — Removed direct Chat mode
+
+- Category: refactor
+- Area: frontend-and-backend-conversation-workflow
+
+### Summary
+
+Removed the direct Codex Chat mode from the frontend and backend, deleted its execution adapter and response contract, made Project the default local conversation, retained only Project and Act creation, discarded legacy direct-chat rows instead of converting them into projects, removed Chat model routing while preserving independent Act routing, and aligned tests and documentation. Ruff passed, all 581 backend tests passed, all 32 frontend tests passed, the frontend production build passed, OpenAPI exposes no chat mode field, and git diff checks passed.
+
+### Limitations
+
+none
+
+## 2026-08-31 00:56 — Dark-first control-plane UI and appearance settings
+
+- Category: feature
+- Area: frontend
+
+### Summary
+
+Replaced the layered frontend styling with a cohesive graphite and restrained-blue design system using bundled Plus Jakarta Sans and IBM Plex Mono, adopted line-led spatial segmentation and dot-plus-text statuses, integrated the Eidolon logo while preserving navigation icons, polished Chat with fixed-height conversation rows and desktop workspace plus neutral Project and Act symbol labels, and added persisted Dark and Light appearance selection in Settings. Added focused theme coverage, updated frontend documentation, and completed live desktop and compact dark-mode QA.
+
+### Limitations
+
+Light mode is implemented but was not visually QA tested, as requested.
+
+## 2026-08-31 14:55 — Five-minute skill and nested capability timeouts
+
+- Category: bugfix
+- Area: runtime
+
+### Summary
+
+Raised bounded skill entrypoint execution from 120 to 300 seconds, aligned nested function and Codex capability clients and trusted relays at 300 seconds, and removed the skill_runtime_codex 45-second action override so it inherits the general five-minute Codex timeout. Updated focused tests and runtime/Codex documentation.
+
+### Limitations
+
+The 300-second entrypoint limit remains the total budget for a bounded skill process, so nested work shares that parent budget rather than extending it.
+
+## 2026-09-01 01:43 — Nested Function Invocation Policy
+
+- Category: research
+- Area: backend-function-composition
+
+### Summary
+
+Superseded the old bounded-depth policy with a backend-validated finite acyclic function graph. Every edge remains independently authorized and scoped, nested runs retain per-skill locks and runner bounds, and parent_run_id provides an inspectable audit chain across direct, scheduled, backend, and web-application origins.
+
+### Limitations
+
+The historical numeric-depth requirement is intentionally superseded: valid graphs have no arbitrary depth cap, while cycles and missing children fail closed.
+
+## 2026-09-02 12:54 — Separate function catalog reads from installed-skill reconciliation
+
+- Category: refactor
+- Area: Function catalog
+
+### Summary
+
+Separated UI catalog and skill-list reads from installed-skill reconciliation. Startup now performs reconciliation and builds the catalog projection; skill lifecycle, runtime approval, active-version, Atlas, and integration mutations refresh it. Existing projection reads perform no filesystem reconciliation or provider probing.
+
+### Limitations
+
+A missing catalog file is rebuilt once as a defensive bootstrap for service entry points that bypass application startup.
+
+## 2026-09-01 01:43 — Define transitive permission and execution semantics for unbounded function chains
+
+- Category: research
+- Area: backend-function-composition
+
+### Summary
+
+Implemented and documented transitive function semantics: parent risk is at least every descendant and integration risk; runtime review includes the transitive child-permission union while each runner retains target-owned permissions; integration leaves add no ordinary permissions; graph fingerprints invalidate stale approvals; child disable/delete propagates disabled/error availability; cycles fail deterministically; nested runs persist parent_run_id; and each node keeps its bounded timeout/resource contract with synchronous child failure handling.
+
+### Limitations
+
+There is deliberately no separate chain-wide cancellation token or shared resource pool. Each node retains its existing bounded runner limits, and the immediate caller owns child-failure handling.
+
+## 2026-09-03 02:57 — Quercus knowledge synchronization
+
+- Category: feature
+- Area: Act and integrations
+
+### Summary
+
+Added trusted Quercus token and course settings, incremental backend mirroring into runtime/act/knowledge/quercus, safe bounded Canvas transport and file downloads, selected-course retention/removal, the daily Toronto platform schedule, the three-directory Act contract, Settings and Schedules UI, documentation, and focused/full regression coverage.
+
+### Limitations
+
+Act knowledge is instruction-read-only until TODO-026 adds filesystem enforcement; files larger than 8 GiB or with unknown size remain metadata-only and have no lazy-fetch endpoint.

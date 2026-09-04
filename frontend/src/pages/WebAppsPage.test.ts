@@ -18,6 +18,7 @@ function skill(id: number, runtime: Skill["runtime"]): Skill {
     installed_path: `skills/installed/skill_${id}`,
     active_version_id: id,
     enabled: true,
+    is_running: false,
     created_at: "2026-07-16T00:00:00Z",
     updated_at: "2026-07-16T00:00:00Z",
   };

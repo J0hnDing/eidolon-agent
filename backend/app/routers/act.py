@@ -4,12 +4,22 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.schemas.act import ActSessionCreate, ActSessionRead, ActSessionSummary, ActTurnCreate, ActTurnRead
 from app.services.act_session_service import ActSessionError, ActSessionService
+from app.services.act_workspace_service import ActWorkspaceError, open_act_root
 
 router = APIRouter(prefix="/act", tags=["act"])
 
 
 def _error(exc: ActSessionError) -> HTTPException:
     return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+
+@router.post("/workspace/open-root", status_code=status.HTTP_204_NO_CONTENT)
+def open_workspace_root() -> Response:
+    try:
+        open_act_root()
+    except ActWorkspaceError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/sessions", response_model=list[ActSessionSummary])

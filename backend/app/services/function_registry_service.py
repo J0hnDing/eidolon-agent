@@ -19,7 +19,7 @@ from app.models import (
     SkillVersion,
 )
 from app.schemas.function_registry import FunctionContractRead, FunctionRequirementReview
-from app.schemas.manifest import SkillManifest, classify_permission_risk
+from app.schemas.manifest import SkillManifest
 from app.services.invocation_approval_contract import effective_invocation_contract
 from app.services.invocation_approval_service import (
     InvocationApprovalError,
@@ -29,6 +29,7 @@ from app.services.invocation_approval_service import (
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
+from app.services.skill_graph_service import SkillGraphService
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
 from app.services.skill_runner import FunctionRunContext, get_skill_runner, validate_supported_permissions
 
@@ -128,24 +129,38 @@ class FunctionRegistryService:
         permission_decision = PermissionService(self.db, project_root=self.project_root).can_run(skill)
         if not permission_decision.allowed:
             reasons.append(permission_decision.reason)
+        graph_contract = SkillGraphService(
+            self.db,
+            project_root=self.project_root,
+        ).effective_contract(
+            skill,
+            manifest=manifest,
+        )
+        reasons.extend(graph_contract.availability_reasons)
         reasons = list(dict.fromkeys(reasons))
         availability = "available"
-        if not skill.enabled and all(reason == "Function is disabled" for reason in reasons):
+        if graph_contract.availability == "error":
+            availability = "error"
+        elif not skill.enabled and all(reason == "Function is disabled" for reason in reasons):
             availability = "disabled"
         elif reasons:
-            availability = "disabled" if reasons == ["Function is disabled"] else "unavailable"
-        permissions = manifest.permissions.model_dump(mode="json") if manifest is not None else {}
-        dependencies = manifest.dependencies if manifest is not None else []
-        risk_level = (
-            classify_permission_risk(manifest.permissions, dependencies)
-            if manifest is not None
-            else skill.risk_level
-        )
+            availability = (
+                "disabled"
+                if graph_contract.availability == "disabled"
+                or reasons == ["Function is disabled"]
+                else "unavailable"
+            )
+        permissions = graph_contract.permissions
+        risk_level = graph_contract.risk_level
         description = manifest.description if manifest is not None else skill.description
         input_schema = manifest.input_schema if manifest is not None else skill.input_schema_json
         output_schema = manifest.output_schema if manifest is not None else skill.output_schema_json
         requires_invocation_approval = bool(
-            manifest is not None and manifest.requires_invocation_approval
+            manifest is not None
+            and (
+                manifest.requires_invocation_approval
+                or risk_level == "high"
+            )
         )
         if (
             manifest is not None
@@ -455,6 +470,7 @@ class FunctionRegistryService:
             invocation_source=source,
             caller_skill_id=caller.skill.id if caller is not None else None,
             caller_version_id=caller.version_id if caller is not None else None,
+            parent_run_id=caller.run_id if caller is not None else None,
             source_schedule_id=source_schedule_id,
             web_app_instance_id=caller.web_app_instance_id if caller is not None else None,
             initiating_action=initiating_action,
@@ -512,7 +528,11 @@ class FunctionRegistryService:
         if self.target_contract_fingerprint(target) != approval.target_contract_fingerprint:
             raise InvocationApprovalError("stale_contract", "Approved function contract has changed")
         manifest = self._active_manifest(target)
-        if not manifest.requires_invocation_approval:
+        graph = SkillGraphService(
+            self.db,
+            project_root=self.project_root,
+        ).effective_contract(target, manifest=manifest)
+        if not (manifest.requires_invocation_approval or graph.risk_level == "high"):
             raise InvocationApprovalError("stale_contract", "Function approval requirement has changed")
         caller: FunctionCaller | None = None
         if approval.caller_skill_id is not None:
@@ -568,6 +588,7 @@ class FunctionRegistryService:
             invocation_source=source,
             caller_skill_id=caller.skill.id if caller is not None else None,
             caller_version_id=caller.version_id if caller is not None else None,
+            parent_run_id=caller.run_id if caller is not None else None,
             source_schedule_id=source_schedule_id,
             web_app_instance_id=caller.web_app_instance_id if caller is not None else None,
             initiating_action=initiating_action,
@@ -709,14 +730,21 @@ class FunctionRegistryService:
 
     def target_contract_fingerprint(self, target: Skill) -> str:
         manifest = self._active_manifest(target)
+        graph = SkillGraphService(
+            self.db,
+            project_root=self.project_root,
+        ).effective_contract(target, manifest=manifest)
         payload = {
-            "risk_level": classify_permission_risk(manifest.permissions, manifest.dependencies),
-            "permissions": manifest.permissions.model_dump(mode="json"),
+            "risk_level": graph.risk_level,
+            "permissions": graph.permissions,
             "dependencies": manifest.dependencies,
             "description": manifest.description,
             "input_schema": manifest.input_schema,
             "output_schema": manifest.output_schema,
-            "requires_invocation_approval": manifest.requires_invocation_approval,
+            "requires_invocation_approval": (
+                manifest.requires_invocation_approval or graph.risk_level == "high"
+            ),
+            "function_graph_fingerprint": graph.fingerprint,
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()

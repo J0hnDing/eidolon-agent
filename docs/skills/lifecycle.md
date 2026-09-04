@@ -25,7 +25,7 @@ building -> failed
 10. User inspects files and approvals.
 11. User installs or rejects. Installing a service creates its one required schedule in paused state. Function and web-app manifests cannot declare schedules.
 
-Generated skills are not installed or run automatically. A generated service schedule is not activated automatically; the user resumes it from Schedules after runtime approval.
+Generated skills are not installed or run automatically. A generated service is initially disabled; the user enables it from Skill Detail or Schedules after runtime approval.
 
 ## Installation
 
@@ -43,7 +43,7 @@ Installation is idempotent after success and can recover an incomplete first cop
 
 The already-provisioned runtime `.deps` folder is copied into the installed version. Build-only `.build-deps` is excluded. Installation validation verifies the existing dependency contract and never invokes `pip`.
 
-If a service `manifest.json` contains its required `schedule`, install reads the installed manifest copy and creates one paused schedule. Functions and web applications reject this field when non-null. The backend does not expose schedule creation to Builder or the UI.
+If a service `manifest.json` contains its required `schedule`, install reads the installed manifest copy and creates one paused compatibility schedule while leaving the service disabled. Functions and web applications reject this field when non-null. The backend does not expose schedule creation to Builder or the UI.
 
 ## Rejection and Deletion
 
@@ -69,8 +69,8 @@ Disable stops active instances before persisting disabled state. Draft update/re
 
 ## Service Runs
 
-Installed services have no manual run or enabled control. Their single schedule is active or paused. Automatic execution requires active state; Run Now may execute while paused without resuming it. Both paths recheck runtime permissions, integration authorization, input/output schemas, and operation locks. Service runs appear in ordinary run history with schedule attribution.
+Installed services use the same enabled/disabled availability control as other skills. Enabling registers their single required schedule; disabling pauses and unregisters it. Automatic execution and Run Now both require enabled state. Both paths recheck runtime permissions, integration authorization, input/output schemas, child-function availability, and operation locks. A disabled or deleted child function automatically disables any ancestor services. Service runs appear in ordinary run history with schedule attribution.
 
 ## Function Registry Calls
 
-Installed function targets remain visible in the dynamic registry with explicit availability state. A function, scheduled service, or web application may invoke a target only when its active manifest declares the exact function requirement. Low-risk targets need no extra relationship approval; medium/high-risk targets require a current caller-target approval. Every call rechecks caller and target lifecycle/version/runtime eligibility, validates input/output schemas, uses the target's operation lock and bounded runner, and records caller/source attribution on the target run. Nested function-to-function calls are not supported.
+Installed function targets remain visible in the dynamic registry with explicit availability state. A function, scheduled service, or web application may invoke a target only when its active manifest declares the exact function requirement. Low-risk targets need no extra relationship approval; medium/high-risk targets require a current caller-target approval. The backend validates the complete function graph, derives transitive risk and permissions, and records parent/child run attribution. Disabled descendants make parents unavailable; missing, deleted, cyclic, or invalid descendants place parents in `error`. Every call still rechecks the immediate edge, caller and target lifecycle/version/runtime eligibility, schemas, operation locks, and approvals.

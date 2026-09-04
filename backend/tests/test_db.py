@@ -103,6 +103,9 @@ def test_local_schema_migrates_legacy_statuses_task_columns_and_retired_skill_fi
     assert "tool_ui_schema_json" not in skill_columns
     assert "runtime" in skill_columns
     assert "function_requirements_json" in skill_columns
+    assert "availability_migrated" in {
+        column["name"] for column in inspector.get_columns("skill_schedules")
+    }
     assert "relay_container_id" in {
         column["name"] for column in inspector.get_columns("web_app_instances")
     }

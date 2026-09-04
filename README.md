@@ -75,7 +75,6 @@ Eidolon treats the backend as the control plane and generated code as untrusted.
 - **Permissions are declarative.** Manifests describe runtime needs; the backend derives risk and decides what requires approval.
 - **Generated code cannot approve itself.** Agents cannot install, enable, schedule, or bypass backend checks.
 - **Execution is bounded.** Function skills use a JSON input/output protocol; web apps run behind an isolated origin and trusted gateway.
-- **Versions are immutable.** The active installed version is never edited in place.
 - **High-risk capabilities remain blocked.** Shell access, secrets, arbitrary filesystem access, browser automation, file deletion, and sensitive third-party actions are outside the current runtime contract.
 
 Docker is the default skill sandbox. An explicit local/development fallback exists, but it is less isolated. See [permissions](docs/security/permissions.md), [sandbox execution](docs/security/sandbox_execution.md), and [web application containment](docs/runtime/web_applications.md).
@@ -132,7 +131,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`. The API defaults to `http://localhost:8000`.
+Open `http://localhost:5174`. The API defaults to `http://localhost:8000`.
 
 No repository `.env` file is required by the current setup; configuration uses process environment variables and safe local defaults. The existing `PERSONAL_AGENT_*` variable prefix is intentionally retained as a compatibility contract during the Eidolon rename.
 

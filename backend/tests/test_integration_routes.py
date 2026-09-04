@@ -43,6 +43,7 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(integrations.FunctionCatalogService, "refresh", lambda _self: None)
     provider = FakeGitHubProviderAdapter(login="route-octocat", account_id="99")
     service = IntegrationService(
         db,
@@ -124,10 +125,11 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
     oauth_start = integrations.start_google_calendar_oauth(db)
     assert google_secret not in oauth_start.model_dump_json()
     state = oauth_start.authorization_url.rsplit("state=", 1)[1]
-    monkeypatch.setattr(integrations.FunctionCatalogService, "refresh", lambda _self: None)
     callback = integrations.complete_google_calendar_oauth(state, "code", "", db)
     assert callback.status_code == 303
-    assert callback.headers["location"].endswith("?google_calendar=connected")
+    assert callback.headers["location"] == (
+        "http://localhost:5174/settings/integrations?google_calendar=connected"
+    )
     google_status = integrations.google_calendar_connection_status(db)
     assert google_status.connected is True
     assert google_status.account_email == "person@example.com"
@@ -135,9 +137,13 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
     denied_start = integrations.start_google_calendar_oauth(db)
     denied_state = denied_start.authorization_url.rsplit("state=", 1)[1]
     denied = integrations.complete_google_calendar_oauth(denied_state, "", "access_denied", db)
-    assert denied.headers["location"].endswith("?google_calendar=denied")
+    assert denied.headers["location"] == (
+        "http://localhost:5174/settings/integrations?google_calendar=denied"
+    )
     invalid_denial = integrations.complete_google_calendar_oauth("invalid-state", "", "access_denied", db)
-    assert invalid_denial.headers["location"].endswith("?google_calendar=failed")
+    assert invalid_denial.headers["location"] == (
+        "http://localhost:5174/settings/integrations?google_calendar=failed"
+    )
     assert integrations.google_calendar_connection_status(db).connected is True
     google_removed = integrations.remove_google_calendar_connection(db)
     assert google_removed.status_code == 204
@@ -147,7 +153,9 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
     assert google_secret not in gmail_start.model_dump_json()
     gmail_state = parse_qs(urlparse(gmail_start.authorization_url).query)["state"][0]
     gmail_callback = integrations.complete_gmail_oauth(gmail_state, "gmail-code", "", db)
-    assert gmail_callback.headers["location"].endswith("?gmail=connected")
+    assert gmail_callback.headers["location"] == (
+        "http://localhost:5174/settings/integrations?gmail=connected"
+    )
     gmail_status = integrations.gmail_connection_status(db)
     assert gmail_status.connected is True
     assert gmail_status.account_email == "mail@example.com"
@@ -161,6 +169,8 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
     assert "/settings/integrations/github" in paths
     assert "/settings/integrations/notion" in paths
     assert "/settings/integrations/notion/data-sources" in paths
+    assert "/settings/integrations/quercus/processing" in paths
+    assert "/settings/integrations/quercus/processing/reprocess-failed" in paths
     assert "/settings/integrations/google" in paths
     assert "/settings/integrations/google/oauth-client" in paths
     assert "/settings/integrations/google-calendar" in paths

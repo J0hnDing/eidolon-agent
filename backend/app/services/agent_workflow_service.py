@@ -1857,6 +1857,9 @@ class AgentWorkflowService:
         risk_level = classify_permission_risk(
             ManifestPermissions.model_validate(runtime_permissions),
             list(runtime["dependencies"]),
+            requires_invocation_approval=bool(
+                blueprint.get("requires_invocation_approval", False)
+            ),
         )
         plan["risk_level"] = risk_level
         generation_request.plan_json = plan

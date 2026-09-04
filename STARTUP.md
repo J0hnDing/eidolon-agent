@@ -13,4 +13,4 @@ npm run dev
 ```
 
 ### Website
-[Eidolon Site](http://localhost:5173)
+[Eidolon App](http://localhost:5174)

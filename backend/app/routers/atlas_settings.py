@@ -13,6 +13,7 @@ from app.services.atlas_settings_service import (
     AtlasSettingsError,
     build_default_atlas_settings_service,
 )
+from app.services.function_catalog_service import FunctionCatalogService
 
 router = APIRouter(prefix="/settings/integrations/atlas", tags=["integrations"])
 
@@ -25,7 +26,9 @@ def atlas_status(db: Session = Depends(get_db)) -> AtlasSettingsStatus:
 @router.put("/directory", response_model=AtlasSettingsStatus)
 def save_atlas_directory(payload: AtlasDirectoryWrite, db: Session = Depends(get_db)) -> AtlasSettingsStatus:
     try:
-        return build_default_atlas_settings_service(db).save_directory_and_restart(Path(payload.directory))
+        result = build_default_atlas_settings_service(db).save_directory_and_restart(Path(payload.directory))
+        FunctionCatalogService(db).refresh()
+        return result
     except AtlasSettingsError as exc:
         raise _http_error(exc) from None
 
@@ -33,13 +36,17 @@ def save_atlas_directory(payload: AtlasDirectoryWrite, db: Session = Depends(get
 @router.post("/restart", response_model=AtlasSettingsStatus)
 def restart_atlas(db: Session = Depends(get_db)) -> AtlasSettingsStatus:
     service = build_default_atlas_settings_service(db)
-    return service.restart()
+    result = service.restart()
+    FunctionCatalogService(db).refresh()
+    return result
 
 
 @router.put("/passphrase", response_model=AtlasSettingsStatus)
 def put_atlas_passphrase(payload: AtlasPassphraseWrite, db: Session = Depends(get_db)) -> AtlasSettingsStatus:
     try:
-        return build_default_atlas_settings_service(db).put_passphrase(payload.passphrase.get_secret_value())
+        result = build_default_atlas_settings_service(db).put_passphrase(payload.passphrase.get_secret_value())
+        FunctionCatalogService(db).refresh()
+        return result
     except AtlasSettingsError as exc:
         raise _http_error(exc) from None
 
@@ -48,6 +55,7 @@ def put_atlas_passphrase(payload: AtlasPassphraseWrite, db: Session = Depends(ge
 def remove_atlas_passphrase(db: Session = Depends(get_db)) -> Response:
     try:
         build_default_atlas_settings_service(db).remove_passphrase()
+        FunctionCatalogService(db).refresh()
     except AtlasSettingsError as exc:
         raise _http_error(exc) from None
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -56,7 +64,9 @@ def remove_atlas_passphrase(db: Session = Depends(get_db)) -> Response:
 @router.post("/unlock", response_model=AtlasSettingsStatus)
 def unlock_atlas(db: Session = Depends(get_db)) -> AtlasSettingsStatus:
     try:
-        return build_default_atlas_settings_service(db).unlock_now()
+        result = build_default_atlas_settings_service(db).unlock_now()
+        FunctionCatalogService(db).refresh()
+        return result
     except AtlasSettingsError as exc:
         raise _http_error(exc) from None
 

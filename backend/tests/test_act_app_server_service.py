@@ -56,12 +56,18 @@ def test_act_app_server_verifies_mcp_and_roots_thread_in_workspace(
     workspace = ActWorkspace(
         root=tmp_path / "act",
         memory=tmp_path / "act" / "memory",
+        knowledge=tmp_path / "act" / "knowledge",
+        quercus=tmp_path / "act" / "knowledge" / "quercus",
         workspace=tmp_path / "act" / "workspace",
         downloads=tmp_path / "act" / "workspace" / "downloads",
         instructions=tmp_path / "act" / "AGENTS.md",
     )
     workspace.workspace.mkdir(parents=True)
     monkeypatch.setattr("app.services.act_app_server_service.ensure_act_workspace", lambda: workspace)
+    monkeypatch.setattr(
+        "app.services.act_app_server_service.QuercusProcessingService",
+        lambda _db: SimpleNamespace(refresh_agent_instructions=lambda: None),
+    )
     monkeypatch.setattr(
         "app.services.act_app_server_service.CodexMcpSettingsService",
         lambda _db: SimpleNamespace(
@@ -75,9 +81,11 @@ def test_act_app_server_verifies_mcp_and_roots_thread_in_workspace(
 
     start_params = next(params for method, params in client.requests if method == "thread/start")
     assert isinstance(start_params, dict)
-    assert start_params["cwd"] == str(workspace.workspace.resolve())
+    assert start_params["cwd"] == str(workspace.root.resolve())
     assert start_params["sandbox"] == "workspace-write"
     assert start_params["approvalPolicy"] == "never"
+    assert "Quercus" not in str(start_params["developerInstructions"])
+    assert "knowledge/quercus" not in str(start_params["developerInstructions"])
 
     # A just-started thread is already loaded in this App Server process. Resuming it
     # before its first turn can fail because Codex has not written a rollout yet.
@@ -88,7 +96,7 @@ def test_act_app_server_verifies_mcp_and_roots_thread_in_workspace(
     restarted_service.resume_thread(None, "thread-act", model="gpt-act", reasoning_effort="high")  # type: ignore[arg-type]
     resume_params = next(params for method, params in reversed(client.requests) if method == "thread/resume")
     assert isinstance(resume_params, dict)
-    assert resume_params["cwd"] == str(workspace.workspace.resolve())
+    assert resume_params["cwd"] == str(workspace.root.resolve())
     assert resume_params["sandbox"] == "workspace-write"
     assert resume_params["developerInstructions"]
 
@@ -100,11 +108,17 @@ def test_act_app_server_fails_closed_without_eidolon_tools(
     workspace = ActWorkspace(
         root=tmp_path,
         memory=tmp_path / "memory",
+        knowledge=tmp_path / "knowledge",
+        quercus=tmp_path / "knowledge" / "quercus",
         workspace=tmp_path / "workspace",
         downloads=tmp_path / "workspace" / "downloads",
         instructions=tmp_path / "AGENTS.md",
     )
     monkeypatch.setattr("app.services.act_app_server_service.ensure_act_workspace", lambda: workspace)
+    monkeypatch.setattr(
+        "app.services.act_app_server_service.QuercusProcessingService",
+        lambda _db: SimpleNamespace(refresh_agent_instructions=lambda: None),
+    )
     monkeypatch.setattr(
         "app.services.act_app_server_service.CodexMcpSettingsService",
         lambda _db: SimpleNamespace(

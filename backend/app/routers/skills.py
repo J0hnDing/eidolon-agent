@@ -29,12 +29,14 @@ from app.services.codex_service import CodexGenerationError
 from app.services.function_registry_service import FunctionRegistryService
 from app.services.permission_service import PermissionError, PermissionService
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
-from app.services.scheduler_service import SchedulerService
+from app.services.runtime_state_service import RuntimeStateService
+from app.services.scheduler_service import ScheduleError, SchedulerService
 from app.services.skill_codex_runtime_service import (
     SkillCodexInvalidRequest,
     SkillCodexRuntimeService,
     SkillCodexUnavailable,
 )
+from app.services.skill_graph_service import SkillGraphService
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
 from app.services.skill_runner import get_runner_status
 from app.services.skill_version_service import SkillVersionError, SkillVersionService
@@ -44,15 +46,21 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 @router.get("", response_model=list[SkillRead])
-def list_skills(db: Session = Depends(get_db)) -> list[Skill]:
-    ProposedSkillService(db).sync_installed_from_filesystem()
-    return list(
+def list_skills(db: Session = Depends(get_db)) -> list[SkillRead]:
+    skills = list(
         db.scalars(
             select(Skill)
             .where(Skill.status != "deleted")
             .order_by(Skill.created_at.desc())
         ).all()
     )
+    running_ids = RuntimeStateService(db).running_skill_ids()
+    return [
+        SkillRead.model_validate(skill).model_copy(
+            update={"is_running": skill.id in running_ids}
+        )
+        for skill in skills
+    ]
 
 
 @router.get("/proposed", response_model=list[SkillRead])
@@ -66,20 +74,23 @@ def read_runner_status() -> RunnerStatusRead:
 
 
 @router.get("/{skill_id}", response_model=SkillRead)
-def get_skill(skill_id: int, db: Session = Depends(get_db)) -> Skill | SkillRead:
+def get_skill(skill_id: int, db: Session = Depends(get_db)) -> SkillRead:
     skill = db.get(Skill, skill_id)
     if skill is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+    updates = {
+        "is_running": skill.id in RuntimeStateService(db).running_skill_ids(),
+    }
     if skill.runtime == "function" and skill.status == "installed":
         contract = FunctionRegistryService(db).contract_for_skill(skill)
-        return SkillRead.model_validate(skill).model_copy(
-            update={
+        updates.update(
+            {
                 "description": contract.description,
                 "input_schema_json": contract.input_schema,
                 "output_schema_json": contract.output_schema,
             }
         )
-    return skill
+    return SkillRead.model_validate(skill).model_copy(update=updates)
 
 
 @router.post("/{skill_id}/run", response_model=SkillRunRead | PendingApprovalReceipt)
@@ -338,7 +349,12 @@ def reject_skill(skill_id: int, db: Session = Depends(get_db)) -> Response:
 
 
 @router.patch("/{skill_id}", response_model=SkillRead)
-def update_skill(skill_id: int, payload: SkillUpdate, db: Session = Depends(get_db)) -> Skill:
+def update_skill(
+    skill_id: int,
+    payload: SkillUpdate,
+    db: Session = Depends(get_db),
+    scheduler_service: SchedulerService = Depends(get_scheduler_service),
+) -> Skill:
     skill = db.get(Skill, skill_id)
     if skill is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
@@ -347,14 +363,29 @@ def update_skill(skill_id: int, payload: SkillUpdate, db: Session = Depends(get_
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only installed skills can be enabled or disabled")
     if payload.enabled is not None:
         if skill.runtime == "service":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Service activation is controlled by its schedule",
+            schedule = db.scalar(
+                select(SkillSchedule).where(SkillSchedule.skill_id == skill.id)
             )
-        if skill.enabled and not payload.enabled:
+            if schedule is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Service is missing its required schedule",
+                )
+            try:
+                if payload.enabled:
+                    scheduler_service.enable_service(schedule)
+                else:
+                    scheduler_service.disable_service(schedule)
+            except ScheduleError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=str(exc),
+                ) from exc
+        elif skill.enabled and not payload.enabled:
             from app.services.web_app_runtime_service import WebAppRuntimeService
 
             try:
+                _disable_dependents(skill, db, scheduler_service)
                 with SkillOperationGuard(db).locked(skill, "disable", reason="Disabling installed skill"):
                     WebAppRuntimeService(db).stop_skill_instances(skill, "Skill disabled")
                     skill.enabled = False
@@ -368,6 +399,36 @@ def update_skill(skill_id: int, payload: SkillUpdate, db: Session = Depends(get_
 
     FunctionCatalogService(db).refresh()
     return skill
+
+
+def _disable_dependents(
+    child: Skill,
+    db: Session,
+    scheduler_service: SchedulerService,
+) -> None:
+    for parent in SkillGraphService(db).ancestors(child.name):
+        if not parent.enabled:
+            continue
+        if parent.runtime == "service":
+            schedule = db.scalar(
+                select(SkillSchedule).where(SkillSchedule.skill_id == parent.id)
+            )
+            if schedule is not None:
+                scheduler_service.disable_service(schedule)
+            continue
+        from app.services.web_app_runtime_service import WebAppRuntimeService
+
+        with SkillOperationGuard(db).locked(
+            parent,
+            "disable",
+            reason=f"Required child {child.name} is unavailable",
+        ):
+            if parent.runtime == "web_app":
+                WebAppRuntimeService(db).stop_skill_instances(
+                    parent,
+                    f"Required child {child.name} is unavailable",
+                )
+            parent.enabled = False
 
 
 def resolve_skill_dir(skill: Skill) -> Path:
@@ -401,12 +462,13 @@ def delete_skill(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
 
     try:
+        _disable_dependents(skill, db, scheduler_service)
         schedule_ids = list(
             db.scalars(select(SkillSchedule.id).where(SkillSchedule.skill_id == skill.id)).all()
         )
         for schedule_id in schedule_ids:
             scheduler_service.remove_job(schedule_id)
         ProposedSkillService(db).delete_skill(skill)
-    except ProposedSkillError as exc:
+    except (ProposedSkillError, ScheduleError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)

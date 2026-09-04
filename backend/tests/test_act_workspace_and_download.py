@@ -5,11 +5,13 @@ from pathlib import Path
 
 import pytest
 
+from app.services import act_workspace_service
 from app.services.act_download_service import ActDownloadError, download_document
 from app.services.act_workspace_service import (
     AGENT_INSTRUCTIONS,
-    ActWorkspaceError,
     ensure_act_workspace,
+    open_act_root,
+    refresh_act_agent_instructions,
 )
 
 
@@ -55,18 +57,55 @@ def test_workspace_is_bootstrapped_with_empty_memory(monkeypatch: pytest.MonkeyP
     assert workspace.instructions.read_text(encoding="utf-8") == AGENT_INSTRUCTIONS
     assert workspace.memory.is_dir()
     assert list(workspace.memory.iterdir()) == []
+    assert workspace.quercus.is_dir()
     assert workspace.downloads.is_dir()
     workspace.instructions.write_text("stale", encoding="utf-8")
-    assert ensure_act_workspace().instructions.read_text(encoding="utf-8") == AGENT_INSTRUCTIONS
+    assert ensure_act_workspace().instructions.read_text(encoding="utf-8") == "stale"
+    refresh_act_agent_instructions("none")
+    assert workspace.instructions.read_text(encoding="utf-8") == AGENT_INSTRUCTIONS
 
 
-def test_workspace_rejects_nonempty_reserved_memory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_workspace_instructions_follow_quercus_processing_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("app.services.act_workspace_service.ACT_ROOT", tmp_path / "act")
+    workspace = refresh_act_agent_instructions("marker_surya_llamacpp")
+    content = workspace.instructions.read_text(encoding="utf-8")
+    assert "`files/processed/` directory first" in content
+    assert "Consult the original in `files/raw/` only" in content
+    assert "never modify `knowledge/`" in content
+
+
+def test_workspace_preserves_agent_created_memory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("app.services.act_workspace_service.ACT_ROOT", tmp_path / "act")
     memory = tmp_path / "act" / "memory"
     memory.mkdir(parents=True)
     (memory / "unexpected.md").write_text("data", encoding="utf-8")
-    with pytest.raises(ActWorkspaceError, match="must remain empty"):
-        ensure_act_workspace()
+    workspace = ensure_act_workspace()
+    assert (workspace.memory / "unexpected.md").read_text(encoding="utf-8") == "data"
+    assert "never modify `knowledge/`" in workspace.instructions.read_text(encoding="utf-8")
+
+
+def test_open_act_root_uses_only_the_managed_agent_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "act"
+    opened: list[Path] = []
+    monkeypatch.setattr(act_workspace_service, "ACT_ROOT", root)
+    monkeypatch.setattr(act_workspace_service.sys, "platform", "win32")
+    monkeypatch.setattr(
+        act_workspace_service.os,
+        "startfile",
+        lambda path: opened.append(Path(path)),
+        raising=False,
+    )
+
+    open_act_root()
+
+    assert opened == [root.resolve()]
+    assert (root / "memory").is_dir()
+    assert (root / "knowledge" / "quercus").is_dir()
+    assert (root / "workspace").is_dir()
 
 
 def test_download_rejects_unsafe_file_type_before_network() -> None:
@@ -119,7 +158,7 @@ def test_download_validates_pdf_and_uses_collision_safe_name(
         opener=FakeOpener([FakeResponse(b"%PDF-1.7\nsecond", media_type="application/pdf")]),
         resolver=public_resolver,
     )
-    assert first["path"] == "downloads/file.pdf"
+    assert first["path"] == "workspace/downloads/file.pdf"
     assert first["media_type"] == "application/pdf"
     assert second["filename"] == "file (1).pdf"
 

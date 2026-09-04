@@ -151,6 +151,7 @@ class FunctionRunContext:
     invocation_source: str = "internal"
     caller_skill_id: int | None = None
     caller_version_id: int | None = None
+    parent_run_id: int | None = None
     source_schedule_id: int | None = None
     schedule_occurrence_key: str | None = None
     scheduled_for_at: datetime | None = None
@@ -321,6 +322,7 @@ class LocalSkillRunner:
             invocation_source=context.invocation_source,
             caller_skill_id=context.caller_skill_id,
             caller_version_id=context.caller_version_id,
+            parent_run_id=context.parent_run_id,
             source_schedule_id=context.source_schedule_id,
             schedule_occurrence_key=context.schedule_occurrence_key,
             scheduled_for_at=context.scheduled_for_at,
@@ -569,6 +571,7 @@ class DockerSkillRunner:
             invocation_source=context.invocation_source,
             caller_skill_id=context.caller_skill_id,
             caller_version_id=context.caller_version_id,
+            parent_run_id=context.parent_run_id,
             source_schedule_id=context.source_schedule_id,
             schedule_occurrence_key=context.schedule_occurrence_key,
             scheduled_for_at=context.scheduled_for_at,

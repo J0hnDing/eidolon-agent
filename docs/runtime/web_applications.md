@@ -4,7 +4,7 @@
 
 ## Ownership Boundary
 
-The skill owns its HTML, CSS, JavaScript, application routes, interaction, in-memory state, and domain logic. Package assets stay under the active immutable version folder.
+The skill owns its HTML, CSS, JavaScript, application routes, interaction, in-memory state, and domain logic. Package assets stay under the active version folder.
 
 The platform owns installation and approval, version activation, Docker or explicit local-development startup, the trusted ASGI host, readiness, loopback ingress, the private ingress/capability relay, resource limits, cache mounting, network mode, session origins, proxying, security headers, scoped privileged capabilities, lifecycle records, logs, shutdown, and stale-instance recovery.
 
@@ -55,7 +55,7 @@ Generated browser code never receives an Eidolon API credential. Approved server
 In-memory application state is ephemeral across stop, failure, update activation, backend restart, or idle shutdown. Persistent skill-owned state is limited to the existing per-skill `./cache` root:
 
 - Docker mounts the active package read-only and mounts the controlled cache at `/skill/cache` read/write.
-- The local-development fallback uses the controlled cache parent as its working directory while importing immutable source through `PYTHONPATH`.
+- The local-development fallback uses the controlled cache parent as its working directory while importing package source through `PYTHONPATH`.
 - The runtime sets `PERSONAL_AGENT_SKILL_CACHE_DIR` to the controlled cache. Generated code must use that value (or `./cache` as a development fallback), never `__file__/cache` or another package-relative writable path.
 - Package code should resolve read-only HTML/CSS/JavaScript assets relative to `__file__`, not the process working directory.
 
@@ -76,7 +76,7 @@ Web applications do not receive direct database access, arbitrary filesystem pat
 | Open | Lazy start or reuse the healthy active-version instance; wait for readiness before returning an embedding URL. |
 | Idle timeout | Stop the instance and close active sessions. The default timeout is 15 minutes. |
 | Disable | Acquire a short per-skill disable lock, stop active instances, close sessions, then persist `enabled = false`. |
-| Update or repair draft | Leave the immutable active version and its instance unchanged while the draft is built and tested. |
+| Application-managed update or repair | Leave the active version and its instance unchanged while Builder and Tester work on the copied draft. |
 | Activate another version | Stop old-version instances before switching the active pointer. A later open starts the new version. |
 | Delete | Stop runtime resources, remove sessions/audit/instance rows, then remove skill lifecycle data and files. |
 | Backend shutdown | Stop every active Docker container or local-development process and close sessions. |

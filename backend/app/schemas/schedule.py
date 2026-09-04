@@ -69,6 +69,8 @@ class ScheduleRead(BaseModel):
     read_only: bool = False
     skill_id: int | None
     skill_name: str | None = None
+    skill_enabled: bool | None = None
+    is_running: bool = False
     name: str
     status: ScheduleStatus
     schedule_type: ScheduleType

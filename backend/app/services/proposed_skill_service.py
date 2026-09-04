@@ -39,6 +39,7 @@ from app.services.dependency_environment import (
     requirements_satisfied,
 )
 from app.services.manifest_validator import ManifestValidationError, classify_permission_risk, validate_manifest_file
+from app.services.skill_graph_service import SkillGraphError, SkillGraphService
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
 from app.services.skill_package_files import SkillPackageFileError, read_skill_text, readable_skill_paths
 
@@ -120,7 +121,11 @@ class ProposedSkillService:
                 if skill.status == "installed":
                     skill.description = manifest.description
                     skill.runtime = manifest.runtime
-                    skill.risk_level = classify_permission_risk(manifest.permissions, manifest.dependencies)
+                    skill.risk_level = classify_permission_risk(
+                        manifest.permissions,
+                        manifest.dependencies,
+                        requires_invocation_approval=manifest.requires_invocation_approval,
+                    )
                     skill.manifest_path = self._relative_path(manifest_path)
                     skill.instructions_path = manifest.instructions_path
                     skill.input_schema_json = manifest.input_schema
@@ -130,8 +135,6 @@ class ProposedSkillService:
                         item.model_dump(mode="json") for item in manifest.integration_requirements
                     ]
                     skill.installed_path = self._relative_path(active_dir)
-                    if manifest.runtime == "service":
-                        skill.enabled = True
                     if self._ensure_synced_active_version(skill, active_dir, manifest):
                         changed = True
                     if reconcile_schedules and manifest.runtime == "service" and self.db.scalar(
@@ -145,7 +148,11 @@ class ProposedSkillService:
                 description=manifest.description,
                 runtime=manifest.runtime,
                 status="installed",
-                risk_level=classify_permission_risk(manifest.permissions, manifest.dependencies),
+                risk_level=classify_permission_risk(
+                    manifest.permissions,
+                    manifest.dependencies,
+                    requires_invocation_approval=manifest.requires_invocation_approval,
+                ),
                 manifest_path=self._relative_path(manifest_path),
                 instructions_path=manifest.instructions_path,
                 input_schema_json=manifest.input_schema,
@@ -155,7 +162,7 @@ class ProposedSkillService:
                     item.model_dump(mode="json") for item in manifest.integration_requirements
                 ],
                 installed_path=self._relative_path(active_dir),
-                enabled=manifest.runtime == "service",
+                enabled=False,
             )
             self.db.add(skill)
             self.db.flush()
@@ -164,6 +171,11 @@ class ProposedSkillService:
                 self._register_manifest_schedule(skill)
             changed = True
         if changed:
+            self.db.flush()
+            SkillGraphService(
+                self.db,
+                project_root=self.project_root,
+            ).refresh_effective_risks()
             self.db.commit()
 
     def _ensure_synced_active_version(
@@ -191,7 +203,7 @@ class ProposedSkillService:
                 manifest_json=manifest_json,
                 code_snapshot_path=folder_path,
                 created_by="system",
-                permission_fingerprint=self._permission_fingerprint(manifest_json),
+                permission_fingerprint=self._permission_fingerprint(skill, manifest_json),
                 test_status="not_run",
                 validation_status="valid",
             )
@@ -236,6 +248,23 @@ class ProposedSkillService:
                     f"Manifest name {manifest.name!r} does not match the controlled skill name {skill.name!r}"
                 ),
             )
+        try:
+            graph = SkillGraphService(
+                self.db,
+                project_root=self.project_root,
+            ).effective_contract(
+                skill,
+                manifest=manifest,
+                strict=True,
+            )
+        except SkillGraphError as exc:
+            return ProposedSkillValidationRead(
+                ok=False,
+                manifest_valid=False,
+                tests_run=False,
+                error_message=str(exc),
+            )
+        skill.risk_level = graph.risk_level
         dependency_error = self._provisioned_dependency_error(skill_dir, manifest.dependencies)
         if dependency_error is not None:
             return ProposedSkillValidationRead(
@@ -313,7 +342,7 @@ class ProposedSkillService:
             change_summary="Initial installed version.",
             changelog="Initial installed version.",
             created_by="system",
-            permission_fingerprint=self._permission_fingerprint(manifest_json),
+            permission_fingerprint=self._permission_fingerprint(skill, manifest_json),
             test_status="passed",
             validation_status="passed",
         )
@@ -321,7 +350,11 @@ class ProposedSkillService:
         self.db.flush()
         skill.runtime = manifest.runtime
         skill.status = "installed"
-        skill.risk_level = classify_permission_risk(manifest.permissions, manifest.dependencies)
+        skill.risk_level = classify_permission_risk(
+            manifest.permissions,
+            manifest.dependencies,
+            requires_invocation_approval=manifest.requires_invocation_approval,
+        )
         skill.manifest_path = self._relative_path(version_dir / "manifest.json")
         skill.instructions_path = manifest.instructions_path
         skill.input_schema_json = manifest.input_schema
@@ -332,9 +365,13 @@ class ProposedSkillService:
         ]
         skill.installed_path = self._relative_path(version_dir)
         skill.active_version_id = version.id
-        skill.enabled = manifest.runtime == "service"
+        skill.enabled = False
         try:
             self._register_manifest_schedule(skill)
+            SkillGraphService(
+                self.db,
+                project_root=self.project_root,
+            ).refresh_effective_risks()
             self.db.commit()
             self.db.refresh(skill)
         except Exception:
@@ -409,6 +446,14 @@ class ProposedSkillService:
                 )
             self.db.query(ApprovalRequest).filter(ApprovalRequest.skill_id == skill.id).delete(synchronize_session=False)
             self.db.query(SkillSchedule).filter(SkillSchedule.skill_id == skill.id).delete(synchronize_session=False)
+            deleted_run_ids = list(
+                self.db.scalars(select(SkillRun.id).where(SkillRun.skill_id == skill.id)).all()
+            )
+            if deleted_run_ids:
+                self.db.query(SkillRun).filter(SkillRun.parent_run_id.in_(deleted_run_ids)).update(
+                    {SkillRun.parent_run_id: None},
+                    synchronize_session=False,
+                )
             self.db.query(SkillRun).filter(SkillRun.skill_id == skill.id).delete(synchronize_session=False)
             self.db.query(SkillVersion).filter(SkillVersion.skill_id == skill.id).delete(synchronize_session=False)
             self.db.query(SkillOperationLock).filter(SkillOperationLock.skill_id == skill.id).delete(
@@ -422,6 +467,8 @@ class ProposedSkillService:
             for agent_run in self.db.scalars(select(AgentRun).where(AgentRun.skill_id == skill.id)).all():
                 agent_run.skill_id = None
             self.db.delete(skill)
+            self.db.commit()
+            SkillGraphService(self.db, project_root=self.project_root).refresh_effective_risks()
             self.db.commit()
             from app.services.function_catalog_service import FunctionCatalogService
 
@@ -515,12 +562,18 @@ class ProposedSkillService:
     def _relative_path(self, path: Path) -> str:
         return path.resolve().relative_to(self.project_root).as_posix()
 
-    def _permission_fingerprint(self, manifest_json: dict) -> str:
+    def _permission_fingerprint(self, skill: Skill, manifest_json: dict) -> str:
+        manifest = SkillManifest.model_validate(manifest_json)
+        graph = SkillGraphService(
+            self.db,
+            project_root=self.project_root,
+        ).effective_contract(skill, manifest=manifest)
         payload = {
-            "permissions": manifest_json.get("permissions", {}),
+            "permissions": graph.permissions,
             "dependencies": manifest_json.get("dependencies", []),
             "function_requirements": manifest_json.get("function_requirements", []),
-            "integration_requirements": manifest_json.get("integration_requirements", []),
+            "risk_level": graph.risk_level,
+            "function_graph_fingerprint": graph.fingerprint,
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()

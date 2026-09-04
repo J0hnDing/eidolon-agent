@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { MemoryCategory, MemoryFact, MemoryFactInput, api } from "../api/client";
+import { DeleteIconButton } from "../components/DeleteIconButton";
 
 const categories: MemoryCategory[] = [
   "interests",
@@ -82,6 +83,15 @@ export default function MemoryPage() {
     }
   }
 
+  async function openAgentFolder() {
+    setError(null);
+    try {
+      await api.openActRoot();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not open the agent folder");
+    }
+  }
+
   function startEdit(fact: MemoryFact) {
     setEditingId(fact.id);
     setForm({
@@ -102,6 +112,9 @@ export default function MemoryPage() {
           <h1>Memory</h1>
           <p className="muted">Keep the context Eidolon uses explicit, focused, and under your control.</p>
         </div>
+        <button type="button" className="secondary" onClick={() => void openAgentFolder()}>
+          Open agent folder
+        </button>
       </header>
 
       <form className="form-panel" onSubmit={handleSubmit}>
@@ -194,9 +207,10 @@ export default function MemoryPage() {
                 <button type="button" className="secondary" onClick={() => startEdit(fact)}>
                   Edit
                 </button>
-                <button type="button" className="danger" onClick={() => handleDelete(fact.id)}>
-                  Delete
-                </button>
+                <DeleteIconButton
+                  label={`Delete memory fact ${fact.key}`}
+                  onClick={() => handleDelete(fact.id)}
+                />
               </div>
             </article>
           ))}

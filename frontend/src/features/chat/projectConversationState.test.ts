@@ -55,6 +55,7 @@ function state(): ProjectConversationState {
       output_schema_json: null,
       installed_path: null,
       active_version_id: null,
+      is_running: false,
       created_at: "2026-07-16T00:00:00Z",
       updated_at: "2026-07-16T00:01:00Z",
       enabled: false,

@@ -28,7 +28,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 @router.get("/catalog", response_model=list[FunctionCatalogEntryRead])
 def list_function_catalog(db: Session = Depends(get_db)) -> list[dict]:
-    return FunctionCatalogService(db).list_entries()
+    return FunctionCatalogService(db).list_entries(include_runtime_state=True)
 
 
 @router.get("", response_model=list[FunctionContractRead])

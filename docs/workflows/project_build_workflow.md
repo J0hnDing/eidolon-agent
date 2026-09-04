@@ -340,7 +340,7 @@ For `single_codex`, successful Codex completion must be followed by the shared s
 
 Repair for an existing failed proposed skill or failed installed-skill copy may use a one-node DAG when the fix is local, or a small repair DAG when the issue spans multiple files.
 
-Installed-skill repair must work on a proposed repair copy or draft version. It must never mutate the active installed version in place.
+Within the application-managed repair workflow, Builder works only on the proposed repair copy or draft version and never mutates the active installed version. This does not restrict direct Codex repository work requested by the user.
 
 Repair uses the same task-node contracts:
 

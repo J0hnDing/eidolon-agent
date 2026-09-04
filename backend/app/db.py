@@ -75,6 +75,49 @@ def ensure_local_schema() -> None:
                         "ADD COLUMN configured_report_resource_id VARCHAR(256)"
                     )
                 )
+        if "quercus_courses" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("quercus_courses")}
+            additions = {
+                "last_processing_started_at": "DATETIME",
+                "last_processing_completed_at": "DATETIME",
+                "last_processing_status": "VARCHAR(32)",
+                "last_processing_error_type": "VARCHAR(64)",
+                "processed_file_count": "INTEGER NOT NULL DEFAULT 0",
+                "failed_processing_count": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for column, definition in additions.items():
+                if column not in columns:
+                    connection.execute(
+                        text(f"ALTER TABLE quercus_courses ADD COLUMN {column} {definition}")
+                    )
+        if "quercus_sync_resources" in table_names:
+            columns = {
+                column["name"] for column in inspector.get_columns("quercus_sync_resources")
+            }
+            additions = {
+                "processed_relative_path": "VARCHAR(1024)",
+                "processed_source_fingerprint": "VARCHAR(64)",
+                "processed_by": "VARCHAR(64)",
+                "processing_state": "VARCHAR(32) NOT NULL DEFAULT 'not_processed'",
+                "processing_error_type": "VARCHAR(64)",
+                "processed_at": "DATETIME",
+            }
+            for column, definition in additions.items():
+                if column not in columns:
+                    connection.execute(
+                        text(f"ALTER TABLE quercus_sync_resources ADD COLUMN {column} {definition}")
+                    )
+        if "quercus_processing_settings" in table_names:
+            columns = {
+                column["name"] for column in inspector.get_columns("quercus_processing_settings")
+            }
+            if "llama_cpp_directory" not in columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE quercus_processing_settings "
+                        "ADD COLUMN llama_cpp_directory VARCHAR(2048)"
+                    )
+                )
         if "skills" in table_names:
             columns = {column["name"] for column in inspector.get_columns("skills")}
             if "runtime" not in columns:
@@ -114,6 +157,13 @@ def ensure_local_schema() -> None:
             schedule_columns = {
                 column["name"] for column in inspector.get_columns("skill_schedules")
             }
+            if "availability_migrated" not in schedule_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE skill_schedules ADD COLUMN "
+                        "availability_migrated BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
             if "status" in schedule_columns:
                 connection.execute(text("DELETE FROM skill_schedules WHERE status = 'deleted'"))
                 connection.execute(
@@ -207,6 +257,7 @@ def ensure_local_schema() -> None:
                 "invocation_source": "VARCHAR(32) NOT NULL DEFAULT 'internal'",
                 "caller_skill_id": "INTEGER",
                 "caller_version_id": "INTEGER",
+                "parent_run_id": "INTEGER",
                 "source_schedule_id": "INTEGER",
                 "schedule_occurrence_key": "VARCHAR(64)",
                 "scheduled_for_at": "DATETIME",
@@ -223,6 +274,7 @@ def ensure_local_schema() -> None:
                 "invocation_source",
                 "caller_skill_id",
                 "caller_version_id",
+                "parent_run_id",
                 "source_schedule_id",
                 "schedule_occurrence_key",
                 "web_app_instance_id",

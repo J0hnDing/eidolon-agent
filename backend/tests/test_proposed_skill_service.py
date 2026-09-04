@@ -214,7 +214,7 @@ def test_install_registers_manifest_declared_schedule(
     schedule = db_session.scalar(select(SkillSchedule).where(SkillSchedule.skill_id == installed.id))
     assert schedule is not None
     assert installed.runtime == "service"
-    assert installed.enabled is True
+    assert installed.enabled is False
     assert schedule.status == "paused"
     assert schedule.schedule_type == "weekly"
     assert schedule.schedule_json["day"] == "monday"

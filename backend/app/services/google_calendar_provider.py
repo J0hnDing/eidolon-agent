@@ -27,7 +27,7 @@ GOOGLE_OAUTH_SCOPES = ("openid", "email", GOOGLE_CALENDAR_SCOPE)
 GOOGLE_OAUTH_REDIRECT_URI = (
     "http://localhost:8000/settings/integrations/google-calendar/oauth/callback"
 )
-GOOGLE_OAUTH_RETURN_URL = "http://localhost:5173/settings/integrations"
+GOOGLE_OAUTH_RETURN_URL = "http://localhost:5174/settings/integrations"
 GOOGLE_CALENDAR_SECRET_NAMESPACE = "google_calendar"
 
 
@@ -56,7 +56,7 @@ class GoogleCalendarProviderAdapter(Protocol):
 
 class UrllibGoogleCalendarProviderAdapter:
     def __init__(self) -> None:
-        self._opener = build_opener(_NoRedirect())
+        self._opener = None
 
     def authorization_url(self, client_id: str, state: str) -> str:
         return google_authorization_url(
@@ -363,6 +363,8 @@ class UrllibGoogleCalendarProviderAdapter:
     ) -> bytes:
         request = Request(url, data=body, method=method, headers=headers)
         try:
+            if self._opener is None:
+                self._opener = build_opener(_NoRedirect())
             with self._opener.open(request, timeout=timeout) as response:
                 raw = response.read(max_bytes + 1)
         except HTTPError as exc:

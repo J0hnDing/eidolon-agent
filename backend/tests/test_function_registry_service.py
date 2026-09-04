@@ -24,13 +24,13 @@ from app.schemas.manifest import SkillManifest
 from app.services.function_catalog_service import FunctionCatalogService
 from app.services.function_registry_service import (
     FunctionCaller,
+    FunctionRegistryError,
     FunctionRegistryService,
 )
 from app.services.invocation_approval_contract import INVOCATION_APPROVAL_DESCRIPTION_SUFFIX
 from app.services.invocation_approval_service import InvocationApprovalService
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
-from app.services.skill_operation_guard import SkillOperationGuard
 
 
 @pytest.fixture
@@ -65,6 +65,7 @@ class FakeRunner:
             invocation_source=context.invocation_source if context else "internal",
             caller_skill_id=context.caller_skill_id if context else None,
             caller_version_id=context.caller_version_id if context else None,
+            parent_run_id=context.parent_run_id if context else None,
             initiating_action=context.initiating_action if context else None,
             function_capability_token_hash=context.capability_token_hash if context else None,
         )
@@ -208,6 +209,7 @@ def test_invocation_approval_projects_contract_and_defers_execution(
     contract = registry.contract_for_skill(target)
 
     assert contract.description == f"send_sensitive_action description {INVOCATION_APPROVAL_DESCRIPTION_SUFFIX}"
+    assert contract.risk_level == "high"
     assert contract.requires_invocation_approval is True
     assert contract.input_schema["required"] == ["value", "reason_to_call"]
     assert contract.output_schema["properties"]["status"]["const"] == "pending_approval"
@@ -346,6 +348,7 @@ def test_unified_catalog_persists_categories_states_and_user_lifecycle(
 
     connection_state["github"] = True
     connection_state["notion"] = True
+    catalog.refresh()
     connected = {entry["id"]: entry for entry in catalog.list_entries()}
     assert connected["github.repository.get"]["availability"] == "available"
     assert connected["notion.todo.list"]["availability"] == "available"
@@ -355,12 +358,29 @@ def test_unified_catalog_persists_categories_states_and_user_lifecycle(
 
     target.enabled = False
     db_session.commit()
+    catalog.refresh()
     disabled = {entry["id"]: entry for entry in catalog.list_entries()}
     assert disabled["normalize_text"]["availability"] == "disabled"
 
     ProposedSkillService(db_session, project_root=tmp_path).delete_skill(target)
     remaining_ids = {entry["id"] for entry in catalog.list_entries(refresh=False)}
     assert "normalize_text" not in remaining_ids
+
+
+def test_catalog_list_defaults_to_existing_projection(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = FunctionCatalogService(db_session, project_root=tmp_path)
+    catalog.refresh()
+    monkeypatch.setattr(
+        catalog,
+        "refresh",
+        lambda: pytest.fail("An existing catalog projection must not refresh during a list"),
+    )
+
+    assert catalog.list_entries()
 
 
 def test_declared_low_risk_function_invokes_without_caller_approval(
@@ -581,15 +601,19 @@ def test_function_capability_chain_can_continue_beyond_three_hops(
     tmp_path: Path,
     db_session: Session,
 ) -> None:
-    functions = [
-        make_function(
-            db_session,
-            tmp_path,
-            f"chain_{index}",
-            requirements=[f"chain_{index + 1}"] if index < 5 else [],
+    functions = list(
+        reversed(
+            [
+                make_function(
+                    db_session,
+                    tmp_path,
+                    f"chain_{index}",
+                    requirements=[f"chain_{index + 1}"] if index < 5 else [],
+                )
+                for index in range(5, 0, -1)
+            ]
         )
-        for index in range(1, 6)
-    ]
+    )
     token = "chain-root-token"
     active_run = SkillRun(
         skill_id=functions[0].id,
@@ -604,12 +628,15 @@ def test_function_capability_chain_can_continue_beyond_three_hops(
     runner = FakeRunner(db_session)
     registry = service(db_session, tmp_path, runner)
 
+    parent_run_id = active_run.id
     for target in functions[1:]:
         run = registry.invoke_from_capability(token, target.name, {"value": target.name})
         assert run.status == "succeeded"
         context = runner.calls[-1]["context"]
+        assert context.parent_run_id == parent_run_id
         assert context.capability_token is not None
         token = context.capability_token
+        parent_run_id = run.id
         run.status = "running"
         run.ended_at = None
         db_session.commit()
@@ -620,12 +647,18 @@ def test_function_capability_chain_can_continue_beyond_three_hops(
     ]
 
 
-def test_function_cycle_is_rejected_by_existing_operation_lock(
+def test_function_cycle_is_rejected_by_graph_availability(
     tmp_path: Path,
     db_session: Session,
 ) -> None:
-    target = make_function(db_session, tmp_path, "cycle_a", requirements=["cycle_b"])
-    caller = make_function(db_session, tmp_path, "cycle_b", requirements=[target.name])
+    target = make_function(db_session, tmp_path, "cycle_a")
+    caller = make_function(db_session, tmp_path, "cycle_b")
+    for skill, requirement in ((target, caller.name), (caller, target.name)):
+        manifest_path = tmp_path / skill.manifest_path
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["function_requirements"] = [requirement]
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        skill.function_requirements_json = [requirement]
     token = "cycle-token"
     active_run = SkillRun(
         skill_id=caller.id,
@@ -640,11 +673,9 @@ def test_function_cycle_is_rejected_by_existing_operation_lock(
     runner = FakeRunner(db_session)
     registry = service(db_session, tmp_path, runner)
 
-    with SkillOperationGuard(db_session).locked(target, "run", reason="active ancestor"):
-        blocked = registry.invoke_from_capability(token, target.name, {"value": "again"})
+    with pytest.raises(FunctionRegistryError, match="cycle"):
+        registry.invoke_from_capability(token, target.name, {"value": "again"})
 
-    assert blocked.status == "blocked"
-    assert "busy with run" in (blocked.error_message or "")
     assert runner.calls == []
 
 
@@ -665,6 +696,11 @@ def test_schedule_attributed_service_capability_can_invoke_declared_function(
     }
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     caller.runtime = "service"
+    active_version = db_session.get(SkillVersion, caller.active_version_id)
+    assert active_version is not None
+    active_version.manifest_json = manifest
+    permission_service = PermissionService(db_session, project_root=tmp_path)
+    permission_service.approve_request(permission_service.create_runtime_request(caller))
     schedule = SkillSchedule(
         skill_id=caller.id,
         name="Daily service",

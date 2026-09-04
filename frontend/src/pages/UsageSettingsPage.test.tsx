@@ -21,6 +21,18 @@ beforeEach(() => {
   vi.spyOn(api, "getGitHubConnection").mockImplementation(unavailable);
   vi.spyOn(api, "getAtlasStatus").mockImplementation(unavailable);
   vi.spyOn(api, "getNotionConnection").mockImplementation(unavailable);
+  vi.spyOn(api, "getQuercusConnection").mockImplementation(unavailable);
+  vi.spyOn(api, "getQuercusProcessing").mockResolvedValue({
+    method: "none",
+    llama_cpp_directory: null,
+    llama_cpp_available: false,
+    inference_url: "http://127.0.0.1:8081/v1",
+    marker_available: false,
+    inference_available: false,
+    status: "disabled",
+    processed_file_count: 0,
+    failed_file_count: 0,
+  });
   vi.spyOn(api, "getGoogleOAuthClient").mockImplementation(unavailable);
   vi.spyOn(api, "getGoogleCalendarConnection").mockImplementation(unavailable);
   vi.spyOn(api, "getGmailConnection").mockImplementation(unavailable);
@@ -151,6 +163,233 @@ describe("GitHub Settings connection", () => {
     await waitFor(() => expect(screen.getByText("octocat")).toBeTruthy());
     expect((input as HTMLInputElement).value).toBe("");
     expect(document.body.textContent).not.toContain(sentinel);
+  });
+});
+
+describe("Quercus Settings", () => {
+  it("polls only while Quercus processing is pending or running", async () => {
+    vi.spyOn(api, "getGitHubConnection").mockResolvedValue({
+      provider: "github",
+      connected: false,
+      status: "disconnected",
+      account_login: null,
+      account_id: null,
+      last_validated_at: null,
+      created_at: null,
+      updated_at: null,
+      error_type: null,
+    });
+    const interval = vi.spyOn(window, "setInterval");
+    const processing = vi.spyOn(api, "getQuercusProcessing");
+
+    renderSettings("integrations");
+
+    await screen.findByRole("heading", { name: "File processing" });
+    expect(processing).toHaveBeenCalledTimes(1);
+    expect(interval).not.toHaveBeenCalledWith(expect.any(Function), 3000);
+
+    cleanup();
+    processing.mockResolvedValue({
+      method: "marker_surya_llamacpp",
+      llama_cpp_directory: "C:\\Tools\\llama-cpp-cuda",
+      llama_cpp_available: true,
+      inference_url: "http://127.0.0.1:8081/v1",
+      marker_available: true,
+      inference_available: true,
+      status: "running",
+      processed_file_count: 42,
+      failed_file_count: 0,
+    });
+
+    renderSettings("integrations");
+
+    await waitFor(() => expect(interval).toHaveBeenCalledWith(expect.any(Function), 3000));
+  });
+
+  it("shows sync state and saves the exact selected course set", async () => {
+    vi.spyOn(api, "getGitHubConnection").mockResolvedValue({
+      provider: "github",
+      connected: false,
+      status: "disconnected",
+      account_login: null,
+      account_id: null,
+      last_validated_at: null,
+      created_at: null,
+      updated_at: null,
+      error_type: null,
+    });
+    const course = {
+      course_id: "course-1",
+      name: "Distributed Systems",
+      course_code: "CSC400",
+      term_name: "Fall 2026",
+      enrollment_state: "active",
+      selected: false,
+      retained: true,
+      local_path: "knowledge/quercus/CSC400 - Distributed Systems",
+      last_sync_started_at: null,
+      last_sync_completed_at: "2026-09-03T14:05:00Z",
+      last_sync_status: "partial",
+      last_error_type: "file",
+      skipped_file_count: 2,
+      last_processing_started_at: null,
+      last_processing_completed_at: "2026-09-03T14:06:00Z",
+      last_processing_status: "partial",
+      last_processing_error_type: "marker_failed",
+      processed_file_count: 10,
+      failed_processing_count: 1,
+    };
+    vi.spyOn(api, "getQuercusConnection").mockResolvedValue({
+      provider: "quercus",
+      connected: true,
+      status: "connected",
+      account_name: "Student",
+      account_id: "user-1",
+      last_validated_at: "2026-09-03T14:00:00Z",
+      created_at: "2026-09-03T14:00:00Z",
+      updated_at: "2026-09-03T14:00:00Z",
+      error_type: null,
+      courses: [course],
+    });
+    vi.spyOn(api, "getQuercusCourses").mockResolvedValue([course]);
+    const save = vi.spyOn(api, "putQuercusCourses").mockResolvedValue([
+      { ...course, selected: true, retained: false },
+    ]);
+    const remove = vi.spyOn(api, "deleteQuercusCourse").mockResolvedValue(undefined);
+
+    const { container } = renderSettings("integrations");
+
+    const coursesHeading = await screen.findByRole("heading", { name: "Courses" });
+    const disclosure = coursesHeading.closest("details");
+    expect(disclosure?.hasAttribute("open")).toBe(false);
+    expect(disclosure?.querySelector(".disclosure-chevron")).toBeTruthy();
+    fireEvent.click(coursesHeading.closest("summary")!);
+    expect(disclosure?.hasAttribute("open")).toBe(true);
+    expect(container.querySelector(".quercus-course-disclosure[open] .disclosure-chevron")).toBeTruthy();
+    const checkbox = screen.getByRole("checkbox", { name: /Distributed Systems/ });
+    expect(screen.getByText(/2 files skipped/)).toBeTruthy();
+    expect(screen.getByText(/Processing: partial/)).toBeTruthy();
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "Save course selection" }));
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith(["course-1"]));
+    expect(await screen.findByText(/background sync was queued/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Delete Distributed Systems" }));
+    expect(remove).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Remove Distributed Systems?" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Permanently remove course" }));
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("course-1"));
+    expect(await screen.findByText(/permanently removed from the course list/i)).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: /Distributed Systems/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete Distributed Systems" })).toBeNull();
+  });
+
+  it("shows delete for an untracked Quercus course and removes it from the list", async () => {
+    vi.spyOn(api, "getGitHubConnection").mockResolvedValue({
+      provider: "github", connected: false, status: "disconnected", account_login: null,
+      account_id: null, last_validated_at: null, created_at: null, updated_at: null, error_type: null,
+    });
+    const course = {
+      course_id: "course-2", name: "Compilers", course_code: "CSC488", term_name: "Fall 2026",
+      enrollment_state: "active", selected: false, retained: false, local_path: null,
+      last_sync_started_at: null, last_sync_completed_at: null, last_sync_status: null,
+      last_error_type: null, skipped_file_count: 0, last_processing_started_at: null,
+      last_processing_completed_at: null, last_processing_status: null,
+      last_processing_error_type: null, processed_file_count: 0, failed_processing_count: 0,
+    };
+    const otherCourse = {
+      ...course, course_id: "course-3", name: "Algorithms", course_code: "CSC373",
+    };
+    vi.spyOn(api, "getQuercusConnection").mockResolvedValue({
+      provider: "quercus", connected: true, status: "connected", account_name: "Student",
+      account_id: "user-1", last_validated_at: "2026-09-03T14:00:00Z",
+      created_at: "2026-09-03T14:00:00Z", updated_at: "2026-09-03T14:00:00Z",
+      error_type: null, courses: [],
+    });
+    vi.spyOn(api, "getQuercusCourses").mockResolvedValue([course, otherCourse]);
+    let finishDelete: (() => void) | undefined;
+    const deletion = new Promise<void>((resolve) => { finishDelete = resolve; });
+    const remove = vi.spyOn(api, "deleteQuercusCourse").mockReturnValue(deletion);
+
+    renderSettings("integrations");
+    const coursesHeading = await screen.findByRole("heading", { name: "Courses" });
+    fireEvent.click(coursesHeading.closest("summary")!);
+    fireEvent.click(screen.getByRole("button", { name: "Delete Compilers" }));
+    expect(remove).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Permanently remove course" }));
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("course-2"));
+    expect((screen.getByRole("button", { name: "Delete Algorithms" }) as HTMLButtonElement).disabled).toBe(false);
+    finishDelete?.();
+    await waitFor(() => expect(screen.queryByRole("checkbox", { name: /Compilers/ })).toBeNull());
+  });
+
+  it("saves Marker processing and reports local readiness", async () => {
+    vi.spyOn(api, "getGitHubConnection").mockResolvedValue({
+      provider: "github", connected: false, status: "disconnected", account_login: null,
+      account_id: null, last_validated_at: null, created_at: null, updated_at: null, error_type: null,
+    });
+    vi.spyOn(api, "getQuercusConnection").mockResolvedValue({
+      provider: "quercus", connected: false, status: "disconnected", account_name: null,
+      account_id: null, last_validated_at: null, created_at: null, updated_at: null,
+      error_type: null, courses: [],
+    });
+    vi.spyOn(api, "getQuercusProcessing").mockResolvedValue({
+      method: "none", llama_cpp_directory: "C:\\Tools\\llama-cpp-cuda",
+      llama_cpp_available: true, inference_url: "http://127.0.0.1:8081/v1", marker_available: true,
+      inference_available: false, status: "disabled", processed_file_count: 0, failed_file_count: 0,
+    });
+    const save = vi.spyOn(api, "putQuercusProcessing").mockResolvedValue({
+      method: "marker_surya_llamacpp", llama_cpp_directory: "C:\\Tools\\llama-cpp-cuda",
+      llama_cpp_available: true, inference_url: "http://127.0.0.1:8081/v1",
+      marker_available: true, inference_available: false, status: "pending",
+      processed_file_count: 0, failed_file_count: 0,
+    });
+
+    renderSettings("integrations");
+    const selector = await screen.findByRole("combobox", { name: "Processing method" });
+    fireEvent.change(selector, { target: { value: "marker_surya_llamacpp" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save file processing" }));
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith(
+      "marker_surya_llamacpp",
+      "C:\\Tools\\llama-cpp-cuda",
+    ));
+    expect(await screen.findByText(/background backfill was queued/i)).toBeTruthy();
+    expect(screen.getByText("Starts on demand", { selector: "dd" })).toBeTruthy();
+  });
+
+  it("queues failed Quercus files only through the explicit action", async () => {
+    vi.spyOn(api, "getGitHubConnection").mockResolvedValue({
+      provider: "github", connected: false, status: "disconnected", account_login: null,
+      account_id: null, last_validated_at: null, created_at: null, updated_at: null,
+      error_type: null,
+    });
+    vi.spyOn(api, "getQuercusConnection").mockResolvedValue({
+      provider: "quercus", connected: false, status: "disconnected", account_name: null,
+      account_id: null, last_validated_at: null, created_at: null, updated_at: null,
+      error_type: null, courses: [],
+    });
+    vi.spyOn(api, "getQuercusProcessing").mockResolvedValue({
+      method: "marker_surya_llamacpp", llama_cpp_directory: "C:\\Tools\\llama-cpp-cuda",
+      llama_cpp_available: true, inference_url: null, marker_available: true,
+      inference_available: false, status: "partial", processed_file_count: 45,
+      failed_file_count: 3,
+    });
+    const reprocess = vi.spyOn(api, "reprocessFailedQuercusFiles").mockResolvedValue({
+      method: "marker_surya_llamacpp", llama_cpp_directory: "C:\\Tools\\llama-cpp-cuda",
+      llama_cpp_available: true, inference_url: null, marker_available: true,
+      inference_available: false, status: "pending", processed_file_count: 45,
+      failed_file_count: 0, queued_file_count: 3,
+    });
+
+    renderSettings("integrations");
+    const button = await screen.findByRole("button", { name: "Reprocess failed files" });
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(reprocess).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("3 failed Quercus files were queued for reprocessing.")).toBeTruthy();
   });
 });
 

@@ -1221,7 +1221,7 @@ class IntegrationService:
         """Invoke a provider operation as the trusted local user, without skill authorization."""
 
         operation = OPERATIONS.get(operation_id)
-        if operation is not None and operation.requires_invocation_approval:
+        if operation is not None and operation.invocation_approval_required:
             return self._submit_integration_approval(
                 operation_id,
                 input_json,
@@ -1242,7 +1242,7 @@ class IntegrationService:
         approval_context: Any | None = None,
     ) -> dict[str, Any]:
         operation = OPERATIONS.get(operation_id)
-        if operation is None or not operation.requires_invocation_approval:
+        if operation is None or not operation.invocation_approval_required:
             raise IntegrationError("stale_contract", "Approved integration contract is no longer current")
         if self.operation_contract_fingerprint(operation_id) != expected_contract_fingerprint:
             raise IntegrationError("stale_contract", "Approved integration contract has changed")
@@ -1314,7 +1314,7 @@ class IntegrationService:
         if self.authorization_state(skill, requirement) != "approved":
             raise IntegrationError("authorization_missing_or_stale", "Integration authorization is missing or stale")
         operation = OPERATIONS.get(operation_id)
-        if operation is not None and operation.requires_invocation_approval:
+        if operation is not None and operation.invocation_approval_required:
             return self._submit_integration_approval(
                 operation_id,
                 input_json,
@@ -1539,7 +1539,7 @@ class IntegrationService:
         attribution: InvocationCallerAttribution,
     ) -> dict[str, Any]:
         operation = OPERATIONS.get(operation_id)
-        if operation is None or not operation.requires_invocation_approval:
+        if operation is None or not operation.invocation_approval_required:
             raise IntegrationError("operation_undeclared", "Integration operation does not require approval")
         connection = self._connection(operation.provider)
         if (

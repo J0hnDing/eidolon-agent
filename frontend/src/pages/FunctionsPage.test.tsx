@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
 
-import { render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { FunctionCatalogEntry } from "../api/client";
 import { FunctionTable } from "./FunctionsPage";
 
+afterEach(cleanup);
+
 describe("FunctionTable", () => {
-  it("shows categories, states, reasons, and user-skill links", () => {
+  it("shows sources, states, reasons, and user-skill links", () => {
     const functions: FunctionCatalogEntry[] = [
       {
         id: "normalize_text",
@@ -25,6 +27,7 @@ describe("FunctionTable", () => {
         provider: null,
         skill_id: 12,
         active_version: "v1",
+        is_running: true,
       },
       {
         id: "github.repository.get",
@@ -41,6 +44,7 @@ describe("FunctionTable", () => {
         provider: "github",
         skill_id: null,
         active_version: null,
+        is_running: false,
       },
     ];
 
@@ -51,9 +55,90 @@ describe("FunctionTable", () => {
     );
 
     expect(screen.getByRole("link", { name: "Normalize Text" }).getAttribute("href")).toBe("/skills/12");
-    expect(screen.getByText("User")).toBeTruthy();
-    expect(screen.getByText("Integration")).toBeTruthy();
+    expect(screen.getByRole("cell", { name: "User" })).toBeTruthy();
+    expect(screen.getByRole("cell", { name: "GitHub" })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "Source" })).toBeTruthy();
+    expect(screen.getByLabelText("Running").getAttribute("title")).toBe("Running");
     expect(screen.getByText("Skill is disabled")).toBeTruthy();
     expect(screen.getByText("GitHub connection is not configured")).toBeTruthy();
+  });
+
+  it("combines keyword, source, availability, and risk filters", () => {
+    const functions: FunctionCatalogEntry[] = [
+      {
+        id: "github.repository.get",
+        category: "integration",
+        title: "Read repository",
+        description: "Reads repository metadata.",
+        risk_level: "medium",
+        input_schema: null,
+        output_schema: null,
+        availability: "unavailable",
+        availability_reasons: [],
+        invocation: {},
+        call_name: null,
+        provider: "github",
+        skill_id: null,
+        active_version: null,
+        is_running: false,
+      },
+      {
+        id: "github.issue.list",
+        category: "integration",
+        title: "List issues",
+        description: "Lists repository issues.",
+        risk_level: "high",
+        input_schema: null,
+        output_schema: null,
+        availability: "available",
+        availability_reasons: [],
+        invocation: {},
+        call_name: null,
+        provider: "github",
+        skill_id: null,
+        active_version: null,
+        is_running: false,
+      },
+      {
+        id: "google_calendar.event.create",
+        category: "integration",
+        title: "Create event",
+        description: "Creates a calendar event.",
+        risk_level: "medium",
+        input_schema: null,
+        output_schema: null,
+        availability: "available",
+        availability_reasons: [],
+        invocation: {},
+        call_name: null,
+        provider: "google_calendar",
+        skill_id: null,
+        active_version: null,
+        is_running: false,
+      },
+    ];
+
+    render(
+      <MemoryRouter>
+        <FunctionTable functions={functions} />
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(screen.getByLabelText("Search"), { target: { value: "calendar" } });
+    expect(screen.getByText("google_calendar.event.create")).toBeTruthy();
+    expect(screen.queryByText("github.repository.get")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Search"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Source"), { target: { value: "provider:github" } });
+    expect(screen.getByText("github.repository.get")).toBeTruthy();
+    expect(screen.getByText("github.issue.list")).toBeTruthy();
+    expect(screen.queryByText("google_calendar.event.create")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Availability"), { target: { value: "available" } });
+    expect(screen.queryByText("github.repository.get")).toBeNull();
+    expect(screen.getByText("github.issue.list")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Risk"), { target: { value: "medium" } });
+    expect(screen.getByText("No functions match these filters.")).toBeTruthy();
   });
 });

@@ -29,7 +29,7 @@ GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 GMAIL_OAUTH_SCOPES = ("openid", "email", GMAIL_SCOPE)
 GMAIL_OAUTH_REDIRECT_URI = "http://localhost:8000/settings/integrations/gmail/oauth/callback"
-GMAIL_OAUTH_RETURN_URL = "http://localhost:5173/settings/integrations"
+GMAIL_OAUTH_RETURN_URL = "http://localhost:5174/settings/integrations"
 GMAIL_SECRET_NAMESPACE = "gmail"
 MAX_GMAIL_RESULT_BYTES = 4 * 1024 * 1024
 MAX_MESSAGE_COUNT = 100
@@ -85,7 +85,7 @@ class GmailProviderAdapter(Protocol):
 
 class UrllibGmailProviderAdapter:
     def __init__(self) -> None:
-        self._opener = build_opener(_NoRedirect())
+        self._opener = None
 
     def authorization_url(self, client_id: str, state: str) -> str:
         return google_authorization_url(
@@ -539,6 +539,8 @@ class UrllibGmailProviderAdapter:
     ) -> bytes:
         request = Request(url, data=body, method=method, headers=headers)
         try:
+            if self._opener is None:
+                self._opener = build_opener(_NoRedirect())
             with self._opener.open(request, timeout=timeout) as response:
                 raw = response.read(max_bytes + 1)
         except HTTPError as exc:

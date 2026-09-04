@@ -29,7 +29,7 @@ Decide whether chat history is backend-persisted or frontend-local; migrate or r
 - Rationale: Skill install, update, activation, rejection, and deletion coordinate filesystem changes with SQLite commits without one transaction spanning both resources. Process interruption can leave recoverable but inconsistent partial state.
 
 -Acceptance Criteria:
-Destructive lifecycle operations use staging plus deterministic commit/rollback or recovery markers; restart recovery is tested; active installed versions are never modified in place; and failed operations leave a clear diagnostic state.
+Destructive lifecycle operations use staging plus deterministic commit/rollback or recovery markers; restart recovery is tested; and failed operations leave a clear diagnostic state.
 
 ## TODO-008: Real Parallel DAG Execution
 
@@ -76,17 +76,6 @@ Docker runtime egress is restricted to the approved manifest domains for both bo
 
 -Acceptance Criteria:
 Codex JSONL and relevant tool/file activity are streamed and persisted as invocation progress; an idle timeout terminates invocations only after a documented period without meaningful activity while a separate hard deadline remains authoritative; each project workflow has a backend-owned total execution budget that excludes user approval and deliberate pause time and is checked before admitting new work; timeout records preserve partial events, usage, last meaningful activity, command context, and structured timeout type; Task-DAG recovery resumes from the last backend-validated workflow state without rerunning completed nodes or accepting unmerged partial node output; single-Codex recovery has an explicit safe policy for reusing or discarding its partial workspace and never marks it valid without full deterministic validation; Windows termination covers the complete spawned process tree; restart, cancellation, timeout, and retry behavior are idempotent and covered by tests; and the UI reports whether a run exceeded idle, invocation-hard, or workflow-budget limits and what recovery action is available.
-
-## TODO-013: Nested Function Invocation Policy
-
-- Priority: medium
-- Category: research
-- Area: backend-function-composition
-- Dependencies: none
-- Rationale: Milestone 2 supports one direct caller-to-function hop and deliberately rejects a function invoked by another function or web application from invoking another target. Safe nesting needs explicit depth, cycle, budget, lock, approval, and audit-chain semantics rather than accidental recursive authority.
-
--Acceptance Criteria:
-Define and enforce a bounded maximum depth; reject cycles deterministically; evaluate every direct caller-target edge independently; propagate only newly scoped child capabilities; preserve per-skill operation safety and total time/resource budgets across the chain; store an inspectable parent/child run chain; attribute runtime Codex usage to the causing function run; handle partial failure and cancellation without orphaned active runs; and cover direct, scheduled, backend, and web-application origins without inventing synthetic caller skills.
 
 ## TODO-014: Memory Context And Long-Term Adaptation
 
@@ -136,17 +125,6 @@ Resolve only explicitly bounded, high-confidence cases such as single-assignment
 
 -Acceptance Criteria:
 One component owns the Task DAG node state machine; execute, resume, blocked-user-action, and retry share one node transition; retry resumes the intended node without restarting completed work; compatibility changes are explicit.
-
-## TODO-019: Separate function catalog reads from installed-skill reconciliation
-
-- Priority: high
-- Category: refactor
-- Area: Function catalog
-- Dependencies: none
-- Rationale: Catalog reads currently trigger filesystem scans, manifest validation, and possible database commits through sync_installed_from_filesystem.
-
--Acceptance Criteria:
-Catalog listing is read-only; reconciliation runs only at a documented startup or explicit lifecycle boundary; reconciliation remains idempotent; UI polling causes no filesystem reconciliation or database writes.
 
 ## TODO-020: Replace startup schema patching with versioned database migrations
 
@@ -203,13 +181,13 @@ Shared runner lifecycle behavior has one implementation without a reuse-only inh
 -Acceptance Criteria:
 Each extraction has a named owner and narrow contract; Codex adapters are separated from workflow facades; UI resource state is split into focused hooks or panels; generic abstractions require concrete reuse; behavior remains tested.
 
-## TODO-025: Define transitive permission and execution semantics for unbounded function chains
+## TODO-026: Enforce Act knowledge directory as read-only
 
-- Priority: medium
-- Category: research
-- Area: backend-function-composition
+- Priority: high
+- Category: bugfix
+- Area: Act sandbox
 - Dependencies: none
-- Rationale: Unbounded nested function calls are now enabled as a controlled exception with direct-edge authorization and target-owned permissions. This supersedes the bounded-depth assumption in TODO-013 without replacing that historical record; the remaining transitive model needs an explicit design.
+- Rationale: The managed Act AGENTS.md currently prohibits writes to knowledge/, but instruction-only protection cannot enforce the backend-owned synchronized knowledge boundary.
 
 -Acceptance Criteria:
-Define and document permission visibility across the full chain, cumulative time and resource budgets, parent-to-child cancellation and failure propagation, deterministic cycle handling, and inspectable parent/child audit chains. Preserve independent declaration, approval, schema, availability, operation-lock, and target-owned permission enforcement at every direct edge, with focused tests for the selected semantics.
+Act can read runtime/act/knowledge, write runtime/act/memory and runtime/act/workspace, cannot create, modify, rename, or delete anything under runtime/act/knowledge regardless of prompt instructions, and the trusted backend Quercus synchronizer retains write authority to runtime/act/knowledge/quercus.

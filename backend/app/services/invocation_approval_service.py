@@ -22,6 +22,7 @@ from app.services.invocation_approval_presentation import (
 )
 from app.services.manifest_validator import validate_manifest_file
 from app.services.proposed_skill_service import ProposedSkillService
+from app.services.skill_graph_service import SkillGraphService
 
 
 class InvocationApprovalError(RuntimeError):
@@ -82,7 +83,13 @@ class InvocationApprovalService:
         manifest = validate_manifest_file(
             self.proposed_service.skill_dir_for_record(target) / "manifest.json"
         )
-        if manifest.runtime != "function" or not manifest.requires_invocation_approval:
+        graph = SkillGraphService(
+            self.db,
+            project_root=self.project_root,
+        ).effective_contract(target, manifest=manifest)
+        if manifest.runtime != "function" or not (
+            manifest.requires_invocation_approval or graph.risk_level == "high"
+        ):
             raise InvocationApprovalError(
                 "approval_not_required", "The target does not require per-call approval"
             )

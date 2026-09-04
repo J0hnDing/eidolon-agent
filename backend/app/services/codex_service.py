@@ -1523,7 +1523,11 @@ class CodexService:
         manifest = validate_manifest_file(proposed_dir / "manifest.json")
         skill.description = manifest.description
         skill.runtime = manifest.runtime
-        skill.risk_level = classify_permission_risk(manifest.permissions, manifest.dependencies)
+        skill.risk_level = classify_permission_risk(
+            manifest.permissions,
+            manifest.dependencies,
+            requires_invocation_approval=manifest.requires_invocation_approval,
+        )
         skill.instructions_path = manifest.instructions_path
         skill.input_schema_json = manifest.input_schema
         skill.output_schema_json = manifest.output_schema

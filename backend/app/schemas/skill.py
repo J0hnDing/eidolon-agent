@@ -33,5 +33,6 @@ class SkillRead(SkillBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    is_running: bool = False
     created_at: datetime
     updated_at: datetime

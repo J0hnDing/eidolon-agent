@@ -45,6 +45,10 @@ class IntegrationOperation:
     fake_behavior: str
     usage_example: dict[str, Any]
     requires_invocation_approval: bool = False
+
+    @property
+    def invocation_approval_required(self) -> bool:
+        return self.requires_invocation_approval or self.risk == "high"
     contract_version: int = 1
 
     def agent_context(self) -> dict[str, Any]:
@@ -57,7 +61,7 @@ class IntegrationOperation:
             "resource_scope": self.resource_scope,
             "read_only": self.read_only,
             "risk": self.risk,
-            "requires_invocation_approval": self.requires_invocation_approval,
+            "requires_invocation_approval": self.invocation_approval_required,
             "normalized_errors": list(self.normalized_errors),
             "usage_example": self.usage_example,
             "helper": (
@@ -1293,7 +1297,7 @@ _GMAIL_OPERATIONS = (
             },
             ["sent", "message_id", "conversation_id"],
         ),
-        read_only=False, side_effect="write", risk="medium", resource_scope="none", method="POST",
+        read_only=False, side_effect="write", risk="high", resource_scope="none", method="POST",
         endpoint_template="/gmail/v1/users/me/messages/send", timeout_seconds=20, allow_redirects=False,
         max_pages=1, max_results=1, max_provider_response_bytes=2_000_000,
         normalized_errors=_GMAIL_ERRORS, audit_resource_fields=(), fake_behavior="email_send",
@@ -1329,6 +1333,7 @@ _TELEGRAM_OPERATIONS = (
                 "title": {"type": "string", "minLength": 1, "maxLength": 120},
                 "description": {"type": "string", "minLength": 1, "maxLength": 800},
                 "link": {"type": "string", "minLength": 1, "maxLength": 2048, "pattern": r"^https?://"},
+                "alert": {"type": "boolean"},
             },
             ["title", "description"],
         ),
@@ -1345,7 +1350,11 @@ _TELEGRAM_OPERATIONS = (
         normalized_errors=_TELEGRAM_ERRORS, audit_resource_fields=(), fake_behavior="telegram_notification_send",
         usage_example={
             "operation": "telegram.notification.send",
-            "input": {"title": "Build complete", "description": "The requested build finished."},
+            "input": {
+                "title": "Build complete",
+                "description": "The requested build finished.",
+                "alert": False,
+            },
         },
     ),
 )
@@ -1371,7 +1380,7 @@ def registry_contract_identity(operation_ids: list[str]) -> dict[str, dict[str, 
             "version": OPERATIONS[operation_id].contract_version,
             "requires_invocation_approval": OPERATIONS[
                 operation_id
-            ].requires_invocation_approval,
+            ].invocation_approval_required,
         }
         for operation_id in sorted(operation_ids)
     }

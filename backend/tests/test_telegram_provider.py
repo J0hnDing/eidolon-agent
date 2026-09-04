@@ -65,6 +65,16 @@ def test_notification_is_bounded_escaped_and_supports_http_link() -> None:
         send_notification(api, 42, title="ok", description="ok", link="javascript:alert(1)")
 
 
+def test_notification_alert_uses_red_exclamation_marker() -> None:
+    api = FakeTelegramBotApi()
+
+    send_notification(api, 42, title="Weekly report failed", description="rate_limited: Try later", alert=True)
+
+    assert api.sent_messages[0]["text"] == "❗ <b>Weekly report failed</b>\nrate_limited: Try later"
+    with pytest.raises(TelegramProviderError, match="alert flag"):
+        send_notification(api, 42, title="Invalid", description="Invalid", alert="yes")
+
+
 def test_pairing_parser_requires_private_start_and_code_is_one_time() -> None:
     pairing = create_pairing_code(now=100.0)
     assert parse_start_command(f"/start@eidolon_bot {pairing.code}") == pairing.code

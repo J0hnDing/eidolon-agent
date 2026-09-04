@@ -17,9 +17,14 @@ import {
   GoogleOAuthClientStatus,
   NotionConnectionStatus,
   PermissionPolicy,
+  QuercusConnectionStatus,
+  QuercusCourse,
+  QuercusProcessingMethod,
+  QuercusProcessingStatus,
   TelegramConnectionStatus,
   api,
 } from "../api/client";
+import { DeleteIconButton } from "../components/DeleteIconButton";
 import { formatSystemDateTime } from "../lib/dateTime";
 import {
   AppearanceTheme,
@@ -79,6 +84,16 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
   const [notionToken, setNotionToken] = useState("");
   const [notionDataSourceId, setNotionDataSourceId] = useState("");
   const [notionReportDataSourceId, setNotionReportDataSourceId] = useState("");
+  const [quercus, setQuercus] = useState<QuercusConnectionStatus | null>(null);
+  const [quercusCourses, setQuercusCourses] = useState<QuercusCourse[]>([]);
+  const [pendingQuercusCourseDelete, setPendingQuercusCourseDelete] = useState<QuercusCourse | null>(null);
+  const [deletingQuercusCourseIds, setDeletingQuercusCourseIds] = useState<string[]>([]);
+  const [quercusToken, setQuercusToken] = useState("");
+  const [selectedQuercusCourseIds, setSelectedQuercusCourseIds] = useState<string[]>([]);
+  const [quercusProcessing, setQuercusProcessing] = useState<QuercusProcessingStatus | null>(null);
+  const [quercusProcessingMethod, setQuercusProcessingMethod] = useState<QuercusProcessingMethod>("none");
+  const [llamaCppDirectory, setLlamaCppDirectory] = useState("");
+  const [quercusProcessingReachable, setQuercusProcessingReachable] = useState(true);
   const [googleCalendar, setGoogleCalendar] = useState<GoogleCalendarConnectionStatus | null>(null);
   const [googleOAuth, setGoogleOAuth] = useState<GoogleOAuthClientStatus | null>(null);
   const [googleClientId, setGoogleClientId] = useState("");
@@ -123,10 +138,21 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setRouting(nextRouting);
         setRoutingDirty(false);
       } else if (section === "integrations") {
-        const [nextGitHub, nextAtlas, nextNotion, nextGoogleOAuth, nextGoogleCalendar, nextGmail, nextTelegram, nextTelegramAgent, nextCodexMcp] = await Promise.all([
+        const [nextGitHub, nextAtlas, nextNotion, nextQuercus, nextQuercusProcessing, nextGoogleOAuth, nextGoogleCalendar, nextGmail, nextTelegram, nextTelegramAgent, nextCodexMcp] = await Promise.all([
           api.getGitHubConnection(),
           api.getAtlasStatus().catch((err) => atlasUnavailableStatus(err)),
           api.getNotionConnection().catch((err) => notionUnavailableStatus(err)),
+          api.getQuercusConnection().catch((err) => quercusUnavailableStatus(err)),
+          api.getQuercusProcessing().then(
+            (value) => {
+              setQuercusProcessingReachable(true);
+              return value;
+            },
+            () => {
+              setQuercusProcessingReachable(false);
+              return quercusProcessingUnavailableStatus();
+            },
+          ),
           api.getGoogleOAuthClient().catch((err) => googleOAuthUnavailableStatus(err)),
           api.getGoogleCalendarConnection().catch((err) => googleCalendarUnavailableStatus(err)),
           api.getGmailConnection().catch((err) => gmailUnavailableStatus(err)),
@@ -140,6 +166,15 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setNotion(nextNotion);
         setNotionDataSourceId(nextNotion.data_source_id ?? "");
         setNotionReportDataSourceId(nextNotion.report_data_source_id ?? "");
+        setQuercus(nextQuercus);
+        setQuercusProcessing(nextQuercusProcessing);
+        setQuercusProcessingMethod(nextQuercusProcessing.method);
+        setLlamaCppDirectory(nextQuercusProcessing.llama_cpp_directory ?? "");
+        const nextQuercusCourses = nextQuercus.connected
+          ? await api.getQuercusCourses().catch(() => nextQuercus.courses)
+          : nextQuercus.courses;
+        setQuercusCourses(nextQuercusCourses);
+        setSelectedQuercusCourseIds(nextQuercusCourses.filter((course) => course.selected).map((course) => course.course_id));
         setGoogleOAuth(nextGoogleOAuth);
         setGoogleCalendar(nextGoogleCalendar);
         setGmail(nextGmail);
@@ -159,6 +194,40 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
   useEffect(() => {
     void loadSettings();
   }, [section]);
+
+  useEffect(() => {
+    const processingIsActive =
+      quercusProcessing?.status === "pending" || quercusProcessing?.status === "running";
+    if (section !== "integrations" || !processingIsActive) return;
+    let active = true;
+    const refreshQuercusProcessing = async () => {
+      try {
+        const next = await api.getQuercusProcessing();
+        if (!active) return;
+        setQuercusProcessing(next);
+        if (!quercusProcessingReachable) {
+          setQuercusProcessingMethod(next.method);
+          setLlamaCppDirectory(next.llama_cpp_directory ?? "");
+        }
+        setQuercusProcessingReachable(true);
+        if (quercus?.connected) {
+          try {
+            const courses = await api.getQuercusCourses();
+            if (active) setQuercusCourses(courses);
+          } catch {
+            // Processing health remains valid when a course refresh fails independently.
+          }
+        }
+      } catch {
+        if (active) setQuercusProcessingReachable(false);
+      }
+    };
+    const interval = window.setInterval(() => void refreshQuercusProcessing(), 3000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [section, quercus?.connected, quercusProcessing?.status, quercusProcessingReachable]);
 
   useEffect(() => {
     if (section !== "integrations") return;
@@ -325,6 +394,103 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     } finally {
       setLoading(false);
     }
+  }
+
+  async function saveQuercusConnection() {
+    if (!quercusToken.trim()) return;
+    setError(null); setSaved(null); setLoading(true);
+    try {
+      const next = await api.putQuercusConnection(quercusToken);
+      const courses = await api.getQuercusCourses();
+      setQuercus(next); setQuercusCourses(courses);
+      setSelectedQuercusCourseIds(courses.filter((course) => course.selected).map((course) => course.course_id));
+      setSaved("Quercus connection validated and saved.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save Quercus connection");
+    } finally { setQuercusToken(""); setLoading(false); }
+  }
+
+  async function removeQuercusConnection() {
+    setError(null); setSaved(null); setLoading(true);
+    try {
+      const next = await api.removeQuercusConnection();
+      setQuercus(next); setQuercusCourses(next.courses); setQuercusToken("");
+      setSelectedQuercusCourseIds(next.courses.filter((course) => course.selected).map((course) => course.course_id));
+      setSaved("Quercus connection removed. Existing local course copies were retained.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove Quercus connection");
+    } finally { setLoading(false); }
+  }
+
+  function toggleQuercusCourse(courseId: string) {
+    setSelectedQuercusCourseIds((current) => current.includes(courseId)
+      ? current.filter((value) => value !== courseId)
+      : [...current, courseId]);
+  }
+
+  async function saveQuercusCourses() {
+    setError(null); setSaved(null); setLoading(true);
+    try {
+      const courses = await api.putQuercusCourses(selectedQuercusCourseIds);
+      setQuercusCourses(courses);
+      setSelectedQuercusCourseIds(courses.filter((course) => course.selected).map((course) => course.course_id));
+      setQuercus((current) => current ? { ...current, courses } : current);
+      setSaved("Quercus course selection saved. A background sync was queued.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save Quercus course selection");
+    } finally { setLoading(false); }
+  }
+
+  async function deleteQuercusCourse(course: QuercusCourse) {
+    setPendingQuercusCourseDelete(null);
+    setError(null); setSaved(null);
+    setDeletingQuercusCourseIds((current) => [...current, course.course_id]);
+    try {
+      await api.deleteQuercusCourse(course.course_id);
+      setQuercusCourses((current) => current.filter((item) => item.course_id !== course.course_id));
+      setSelectedQuercusCourseIds((current) => current.filter((courseId) => courseId !== course.course_id));
+      setQuercus((current) => current
+        ? { ...current, courses: current.courses.filter((item) => item.course_id !== course.course_id) }
+        : current);
+      setSaved("Quercus course permanently removed from the course list. Any synchronized content was deleted.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete the Quercus course");
+    } finally {
+      setDeletingQuercusCourseIds((current) => current.filter((courseId) => courseId !== course.course_id));
+    }
+  }
+
+  async function saveQuercusProcessing() {
+    setError(null); setSaved(null); setLoading(true);
+    try {
+      const next = await api.putQuercusProcessing(
+        quercusProcessingMethod,
+        llamaCppDirectory.trim() || null,
+      );
+      setQuercusProcessing(next);
+      setQuercusProcessingReachable(true);
+      setQuercusProcessingMethod(next.method);
+      setLlamaCppDirectory(next.llama_cpp_directory ?? "");
+      setSaved(next.method === "marker_surya_llamacpp"
+        ? "Quercus file processing enabled. A background backfill was queued."
+        : "Quercus file processing disabled. Existing processed files were retained and will be ignored by Act.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save Quercus file processing");
+    } finally { setLoading(false); }
+  }
+
+  async function reprocessFailedQuercusFiles() {
+    setError(null); setSaved(null); setLoading(true);
+    try {
+      const next = await api.reprocessFailedQuercusFiles();
+      setQuercusProcessing(next);
+      setQuercusProcessingReachable(true);
+      setSaved(next.queued_file_count
+        ? `${next.queued_file_count} failed Quercus ${next.queued_file_count === 1 ? "file was" : "files were"} queued for reprocessing.`
+        : "No failed Quercus files needed reprocessing.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not reprocess failed Quercus files");
+    } finally { setLoading(false); }
   }
 
   async function saveGoogleOAuthClient() {
@@ -880,6 +1046,105 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </p>
         </section>
       )}
+      {section === "integrations" && quercus && (
+        <section className="detail-panel stack">
+          <div>
+            <h2>Quercus knowledge sync</h2>
+            <p className="muted">Selected courses are mirrored daily at 10:00 Toronto time under <code>knowledge/quercus/</code> for Act to inspect only when needed. Quercus content is never injected into agent context automatically.</p>
+            <p className="muted">The token stays in Windows Credential Manager. Files larger than 8 GiB, or without a known size, are recorded by the backend but not downloaded.</p>
+          </div>
+          <dl className="detail-grid">
+            <div><dt>Status</dt><dd>{quercus.connected ? "Connected" : quercus.status}</dd></div>
+            <div><dt>Account</dt><dd>{quercus.account_name ?? "None"}</dd></div>
+            <div><dt>Account ID</dt><dd>{quercus.account_id ?? "None"}</dd></div>
+            <div><dt>Last validated</dt><dd>{formatDate(quercus.last_validated_at)}</dd></div>
+          </dl>
+          {quercus.error_type && <p className="error-text">Connection status: {quercus.error_type.replace(/_/g, " ")}</p>}
+          <label>
+            {quercus.connected ? "Replacement Quercus access token" : "Quercus access token"}
+            <input type="password" autoComplete="new-password" value={quercusToken} onChange={(event) => setQuercusToken(event.target.value)} placeholder="Token is never displayed after submission" />
+          </label>
+          <div className="button-row">
+            <button type="button" onClick={() => void saveQuercusConnection()} disabled={loading || !quercusToken.trim()}>{quercus.connected ? "Replace connection" : "Connect Quercus"}</button>
+            {quercus.connected && <button type="button" className="secondary" onClick={() => void removeQuercusConnection()} disabled={loading}>Disconnect</button>}
+          </div>
+          {quercusProcessing && (
+            <div className="settings-subsection stack">
+              <div>
+                <h3>File processing</h3>
+                <p className="muted">Originals stay in <code>files/raw/</code>. Marker output is written to the matching <code>files/processed/</code> tree. Select an existing llama.cpp installation; the backend starts its server on demand.</p>
+              </div>
+              <label>
+                Processing method
+                <select value={quercusProcessingMethod} onChange={(event) => setQuercusProcessingMethod(event.target.value as QuercusProcessingMethod)} disabled={loading}>
+                  <option value="none">None</option>
+                  <option value="marker_surya_llamacpp">Marker + Surya with local llama.cpp</option>
+                </select>
+              </label>
+              <label>
+                llama.cpp directory (absolute path)
+                <input
+                  type="text"
+                  value={llamaCppDirectory}
+                  onChange={(event) => setLlamaCppDirectory(event.target.value)}
+                  placeholder="C:\\Tools\\llama-cpp-cuda"
+                  disabled={loading}
+                />
+              </label>
+              <dl className="detail-grid">
+                <div><dt>Processing status</dt><dd>{quercusProcessingReachable ? quercusProcessing.status : "Backend unavailable"}</dd></div>
+                <div><dt>Marker executable</dt><dd>{quercusProcessing.marker_available ? "Available" : "Not found on backend PATH"}</dd></div>
+                <div><dt>llama.cpp installation</dt><dd>{quercusProcessing.llama_cpp_available ? "Available" : quercusProcessing.llama_cpp_directory ? "Invalid" : "Not configured"}</dd></div>
+                <div><dt>Inference server</dt><dd>{!quercusProcessingReachable ? "Unknown" : quercusProcessing.inference_available ? "Running" : quercusProcessing.llama_cpp_available ? "Starts on demand" : "Not ready"}</dd></div>
+                <div><dt>Processed</dt><dd>{quercusProcessing.processed_file_count}</dd></div>
+                <div><dt>Failed</dt><dd>{quercusProcessing.failed_file_count}</dd></div>
+              </dl>
+              <div className="button-row">
+                <button type="button" onClick={() => void saveQuercusProcessing()} disabled={loading || (quercusProcessingMethod === "marker_surya_llamacpp" && !llamaCppDirectory.trim())}>Save file processing</button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => void reprocessFailedQuercusFiles()}
+                  disabled={loading || quercusProcessing.method !== "marker_surya_llamacpp" || quercusProcessing.failed_file_count === 0 || quercusProcessing.status === "pending" || quercusProcessing.status === "running"}
+                >
+                  Reprocess failed files
+                </button>
+              </div>
+            </div>
+          )}
+          {(quercus.connected || quercusCourses.length > 0) && (
+            <details className="settings-subsection quercus-course-disclosure">
+              <summary>
+                <h3>Courses</h3>
+                <svg className="disclosure-chevron" viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="m7 4 6 6-6 6" />
+                </svg>
+              </summary>
+              <div className="stack quercus-course-content">
+              <p className="muted">Deselecting stops updates but retains the existing local copy. The trash button permanently removes any course from this list and deletes its synchronized content, if present.</p>
+              {quercusCourses.length === 0 && <p className="muted">No accessible courses were returned.</p>}
+              {quercusCourses.map((course) => (
+                <div className="settings-choice-row" key={course.course_id}>
+                  <label>
+                    <input type="checkbox" checked={selectedQuercusCourseIds.includes(course.course_id)} onChange={() => toggleQuercusCourse(course.course_id)} disabled={loading || !quercus.connected} />
+                    <span><strong>{course.name}</strong>{course.course_code && <> · {course.course_code}</>}<small>{course.term_name ?? course.enrollment_state ?? "Course"}</small></span>
+                  </label>
+                  <div>
+                    <span className="muted">{course.last_sync_status ? `Sync: ${course.last_sync_status}` : course.retained ? "Retained locally" : "Not synced"}{course.skipped_file_count ? ` · ${course.skipped_file_count} files skipped` : ""}{course.last_processing_status ? ` · Processing: ${course.last_processing_status}` : ""}{course.processed_file_count ? ` · ${course.processed_file_count} processed` : ""}{course.failed_processing_count ? ` · ${course.failed_processing_count} failed` : ""}</span>
+                    <DeleteIconButton
+                      label={`Delete ${course.name}`}
+                      onClick={() => setPendingQuercusCourseDelete(course)}
+                      disabled={deletingQuercusCourseIds.includes(course.course_id)}
+                    />
+                  </div>
+                </div>
+              ))}
+              {quercus.connected && <div className="button-row"><button type="button" onClick={() => void saveQuercusCourses()} disabled={loading}>Save course selection</button></div>}
+              </div>
+            </details>
+          )}
+        </section>
+      )}
       {section === "integrations" && notion && (
         <section className="detail-panel stack">
           <div>
@@ -965,18 +1230,15 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
               >
                 Save data-source IDs
               </button>
-              <button
-                type="button"
-                className="secondary"
+              <DeleteIconButton
+                label="Delete data-source IDs"
                 onClick={() => void removeNotionDataSources()}
                 disabled={
                   loading
                   || !notion.connected
                   || (!notion.data_source_id && !notion.report_data_source_id)
                 }
-              >
-                Delete data-source IDs
-              </button>
+              />
             </div>
           </div>
         </section>
@@ -1171,6 +1433,26 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           DAG builds pause before the next ready batch when either allowance window has less than 5% remaining. Skill runtime calls are intentionally excluded from build token accounting.
         </p>
       )}
+      {pendingQuercusCourseDelete && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="quercus-course-delete-title">
+          <section className="modal-panel stack">
+            <div>
+              <h2 id="quercus-course-delete-title">Remove {pendingQuercusCourseDelete.name}?</h2>
+              <p className="muted">
+                This permanently removes the course from the Quercus list. Any synchronized course files and tracking records are also permanently deleted. This cannot be undone.
+              </p>
+            </div>
+            <div className="button-row">
+              <button type="button" className="danger" onClick={() => void deleteQuercusCourse(pendingQuercusCourseDelete)}>
+                Permanently remove course
+              </button>
+              <button type="button" className="secondary" onClick={() => setPendingQuercusCourseDelete(null)}>
+                Cancel
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </section>
   );
 }
@@ -1202,6 +1484,35 @@ function notionUnavailableStatus(err: unknown): NotionConnectionStatus {
     created_at: null,
     updated_at: null,
     error_type: err instanceof Error ? err.message : "unavailable",
+  };
+}
+
+function quercusUnavailableStatus(err: unknown): QuercusConnectionStatus {
+  return {
+    provider: "quercus",
+    connected: false,
+    status: "unavailable",
+    account_name: null,
+    account_id: null,
+    last_validated_at: null,
+    created_at: null,
+    updated_at: null,
+    error_type: err instanceof Error ? err.message : "unavailable",
+    courses: [],
+  };
+}
+
+function quercusProcessingUnavailableStatus(): QuercusProcessingStatus {
+  return {
+    method: "none",
+    llama_cpp_directory: null,
+    llama_cpp_available: false,
+    inference_url: null,
+    marker_available: false,
+    inference_available: false,
+    status: "disabled",
+    processed_file_count: 0,
+    failed_file_count: 0,
   };
 }
 

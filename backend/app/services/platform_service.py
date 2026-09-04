@@ -12,6 +12,7 @@ from app.services.integration_service import (
 )
 
 NOTION_DONE_CLEANUP_SERVICE_ID = "backend.notion.todo.cleanup_done"
+QUERCUS_SYNC_SERVICE_ID = "backend.quercus.knowledge.sync"
 MAX_CLEANUP_PAGES = 100
 PAGE_SIZE = 100
 MAX_REPORTED_ITEMS = 100
@@ -19,6 +20,35 @@ MAX_REPORTED_ITEMS = 100
 
 class PlatformServiceError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class PlatformScheduleDefinition:
+    service_id: str
+    schedule_id: int
+    job_id: str
+    name: str
+    time: str
+    timezone: str = "America/Toronto"
+
+
+PLATFORM_SCHEDULES = (
+    PlatformScheduleDefinition(
+        service_id=NOTION_DONE_CLEANUP_SERVICE_ID,
+        schedule_id=0,
+        job_id="backend_notion_todo_cleanup_daily",
+        name="Daily Notion Done Cleanup",
+        time="03:00",
+    ),
+    PlatformScheduleDefinition(
+        service_id=QUERCUS_SYNC_SERVICE_ID,
+        schedule_id=-1,
+        job_id="backend_quercus_knowledge_sync_daily",
+        name="Daily Quercus Knowledge Sync",
+        time="10:00",
+    ),
+)
+PLATFORM_SCHEDULE_BY_ID = {definition.service_id: definition for definition in PLATFORM_SCHEDULES}
 
 
 @dataclass
@@ -148,7 +178,11 @@ class PlatformServiceDispatcher:
     integrations: IntegrationService | None = None
 
     def invoke(self, service_id: str) -> dict[str, Any]:
-        if service_id != NOTION_DONE_CLEANUP_SERVICE_ID:
-            raise PlatformServiceError("Unknown platform service")
-        integrations = self.integrations or build_default_integration_service(self.db)
-        return NotionDoneCleanupService(integrations).run()
+        if service_id == NOTION_DONE_CLEANUP_SERVICE_ID:
+            integrations = self.integrations or build_default_integration_service(self.db)
+            return NotionDoneCleanupService(integrations).run()
+        if service_id == QUERCUS_SYNC_SERVICE_ID:
+            from app.services.quercus_service import QuercusSyncService
+
+            return QuercusSyncService(self.db).run()
+        raise PlatformServiceError("Unknown platform service")

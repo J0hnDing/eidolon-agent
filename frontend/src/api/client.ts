@@ -14,7 +14,7 @@ export type RiskLevel = "low" | "medium" | "high" | "blocked";
 export type SkillRuntime = "function" | "web_app" | "service";
 export type SkillStatus = "building" | "proposed" | "installed" | "failed" | "deleted";
 export type FunctionCategory = "backend_core" | "user" | "integration";
-export type FunctionAvailability = "available" | "disabled" | "unavailable";
+export type FunctionAvailability = "available" | "disabled" | "unavailable" | "error";
 export type ConversationMode = "project" | "act";
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired" | "superseded";
 export type PermissionRequestScope = "build_time" | "runtime";
@@ -69,6 +69,7 @@ export interface Skill {
   installed_path: string | null;
   active_version_id: number | null;
   enabled: boolean;
+  is_running: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -88,6 +89,7 @@ export interface FunctionCatalogEntry {
   provider: string | null;
   skill_id: number | null;
   active_version: string | null;
+  is_running: boolean;
 }
 
 export type SkillUpdateInput = Pick<Skill, "enabled">;
@@ -465,6 +467,59 @@ export interface NotionConnectionStatus {
   error_type: string | null;
 }
 
+export interface QuercusCourse {
+  course_id: string;
+  name: string;
+  course_code: string | null;
+  term_name: string | null;
+  enrollment_state: string | null;
+  selected: boolean;
+  retained: boolean;
+  local_path: string | null;
+  last_sync_started_at: string | null;
+  last_sync_completed_at: string | null;
+  last_sync_status: string | null;
+  last_error_type: string | null;
+  skipped_file_count: number;
+  last_processing_started_at: string | null;
+  last_processing_completed_at: string | null;
+  last_processing_status: string | null;
+  last_processing_error_type: string | null;
+  processed_file_count: number;
+  failed_processing_count: number;
+}
+
+export type QuercusProcessingMethod = "none" | "marker_surya_llamacpp";
+
+export interface QuercusProcessingStatus {
+  method: QuercusProcessingMethod;
+  llama_cpp_directory: string | null;
+  llama_cpp_available: boolean;
+  inference_url: string | null;
+  marker_available: boolean;
+  inference_available: boolean;
+  status: "disabled" | "idle" | "pending" | "running" | "succeeded" | "partial" | "failed";
+  processed_file_count: number;
+  failed_file_count: number;
+}
+
+export interface QuercusProcessingReprocessResult extends QuercusProcessingStatus {
+  queued_file_count: number;
+}
+
+export interface QuercusConnectionStatus {
+  provider: "quercus";
+  connected: boolean;
+  status: "connected" | "disconnected" | "unavailable" | "invalid";
+  account_name: string | null;
+  account_id: string | null;
+  last_validated_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  error_type: string | null;
+  courses: QuercusCourse[];
+}
+
 export interface GoogleCalendarConnectionStatus {
   provider: "google_calendar";
   connected: boolean;
@@ -575,6 +630,8 @@ export interface SkillSchedule {
   read_only: boolean;
   skill_id: number | null;
   skill_name: string | null;
+  skill_enabled: boolean | null;
+  is_running: boolean;
   name: string;
   status: ScheduleStatus;
   schedule_type: ScheduleType;
@@ -732,7 +789,26 @@ export interface ProjectConversationState {
   needs_polling: boolean;
 }
 
+const inFlightGetRequests = new Map<string, Promise<unknown>>();
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const method = (options.method ?? "GET").toUpperCase();
+  const requestKey = method === "GET" ? path : null;
+  const existing = requestKey ? inFlightGetRequests.get(requestKey) : undefined;
+  if (existing) return existing as Promise<T>;
+
+  const pending = performRequest<T>(path, options);
+  if (requestKey) inFlightGetRequests.set(requestKey, pending);
+  try {
+    return await pending;
+  } finally {
+    if (requestKey && inFlightGetRequests.get(requestKey) === pending) {
+      inFlightGetRequests.delete(requestKey);
+    }
+  }
+}
+
+async function performRequest<T>(path: string, options: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
@@ -874,6 +950,7 @@ export const api = {
     request<void>(`/memory-facts/${id}`, {
       method: "DELETE",
     }),
+  openActRoot: () => request<void>("/act/workspace/open-root", { method: "POST" }),
   listSkills: () => request<Skill[]>("/skills"),
   listFunctionCatalog: () => request<FunctionCatalogEntry[]>("/functions/catalog"),
   openWebApp: (skillId: number) =>
@@ -929,6 +1006,36 @@ export const api = {
     }),
   removeNotionConnection: () =>
     request<void>("/settings/integrations/notion", { method: "DELETE" }),
+  getQuercusConnection: () => request<QuercusConnectionStatus>("/settings/integrations/quercus"),
+  putQuercusConnection: (token: string) =>
+    request<QuercusConnectionStatus>("/settings/integrations/quercus", {
+      method: "PUT",
+      body: JSON.stringify({ token }),
+    }),
+  removeQuercusConnection: () =>
+    request<QuercusConnectionStatus>("/settings/integrations/quercus", { method: "DELETE" }),
+  getQuercusCourses: () => request<QuercusCourse[]>("/settings/integrations/quercus/courses"),
+  putQuercusCourses: (courseIds: string[]) =>
+    request<QuercusCourse[]>("/settings/integrations/quercus/courses", {
+      method: "PUT",
+      body: JSON.stringify({ course_ids: courseIds }),
+    }),
+  deleteQuercusCourse: (courseId: string) =>
+    request<void>(`/settings/integrations/quercus/courses/${encodeURIComponent(courseId)}`, {
+      method: "DELETE",
+    }),
+  getQuercusProcessing: () =>
+    request<QuercusProcessingStatus>("/settings/integrations/quercus/processing"),
+  putQuercusProcessing: (method: QuercusProcessingMethod, llamaCppDirectory: string | null) =>
+    request<QuercusProcessingStatus>("/settings/integrations/quercus/processing", {
+      method: "PUT",
+      body: JSON.stringify({ method, llama_cpp_directory: llamaCppDirectory }),
+    }),
+  reprocessFailedQuercusFiles: () =>
+    request<QuercusProcessingReprocessResult>(
+      "/settings/integrations/quercus/processing/reprocess-failed",
+      { method: "POST" },
+    ),
   getGoogleCalendarConnection: () =>
     request<GoogleCalendarConnectionStatus>("/settings/integrations/google-calendar"),
   getGoogleOAuthClient: () =>
@@ -1038,14 +1145,6 @@ export const api = {
     request<SkillSchedule>(`/schedules/${id}`, {
       method: "PUT",
       body: JSON.stringify(payload),
-    }),
-  pauseSchedule: (id: number) =>
-    request<SkillSchedule>(`/schedules/${id}/pause`, {
-      method: "POST",
-    }),
-  resumeSchedule: (id: number) =>
-    request<SkillSchedule>(`/schedules/${id}/resume`, {
-      method: "POST",
     }),
   runScheduleNow: (id: number) =>
     request<SkillRun>(`/schedules/${id}/run-now`, {

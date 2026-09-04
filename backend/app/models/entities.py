@@ -172,6 +172,9 @@ class SkillRun(Base):
     invocation_source: Mapped[str] = mapped_column(String(32), default="internal", nullable=False, index=True)
     caller_skill_id: Mapped[int | None] = mapped_column(ForeignKey("skills.id"), nullable=True, index=True)
     caller_version_id: Mapped[int | None] = mapped_column(ForeignKey("skill_versions.id"), nullable=True, index=True)
+    parent_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("skill_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     source_schedule_id: Mapped[int | None] = mapped_column(ForeignKey("skill_schedules.id"), nullable=True, index=True)
     schedule_occurrence_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     scheduled_for_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -186,6 +189,9 @@ class SkillRun(Base):
     version: Mapped["SkillVersion | None"] = relationship(foreign_keys=[version_id])
     caller_skill: Mapped["Skill | None"] = relationship(foreign_keys=[caller_skill_id])
     caller_version: Mapped["SkillVersion | None"] = relationship(foreign_keys=[caller_version_id])
+    parent_run: Mapped["SkillRun | None"] = relationship(
+        remote_side=[id], foreign_keys=[parent_run_id]
+    )
 
 
 class InvocationApproval(Base):
@@ -327,6 +333,96 @@ class IntegrationConnection(Base):
         nullable=False,
     )
     last_validated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class QuercusCourse(Base):
+    __tablename__ = "quercus_courses"
+
+    course_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(512), nullable=False)
+    course_code: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    term_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    enrollment_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    selected: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    local_path: Mapped[str] = mapped_column(String(768), nullable=False, unique=True)
+    sync_generation: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_sync_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sync_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sync_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    skipped_file_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_processing_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_processing_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_processing_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_processing_error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    processed_file_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failed_processing_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    resources: Mapped[list["QuercusSyncResource"]] = relationship(
+        back_populates="course", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+
+class QuercusCourseExclusion(Base):
+    __tablename__ = "quercus_course_exclusions"
+
+    account_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    course_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class QuercusSyncResource(Base):
+    __tablename__ = "quercus_sync_resources"
+    __table_args__ = (
+        UniqueConstraint("course_id", "resource_type", "resource_id", name="uq_quercus_resource"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    course_id: Mapped[str] = mapped_column(
+        ForeignKey("quercus_courses.course_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    resource_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    resource_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    parent_resource_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    remote_updated_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    remote_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    content_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    relative_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    download_state: Mapped[str] = mapped_column(String(32), default="written", nullable=False)
+    processed_relative_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    processed_source_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    processed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    processing_state: Mapped[str] = mapped_column(
+        String(32), default="not_processed", nullable=False
+    )
+    processing_error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    course: Mapped["QuercusCourse"] = relationship(back_populates="resources")
+
+
+class QuercusProcessingSetting(Base):
+    __tablename__ = "quercus_processing_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    method: Mapped[str] = mapped_column(String(64), default="none", nullable=False)
+    llama_cpp_directory: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
 
 
 class GoogleOAuthClientConfig(Base):
@@ -523,6 +619,7 @@ class SkillSchedule(Base):
     skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="paused", nullable=False, index=True)
+    availability_migrated: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     schedule_type: Mapped[str] = mapped_column(String(32), nullable=False)
     schedule_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     input_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)

@@ -152,7 +152,10 @@ _BUILD_BLUEPRINT_SCHEMA = _object_schema(
         },
         "requires_invocation_approval": {
             "type": "boolean",
-            "description": "Whether every function invocation requires backend-managed user approval.",
+            "description": (
+                "True only when the user explicitly requires approval before every run "
+                "or the function is high risk; otherwise false."
+            ),
         },
         "input_schema": _described(
             _CALLABLE_JSON_SCHEMA,
@@ -205,7 +208,9 @@ _REPAIR_BLUEPRINT_SCHEMA = _object_schema(
         },
         "requires_invocation_approval": {
             "type": "boolean",
-            "description": "Current per-invocation approval requirement.",
+            "description": (
+                "True only when explicitly required by the user or justified by high risk."
+            ),
         },
         "input_schema": _described(_CALLABLE_JSON_SCHEMA, "Current callable input contract."),
         "output_schema": _described(_CALLABLE_JSON_SCHEMA, "Current callable output contract."),
@@ -252,7 +257,9 @@ _UPDATE_BLUEPRINT_SCHEMA = _object_schema(
         },
         "requires_invocation_approval": {
             "type": "boolean",
-            "description": "Updated per-invocation approval requirement.",
+            "description": (
+                "True only when explicitly required by the user or justified by high risk."
+            ),
         },
         "suggestion": {
             "type": "string",

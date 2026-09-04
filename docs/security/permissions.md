@@ -22,13 +22,13 @@ Immediately after approval, the backend creates a clean proposed-skill workspace
 
 Runtime approval is based on the actual generated `manifest.json`. Installation remains a separate decision, and neither an installed function run nor an installed web-application session may start until the corresponding runtime declaration is approved.
 
-Declared `function_requirements` are shown during build-time and runtime review but are not permissions inherited from the target. Low-risk targets need no additional caller approval. Medium- and high-risk targets create a separate `function_access` approval tied to the caller and target. That approval is reusable only while the target risk, permissions, dependencies, and JSON callable schemas keep the same backend fingerprint. It never overrides a disabled target, missing runtime approval, unsupported permission, or blocked platform policy.
+Declared `function_requirements` form a backend-validated directed graph. Runtime review uses the transitive union of child-function permissions and an effective risk no lower than any child function or integration operation; integration functions contribute no ordinary permissions. Low-risk targets need no additional caller approval. Medium- and high-risk targets create a separate `function_access` approval tied to the caller and target. That approval is reusable only while the target risk, permissions, dependencies, JSON callable schemas, and descendant graph keep the same backend fingerprint. Inherited review does not grant a parent process direct access to a child's sandbox capabilities: each child still runs under its own approved manifest. Approval never overrides a disabled target, missing runtime approval, unsupported permission, or blocked platform policy.
 
 Provider availability and skill authorization remain separate facts. Every actual-manifest `integration_requirements` entry creates or reuses an auditable `integration_access` record, but the user reviews it together with the base manifest permissions in one complete runtime approval. One decision applies to every pending component shown. Each integration fingerprint includes provider, operations, normalized scope, and registry contract versions. Expansion, GitHub or Google account change, an Atlas native-contract or directory change, or a Notion bot identity change requires reapproval. Notion Todo and Reports source changes affect operation availability without invalidating authorization. Removing an Atlas auto-unlock passphrase does not invalidate authorization. See [GitHub integration](../integrations/github.md), [Atlas integration](../integrations/atlas.md), [Notion integration](../integrations/notion.md), and [Google Calendar integration](../integrations/google_calendar.md).
 
 ### Schedule
 
-A service schedule can be resumed only after the current runtime and integration permission contract is approved. There is no separate schedule approval request.
+A service can be enabled only after the current runtime, transitive function, and integration permission contract is approved. There is no separate schedule approval request.
 
 ## Risk Levels
 
@@ -107,6 +107,8 @@ Ordinary network approval never authorizes direct provider traffic. GitHub, Atla
 ## Permission Expansion
 
 Runtime permission review compares actual manifest permissions/dependencies against the approved build-time plan. Meaningful expansion requires explicit runtime review. Empty expansion should not be displayed as a warning. The backend creates this review only for a finalized proposed or installed skill, fingerprints the validated manifest permission/dependency contract, and verifies that fingerprint again before installation or execution. If that contract changes, the old runtime request is superseded and a new decision is required.
+
+Approvals stored with the immediately previous permission/dependency-only fingerprint are migrated to the current fingerprint only when the approved permissions and dependencies still match, the skill has no function requirements, and the approved risk is not lower than the current effective risk. Any actual expansion still requires a new review.
 
 Runtime review also resolves every declared function requirement against the current dynamic registry. Missing, disabled, schema-less legacy, permission-blocked, or otherwise unavailable targets are reported explicitly. Discovery alone never grants invocation authority.
 
