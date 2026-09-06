@@ -87,10 +87,11 @@ export function SkillTable({ skills }: { skills: Skill[] }) {
                   <span className="table-subtitle">{skill.description}</span>
                 </td>
                 <td>
-                  <span className="table-status-stack">
+                  {skill.is_running ? (
+                    <RunningStatus />
+                  ) : (
                     <span className={`badge status-${skill.status}`}>{skill.status}</span>
-                    {skill.is_running && <RunningStatus />}
-                  </span>
+                  )}
                 </td>
                 <td>{skill.runtime}</td>
                 <td>

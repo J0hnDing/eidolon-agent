@@ -38,7 +38,8 @@ describe("SkillTable", () => {
     expect(screen.getAllByLabelText("Running")).toHaveLength(1);
     expect(runningDot.getAttribute("title")).toBe("Running");
     expect(runningDot.closest("td")?.cellIndex).toBe(1);
-    expect(runningDot.closest("td")?.textContent).toContain("running");
+    expect(runningDot.closest("td")?.textContent).toBe("running");
     expect(runningDot.closest("tr")?.firstElementChild?.querySelector(".running-state-dot")).toBeNull();
+    expect(screen.getAllByRole("cell", { name: "installed" })).toHaveLength(1);
   });
 });

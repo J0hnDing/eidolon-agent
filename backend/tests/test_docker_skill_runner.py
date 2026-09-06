@@ -11,7 +11,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db import Base
 from app.models import Skill
 from app.services.docker_image_manager import DockerImageBuildError, DockerImageStatus
-from app.services.skill_runner import DockerSkillRunner, RunnerConfig, get_runner_status, is_docker_available
+from app.services.skill_runner import (
+    DockerSkillRunner,
+    FunctionRunContext,
+    RunnerConfig,
+    get_runner_status,
+    is_docker_available,
+)
 
 
 @pytest.fixture
@@ -119,6 +125,7 @@ def test_private_function_capability_command_uses_internal_network_and_relay_url
     )
 
     assert command[command.index("--network") + 1] == "private-function-network"
+    assert "host.docker.internal:127.0.0.1" in command
     assert f"PERSONAL_AGENT_SCHEDULE_IDEMPOTENCY_KEY={'c' * 64}" in command
     assert "api.github.com:127.0.0.1" in command
     assert "github.com:127.0.0.1" in command
@@ -215,15 +222,71 @@ def test_docker_runner_allows_explicit_network_permissions_with_bridge_network(t
     skill = create_skill_record(db_session, skill_dir)
     commands: list[list[str]] = []
 
-    run = make_runner(db_session, tmp_path, lambda command, **_: commands.append(command) or completed()).run(
-        skill.id, skill_dir, {}
+    def fake_runner(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if command[-2:] == ["python", "/skill/skill.py"]:
+            return completed(stdout='{"ok": true}')
+        return completed()
+
+    run = make_runner(db_session, tmp_path, fake_runner).run(
+        skill.id,
+        skill_dir,
+        {},
+        FunctionRunContext(capability_token="network-capability"),
     )
 
-    assert run.status == "failed"
-    assert len(commands) == 2
+    assert run.status == "succeeded"
     assert commands[0][commands[0].index("--network") + 1] == "bridge"
-    assert commands[1][commands[1].index("--network") + 1] == "bridge"
-    assert "api.github.com:127.0.0.1" in commands[1]
+    assert "PERSONAL_AGENT_BACKEND_URL=http://127.0.0.1:8000" in commands[0]
+
+    create_network = next(command for command in commands if command[:3] == ["docker", "network", "create"])
+    assert "--internal" not in create_network
+    relay_network = create_network[-1]
+    entrypoint_command = next(command for command in commands if command[-2:] == ["python", "/skill/skill.py"])
+    assert entrypoint_command[entrypoint_command.index("--network") + 1] == relay_network
+    assert "PERSONAL_AGENT_BACKEND_URL=http://host.docker.internal:8000" not in entrypoint_command
+    assert any(
+        value.startswith("PERSONAL_AGENT_BACKEND_URL=http://personal-agent-function-relay-")
+        for value in entrypoint_command
+    )
+    assert "PERSONAL_AGENT_FUNCTION_CAPABILITY=network-capability" in entrypoint_command
+    assert "host.docker.internal:127.0.0.1" in entrypoint_command
+    assert "api.github.com:127.0.0.1" in entrypoint_command
+
+
+def test_no_network_skill_with_capability_uses_internal_relay_network(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill_dir = tmp_path / "no_network_capability_skill"
+    write_skill(skill_dir)
+    skill = create_skill_record(db_session, skill_dir)
+    commands: list[list[str]] = []
+
+    def fake_runner(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if command[-2:] == ["python", "/skill/skill.py"]:
+            return completed(stdout='{"ok": true}')
+        return completed()
+
+    run = make_runner(db_session, tmp_path, fake_runner).run(
+        skill.id,
+        skill_dir,
+        {},
+        FunctionRunContext(capability_token="private-capability"),
+    )
+
+    assert run.status == "succeeded"
+    create_network = next(command for command in commands if command[:3] == ["docker", "network", "create"])
+    assert "--internal" in create_network
+    relay_network = create_network[-1]
+    entrypoint_command = next(command for command in commands if command[-2:] == ["python", "/skill/skill.py"])
+    assert entrypoint_command[entrypoint_command.index("--network") + 1] == relay_network
+    assert any(
+        value.startswith("PERSONAL_AGENT_BACKEND_URL=http://personal-agent-function-relay-")
+        for value in entrypoint_command
+    )
+    assert "PERSONAL_AGENT_FUNCTION_CAPABILITY=private-capability" in entrypoint_command
 
 
 def test_docker_runner_blocks_filesystem_read(tmp_path: Path, db_session: Session) -> None:

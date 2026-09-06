@@ -61,7 +61,7 @@ describe("FunctionTable", () => {
     const runningDot = screen.getByLabelText("Running");
     expect(runningDot.getAttribute("title")).toBe("Running");
     expect(runningDot.closest("td")?.cellIndex).toBe(2);
-    expect(runningDot.closest("td")?.textContent).toContain("running");
+    expect(runningDot.closest(".running-state-status")?.textContent).toBe("running");
     expect(runningDot.closest("tr")?.firstElementChild?.querySelector(".running-state-dot")).toBeNull();
     expect(screen.getByText("Skill is disabled")).toBeTruthy();
     expect(screen.getByText("GitHub connection is not configured")).toBeTruthy();

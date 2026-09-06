@@ -162,7 +162,7 @@ describe("SchedulesPage", () => {
     const runningDot = screen.getByLabelText("Running");
     expect(runningDot.classList.contains("running-state-dot")).toBe(true);
     expect(runningDot.closest("td")?.cellIndex).toBe(2);
-    expect(runningDot.closest("td")?.textContent).toContain("running");
+    expect(runningDot.closest("td")?.textContent).toBe("running");
     expect(runningDot.closest("tr")?.firstElementChild?.querySelector(".running-state-dot")).toBeNull();
     expect(statusDot.getAttribute("title")).toBe("failed");
     expect(statusDot.textContent).toBe("");
@@ -170,8 +170,7 @@ describe("SchedulesPage", () => {
     const scheduleTable = statusDot.closest("table");
     expect(scheduleTable).toBeTruthy();
     expect(scheduleTable?.textContent).toContain("Weekly on Monday at 08:00");
-    expect(scheduleTable?.querySelector("tbody tr td:nth-child(3)")?.textContent).toContain("active");
-    expect(scheduleTable?.querySelector("tbody tr td:nth-child(3)")?.textContent).toContain("running");
+    expect(scheduleTable?.querySelector("tbody tr td:nth-child(3)")?.textContent).toBe("running");
     expect(screen.queryByText("enabled")).toBeNull();
     expect(screen.getByRole("button", { name: "Disable" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Run Now" })).not.toHaveProperty("disabled", true);

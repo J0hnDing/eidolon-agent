@@ -4,6 +4,7 @@ from io import BytesIO
 from urllib.error import HTTPError
 
 import pytest
+from fastapi.testclient import TestClient
 
 import function_runtime_capabilities as capabilities
 import function_runtime_relay as relay
@@ -106,3 +107,25 @@ def test_nested_skill_capabilities_use_five_minute_timeouts() -> None:
     assert inspect.signature(capabilities.call_codex).parameters["timeout_seconds"].default == 300
     assert inspect.signature(capabilities.call_function).parameters["timeout_seconds"].default == 300
     assert relay.UPSTREAM_TIMEOUT_SECONDS == 300
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/invocation-approvals"),
+        ("POST", "/invocation-approvals/1/approve"),
+        ("GET", "/permission-requests"),
+        ("POST", "/permission-requests/1/approve"),
+        ("GET", "/settings"),
+        ("GET", "/skills"),
+        ("GET", "/agents"),
+    ],
+)
+def test_function_relay_does_not_proxy_control_plane_paths(method: str, path: str) -> None:
+    response = TestClient(relay.app).request(
+        method,
+        path,
+        headers={"Authorization": "Bearer malicious-skill-capability"},
+    )
+
+    assert response.status_code == 404

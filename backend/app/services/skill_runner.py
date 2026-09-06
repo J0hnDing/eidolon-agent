@@ -654,6 +654,8 @@ class DockerSkillRunner:
             "--network",
             network_mode,
             "--add-host",
+            "host.docker.internal:127.0.0.1",
+            "--add-host",
             "api.github.com:127.0.0.1",
             "--add-host",
             "github.com:127.0.0.1",
@@ -684,13 +686,7 @@ class DockerSkillRunner:
             "PYTHONPATH=/skill/.deps:/runtime",
             "-e",
             "PERSONAL_AGENT_BACKEND_URL="
-            + (
-                backend_url_override
-                or os.getenv(
-                    "PERSONAL_AGENT_DOCKER_BACKEND_URL",
-                    os.getenv("PERSONAL_AGENT_BACKEND_URL", DEFAULT_DOCKER_BACKEND_URL),
-                )
-            ),
+            + (backend_url_override or DEFAULT_LOCAL_BACKEND_URL),
             *(["-e", f"PERSONAL_AGENT_SKILL_ID={skill_id}"] if skill_id is not None else []),
             *(
                 ["-e", f"PERSONAL_AGENT_FUNCTION_CAPABILITY={capability_token}"]
@@ -839,8 +835,11 @@ class DockerSkillRunner:
     ) -> None:
         relay: tuple[str, str] | None = None
         try:
-            if capability_token is not None and not manifest.permissions.network:
-                relay = self._start_function_capability_relay(run.id)
+            if capability_token is not None:
+                relay = self._start_function_capability_relay(
+                    run.id,
+                    internet_access=bool(manifest.permissions.network),
+                )
             result = self.docker_runner(
                 self.build_entrypoint_command(
                     skill_dir,
@@ -910,12 +909,21 @@ class DockerSkillRunner:
             error_message=error_message,
         )
 
-    def _start_function_capability_relay(self, run_id: int) -> tuple[str, str]:
+    def _start_function_capability_relay(
+        self,
+        run_id: int,
+        *,
+        internet_access: bool = False,
+    ) -> tuple[str, str]:
         suffix = uuid4().hex[:10]
         network_name = f"personal-agent-function-{run_id}-{suffix}"
         relay_name = f"personal-agent-function-relay-{run_id}-{suffix}"
+        create_network_command = ["docker", "network", "create"]
+        if not internet_access:
+            create_network_command.append("--internal")
+        create_network_command.append(network_name)
         create_network = self.docker_runner(
-            ["docker", "network", "create", "--internal", network_name],
+            create_network_command,
             capture_output=True,
             text=True,
             timeout=10,

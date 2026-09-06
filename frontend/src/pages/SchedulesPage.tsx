@@ -130,12 +130,13 @@ export default function SchedulesPage() {
                   </td>
                   <td>{humanSchedule(schedule)}</td>
                   <td>
-                    <span className="table-status-stack">
+                    {schedule.is_running ? (
+                      <RunningStatus />
+                    ) : (
                       <span className={`badge status-${isEnabled(schedule) ? "active" : "paused"}`}>
                         {isEnabled(schedule) ? "active" : "paused"}
                       </span>
-                      {schedule.is_running && <RunningStatus />}
-                    </span>
+                    )}
                   </td>
                   <td>{formatTimestamp(schedule.next_run_at, "not scheduled")}</td>
                   <td>

@@ -60,9 +60,11 @@ describe("ChatWorkspace", () => {
     const sidebar = screen.getByRole("complementary", { name: "Chats" });
     expect(sidebar.querySelector(".chat-thread-list")?.nextElementSibling?.classList.contains("chat-create-actions")).toBe(true);
     expect(screen.getByRole("button", { name: "New Chat" })).toBeTruthy();
-    expect(screen.queryByRole("dialog", { name: "New Chat" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Create conversation" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
-    expect(screen.getByRole("dialog", { name: "New Chat" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Create conversation" })).toBeTruthy();
+    expect(screen.queryByText("Choose a conversation mode.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Close new chat menu" })).toBeNull();
     expect(screen.getByRole("button", { name: "Create Project" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Create Act" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Create Project" }).classList.contains("project")).toBe(true);

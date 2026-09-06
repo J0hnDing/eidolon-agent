@@ -1,4 +1,4 @@
-"""Trusted allowlisted backend relay for no-internet bounded function containers."""
+"""Trusted allowlisted backend relay for bounded function and service containers."""
 
 import asyncio
 import os

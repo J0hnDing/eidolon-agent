@@ -214,17 +214,8 @@ function ChatSidebar({
               ref={createPopoverRef}
               role="dialog"
               aria-modal="true"
-              aria-labelledby="chat-create-popover-title"
+              aria-label="Create conversation"
             >
-              <header className="chat-create-popover-header">
-                <div>
-                  <h2 id="chat-create-popover-title">New Chat</h2>
-                  <p className="muted">Choose a conversation mode.</p>
-                </div>
-                <button type="button" className="square-icon-button secondary" onClick={closeCreatePopover} aria-label="Close new chat menu">
-                  ×
-                </button>
-              </header>
               <div className="chat-create-options">
                 {conversationModeOptions.map((option, index) => (
                   <button
@@ -241,7 +232,6 @@ function ChatSidebar({
                     <span className="conversation-mode-symbol" aria-hidden="true">{modeSymbol(option.mode)}</span>
                     <span>
                       <strong>Create {option.label}</strong>
-                      <small>{option.description}</small>
                     </span>
                   </button>
                 ))}

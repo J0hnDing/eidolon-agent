@@ -166,10 +166,11 @@ export function FunctionTable({ functions }: { functions: FunctionCatalogEntry[]
                 </td>
                 <td>{functionSourceLabel(entry)}</td>
                 <td>
-                  <span className="table-status-stack">
+                  {entry.is_running ? (
+                    <RunningStatus />
+                  ) : (
                     <span className={`badge status-${entry.availability}`}>{entry.availability}</span>
-                    {entry.is_running && <RunningStatus />}
-                  </span>
+                  )}
                   {entry.availability_reasons.map((reason) => (
                     <span className="table-subtitle" key={reason}>{reason}</span>
                   ))}

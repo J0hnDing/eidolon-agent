@@ -616,11 +616,6 @@ html[data-theme="light"] .nav-link.active {
   gap: 8px;
 }
 
-.table-status-stack {
-  display: grid;
-  gap: 4px;
-}
-
 .running-state-status {
   display: inline-flex;
   align-items: center;
@@ -1716,8 +1711,6 @@ tbody tr:last-child td {
   right: 0;
   bottom: calc(100% + 8px);
   left: 0;
-  display: grid;
-  grid-template-rows: auto;
   width: 100%;
   max-height: min(430px, calc(100dvh - 48px));
   overflow-y: auto;
@@ -1725,45 +1718,14 @@ tbody tr:last-child td {
   border-radius: 5px;
   background: var(--panel);
   box-shadow: var(--shadow-modal);
-  padding: 14px;
+  padding: 8px;
   pointer-events: auto;
-}
-
-.chat-create-popover-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 12px;
-}
-
-.chat-create-popover-header h2,
-.chat-create-popover-header p {
-  margin: 0;
-}
-
-.chat-create-popover-header p {
-  margin-top: 4px;
-  font-size: 11px;
-}
-
-.chat-create-popover .square-icon-button {
-  border-color: var(--line-strong);
-  background: transparent;
-  color: var(--text);
-}
-
-.chat-create-popover .square-icon-button:hover:not(:disabled) {
-  border-color: var(--interaction);
-  background: var(--surface-hover);
 }
 
 .chat-create-options {
   display: grid;
   align-content: start;
-  gap: 8px;
-  padding-top: 18px;
+  gap: 4px;
 }
 
 .chat-create-option {
@@ -1771,14 +1733,14 @@ tbody tr:last-child td {
   --liquid-text-color: var(--text);
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr);
-  align-items: start;
-  gap: 12px;
+  align-items: center;
+  gap: 10px;
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 4px;
   background: transparent;
   color: var(--text);
-  padding: 14px;
+  padding: 9px 12px;
   text-align: left;
 }
 
@@ -1816,10 +1778,22 @@ tbody tr:last-child td {
   border-left: 3px solid var(--running);
 }
 
-.chat-create-option small {
-  color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.45;
+.chat-create-option.observer .conversation-mode-symbol,
+.chat-create-option.observer strong {
+  color: var(--success);
+}
+
+.chat-create-option.observer {
+  border-left: 3px solid var(--success);
+}
+
+.chat-create-option.assistant .conversation-mode-symbol,
+.chat-create-option.assistant strong {
+  color: var(--agent-assistant);
+}
+
+.chat-create-option.assistant {
+  border-left: 3px solid var(--agent-assistant);
 }
 
 .conversation-mode-symbol {
