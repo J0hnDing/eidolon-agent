@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { ActSessionSummary, ConversationMode } from "../../api/client";
+import { ActSessionSummary, AgentId, ConversationMode } from "../../api/client";
 import {
   appendMessages as appendStoredMessages,
   CHAT_STORAGE_KEY,
@@ -113,28 +113,38 @@ export function useChatConversations() {
   }
 
   function importActSessions(sessions: ActSessionSummary[]) {
+    importAgentSessions("act", sessions);
+  }
+
+  function importAgentSessions(agentId: AgentId, sessions: ActSessionSummary[]) {
     const nextConversations = updateStoredConversations((current) => {
-      const knownSessionIds = new Set(
-        current
-          .map((conversation) => conversation.actSessionId)
-          .filter((sessionId): sessionId is number => typeof sessionId === "number"),
+      // Reconcile archived/pruned sessions as well as sessions created in Agents or Telegram.
+      const retained = current.filter((conversation) =>
+        conversation.mode !== agentId || conversation.actSessionId === undefined ||
+        sessions.some((session) => session.id === conversation.actSessionId),
       );
-      const imported = sessions
-        .filter((session) => !knownSessionIds.has(session.id))
-        .map((session) => createConversation("act", {
-          id: `act-${session.id}`,
+      const knownSessionIds = new Set(retained.filter((item) => item.mode === agentId)
+        .map((item) => item.actSessionId));
+      const imported = sessions.filter((session) => !knownSessionIds.has(session.id))
+        .map((session) => createConversation(agentId, {
+          id: `${agentId}-${session.id}`,
           title: session.title,
           actSessionId: session.id,
           createdAt: session.created_at,
           updatedAt: session.updated_at,
         }));
-      return [...imported, ...current].map((conversation) => {
-        if (conversation.mode !== "act" || conversation.actSessionId === undefined) return conversation;
+      return [...imported, ...retained].map((conversation) => {
+        if (conversation.mode !== agentId || conversation.actSessionId === undefined) return conversation;
         const session = sessions.find((item) => item.id === conversation.actSessionId);
         return session ? { ...conversation, title: session.title, updatedAt: session.updated_at } : conversation;
       });
     });
     setConversations(nextConversations);
+    setActiveConversationId((selectedId) => {
+      if (!nextConversations.length || nextConversations.some((item) => item.id === selectedId)) return selectedId;
+      saveActiveConversationId(nextConversations[0].id);
+      return nextConversations[0].id;
+    });
   }
 
   function updateMessageInConversation(
@@ -169,6 +179,7 @@ export function useChatConversations() {
     appendMessagesToConversation,
     createNewConversation,
     importActSessions,
+    importAgentSessions,
     selectConversation,
     deleteConversation,
     updateDraft,

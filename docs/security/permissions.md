@@ -113,3 +113,7 @@ Approvals stored with the immediately previous permission/dependency-only finger
 Runtime review also resolves every declared function requirement against the current dynamic registry. Missing, disabled, schema-less legacy, permission-blocked, or otherwise unavailable targets are reported explicitly. Discovery alone never grants invocation authority.
 
 New `codex.call_response=true` or `codex.internet_access=true` is a permission expansion unless it was present in the approved plan. Codex internet access also requires approved runtime network domains.
+
+## Persistent conversational agents
+
+Act, Observer, and Assistant use a separate backend-owned function policy and named Codex filesystem profile. Explicit function bans win over allows, and deferred approvals recheck agent policy. See [persistent agents](../runtime/agents.md) for authenticated MCP, risk/semantic rules, and protected workspace boundaries. Generated-skill permissions above remain independently enforced.

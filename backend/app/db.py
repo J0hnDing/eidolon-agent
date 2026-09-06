@@ -42,6 +42,26 @@ def ensure_local_schema() -> None:
     inspector = inspect(engine)
     table_names = set(inspector.get_table_names())
     with engine.begin() as connection:
+        if "agent_proposals" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("agent_proposals")}
+            if "telegram_outcome_fingerprint" not in columns:
+                connection.execute(text("ALTER TABLE agent_proposals ADD COLUMN telegram_outcome_fingerprint VARCHAR(128)"))
+        if "act_sessions" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("act_sessions")}
+            if "agent_id" not in columns:
+                connection.execute(text("ALTER TABLE act_sessions ADD COLUMN agent_id VARCHAR(32) NOT NULL DEFAULT 'act'"))
+            if "proposal_count" not in columns:
+                connection.execute(text("ALTER TABLE act_sessions ADD COLUMN proposal_count INTEGER NOT NULL DEFAULT 0"))
+                if "agent_proposals" in table_names:
+                    connection.execute(text(
+                        "UPDATE act_sessions SET proposal_count = (SELECT COUNT(*) FROM agent_proposals "
+                        "WHERE source_session_id = act_sessions.id AND replaces_proposal_id IS NULL)"
+                    ))
+        if "mcp_audit_records" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("mcp_audit_records")}
+            for column, definition in {"agent_id": "VARCHAR(32)", "agent_session_id": "INTEGER", "agent_turn_id": "INTEGER"}.items():
+                if column not in columns:
+                    connection.execute(text(f"ALTER TABLE mcp_audit_records ADD COLUMN {column} {definition}"))
         if "approval_requests" in table_names:
             columns = {column["name"] for column in inspector.get_columns("approval_requests")}
             if "schedule_id" not in columns:
@@ -216,6 +236,24 @@ def ensure_local_schema() -> None:
                     text(
                         "CREATE UNIQUE INDEX IF NOT EXISTS uq_skill_schedules_skill_id "
                         "ON skill_schedules (skill_id)"
+                    )
+                )
+        if "schedule_runtime_states" in table_names:
+            columns = {
+                column["name"]
+                for column in inspector.get_columns("schedule_runtime_states")
+            }
+            if "enabled" not in columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE schedule_runtime_states ADD COLUMN "
+                        "enabled BOOLEAN NOT NULL DEFAULT 1"
+                    )
+                )
+            if "configuration_json" not in columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE schedule_runtime_states ADD COLUMN configuration_json JSON"
                     )
                 )
         if "skill_versions" in table_names:

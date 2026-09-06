@@ -15,7 +15,7 @@ export type SkillRuntime = "function" | "web_app" | "service";
 export type SkillStatus = "building" | "proposed" | "installed" | "failed" | "deleted";
 export type FunctionCategory = "backend_core" | "user" | "integration";
 export type FunctionAvailability = "available" | "disabled" | "unavailable" | "error";
-export type ConversationMode = "project" | "act";
+export type ConversationMode = "project" | "act" | "observer" | "assistant";
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired" | "superseded";
 export type PermissionRequestScope = "build_time" | "runtime";
 export type ScheduleStatus = "active" | "paused";
@@ -344,6 +344,8 @@ export type ProjectBuildWorkflowOverride = "single_codex" | "task_dag";
 export interface CodexRoutingSettingsPayload {
   project_build_workflow_override: ProjectBuildWorkflowOverride | null;
   act: CodexInvocationChoice;
+  observer: CodexInvocationChoice;
+  assessment: CodexInvocationChoice;
   product_manager: {
     default: CodexInvocationChoice;
     blueprint_and_permissions: CodexInvocationChoice;
@@ -399,6 +401,72 @@ export interface ActSession {
 }
 
 export type ActSessionSummary = Omit<ActSession, "turns">;
+
+export type AgentId = "act" | "observer" | "assistant";
+export type AgentPolicyRiskLevel = "low" | "medium" | "high";
+
+export interface AgentPolicy {
+  max_risk: AgentPolicyRiskLevel;
+  read_only: boolean;
+  allowed_functions: string[];
+  banned_functions: string[];
+  model: string | null;
+  reasoning_effort: string | null;
+}
+
+export interface AgentFunctionPermission {
+  id: string;
+  title: string;
+  description: string;
+  risk_level: RiskLevel;
+  mcp_read_only: boolean;
+  allowed: boolean;
+  reason: string;
+}
+
+export interface AgentDefinition {
+  id: AgentId;
+  name: string;
+  description: string;
+  policy: AgentPolicy;
+  permissions: {
+    filesystem: string;
+    web_search: boolean;
+  };
+  functions: AgentFunctionPermission[];
+}
+
+export interface AgentTurn extends ActTurn {
+  agent_id: AgentId;
+}
+
+export interface AgentSession extends Omit<ActSession, "turns"> {
+  agent_id: AgentId;
+  turns: AgentTurn[];
+}
+
+export type AgentSessionSummary = Omit<AgentSession, "turns">;
+
+export interface AssistantProposal {
+  id: number;
+  title: string;
+  rationale: string;
+  instruction: string;
+  actions: string;
+  references: string[];
+  status: string;
+  execution_status: string | null;
+  act_session_id: number | null;
+  created_at: string;
+  source_session_id: number;
+}
+
+export interface AssistantAssessment {
+  enabled: boolean;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_status: string | null;
+}
 
 export interface PermissionPolicy {
   source: string;
@@ -886,6 +954,46 @@ export const api = {
   runActTurn: (sessionId: number, message: string) => request<ActTurn>(`/act/sessions/${sessionId}/turns`, { method: "POST", body: JSON.stringify({ message }) }),
   cancelActTurn: (sessionId: number, turnId: number) => request<ActTurn>(`/act/sessions/${sessionId}/turns/${turnId}/cancel`, { method: "POST" }),
   archiveActSession: (sessionId: number) => request<void>(`/act/sessions/${sessionId}`, { method: "DELETE" }),
+  listAgents: () => request<AgentDefinition[]>("/agents"),
+  getAgent: (agentId: AgentId) => request<AgentDefinition>(`/agents/${agentId}`),
+  updateAgentPolicy: (agentId: AgentId, policy: AgentPolicy) =>
+    request<AgentDefinition>(`/agents/${agentId}/policy`, {
+      method: "PUT",
+      body: JSON.stringify(policy),
+    }),
+  listAgentSessions: (agentId: AgentId) =>
+    request<AgentSessionSummary[]>(`/agents/${agentId}/sessions`),
+  createAgentSession: (agentId: AgentId) =>
+    request<AgentSession>(`/agents/${agentId}/sessions`, {
+      method: "POST",
+      body: JSON.stringify({ origin: "web" }),
+    }),
+  getAgentSession: (agentId: AgentId, sessionId: number) =>
+    request<AgentSession>(`/agents/${agentId}/sessions/${sessionId}`),
+  runAgentTurn: (agentId: AgentId, sessionId: number, message: string) =>
+    request<AgentTurn>(`/agents/${agentId}/sessions/${sessionId}/turns`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    }),
+  cancelAgentTurn: (agentId: AgentId, sessionId: number, turnId: number) =>
+    request<AgentTurn>(`/agents/${agentId}/sessions/${sessionId}/turns/${turnId}/cancel`, {
+      method: "POST",
+    }),
+  archiveAgentSession: (agentId: AgentId, sessionId: number) =>
+    request<void>(`/agents/${agentId}/sessions/${sessionId}`, { method: "DELETE" }),
+  listAssistantProposals: () => request<AssistantProposal[]>("/agents/assistant/proposals"),
+  approveAssistantProposal: (proposalId: number) =>
+    request<AssistantProposal>(`/agents/assistant/proposals/${proposalId}/approve`, { method: "POST" }),
+  denyAssistantProposal: (proposalId: number) =>
+    request<AssistantProposal>(`/agents/assistant/proposals/${proposalId}/deny`, { method: "POST" }),
+  getAssistantAssessment: () => request<AssistantAssessment>("/agents/assistant/assessment"),
+  updateAssistantAssessment: (enabled: boolean) =>
+    request<AssistantAssessment>("/agents/assistant/assessment", {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
+  runAssistantAssessment: () =>
+    request<AssistantAssessment>("/agents/assistant/assessment/run", { method: "POST" }),
   approveSkillGeneration: (id: number) =>
     request<SkillGenerationApprovalResponse>(`/skill-generation-requests/${id}/approve-generation`, {
       method: "POST",
@@ -1064,12 +1172,16 @@ export const api = {
   getTelegramConnection: () =>
     request<TelegramConnectionStatus>("/settings/integrations/telegram"),
   getTelegramAgentConnection: () => request<TelegramConnectionStatus>("/settings/integrations/telegram-agent"),
+  getTelegramObserverAgentConnection: () => request<TelegramConnectionStatus>("/settings/integrations/telegram-observer-agent"),
+  getTelegramAssistantAgentConnection: () => request<TelegramConnectionStatus>("/settings/integrations/telegram-assistant-agent"),
   startTelegramPairing: (token: string) =>
     request<TelegramPairingResponse>("/settings/integrations/telegram/pairing/start", {
       method: "POST",
       body: JSON.stringify({ token }),
     }),
   startTelegramAgentPairing: (token: string) => request<TelegramPairingResponse>("/settings/integrations/telegram-agent/pairing/start", { method: "POST", body: JSON.stringify({ token }) }),
+  startTelegramObserverAgentPairing: (token: string) => request<TelegramPairingResponse>("/settings/integrations/telegram-observer-agent/pairing/start", { method: "POST", body: JSON.stringify({ token }) }),
+  startTelegramAssistantAgentPairing: (token: string) => request<TelegramPairingResponse>("/settings/integrations/telegram-assistant-agent/pairing/start", { method: "POST", body: JSON.stringify({ token }) }),
   refreshTelegramPairing: () =>
     request<TelegramConnectionStatus>("/settings/integrations/telegram/pairing/refresh", {
       method: "POST",
@@ -1078,9 +1190,19 @@ export const api = {
     request<TelegramConnectionStatus>("/settings/integrations/telegram-agent/pairing/refresh", {
       method: "POST",
     }),
+  refreshTelegramObserverAgentPairing: () =>
+    request<TelegramConnectionStatus>("/settings/integrations/telegram-observer-agent/pairing/refresh", {
+      method: "POST",
+    }),
+  refreshTelegramAssistantAgentPairing: () =>
+    request<TelegramConnectionStatus>("/settings/integrations/telegram-assistant-agent/pairing/refresh", {
+      method: "POST",
+    }),
   removeTelegramConnection: () =>
     request<void>("/settings/integrations/telegram", { method: "DELETE" }),
   removeTelegramAgentConnection: () => request<void>("/settings/integrations/telegram-agent", { method: "DELETE" }),
+  removeTelegramObserverAgentConnection: () => request<void>("/settings/integrations/telegram-observer-agent", { method: "DELETE" }),
+  removeTelegramAssistantAgentConnection: () => request<void>("/settings/integrations/telegram-assistant-agent", { method: "DELETE" }),
   getAtlasStatus: () => request<AtlasIntegrationStatus>("/settings/integrations/atlas"),
   updateAtlasDirectory: (directory: string) =>
     request<AtlasIntegrationStatus>("/settings/integrations/atlas/directory", {
@@ -1145,6 +1267,20 @@ export const api = {
     request<SkillSchedule>(`/schedules/${id}`, {
       method: "PUT",
       body: JSON.stringify(payload),
+    }),
+  updatePlatformSchedule: (serviceId: string, payload: { name: string; schedule: SchedulePayload }) =>
+    request<SkillSchedule>(`/schedules/platform/${encodeURIComponent(serviceId)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  updatePlatformScheduleAvailability: (serviceId: string, enabled: boolean) =>
+    request<SkillSchedule>(`/schedules/platform/${encodeURIComponent(serviceId)}/availability`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
+  runPlatformScheduleNow: (serviceId: string) =>
+    request<Record<string, unknown>>(`/schedules/platform/${encodeURIComponent(serviceId)}/run-now`, {
+      method: "POST",
     }),
   runScheduleNow: (id: number) =>
     request<SkillRun>(`/schedules/${id}/run-now`, {

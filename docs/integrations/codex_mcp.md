@@ -52,3 +52,7 @@ tool_timeout_sec = 180
 No `enabled_tools` allowlist is written, so restarted sessions discover newly available catalog functions. Unrelated TOML, comments, plugins, and MCP servers are preserved. Eidolon stores a fingerprint of the exact table it wrote; install, repair, and remove refuse a conflicting table rather than taking ownership of it. Installation uses atomic replacement and restores the original file if verification or database persistence fails. Removal disables MCP calls in the database before touching the file, immediately revoking already-running MCP processes.
 
 The configuration contains no provider credential, secret reference, header, or capability token. Codex uses `default_tools_approval_mode = "writes"`, so tools not marked read-only require confirmation. Restart Codex Desktop, CLI, or IDE sessions after installation, repair, or catalog changes.
+
+## Managed conversational agents
+
+Act, Observer, and Assistant use separate session-authenticated STDIO registrations, independent of this public host registration. Tool discovery and invocation both apply agent policy; public calls cannot access Assistant plan submission. See [persistent agents](../runtime/agents.md).

@@ -1,23 +1,28 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
-from app.models import ActSession, ActTurn
+from app.models import ActSession, ActTelegramBinding, ActTurn, AgentPolicy
 from app.services.act_app_server_service import (
-    ActAppServerError,
     ActAppServerService,
-    act_app_server_service,
+    agent_app_servers,
     is_missing_rollout_error,
 )
-from app.services.codex_routing_service import CodexRoutingService
+from app.services.agent_policy_service import AgentPolicyService
 
 ACTIVE_TURN_STATUSES = ("queued", "running")
 
 
 class ActSessionError(RuntimeError):
+    pass
+
+
+class AssistantSessionCapacityError(ActSessionError):
     pass
 
 
@@ -27,23 +32,26 @@ class ActSessionService:
         db: Session,
         *,
         app_server: ActAppServerService | None = None,
+        agent_id: str = "act",
     ) -> None:
         self.db = db
-        self.app_server = app_server or act_app_server_service
+        AgentPolicyService.require_agent(agent_id)
+        self.agent_id = agent_id
+        self.app_server = app_server or agent_app_servers[agent_id]
 
     def list_sessions(self) -> list[ActSession]:
         return list(
             self.db.scalars(
                 select(ActSession)
-                .where(ActSession.status == "active")
+                .where(ActSession.status == "active", ActSession.agent_id == self.agent_id)
                 .order_by(ActSession.updated_at.desc(), ActSession.id.desc())
             )
         )
 
     def read_session(self, session_id: int) -> ActSession:
         session = self.db.get(ActSession, session_id)
-        if session is None:
-            raise ActSessionError("Act session was not found")
+        if session is None or session.agent_id != self.agent_id:
+            raise ActSessionError("Agent session was not found")
         session.turns = list(
             self.db.scalars(
                 select(ActTurn).where(ActTurn.session_id == session.id).order_by(ActTurn.id)
@@ -51,22 +59,39 @@ class ActSessionService:
         )
         return session
 
-    def create_session(self, *, origin: str = "web") -> ActSession:
-        try:
-            routing = CodexRoutingService(self.db).resolve(role="act", action="act")
-            thread_id = self.app_server.start_thread(
-                self.db,
-                model=routing.effective_model,
-                reasoning_effort=routing.effective_reasoning_effort,
-            )
-        except Exception as exc:
-            message = str(exc) if isinstance(exc, ActAppServerError) else f"Could not start Act: {exc}"
-            raise ActSessionError(message) from None
-        session = ActSession(codex_thread_id=thread_id, origin=origin)
+    def create_session(self, *, origin: str = "web", commit: bool = True) -> ActSession:
+        if self.agent_id == "assistant":
+            self.prune_assistant_sessions(limit=4)
+        session = ActSession(codex_thread_id="pending:" + uuid4().hex, origin=origin,
+                             agent_id=self.agent_id, title=f"New {self.agent_id}")
         self.db.add(session)
-        self.db.commit()
-        self.db.refresh(session)
+        self.db.flush()
+        if commit:
+            self.db.commit()
+            self.db.refresh(session)
         return session
+
+    def prune_assistant_sessions(self, *, limit: int = 5) -> None:
+        # A SQLite write claim serializes retention + creation across API/MCP
+        # processes, not just Python threads. Preserve any existing policy.
+        statement = insert(AgentPolicy).values(id="assistant", policy_json=AgentPolicyService(self.db).policy("assistant").model_dump(), revision=1)
+        self.db.execute(statement.on_conflict_do_update(index_elements=[AgentPolicy.id], set_={"revision": AgentPolicy.revision}))
+        sessions = list(self.db.scalars(select(ActSession).where(ActSession.agent_id == "assistant").order_by(ActSession.created_at, ActSession.id)))
+        for old in sessions[:max(0, len(sessions) - limit)]:
+            if self.db.scalar(select(ActTurn.id).where(ActTurn.session_id == old.id, ActTurn.status.in_(ACTIVE_TURN_STATUSES))):
+                self.db.rollback()
+                raise AssistantSessionCapacityError("Assistant session capacity is full because the oldest session is busy")
+            if not old.codex_thread_id.startswith("pending:"):
+                try:
+                    self.app_server.sessions.archive_thread(old.codex_thread_id)
+                except Exception as exc:
+                    if not is_missing_rollout_error(exc):
+                        self.db.rollback()
+                        raise ActSessionError("Could not archive the oldest Assistant thread") from None
+            self.db.execute(update(ActTelegramBinding).where(ActTelegramBinding.active_session_id == old.id).values(active_session_id=None))
+            AgentPolicyService(self.db).revoke(old.id)
+            self.db.delete(old)
+        self.db.flush()
 
     def enqueue_turn(
         self,
@@ -75,10 +100,11 @@ class ActSessionService:
         *,
         delivery_connection_id: int | None = None,
         delivery_chat_id: str | None = None,
+        commit: bool = True,
     ) -> ActTurn:
         session = self.read_session(session_id)
         if session.status != "active":
-            raise ActSessionError("Act session is archived")
+            raise ActSessionError("Agent session is archived")
         active = self.db.scalar(
             select(ActTurn).where(
                 ActTurn.session_id == session.id,
@@ -86,25 +112,26 @@ class ActSessionService:
             )
         )
         if active is not None:
-            raise ActSessionError("An Act turn is already queued or running for this session")
+            raise ActSessionError("An agent turn is already queued or running for this session")
         turn = ActTurn(
             session_id=session.id,
             user_message=message,
             status="queued",
-            activity_json=[{"kind": "queued", "label": "Queued for Act"}],
+            activity_json=[{"kind": "queued", "label": f"Queued for {self.agent_id.title()}"}],
             delivery_connection_id=delivery_connection_id,
             delivery_chat_id=delivery_chat_id,
             delivery_status="pending" if delivery_connection_id is not None else None,
         )
-        if session.title == "New act":
+        if session.title == f"New {self.agent_id}":
             session.title = " ".join(message.split())[:160] or "New act"
         session.updated_at = datetime.now(UTC)
         self.db.add(turn)
-        self.db.commit()
-        self.db.refresh(turn)
-        from app.services.act_turn_dispatcher import act_turn_dispatcher
-
-        act_turn_dispatcher.notify()
+        self.db.flush()
+        if commit:
+            self.db.commit()
+            self.db.refresh(turn)
+            from app.services.act_turn_dispatcher import agent_dispatchers
+            agent_dispatchers[self.agent_id].notify()
         return turn
 
     def cancel_turn(self, session_id: int, turn_id: int) -> ActTurn:
@@ -141,10 +168,12 @@ class ActSessionService:
         ):
             raise ActSessionError("Cannot archive an Act session while a turn is queued or running")
         try:
-            self.app_server.sessions.archive_thread(session.codex_thread_id)
+            if not session.codex_thread_id.startswith("pending:"):
+                self.app_server.sessions.archive_thread(session.codex_thread_id)
         except Exception as exc:
             if not is_missing_rollout_error(exc):
                 raise ActSessionError(f"Could not archive the Codex thread: {exc}") from None
+        AgentPolicyService(self.db).revoke(session.id)
         session.status = "archived"
         session.updated_at = datetime.now(UTC)
         self.db.commit()

@@ -12,13 +12,16 @@ from app.services.telegram_provider import (
     TelegramLongPollWorker,
     TelegramProviderError,
     build_callback_data,
+    build_proposal_callback_data,
     create_pairing_code,
+    edit_agent_proposal_outcome,
     edit_approval_outcome,
     hash_callback_nonce,
     parse_callback_data,
     parse_callback_update,
     parse_pairing_update,
     parse_start_command,
+    send_agent_proposal_request,
     send_approval_request,
     send_notification,
     validate_callback_origin,
@@ -232,6 +235,57 @@ def test_callback_data_and_origin_validation_are_bounded() -> None:
         validate_callback_origin(callback, expected_chat_id=99, expected_user_id=7, expected_nonce_hash=digest)
     with pytest.raises(TelegramProviderError):
         build_callback_data(12, "approve", "x" * 64)
+
+
+def test_agent_proposal_delivery_has_namespaced_callbacks_and_complete_instruction() -> None:
+    api = FakeTelegramBotApi()
+
+    delivery = send_agent_proposal_request(
+        api,
+        42,
+        proposal_id=4,
+        title="Finish the report",
+        rationale="The report is the next actionable todo.",
+        instruction="Open the report workspace and complete the remaining analysis.",
+        actions="Inspect sources, update the draft, and run its checks.",
+        references=["todo: 12", "goal: publish report"],
+        nonce="fixed_nonce_123",
+    )
+
+    assert delivery.approve_callback_data.startswith("proposal:approve:4:")
+    callback = parse_callback_update(_callback_update(delivery.approve_callback_data))
+    assert callback is not None
+    assert callback.kind == "proposal"
+    assert callback.approval_id == 4
+    validate_callback_origin(
+        callback,
+        expected_chat_id=42,
+        expected_user_id=7,
+        expected_nonce_hash=delivery.nonce_hash,
+    )
+    rendered = html.unescape("\n".join(message["text"] for message in api.sent_messages))
+    assert "Finish the report" in rendered
+    assert "Open the report workspace and complete the remaining analysis." in rendered
+    assert "todo: 12" in rendered
+
+    edit_agent_proposal_outcome(
+        api,
+        42,
+        delivery.message_ids[0],
+        title="Finish the report",
+        rationale="The report is the next actionable todo.",
+        instruction="Open the report workspace and complete the remaining analysis.",
+        actions="Inspect sources, update the draft, and run its checks.",
+        references=["todo: 12"],
+        status="approved",
+        execution_status="queued",
+    )
+
+    assert api.edited_messages[-1]["text"].startswith("✅ <b>Approved · Act queued</b>")
+    assert api.edited_messages[-1]["reply_markup"] == {"inline_keyboard": []}
+
+    callback_data, _ = build_proposal_callback_data(4, "deny", "fixed_nonce_123")
+    assert len(callback_data.encode("utf-8")) <= 64
 
 
 def test_worker_rejects_webhook_and_wrong_origin_but_persists_updates() -> None:

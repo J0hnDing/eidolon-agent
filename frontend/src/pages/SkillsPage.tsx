@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Skill, api } from "../api/client";
-import RunningStateDot from "../components/RunningStateDot";
+import { RunningStatus } from "../components/RunningStateDot";
 import { formatDisplayName } from "../lib/displayName";
 import { usePolling } from "../lib/usePolling";
 
@@ -79,9 +79,6 @@ export function SkillTable({ skills }: { skills: Skill[] }) {
               >
                 <td>
                   <span className="entry-title-line">
-                    <span className="running-state-slot">
-                      {skill.is_running && <RunningStateDot />}
-                    </span>
                     <strong className="clickable-row-title">
                       {formatDisplayName(skill.name)}
                       <span className="row-reveal-arrow" aria-hidden="true">→</span>
@@ -90,7 +87,10 @@ export function SkillTable({ skills }: { skills: Skill[] }) {
                   <span className="table-subtitle">{skill.description}</span>
                 </td>
                 <td>
-                  <span className={`badge status-${skill.status}`}>{skill.status}</span>
+                  <span className="table-status-stack">
+                    <span className={`badge status-${skill.status}`}>{skill.status}</span>
+                    {skill.is_running && <RunningStatus />}
+                  </span>
                 </td>
                 <td>{skill.runtime}</td>
                 <td>

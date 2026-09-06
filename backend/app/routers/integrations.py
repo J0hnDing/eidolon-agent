@@ -41,7 +41,13 @@ from app.services.quercus_processing_service import (
     QuercusProcessingService,
 )
 from app.services.quercus_service import QuercusError, QuercusService
-from app.services.telegram_service import TELEGRAM_ACT_ROLE, TelegramService, TelegramServiceError
+from app.services.telegram_service import (
+    TELEGRAM_ACT_ROLE,
+    TELEGRAM_ASSISTANT_ROLE,
+    TELEGRAM_OBSERVER_ROLE,
+    TelegramService,
+    TelegramServiceError,
+)
 
 router = APIRouter(tags=["integrations"])
 
@@ -473,6 +479,92 @@ def refresh_telegram_agent_pairing(db: Session = Depends(get_db)) -> TelegramCon
 def remove_telegram_agent_connection(db: Session = Depends(get_db)) -> Response:
     try:
         TelegramService(db, role=TELEGRAM_ACT_ROLE).remove()
+    except TelegramServiceError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/settings/integrations/telegram-observer-agent", response_model=TelegramConnectionStatus)
+def telegram_observer_agent_connection_status(db: Session = Depends(get_db)) -> TelegramConnectionStatus:
+    return TelegramService(db, role=TELEGRAM_OBSERVER_ROLE).connection_status()
+
+
+@router.post(
+    "/settings/integrations/telegram-observer-agent/pairing/start",
+    response_model=TelegramPairingResponse,
+)
+def start_telegram_observer_agent_pairing(
+    payload: TelegramPairingStart,
+    db: Session = Depends(get_db),
+) -> TelegramPairingResponse:
+    try:
+        return TelegramService(db, role=TELEGRAM_OBSERVER_ROLE).start_pairing(
+            payload.token.get_secret_value()
+        )
+    except TelegramServiceError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
+
+
+@router.post(
+    "/settings/integrations/telegram-observer-agent/pairing/refresh",
+    response_model=TelegramConnectionStatus,
+)
+def refresh_telegram_observer_agent_pairing(
+    db: Session = Depends(get_db),
+) -> TelegramConnectionStatus:
+    return TelegramService(db, role=TELEGRAM_OBSERVER_ROLE).connection_status()
+
+
+@router.delete(
+    "/settings/integrations/telegram-observer-agent",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def remove_telegram_observer_agent_connection(db: Session = Depends(get_db)) -> Response:
+    try:
+        TelegramService(db, role=TELEGRAM_OBSERVER_ROLE).remove()
+    except TelegramServiceError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/settings/integrations/telegram-assistant-agent", response_model=TelegramConnectionStatus)
+def telegram_assistant_agent_connection_status(db: Session = Depends(get_db)) -> TelegramConnectionStatus:
+    return TelegramService(db, role=TELEGRAM_ASSISTANT_ROLE).connection_status()
+
+
+@router.post(
+    "/settings/integrations/telegram-assistant-agent/pairing/start",
+    response_model=TelegramPairingResponse,
+)
+def start_telegram_assistant_agent_pairing(
+    payload: TelegramPairingStart,
+    db: Session = Depends(get_db),
+) -> TelegramPairingResponse:
+    try:
+        return TelegramService(db, role=TELEGRAM_ASSISTANT_ROLE).start_pairing(
+            payload.token.get_secret_value()
+        )
+    except TelegramServiceError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
+
+
+@router.post(
+    "/settings/integrations/telegram-assistant-agent/pairing/refresh",
+    response_model=TelegramConnectionStatus,
+)
+def refresh_telegram_assistant_agent_pairing(
+    db: Session = Depends(get_db),
+) -> TelegramConnectionStatus:
+    return TelegramService(db, role=TELEGRAM_ASSISTANT_ROLE).connection_status()
+
+
+@router.delete(
+    "/settings/integrations/telegram-assistant-agent",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def remove_telegram_assistant_agent_connection(db: Session = Depends(get_db)) -> Response:
+    try:
+        TelegramService(db, role=TELEGRAM_ASSISTANT_ROLE).remove()
     except TelegramServiceError as exc:
         raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
     return Response(status_code=status.HTTP_204_NO_CONTENT)

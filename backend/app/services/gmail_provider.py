@@ -123,6 +123,8 @@ class UrllibGmailProviderAdapter:
             return self._conversation(operation, input_json, headers)
         if operation.operation_id == "email.read_new":
             return self._read_new(operation, headers)
+        if operation.operation_id == "email.read_and_mark_new":
+            return self._read_and_mark_new(operation, headers)
         if operation.operation_id == "email.send":
             return self._send(operation, input_json, headers)
         raise IntegrationProviderError("operation_undeclared", "Gmail operation is not implemented")
@@ -179,6 +181,18 @@ class UrllibGmailProviderAdapter:
         return result
 
     def _read_new(self, operation: IntegrationOperation, headers: dict[str, str]) -> dict[str, Any]:
+        return self._fetch_new(operation, headers, mark_read=False)
+
+    def _read_and_mark_new(self, operation: IntegrationOperation, headers: dict[str, str]) -> dict[str, Any]:
+        return self._fetch_new(operation, headers, mark_read=True)
+
+    def _fetch_new(
+        self,
+        operation: IntegrationOperation,
+        headers: dict[str, str],
+        *,
+        mark_read: bool,
+    ) -> dict[str, Any]:
         payload = self._request_json(
             f"{GMAIL_API_BASE}/messages?{urlencode({'q': READ_NEW_QUERY, 'maxResults': MAX_READ_NEW_COUNT})}",
             method="GET",
@@ -212,7 +226,7 @@ class UrllibGmailProviderAdapter:
             "has_more": bool(payload.get("nextPageToken")),
         }
         self._enforce_result_budget(result)
-        if message_ids:
+        if mark_read and message_ids:
             self._request_bytes(
                 f"{GMAIL_API_BASE}/messages/batchModify",
                 method="POST",
@@ -637,7 +651,7 @@ class FakeGmailProviderAdapter:
             if conversation_id not in self.conversations:
                 raise IntegrationProviderError("not_found", "Fake conversation was not found")
             return {"conversation_id": conversation_id, "messages": self.conversations[conversation_id][:100]}
-        if operation.operation_id == "email.read_new":
+        if operation.operation_id in {"email.read_new", "email.read_and_mark_new"}:
             messages = [
                 item
                 for conversation in self.conversations.values()
@@ -645,8 +659,9 @@ class FakeGmailProviderAdapter:
                 if item.get("unread", False)
             ][:MAX_READ_NEW_COUNT]
             returned = [dict(item) for item in messages]
-            for item in messages:
-                item["unread"] = False
+            if operation.operation_id == "email.read_and_mark_new":
+                for item in messages:
+                    item["unread"] = False
             return {"messages": returned, "count": len(returned), "has_more": False}
         if operation.operation_id == "email.send":
             index = sum(len(messages) for messages in self.conversations.values()) + 1

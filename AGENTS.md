@@ -72,6 +72,7 @@ Read the relevant files under `docs/` before making non-trivial changes. Start a
 - Agent workflows: [docs/agents/overview.md](docs/agents/overview.md), [docs/workflows/project_build_workflow.md](docs/workflows/project_build_workflow.md), [docs/workflows/update_workflow.md](docs/workflows/update_workflow.md)
 - Permissions and sandboxing: [docs/security/permissions.md](docs/security/permissions.md), [docs/security/sandbox_execution.md](docs/security/sandbox_execution.md)
 - Scheduling: [docs/runtime/scheduling.md](docs/runtime/scheduling.md)
+- Persistent conversational agents: [docs/runtime/agents.md](docs/runtime/agents.md)
 - Function extension blueprints: [docs/runtime/function_extension_guide.md](docs/runtime/function_extension_guide.md)
 - Codex CLI integration: [docs/integrations/codex_cli.md](docs/integrations/codex_cli.md)
 - Google Calendar integration: [docs/integrations/google_calendar.md](docs/integrations/google_calendar.md)

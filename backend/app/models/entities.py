@@ -252,6 +252,8 @@ class ActSession(Base):
     __tablename__ = "act_sessions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    agent_id: Mapped[str] = mapped_column(String(32), default="act", nullable=False, index=True)
+    proposal_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     codex_thread_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(160), nullable=False, default="New act")
     origin: Mapped[str] = mapped_column(String(32), nullable=False, default="web")
@@ -513,6 +515,9 @@ class McpAuditRecord(Base):
     __tablename__ = "mcp_audit_records"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    agent_id: Mapped[str | None] = mapped_column(String(32))
+    agent_session_id: Mapped[int | None] = mapped_column(Integer)
+    agent_turn_id: Mapped[int | None] = mapped_column(Integer)
     caller_type: Mapped[str] = mapped_column(String(32), default="codex_mcp", nullable=False, index=True)
     function_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     category: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
@@ -643,6 +648,8 @@ class ScheduleRuntimeState(Base):
 
     schedule_key: Mapped[str] = mapped_column(String(160), primary_key=True)
     definition_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    configuration_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     active_since_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     interval_anchor_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

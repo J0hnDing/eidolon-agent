@@ -13,13 +13,13 @@ afterEach(() => {
 });
 
 describe("SchedulesPage", () => {
-  it("shows the scheduler-owned cleanup as a read-only platform schedule", async () => {
+  it("shows controls for every backend-owned platform schedule", async () => {
     vi.spyOn(api, "listSchedules").mockResolvedValue([
       {
         id: 0,
         schedule_kind: "platform",
         service_id: "backend.notion.todo.cleanup_done",
-        read_only: true,
+        read_only: false,
         skill_enabled: null,
         is_running: true,
         skill_id: null,
@@ -45,7 +45,7 @@ describe("SchedulesPage", () => {
         id: -1,
         schedule_kind: "platform",
         service_id: "backend.quercus.knowledge.sync",
-        read_only: true,
+        read_only: false,
         skill_enabled: null,
         is_running: false,
         skill_id: null,
@@ -78,8 +78,47 @@ describe("SchedulesPage", () => {
     expect(await screen.findByText("Daily Notion Done Cleanup")).toBeTruthy();
     expect(screen.getByText("Daily Quercus Knowledge Sync")).toBeTruthy();
     expect(screen.getByLabelText("Running").getAttribute("title")).toBe("Running");
-    expect(screen.getAllByText("Managed by Eidolon")).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Disable" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Run Now" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Edit" })).toHaveLength(2);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Delete" })).toBeNull());
+  });
+
+  it("uses the Agents assessment controls and links Edit to Assistant", async () => {
+    vi.spyOn(api, "listSchedules").mockResolvedValue([{
+      id: -2,
+      schedule_kind: "platform",
+      service_id: "backend.assistant.assessment",
+      read_only: true,
+      skill_enabled: null,
+      is_running: false,
+      skill_id: null,
+      skill_name: null,
+      name: "Assistant assessment",
+      status: "paused",
+      schedule_type: "interval",
+      schedule_json: { type: "interval", every: 3, unit: "days", timezone: "UTC", input: {} },
+      input_json: {},
+      timezone: "UTC",
+      next_run_at: null,
+      last_run_at: null,
+      last_run_status: null,
+      created_at: "2026-08-26T12:00:00Z",
+      updated_at: "2026-08-26T12:00:00Z",
+    }]);
+    const update = vi.spyOn(api, "updateAssistantAssessment").mockResolvedValue({
+      enabled: true,
+      next_run_at: null,
+      last_run_at: null,
+      last_status: null,
+    });
+
+    render(<MemoryRouter><SchedulesPage /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Enable" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith(true));
+    expect(screen.getByRole("link", { name: "Edit" }).getAttribute("href")).toBe("/agents/assistant");
+    expect(screen.getByRole("button", { name: "Run Now" })).not.toHaveProperty("disabled", true);
   });
 
   it("shows the last-run status only as a tooltip dot before the timestamp", async () => {
@@ -120,14 +159,19 @@ describe("SchedulesPage", () => {
     );
 
     const statusDot = await screen.findByLabelText("Last run status: failed");
-    expect(screen.getByLabelText("Running").classList.contains("running-state-dot")).toBe(true);
+    const runningDot = screen.getByLabelText("Running");
+    expect(runningDot.classList.contains("running-state-dot")).toBe(true);
+    expect(runningDot.closest("td")?.cellIndex).toBe(2);
+    expect(runningDot.closest("td")?.textContent).toContain("running");
+    expect(runningDot.closest("tr")?.firstElementChild?.querySelector(".running-state-dot")).toBeNull();
     expect(statusDot.getAttribute("title")).toBe("failed");
     expect(statusDot.textContent).toBe("");
     expect(statusDot.parentElement?.firstElementChild).toBe(statusDot);
     const scheduleTable = statusDot.closest("table");
     expect(scheduleTable).toBeTruthy();
     expect(scheduleTable?.textContent).toContain("Weekly on Monday at 08:00");
-    expect(scheduleTable?.querySelector("tbody tr td:nth-child(3)")?.textContent).toBe("active");
+    expect(scheduleTable?.querySelector("tbody tr td:nth-child(3)")?.textContent).toContain("active");
+    expect(scheduleTable?.querySelector("tbody tr td:nth-child(3)")?.textContent).toContain("running");
     expect(screen.queryByText("enabled")).toBeNull();
     expect(screen.getByRole("button", { name: "Disable" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Run Now" })).not.toHaveProperty("disabled", true);

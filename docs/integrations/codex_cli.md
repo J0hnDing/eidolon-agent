@@ -43,12 +43,14 @@ The backend reads the account-aware model picker through App Server `model/list`
 
 Routing settings cover:
 
-- persistent Act independently;
+- persistent Act, Observer, and Assistant assessment agents independently;
 - ProductManager refine-intent, plan-build, task-DAG, repair, and update actions;
 - Builder single-Codex builds, `easy`, `medium`, and `hard` DAG nodes, plus repair and update actions;
 - Tester task, final end-to-end, and update actions.
 
 The single-Codex workflow uses the explicit Builder `single_codex` route. Task-DAG Builder routing reads the backend-validated `difficulty` already present on each task node. The task DAG contains no model or reasoning-effort fields, so ProductManager cannot invent or select model ids.
+
+The Settings page presents the three agent routes together under **Agent Routing**. Observer turns use the Observer route, and Assistant turns—including scheduled assessments—use the Assessment route; neither silently falls back to Act when an agent route is configured.
 
 Precedence is:
 

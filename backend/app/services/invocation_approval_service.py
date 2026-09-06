@@ -300,6 +300,11 @@ class InvocationApprovalService:
         from app.models.entities import utc_now
 
         try:
+            agent = (approval.dispatch_metadata_json or {}).get("agent_identity")
+            if agent is not None:
+                from app.services.agent_policy_service import AgentPolicyService
+                AgentPolicyService(self.db).require_session(agent["agent_id"], agent["session_id"])
+                AgentPolicyService(self.db).require_function(agent["agent_id"], approval.target_id)
             if approval.target_kind == "user_function":
                 from app.services.function_registry_service import FunctionRegistryService
 
@@ -352,6 +357,16 @@ class InvocationApprovalService:
             return approval
 
     def _commit_and_deliver(self, approval: InvocationApproval) -> InvocationApproval:
+        from app.services.agent_policy_service import current_agent
+        identity = current_agent.get()
+        if identity is not None:
+            approval.dispatch_metadata_json = {**(approval.dispatch_metadata_json or {}), "agent_identity": {"agent_id": identity[0], "session_id": identity[1]}}
+            approval.source = f"agent:{identity[0]}"
+            approval.presentation_json = presentation_snapshot(build_approval_presentation(
+                approval_id=0, action=approval.target_id,
+                caller=f"{identity[0].title()} session {identity[1]}",
+                input_json=approval.input_json, reason=approval.reason_to_call,
+            ))
         self.db.add(approval)
         self.db.commit()
         self.db.refresh(approval)

@@ -60,6 +60,12 @@ class ScheduleUpdate(BaseModel):
     schedule: SchedulePayload
 
 
+class ScheduleAvailabilityUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
 class ScheduleRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

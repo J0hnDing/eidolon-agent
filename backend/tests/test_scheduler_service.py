@@ -60,7 +60,7 @@ class FakeScheduler:
             "coalesce": coalesce,
             "misfire_grace_time": misfire_grace_time,
         }
-        return FakeJob()
+        return SimpleNamespace(next_run_time=FakeJob.next_run_time if self.running else None)
 
     def remove_job(self, id: str) -> None:
         self.removed.append(id)
@@ -202,11 +202,96 @@ def test_start_registers_backend_owned_platform_services(
     listed = list_schedules(request, skill_id=None, db=db_session)  # type: ignore[arg-type]
     assert listed[0]["schedule_kind"] == "platform"
     assert listed[0]["service_id"] == NOTION_DONE_CLEANUP_SERVICE_ID
-    assert listed[0]["read_only"] is True
+    assert listed[0]["read_only"] is False
     assert [item["service_id"] for item in listed[:2]] == [
         NOTION_DONE_CLEANUP_SERVICE_ID,
         QUERCUS_SYNC_SERVICE_ID,
     ]
+
+
+def test_platform_service_can_be_disabled_edited_and_enabled_across_instances(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    fake_scheduler = FakeScheduler()
+    scheduler = service(db_session, tmp_path, fake_scheduler)
+    scheduler.register_platform_services(now=datetime(2026, 9, 1, tzinfo=UTC))
+
+    disabled = scheduler.configure_platform_service(QUERCUS_SYNC_SERVICE_ID, False)
+    definition = PLATFORM_SCHEDULE_BY_ID[QUERCUS_SYNC_SERVICE_ID]
+    assert disabled["status"] == "paused"
+    assert definition.job_id not in fake_scheduler.jobs
+
+    edited = scheduler.update_platform_schedule(
+        QUERCUS_SYNC_SERVICE_ID,
+        ScheduleUpdate(
+            name="Quercus evening sync",
+            schedule=SchedulePayload(
+                type="weekly",
+                day="friday",
+                time="18:30",
+                timezone="America/Toronto",
+                input={},
+            ),
+        ),
+    )
+    assert edited["name"] == "Quercus evening sync"
+    assert edited["schedule_type"] == "weekly"
+    assert edited["status"] == "paused"
+
+    recreated = service(db_session, tmp_path, fake_scheduler)
+    recreated.register_platform_services(now=datetime(2026, 9, 2, tzinfo=UTC))
+    assert definition.job_id not in fake_scheduler.jobs
+    persisted = recreated.serialize_platform_schedule(definition)
+    assert persisted["name"] == "Quercus evening sync"
+    assert persisted["schedule_json"]["day"] == "friday"
+
+    enabled = recreated.configure_platform_service(QUERCUS_SYNC_SERVICE_ID, True)
+    assert enabled["status"] == "active"
+    assert definition.job_id in fake_scheduler.jobs
+
+
+def test_platform_run_now_uses_occurrence_ledger_and_requires_enabled(
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = service(db_session, tmp_path)
+    monkeypatch.setattr(
+        "app.services.scheduler_service.PlatformServiceDispatcher.invoke",
+        lambda _dispatcher, _service_id: {"status": "succeeded", "count": 1},
+    )
+
+    result = scheduler.run_platform_service_now(NOTION_DONE_CLEANUP_SERVICE_ID)
+    occurrence = db_session.scalar(select(ScheduleOccurrence))
+    assert result == {"status": "succeeded", "count": 1}
+    assert occurrence is not None
+    assert occurrence.trigger_reason == "manual"
+    assert occurrence.status == "succeeded"
+
+    scheduler.configure_platform_service(NOTION_DONE_CLEANUP_SERVICE_ID, False)
+    with pytest.raises(ScheduleError, match="disabled"):
+        scheduler.run_platform_service_now(NOTION_DONE_CLEANUP_SERVICE_ID)
+
+
+def test_start_registers_active_service_after_scheduler_starts(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill = create_skill(db_session, tmp_path)
+    fake_scheduler = FakeScheduler()
+    scheduler = service(db_session, tmp_path, fake_scheduler)
+    schedule = scheduler.create_from_manifest(skill)
+    schedule.status = "active"
+    skill.enabled = True
+    db_session.commit()
+
+    scheduler.start()
+
+    assert fake_scheduler.running is True
+    assert scheduler.job_id(schedule.id) in fake_scheduler.jobs
+    assert schedule.next_run_at is not None
+    assert schedule.next_run_at.replace(tzinfo=UTC) == FakeJob.next_run_time
 
 
 def test_quercus_platform_schedule_follows_toronto_dst(tmp_path: Path, db_session: Session) -> None:

@@ -1256,6 +1256,29 @@ _GMAIL_OPERATIONS = (
         operation_id="email.read_new",
         title="Read new email",
         description=(
+            "Read up to 50 unread Primary Inbox messages from the last year without changing their read state."
+        ),
+        provider="gmail",
+        input_schema=_object_schema({}, []),
+        output_schema=_object_schema(
+            {
+                "messages": {"type": "array", "maxItems": 50, "items": _EMAIL_MESSAGE},
+                "count": {"type": "integer", "minimum": 0, "maximum": 50},
+                "has_more": {"type": "boolean"},
+            },
+            ["messages", "count", "has_more"],
+        ),
+        read_only=True, side_effect="none", risk="low", resource_scope="none", method="GET",
+        endpoint_template="/gmail/v1/users/me/messages", timeout_seconds=20,
+        allow_redirects=False, max_pages=1, max_results=50, max_provider_response_bytes=4_000_000,
+        normalized_errors=_GMAIL_ERRORS, audit_resource_fields=(), fake_behavior="email_read_new",
+        usage_example={"operation": "email.read_new", "input": {}},
+        contract_version=2,
+    ),
+    IntegrationOperation(
+        operation_id="email.read_and_mark_new",
+        title="Read and mark new email",
+        description=(
             "Read up to 50 unread Primary Inbox messages from the last year, then mark exactly that fetched batch read."
         ),
         provider="gmail",
@@ -1271,8 +1294,8 @@ _GMAIL_OPERATIONS = (
         read_only=False, side_effect="write", risk="medium", resource_scope="none", method="POST",
         endpoint_template="/gmail/v1/users/me/messages plus batchModify", timeout_seconds=30,
         allow_redirects=False, max_pages=1, max_results=50, max_provider_response_bytes=4_000_000,
-        normalized_errors=_GMAIL_ERRORS, audit_resource_fields=(), fake_behavior="email_read_new",
-        usage_example={"operation": "email.read_new", "input": {}},
+        normalized_errors=_GMAIL_ERRORS, audit_resource_fields=(), fake_behavior="email_read_and_mark_new",
+        usage_example={"operation": "email.read_and_mark_new", "input": {}},
     ),
     IntegrationOperation(
         operation_id="email.send",

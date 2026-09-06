@@ -38,6 +38,8 @@ beforeEach(() => {
   vi.spyOn(api, "getGmailConnection").mockImplementation(unavailable);
   vi.spyOn(api, "getTelegramConnection").mockImplementation(unavailable);
   vi.spyOn(api, "getTelegramAgentConnection").mockImplementation(unavailable);
+  vi.spyOn(api, "getTelegramObserverAgentConnection").mockImplementation(unavailable);
+  vi.spyOn(api, "getTelegramAssistantAgentConnection").mockImplementation(unavailable);
   vi.spyOn(api, "getCodexMcpStatus").mockImplementation(unavailable);
 });
 
@@ -106,6 +108,8 @@ describe("GitHub Settings connection", () => {
     vi.spyOn(api, "getCodexRoutingSettings").mockResolvedValue({
       project_build_workflow_override: null,
       act: choice,
+      observer: choice,
+      assessment: choice,
       product_manager: {
         default: choice,
         blueprint_and_permissions: choice,
@@ -428,6 +432,8 @@ describe("Notion Settings connection", () => {
     vi.spyOn(api, "getCodexRoutingSettings").mockResolvedValue({
       project_build_workflow_override: null,
       act: choice,
+      observer: choice,
+      assessment: choice,
       product_manager: {
         default: choice,
         blueprint_and_permissions: choice,
@@ -626,9 +632,13 @@ describe("Google Calendar OAuth connection", () => {
     expect(screen.getByRole("heading", { name: "Gmail" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Telegram" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Notification / Approval bot" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Agent bot" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Act Agent bot" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Observer Agent bot" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Assistant Agent bot" })).toBeTruthy();
     expect(screen.getByLabelText("Replacement Notification/Approval bot token")).toBeTruthy();
-    expect(screen.getByLabelText("Agent bot token")).toBeTruthy();
+    expect(screen.getByLabelText("Act Agent bot token")).toBeTruthy();
+    expect(screen.getByLabelText("Observer Agent bot token")).toBeTruthy();
+    expect(screen.getByLabelText("Assistant Agent bot token")).toBeTruthy();
     expect(screen.getByText("person@example.com")).toBeTruthy();
     expect(screen.getByText("mail@example.com")).toBeTruthy();
     expect(
@@ -785,7 +795,7 @@ describe("Codex model routing", () => {
         update: choice,
       },
       updated_at: null,
-    };
+    } as unknown as Awaited<ReturnType<typeof api.getCodexRoutingSettings>>;
     vi.spyOn(api, "getCodexRoutingSettings").mockResolvedValue(routing);
     vi.spyOn(api, "getPermissionPolicy").mockResolvedValue(permissionPolicy);
     vi.spyOn(api, "getGitHubConnection").mockResolvedValue({
@@ -805,6 +815,9 @@ describe("Codex model routing", () => {
     }));
 
     renderSettings("models");
+    expect(await screen.findByRole("heading", { name: "Agent Routing" })).toBeTruthy();
+    expect(screen.getByLabelText("Observer model")).toBeTruthy();
+    expect(screen.getByLabelText("Assessment model")).toBeTruthy();
     expect(await screen.findByLabelText("Project planning and clarification model")).toBeTruthy();
     expect(screen.queryByText("Plausibility review")).toBeNull();
     fireEvent.change(await screen.findByLabelText("Single Codex model"), {
@@ -864,6 +877,8 @@ describe("Atlas Settings", () => {
     vi.spyOn(api, "getCodexRoutingSettings").mockResolvedValue({
       project_build_workflow_override: null,
       act: choice,
+      observer: choice,
+      assessment: choice,
       product_manager: {
         default: choice,
         blueprint_and_permissions: choice,

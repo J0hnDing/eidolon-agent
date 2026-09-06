@@ -14,6 +14,7 @@ from app.db import SessionLocal, create_db_and_tables
 from app.routers import (
     act,
     agent_runs,
+    agents,
     atlas_settings,
     chat,
     codex_settings,
@@ -28,7 +29,7 @@ from app.routers import (
     usage,
     web_apps,
 )
-from app.services.act_turn_dispatcher import act_turn_dispatcher
+from app.services.act_turn_dispatcher import agent_dispatchers
 from app.services.atlas_lifecycle_service import atlas_lifecycle_service
 from app.services.atlas_settings_service import build_default_atlas_settings_service
 from app.services.codex_usage_service import codex_usage_service
@@ -138,8 +139,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         InvocationApprovalService(recovery_db).recover()
     finally:
         recovery_db.close()
+    for dispatcher in agent_dispatchers.values():
+        dispatcher.recover()
+    agent_db = SessionLocal()
+    try:
+        from app.services.act_session_service import ActSessionError, ActSessionService
+        from app.services.agent_proposal_service import AgentProposalService
+        try:
+            ActSessionService(agent_db, agent_id="assistant").prune_assistant_sessions()
+            agent_db.commit()
+        except ActSessionError:
+            agent_db.rollback()
+            logger.warning("Assistant retention reconciliation is waiting for an existing session")
+        AgentProposalService(agent_db).reconcile()
+    finally:
+        agent_db.close()
     telegram_pollers = start_telegram_pollers()
-    act_turn_dispatcher.start()
+    for dispatcher in agent_dispatchers.values():
+        dispatcher.start()
     atlas_db = SessionLocal()
     try:
         build_default_atlas_settings_service(atlas_db).startup()
@@ -180,7 +197,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         await asyncio.to_thread(quercus_processing_dispatcher.stop, 45)
         await asyncio.to_thread(stop_telegram_pollers, telegram_pollers)
-        await asyncio.to_thread(act_turn_dispatcher.stop)
+        for dispatcher in agent_dispatchers.values():
+            await asyncio.to_thread(dispatcher.stop)
         web_app_maintenance.cancel()
         try:
             await web_app_maintenance
@@ -231,6 +249,7 @@ async def enforce_web_app_gateway_origin(request: Request, call_next):
 
 app.include_router(memory_facts.router)
 app.include_router(act.router)
+app.include_router(agents.router)
 app.include_router(functions.router)
 app.include_router(integrations.router)
 app.include_router(atlas_settings.router)

@@ -8,6 +8,22 @@ import { useChatConversations } from "./useChatConversations";
 describe("useChatConversations", () => {
   beforeEach(() => localStorage.clear());
 
+  it("keeps agent bindings distinct and removes pruned sessions without changing a valid selection", () => {
+    const { result } = renderHook(() => useChatConversations());
+    const session = { id: 7, title: "Session", origin: "web", status: "active",
+      created_at: "2026-09-05T12:00:00Z", updated_at: "2026-09-05T12:00:00Z" };
+    act(() => result.current.importAgentSessions("observer", [session]));
+    act(() => result.current.importAgentSessions("assistant", [session]));
+    act(() => result.current.selectConversation("assistant-7"));
+    act(() => result.current.importAgentSessions("observer", []));
+    expect(result.current.activeConversationId).toBe("assistant-7");
+    expect(result.current.mode).toBe("assistant");
+    expect(result.current.conversations.some((item) => item.id === "observer-7")).toBe(false);
+    act(() => result.current.importAgentSessions("assistant", []));
+    expect(result.current.activeConversation).toBeDefined();
+    expect(result.current.mode).toBe("project");
+  });
+
   it("owns drafts and creates conversations with immutable modes", () => {
     const { result } = renderHook(() => useChatConversations());
     const firstId = result.current.activeConversationId;

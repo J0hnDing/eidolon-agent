@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 
 from mcp import types
 from mcp.server import Server
@@ -12,7 +14,7 @@ from app.services.mcp_function_service import McpFunctionError, McpFunctionServi
 
 def build_server(service: McpFunctionService) -> Server:
     server = Server(
-        "eidolon",
+        "eidolon-agent" if getattr(service, "agent_identity", None) is not None else "eidolon",
         version="1.0.0",
         instructions=(
             "Eidolon exposes the local user's currently available integration and installed-function catalog. "
@@ -47,7 +49,11 @@ async def _run_stdio() -> None:
     create_db_and_tables()
     db = SessionLocal()
     try:
-        server = build_server(McpFunctionService(db))
+        agent_mode = "--agent" in sys.argv
+        token = os.environ.pop("EIDOLON_AGENT_TOKEN", None) if agent_mode else None
+        if agent_mode and not token:
+            raise RuntimeError("Authenticated agent MCP requires a credential")
+        server = build_server(McpFunctionService(db, agent_token=token))
         async with stdio_server() as (read_stream, write_stream):
             await server.run(
                 read_stream,

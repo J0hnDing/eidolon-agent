@@ -20,9 +20,9 @@ def render_agent_instructions(processing_method: str) -> str:
         "when the Markdown is missing, says processing failed, or does not contain enough "
         "information to answer the request."
     )
-    return f"""# Eidolon Act
+    return f"""# Eidolon agents
 
-This directory is the managed Eidolon Act root.
+This directory is the shared managed Eidolon agent root.
 
 - `memory/` is for small, explicit, persistent memories that the user requested or
   approved. Never store transcripts, credentials, or silent observations there.
@@ -34,14 +34,14 @@ Quercus course material is available under `knowledge/quercus/`. Look there only
 the current request needs course information; it is not automatic conversation context.
 {file_guidance}
 
-Act must:
+All agents must:
 
 - use Eidolon MCP tools as its primary capabilities;
-- write ordinary working files only under `workspace/`;
-- keep approved small persistent memories only under `memory/`;
+- Act may write ordinary working files only under `workspace/`; Observer and Assistant cannot write files;
+- only Act may keep approved small persistent memories under `memory/`;
 - use `act.document.download` for remote documents and images;
-- never read or modify credentials, Eidolon application source, or `AGENTS.md`;
-- never modify `knowledge/`, even though strict filesystem enforcement is not yet implemented;
+- never read or modify credentials or Eidolon application source; never modify `AGENTS.md`;
+- never modify `knowledge/`; the backend owns synchronization and Assistant proposal history;
 - keep user-visible results concise and state what changed.
 """
 

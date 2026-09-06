@@ -70,6 +70,16 @@ const settingsPageCopy: Record<SettingsSection, { title: string; description: st
   },
 };
 
+const EMPTY_INVOCATION_CHOICE: CodexInvocationChoice = { model: null, reasoning_effort: null };
+
+function normalizeRoutingSettings(settings: CodexRoutingSettings): CodexRoutingSettings {
+  return {
+    ...settings,
+    observer: settings.observer ?? EMPTY_INVOCATION_CHOICE,
+    assessment: settings.assessment ?? EMPTY_INVOCATION_CHOICE,
+  };
+}
+
 export default function UsageSettingsPage({ section = "usage" }: { section?: SettingsSection }) {
   const [appearanceTheme, setAppearanceTheme] = useState<AppearanceTheme>(() => readAppearanceTheme());
   const [usage, setUsage] = useState<CodexAccountUsage | null>(null);
@@ -103,6 +113,12 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
   const [telegramAgent, setTelegramAgent] = useState<TelegramConnectionStatus | null>(null);
   const [telegramAgentToken, setTelegramAgentToken] = useState("");
   const [telegramAgentPairingCode, setTelegramAgentPairingCode] = useState<string | null>(null);
+  const [telegramObserverAgent, setTelegramObserverAgent] = useState<TelegramConnectionStatus | null>(null);
+  const [telegramObserverAgentToken, setTelegramObserverAgentToken] = useState("");
+  const [telegramObserverAgentPairingCode, setTelegramObserverAgentPairingCode] = useState<string | null>(null);
+  const [telegramAssistantAgent, setTelegramAssistantAgent] = useState<TelegramConnectionStatus | null>(null);
+  const [telegramAssistantAgentToken, setTelegramAssistantAgentToken] = useState("");
+  const [telegramAssistantAgentPairingCode, setTelegramAssistantAgentPairingCode] = useState<string | null>(null);
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramPairingCode, setTelegramPairingCode] = useState<string | null>(null);
   const [telegramPairingExpiry, setTelegramPairingExpiry] = useState<string | null>(null);
@@ -127,7 +143,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setUsage(nextUsage);
         setCliStatus(nextCliStatus);
       } else if (section === "project") {
-        setRouting(await api.getCodexRoutingSettings());
+        setRouting(normalizeRoutingSettings(await api.getCodexRoutingSettings()));
         setRoutingDirty(false);
       } else if (section === "models") {
         const [nextCatalog, nextRouting] = await Promise.all([
@@ -135,10 +151,10 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           api.getCodexRoutingSettings(),
         ]);
         setCatalog(nextCatalog);
-        setRouting(nextRouting);
+        setRouting(normalizeRoutingSettings(nextRouting));
         setRoutingDirty(false);
       } else if (section === "integrations") {
-        const [nextGitHub, nextAtlas, nextNotion, nextQuercus, nextQuercusProcessing, nextGoogleOAuth, nextGoogleCalendar, nextGmail, nextTelegram, nextTelegramAgent, nextCodexMcp] = await Promise.all([
+        const [nextGitHub, nextAtlas, nextNotion, nextQuercus, nextQuercusProcessing, nextGoogleOAuth, nextGoogleCalendar, nextGmail, nextTelegram, nextTelegramAgent, nextTelegramObserverAgent, nextTelegramAssistantAgent, nextCodexMcp] = await Promise.all([
           api.getGitHubConnection(),
           api.getAtlasStatus().catch((err) => atlasUnavailableStatus(err)),
           api.getNotionConnection().catch((err) => notionUnavailableStatus(err)),
@@ -158,6 +174,8 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           api.getGmailConnection().catch((err) => gmailUnavailableStatus(err)),
           api.getTelegramConnection().catch((err) => telegramUnavailableStatus(err)),
           api.getTelegramAgentConnection().catch((err) => telegramUnavailableStatus(err)),
+          api.getTelegramObserverAgentConnection().catch((err) => telegramUnavailableStatus(err)),
+          api.getTelegramAssistantAgentConnection().catch((err) => telegramUnavailableStatus(err)),
           api.getCodexMcpStatus().catch((err) => codexMcpUnavailableStatus(err)),
         ]);
         setGitHub(nextGitHub);
@@ -180,6 +198,8 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setGmail(nextGmail);
         setTelegram(nextTelegram);
         setTelegramAgent(nextTelegramAgent);
+        setTelegramObserverAgent(nextTelegramObserverAgent);
+        setTelegramAssistantAgent(nextTelegramAssistantAgent);
         setCodexMcp(nextCodexMcp);
       } else if (section === "permissions") {
         setPermissionPolicy(await api.getPermissionPolicy());
@@ -247,7 +267,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
   }, [section]);
 
   function updateChoice(
-    group: "act" | "product_manager" | "builder" | "tester",
+    group: "act" | "observer" | "assessment" | "product_manager" | "builder" | "tester",
     key: string,
     choice: CodexInvocationChoice,
   ) {
@@ -255,7 +275,9 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     setRoutingDirty(true);
     setRouting((current) => {
       if (!current) return current;
-      if (group === "act") return { ...current, act: choice };
+      if (group === "act" || group === "observer" || group === "assessment") {
+        return { ...current, [group]: choice };
+      }
       const nextGroup = { ...current[group], [key]: choice };
       return { ...current, [group]: nextGroup };
     });
@@ -274,7 +296,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     try {
       const { updated_at: _updatedAt, ...payload } = routing;
       const next = await api.updateCodexRoutingSettings(payload as CodexRoutingSettingsPayload);
-      setRouting(next);
+      setRouting(normalizeRoutingSettings(next));
       setRoutingDirty(false);
       setSaved(successMessage);
     } catch (err) {
@@ -634,6 +656,88 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     }
   }
 
+  async function startTelegramObserverAgentPairing() {
+    if (!telegramObserverAgentToken.trim()) return;
+    setLoading(true); setError(null);
+    try {
+      const result = await api.startTelegramObserverAgentPairing(telegramObserverAgentToken);
+      setTelegramObserverAgent(result.connection);
+      setTelegramObserverAgentToken("");
+      setTelegramObserverAgentPairingCode(result.pairing_code);
+      setSaved("Observer Agent bot validated. Finish pairing in its private chat.");
+    } catch (err) {
+      setTelegramObserverAgentToken("");
+      setError(err instanceof Error ? err.message : "Could not pair Observer Agent bot");
+    } finally { setLoading(false); }
+  }
+
+  async function removeTelegramObserverAgentConnection() {
+    setLoading(true); setError(null);
+    try {
+      await api.removeTelegramObserverAgentConnection();
+      setTelegramObserverAgent(await api.getTelegramObserverAgentConnection());
+      setTelegramObserverAgentPairingCode(null);
+      setSaved("Observer Agent bot removed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove Observer Agent bot");
+    } finally { setLoading(false); }
+  }
+
+  async function refreshTelegramObserverAgentPairing() {
+    setError(null);
+    try {
+      const next = await api.refreshTelegramObserverAgentPairing();
+      setTelegramObserverAgent(next);
+      if (next.connected) {
+        setTelegramObserverAgentPairingCode(null);
+        setSaved("Observer Agent bot paired.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not refresh Observer Agent pairing");
+    }
+  }
+
+  async function startTelegramAssistantAgentPairing() {
+    if (!telegramAssistantAgentToken.trim()) return;
+    setLoading(true); setError(null);
+    try {
+      const result = await api.startTelegramAssistantAgentPairing(telegramAssistantAgentToken);
+      setTelegramAssistantAgent(result.connection);
+      setTelegramAssistantAgentToken("");
+      setTelegramAssistantAgentPairingCode(result.pairing_code);
+      setSaved("Assistant Agent bot validated. Finish pairing in its private chat.");
+    } catch (err) {
+      setTelegramAssistantAgentToken("");
+      setError(err instanceof Error ? err.message : "Could not pair Assistant Agent bot");
+    } finally { setLoading(false); }
+  }
+
+  async function removeTelegramAssistantAgentConnection() {
+    setLoading(true); setError(null);
+    try {
+      await api.removeTelegramAssistantAgentConnection();
+      setTelegramAssistantAgent(await api.getTelegramAssistantAgentConnection());
+      setTelegramAssistantAgentPairingCode(null);
+      setSaved("Assistant Agent bot removed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove Assistant Agent bot");
+    } finally { setLoading(false); }
+  }
+
+  async function refreshTelegramAssistantAgentPairing() {
+    setError(null);
+    try {
+      const next = await api.refreshTelegramAssistantAgentPairing();
+      setTelegramAssistantAgent(next);
+      if (next.connected) {
+        setTelegramAssistantAgentPairingCode(null);
+        setSaved("Assistant Agent bot paired.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not refresh Assistant Agent pairing");
+    }
+  }
+
   async function refreshTelegramPairing() {
     setError(null);
     try {
@@ -975,11 +1079,11 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
         </section>
       )}
-      {section === "integrations" && telegram && telegramAgent && (
+      {section === "integrations" && telegram && telegramAgent && telegramObserverAgent && telegramAssistantAgent && (
         <section className="detail-panel stack">
           <div>
             <h2>Telegram</h2>
-            <p className="muted">Configure independent private bots for approvals and Act. Both tokens are write-only and stay in the operating-system secret store.</p>
+            <p className="muted">Configure independent private bots for approvals, Act, Observer, and Assistant. Tokens are write-only and stay in the operating-system secret store.</p>
           </div>
 
           <div className="settings-subsection stack">
@@ -995,13 +1099,33 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
 
           <div className="settings-subsection stack">
-            <div><h3>Agent bot</h3><p className="muted">Connects to Act and keeps one selected Act session. Use <code>/new</code>, <code>/sessions</code>, and <code>/use &lt;id&gt;</code>.</p></div>
+            <div><h3>Act Agent bot</h3><p className="muted">Connects to Act and keeps one selected Act session. Use <code>/new</code>, <code>/sessions</code>, and <code>/use &lt;id&gt;</code>.</p></div>
             <dl className="detail-grid"><div><dt>Status</dt><dd>{telegramStatusLabel(telegramAgent)}</dd></div><div><dt>Bot</dt><dd>{telegramAgent.bot_username ? `@${telegramAgent.bot_username}` : "None"}</dd></div><div><dt>Private chat</dt><dd>{telegramAgent.paired_chat_id ?? "Not paired"}</dd></div><div><dt>User</dt><dd>{telegramAgent.paired_user_id ?? "Not paired"}</dd></div></dl>
             {telegramAgent.error_type && <p className="error-text">Connection status: {telegramAgent.error_type.replace(/_/g, " ")}</p>}
-            {telegramAgentPairingCode && <div><h4>Finish pairing</h4><p>Open the Agent bot in Telegram and send <code>/start {telegramAgentPairingCode}</code>.</p><button type="button" className="secondary" onClick={() => void refreshTelegramAgentPairing()}>Check Agent pairing</button></div>}
-            {!telegramAgentPairingCode && telegramAgent.status === "pairing" && <div><p>Pairing is waiting for the private <code>/start</code> message.</p><button type="button" className="secondary" onClick={() => void refreshTelegramAgentPairing()}>Check Agent pairing</button></div>}
-            <label>{telegramAgent.connected ? "Replacement Agent bot token" : "Agent bot token"}<input type="password" autoComplete="new-password" value={telegramAgentToken} onChange={(event) => setTelegramAgentToken(event.target.value)} placeholder="Token is never displayed after submission" /></label>
-            <div className="button-row"><button type="button" onClick={() => void startTelegramAgentPairing()} disabled={loading || !telegramAgentToken}>{telegramAgent.connected ? "Replace Agent bot" : "Pair Agent bot"}</button>{telegramAgent.connected && <button type="button" className="secondary" onClick={() => void removeTelegramAgentConnection()} disabled={loading}>Disconnect Agent bot</button>}</div>
+            {telegramAgentPairingCode && <div><h4>Finish pairing</h4><p>Open the Act Agent bot in Telegram and send <code>/start {telegramAgentPairingCode}</code>.</p><button type="button" className="secondary" onClick={() => void refreshTelegramAgentPairing()}>Check Act Agent pairing</button></div>}
+            {!telegramAgentPairingCode && telegramAgent.status === "pairing" && <div><p>Pairing is waiting for the private <code>/start</code> message.</p><button type="button" className="secondary" onClick={() => void refreshTelegramAgentPairing()}>Check Act Agent pairing</button></div>}
+            <label>{telegramAgent.connected ? "Replacement Act Agent bot token" : "Act Agent bot token"}<input type="password" autoComplete="new-password" value={telegramAgentToken} onChange={(event) => setTelegramAgentToken(event.target.value)} placeholder="Token is never displayed after submission" /></label>
+            <div className="button-row"><button type="button" onClick={() => void startTelegramAgentPairing()} disabled={loading || !telegramAgentToken}>{telegramAgent.connected ? "Replace Act Agent bot" : "Pair Act Agent bot"}</button>{telegramAgent.connected && <button type="button" className="secondary" onClick={() => void removeTelegramAgentConnection()} disabled={loading}>Disconnect Act Agent bot</button>}</div>
+          </div>
+
+          <div className="settings-subsection stack">
+            <div><h3>Observer Agent bot</h3><p className="muted">Connects to read-only Observer conversations and keeps one selected Observer session.</p></div>
+            <dl className="detail-grid"><div><dt>Status</dt><dd>{telegramStatusLabel(telegramObserverAgent)}</dd></div><div><dt>Bot</dt><dd>{telegramObserverAgent.bot_username ? `@${telegramObserverAgent.bot_username}` : "None"}</dd></div><div><dt>Private chat</dt><dd>{telegramObserverAgent.paired_chat_id ?? "Not paired"}</dd></div><div><dt>User</dt><dd>{telegramObserverAgent.paired_user_id ?? "Not paired"}</dd></div></dl>
+            {telegramObserverAgent.error_type && <p className="error-text">Connection status: {telegramObserverAgent.error_type.replace(/_/g, " ")}</p>}
+            {telegramObserverAgentPairingCode && <div><h4>Finish pairing</h4><p>Open the Observer Agent bot in Telegram and send <code>/start {telegramObserverAgentPairingCode}</code>.</p><button type="button" className="secondary" onClick={() => void refreshTelegramObserverAgentPairing()}>Check Observer Agent pairing</button></div>}
+            {!telegramObserverAgentPairingCode && telegramObserverAgent.status === "pairing" && <div><p>Pairing is waiting for the private <code>/start</code> message.</p><button type="button" className="secondary" onClick={() => void refreshTelegramObserverAgentPairing()}>Check Observer Agent pairing</button></div>}
+            <label>{telegramObserverAgent.connected ? "Replacement Observer Agent bot token" : "Observer Agent bot token"}<input type="password" autoComplete="new-password" value={telegramObserverAgentToken} onChange={(event) => setTelegramObserverAgentToken(event.target.value)} placeholder="Token is never displayed after submission" /></label>
+            <div className="button-row"><button type="button" onClick={() => void startTelegramObserverAgentPairing()} disabled={loading || !telegramObserverAgentToken}>{telegramObserverAgent.connected ? "Replace Observer Agent bot" : "Pair Observer Agent bot"}</button>{telegramObserverAgent.connected && <button type="button" className="secondary" onClick={() => void removeTelegramObserverAgentConnection()} disabled={loading}>Disconnect Observer Agent bot</button>}</div>
+          </div>
+
+          <div className="settings-subsection stack">
+            <div><h3>Assistant Agent bot</h3><p className="muted">Connects to Assistant conversations and keeps one selected Assistant session. Assistant retains at most five sessions across Telegram, the UI, and scheduled assessments.</p></div>
+            <dl className="detail-grid"><div><dt>Status</dt><dd>{telegramStatusLabel(telegramAssistantAgent)}</dd></div><div><dt>Bot</dt><dd>{telegramAssistantAgent.bot_username ? `@${telegramAssistantAgent.bot_username}` : "None"}</dd></div><div><dt>Private chat</dt><dd>{telegramAssistantAgent.paired_chat_id ?? "Not paired"}</dd></div><div><dt>User</dt><dd>{telegramAssistantAgent.paired_user_id ?? "Not paired"}</dd></div></dl>
+            {telegramAssistantAgent.error_type && <p className="error-text">Connection status: {telegramAssistantAgent.error_type.replace(/_/g, " ")}</p>}
+            {telegramAssistantAgentPairingCode && <div><h4>Finish pairing</h4><p>Open the Assistant Agent bot in Telegram and send <code>/start {telegramAssistantAgentPairingCode}</code>.</p><button type="button" className="secondary" onClick={() => void refreshTelegramAssistantAgentPairing()}>Check Assistant Agent pairing</button></div>}
+            {!telegramAssistantAgentPairingCode && telegramAssistantAgent.status === "pairing" && <div><p>Pairing is waiting for the private <code>/start</code> message.</p><button type="button" className="secondary" onClick={() => void refreshTelegramAssistantAgentPairing()}>Check Assistant Agent pairing</button></div>}
+            <label>{telegramAssistantAgent.connected ? "Replacement Assistant Agent bot token" : "Assistant Agent bot token"}<input type="password" autoComplete="new-password" value={telegramAssistantAgentToken} onChange={(event) => setTelegramAssistantAgentToken(event.target.value)} placeholder="Token is never displayed after submission" /></label>
+            <div className="button-row"><button type="button" onClick={() => void startTelegramAssistantAgentPairing()} disabled={loading || !telegramAssistantAgentToken}>{telegramAssistantAgent.connected ? "Replace Assistant Agent bot" : "Pair Assistant Agent bot"}</button>{telegramAssistantAgent.connected && <button type="button" className="secondary" onClick={() => void removeTelegramAssistantAgentConnection()} disabled={loading}>Disconnect Assistant Agent bot</button>}</div>
           </div>
         </section>
       )}
@@ -1351,10 +1475,12 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         <>
           <section className="detail-panel stack">
             <div>
-              <h2>Act routing</h2>
-              <p className="muted">Act uses its own model and reasoning-effort route.</p>
+              <h2>Agent Routing</h2>
+              <p className="muted">Act, Observer, and the scheduled Assistant assessment use independent model and reasoning-effort routes.</p>
             </div>
             <RoutingRow label="Act" choice={routing.act} models={catalog.models} onChange={(choice) => updateChoice("act", "act", choice)} />
+            <RoutingRow label="Observer" choice={routing.observer ?? EMPTY_INVOCATION_CHOICE} models={catalog.models} onChange={(choice) => updateChoice("observer", "observer", choice)} />
+            <RoutingRow label="Assessment" choice={routing.assessment ?? EMPTY_INVOCATION_CHOICE} models={catalog.models} onChange={(choice) => updateChoice("assessment", "assessment", choice)} />
           </section>
 
           <section className="detail-panel stack">

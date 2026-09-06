@@ -116,6 +116,29 @@ def test_act_has_an_independent_route(db_session: Session) -> None:
     assert explicit.route_source == "act"
 
 
+def test_observer_and_assessment_have_independent_agent_routes(db_session: Session) -> None:
+    service = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
+    service.update_settings(
+        CodexRoutingSettingsPayload.model_validate(
+            {
+                "act": {"model": "gpt-fast", "reasoning_effort": "low"},
+                "observer": {"model": "gpt-smart", "reasoning_effort": "high"},
+                "assessment": {"model": "gpt-smart", "reasoning_effort": "xhigh"},
+            }
+        )
+    )
+
+    observer = service.resolve(role="observer", action="observer")
+    assessment = service.resolve(role="assessment", action="assessment")
+
+    assert observer.effective_model == "gpt-smart"
+    assert observer.effective_reasoning_effort == "high"
+    assert observer.route_source == "observer"
+    assert assessment.effective_model == "gpt-smart"
+    assert assessment.effective_reasoning_effort == "xhigh"
+    assert assessment.route_source == "assessment"
+
+
 def test_saved_single_codex_route_reaches_real_cli_command(
     tmp_path: Path,
     db_session: Session,

@@ -13,6 +13,7 @@ from app.services.integration_service import (
 
 NOTION_DONE_CLEANUP_SERVICE_ID = "backend.notion.todo.cleanup_done"
 QUERCUS_SYNC_SERVICE_ID = "backend.quercus.knowledge.sync"
+ASSISTANT_ASSESSMENT_SERVICE_ID = "backend.assistant.assessment"
 MAX_CLEANUP_PAGES = 100
 PAGE_SIZE = 100
 MAX_REPORTED_ITEMS = 100

@@ -56,3 +56,7 @@ Agents must not:
 ## Failure Policy
 
 For project build workflows, one task node can fail and repair up to three times. The final end-to-end test loop also has its own three-failure limit. After repeated failures, ProductManager stops the workflow and writes a user-facing stuck summary.
+
+## Conversational agents
+
+The bounded skill-building roles above are separate from the persistent Act, Observer, and Assistant conversations. Their shared workspace, authenticated tools, and editable access policies are documented under [persistent agents](../runtime/agents.md).

@@ -1,6 +1,6 @@
 # Gmail OAuth Integration
 
-Eidolon supports one trusted Gmail connection and four provider-neutral `email.*` functions. Gmail and Google Calendar share one Google OAuth application client, but each service has its own authorization grant, refresh token, scopes, account identity, connect/disconnect controls, and authorization records. The two services may therefore be connected to different Google accounts, and replacing one account does not change the other.
+Eidolon supports one trusted Gmail connection and five provider-neutral `email.*` functions. Gmail and Google Calendar share one Google OAuth application client, but each service has its own authorization grant, refresh token, scopes, account identity, connect/disconnect controls, and authorization records. The two services may therefore be connected to different Google accounts, and replacing one account does not change the other.
 
 ## OAuth Setup and Storage
 
@@ -28,7 +28,8 @@ The callback requires the Gmail scope and a refresh token, then retrieves the ve
 | --- | --- |
 | `email.search` | Requires at least one keyword/filter. Returns one page of at most 25 normalized conversation summaries and an opaque continuation token. |
 | `email.conversation.get` | Fetches one Gmail thread in full format and returns at most 100 normalized messages. HTML-only bodies are converted to text. Attachments expose only filename, MIME type, and size. |
-| `email.read_new` | Fetches at most 50 unread Primary Inbox messages newer than one year. It excludes Promotions, Social, Updates, Forums, Spam, and Trash. Every selected message must be fetched and the combined normalized result must fit 4 MiB before Eidolon removes the `UNREAD` label from the batch. |
+| `email.read_new` | Fetches at most 50 unread Primary Inbox messages newer than one year without changing their read state. It excludes Promotions, Social, Updates, Forums, Spam, and Trash. Every selected message must be fetched and the combined normalized result must fit 4 MiB. |
+| `email.read_and_mark_new` | Fetches the same bounded unread Primary Inbox batch, then removes the `UNREAD` label from exactly the messages successfully fetched after the combined normalized result fits 4 MiB. |
 | `email.send` | High risk. Sends one plain-text email to 1-10 direct recipients and at most 20 total recipients. Subject and body are bounded, and HTML and attachments are not accepted. Every invocation requires the separate per-call approval workflow. |
 
 Normalized messages contain message/conversation IDs, bounded sender and recipient headers, subject, date, snippet, text, unread state, and attachment metadata. Eidolon never returns raw MIME, attachment bytes, OAuth responses, authorization headers, or provider credentials.

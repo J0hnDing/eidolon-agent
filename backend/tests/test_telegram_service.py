@@ -1,16 +1,24 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.db import Base
-from app.models import ActSession, ActTelegramBinding, InvocationApproval, TelegramBotConnection
+from app.models import (
+    ActSession,
+    ActTelegramBinding,
+    AgentProposal,
+    InvocationApproval,
+    TelegramBotConnection,
+)
 from app.services.secret_store import FakeSecretStore
 from app.services.telegram_provider import FakeTelegramBotApi, PairingMessage, TelegramProviderError
 from app.services.telegram_service import (
     TELEGRAM_ACT_ROLE,
+    TELEGRAM_ASSISTANT_ROLE,
+    TELEGRAM_OBSERVER_ROLE,
     TelegramService,
     TelegramServiceError,
     run_telegram_long_polling,
@@ -229,6 +237,210 @@ def test_act_bot_has_independent_role_validates_use_and_disconnects_binding() ->
         service.remove()
         assert db.query(ActTelegramBinding).count() == 0
         assert db.query(TelegramBotConnection).count() == 0
+
+
+def test_observer_and_assistant_bots_keep_independent_pairing_and_session_selection() -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        store = FakeSecretStore()
+        observer_api = FakeTelegramBotApi(bot_id=101, username="observer_bot")
+        assistant_api = FakeTelegramBotApi(bot_id=202, username="assistant_bot")
+        observer = TelegramService(
+            db,
+            secret_store=store,
+            api_factory=lambda _token: observer_api,
+            role=TELEGRAM_OBSERVER_ROLE,
+        )
+        assistant = TelegramService(
+            db,
+            secret_store=store,
+            api_factory=lambda _token: assistant_api,
+            role=TELEGRAM_ASSISTANT_ROLE,
+        )
+        observer_pairing = observer.start_pairing("101:observer-token")
+        assistant_pairing = assistant.start_pairing("202:assistant-token")
+        observer_connection = db.scalar(
+            select(TelegramBotConnection).where(TelegramBotConnection.role == TELEGRAM_OBSERVER_ROLE)
+        )
+        assistant_connection = db.scalar(
+            select(TelegramBotConnection).where(TelegramBotConnection.role == TELEGRAM_ASSISTANT_ROLE)
+        )
+        assert observer_connection is not None
+        assert assistant_connection is not None
+        observer._handle_pairing(
+            observer_connection.id,
+            observer_connection.bot_id,
+            PairingMessage(update_id=1, code=observer_pairing.pairing_code, chat_id=11, user_id=22),
+        )
+        assistant._handle_pairing(
+            assistant_connection.id,
+            assistant_connection.bot_id,
+            PairingMessage(update_id=1, code=assistant_pairing.pairing_code, chat_id=33, user_id=44),
+        )
+        db.add_all(
+            [
+                ActSession(agent_id="act", codex_thread_id="thread-act", title="Act only"),
+                ActSession(agent_id="observer", codex_thread_id="thread-observer", title="Read the workspace"),
+                ActSession(agent_id="assistant", codex_thread_id="thread-assistant", title="Assess goals"),
+            ]
+        )
+        db.add(ActTelegramBinding(connection_id=assistant_connection.id, active_session_id=None))
+        db.commit()
+
+        session_count = db.query(ActSession).count()
+        assistant._handle_message(
+            assistant_connection.id,
+            assistant_connection.bot_id,
+            {"chat_id": 33, "user_id": 44, "text": "Continue the assessment"},
+        )
+        assert db.query(ActSession).count() == session_count
+        assert assistant_api.sent_messages[-1]["text"] == (
+            "No Assistant session is selected. Use /new or /use <session id>."
+        )
+
+        observer._handle_message(
+            observer_connection.id,
+            observer_connection.bot_id,
+            {"chat_id": 11, "user_id": 22, "text": "/sessions"},
+        )
+        assistant._handle_message(
+            assistant_connection.id,
+            assistant_connection.bot_id,
+            {"chat_id": 33, "user_id": 44, "text": "/sessions"},
+        )
+
+        assert "Read the workspace" in observer_api.sent_messages[-1]["text"]
+        assert "Act only" not in observer_api.sent_messages[-1]["text"]
+        assert "Assess goals" in assistant_api.sent_messages[-1]["text"]
+        assert "Read the workspace" not in assistant_api.sent_messages[-1]["text"]
+        assert observer_connection.id != assistant_connection.id
+
+
+def test_assistant_proposal_uses_notification_bot_and_denial_is_idempotent() -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        store = FakeSecretStore()
+        api = FakeTelegramBotApi()
+        service = TelegramService(db, secret_store=store, api_factory=lambda _token: api)
+        pairing = service.start_pairing("123:telegram-token")
+        connection = db.query(TelegramBotConnection).one()
+        service._handle_pairing(
+            connection.id,
+            connection.bot_id,
+            PairingMessage(update_id=1, code=pairing.pairing_code, chat_id=11, user_id=22),
+        )
+        source = ActSession(agent_id="assistant", codex_thread_id="assistant-thread")
+        db.add(source)
+        db.flush()
+        proposal = AgentProposal(
+            source_session_id=source.id,
+            title="Finish the report",
+            rationale="This is the next actionable todo.",
+            instruction="Complete the report and run its checks.",
+            actions="Inspect sources and update the draft.",
+            references_json=[{"type": "todo", "id": "12"}],
+            fingerprint="a" * 64,
+        )
+        db.add(proposal)
+        db.commit()
+        db.refresh(proposal)
+
+        service.send_agent_proposal(proposal)
+
+        assert proposal.telegram_connection_id == connection.id
+        assert proposal.telegram_message_ids_json == [1]
+        assert proposal.nonce_hash is not None
+        callback_data = api.sent_messages[0]["reply_markup"]["inline_keyboard"][0][1]["callback_data"]
+        api.updates.append(
+            {
+                "update_id": 2,
+                "callback_query": {
+                    "id": "proposal-deny",
+                    "from": {"id": 22},
+                    "data": callback_data,
+                    "message": {"message_id": 1, "chat": {"id": 11, "type": "private"}},
+                },
+            }
+        )
+        service.poll_once()
+        db.refresh(proposal)
+        assert proposal.status == "denied"
+        assert proposal.nonce_hash is None
+        assert api.edited_messages[-1]["text"].startswith("❌ <b>Assistant plan denied</b>")
+
+        api.updates.append({**api.updates[-1], "update_id": 3})
+        service.poll_once()
+        db.refresh(proposal)
+        assert proposal.status == "denied"
+
+
+def test_agent_proposal_terminal_outcome_retries_once_after_delivery_failure() -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        store = FakeSecretStore()
+        api = FakeTelegramBotApi()
+        service = TelegramService(db, secret_store=store, api_factory=lambda _token: api)
+        pairing = service.start_pairing("123:telegram-token")
+        connection = db.query(TelegramBotConnection).one()
+        service._handle_pairing(
+            connection.id,
+            connection.bot_id,
+            PairingMessage(update_id=1, code=pairing.pairing_code, chat_id=11, user_id=22),
+        )
+        source = ActSession(agent_id="assistant", codex_thread_id="assistant-retry-thread")
+        db.add(source)
+        db.flush()
+        proposal = AgentProposal(
+            source_session_id=source.id,
+            title="Finish the report",
+            rationale="This is the next actionable todo.",
+            instruction="Complete the report and run its checks.",
+            actions="Inspect sources and update the draft.",
+            references_json=[],
+            fingerprint="b" * 64,
+        )
+        db.add(proposal)
+        db.commit()
+        db.refresh(proposal)
+        service.send_agent_proposal(proposal)
+        proposal.status = "approved"
+        proposal.execution_status = "queued"
+        db.commit()
+        service.update_agent_proposal(proposal)
+        assert proposal.telegram_outcome_fingerprint == "approved:queued"
+
+        proposal.execution_status = "failed"
+        db.commit()
+        api.errors.append(TelegramProviderError("provider_unavailable", "temporary failure"))
+        with pytest.raises(TelegramProviderError):
+            service.update_agent_proposal(proposal)
+        db.rollback()
+        db.refresh(proposal)
+        assert proposal.telegram_outcome_fingerprint == "approved:queued"
+
+        edits_before_retry = len(api.edited_messages)
+        assert service.poll_once() == 0
+        db.refresh(proposal)
+        assert proposal.telegram_outcome_fingerprint == "approved:failed"
+        assert len(api.edited_messages) == edits_before_retry + 1
+
+        service.poll_once()
+        assert len(api.edited_messages) == edits_before_retry + 1
 
 
 def test_disconnected_poll_worker_backs_off_instead_of_spinning(monkeypatch: pytest.MonkeyPatch) -> None:

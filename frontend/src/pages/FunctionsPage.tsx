@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { FunctionCatalogEntry, api } from "../api/client";
-import RunningStateDot from "../components/RunningStateDot";
+import { RunningStatus } from "../components/RunningStateDot";
 import { formatDisplayName } from "../lib/displayName";
 import { usePolling } from "../lib/usePolling";
 
@@ -155,9 +155,6 @@ export function FunctionTable({ functions }: { functions: FunctionCatalogEntry[]
               <tr key={entry.id}>
                 <td>
                   <span className="entry-title-line">
-                    <span className="running-state-slot">
-                      {entry.is_running && <RunningStateDot />}
-                    </span>
                     <strong>
                       {entry.skill_id ? (
                         <Link to={`/skills/${entry.skill_id}`}>{formatDisplayName(entry.title)}</Link>
@@ -169,7 +166,10 @@ export function FunctionTable({ functions }: { functions: FunctionCatalogEntry[]
                 </td>
                 <td>{functionSourceLabel(entry)}</td>
                 <td>
-                  <span className={`badge status-${entry.availability}`}>{entry.availability}</span>
+                  <span className="table-status-stack">
+                    <span className={`badge status-${entry.availability}`}>{entry.availability}</span>
+                    {entry.is_running && <RunningStatus />}
+                  </span>
                   {entry.availability_reasons.map((reason) => (
                     <span className="table-subtitle" key={reason}>{reason}</span>
                   ))}

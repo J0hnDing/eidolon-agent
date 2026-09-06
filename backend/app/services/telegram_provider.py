@@ -488,9 +488,13 @@ class TelegramApprovalCallback:
     chat_id: int
     user_id: int
     message_id: int | None
+    kind: Literal["invocation", "proposal"] = "invocation"
 
 
 _CALLBACK_RE = re.compile(r"^(approve|deny):([1-9][0-9]{0,18}):([A-Za-z0-9_-]{8,32})$")
+_PROPOSAL_CALLBACK_RE = re.compile(
+    r"^proposal:(approve|deny):([1-9][0-9]{0,18}):([A-Za-z0-9_-]{8,32})$"
+)
 
 
 def create_callback_nonce() -> str:
@@ -512,6 +516,23 @@ def build_callback_data(approval_id: int, decision: PairingDecision, nonce: str 
     callback_nonce = nonce or create_callback_nonce()
     digest = hash_callback_nonce(callback_nonce)
     value = f"{decision}:{approval_id}:{callback_nonce}"
+    if len(value.encode("utf-8")) > TELEGRAM_MAX_CALLBACK_DATA_BYTES:
+        raise TelegramProviderError("invalid_input", "Telegram callback data exceeds the 64 byte limit")
+    return value, digest
+
+
+def build_proposal_callback_data(
+    proposal_id: int,
+    decision: PairingDecision,
+    nonce: str | None = None,
+) -> tuple[str, str]:
+    if isinstance(proposal_id, bool) or not isinstance(proposal_id, int) or not 1 <= proposal_id <= 10**18:
+        raise TelegramProviderError("invalid_input", "proposal id is invalid")
+    if decision not in {"approve", "deny"}:
+        raise TelegramProviderError("invalid_input", "proposal decision is invalid")
+    callback_nonce = nonce or create_callback_nonce()
+    digest = hash_callback_nonce(callback_nonce)
+    value = f"proposal:{decision}:{proposal_id}:{callback_nonce}"
     if len(value.encode("utf-8")) > TELEGRAM_MAX_CALLBACK_DATA_BYTES:
         raise TelegramProviderError("invalid_input", "Telegram callback data exceeds the 64 byte limit")
     return value, digest
@@ -539,7 +560,18 @@ def parse_callback_update(update: Mapping[str, Any]) -> TelegramApprovalCallback
     query_id = query.get("id")
     sender = query.get("from")
     message = query.get("message")
-    data = parse_callback_data(query.get("data"))
+    raw_data = query.get("data")
+    data = parse_callback_data(raw_data)
+    callback_kind: Literal["invocation", "proposal"] = "invocation"
+    if data is None and isinstance(raw_data, str) and len(raw_data.encode("utf-8")) <= TELEGRAM_MAX_CALLBACK_DATA_BYTES:
+        proposal_match = _PROPOSAL_CALLBACK_RE.fullmatch(raw_data)
+        if proposal_match is not None:
+            data = (
+                proposal_match.group(1),
+                int(proposal_match.group(2)),
+                proposal_match.group(3),
+            )  # type: ignore[assignment]
+            callback_kind = "proposal"
     if (
         not isinstance(query_id, str)
         or not query_id
@@ -567,6 +599,7 @@ def parse_callback_update(update: Mapping[str, Any]) -> TelegramApprovalCallback
         chat_id=chat["id"],
         user_id=sender["id"],
         message_id=message_id,
+        kind=callback_kind,
     )
 
 
@@ -686,6 +719,144 @@ def send_approval_request(
         nonce_hash=nonce_hash,
         approve_callback_data=approve,
         deny_callback_data=deny,
+    )
+
+
+def _agent_proposal_html_chunks(
+    *,
+    heading: str,
+    title: str,
+    rationale: str,
+    instruction: str,
+    actions: str,
+    references: list[str],
+) -> list[str]:
+    fields = (
+        ("Title", title),
+        ("Why", rationale),
+        ("Proposed actions", actions),
+        ("Act instruction", instruction),
+        ("Related goals and todos", "\n".join(references) if references else "None"),
+    )
+    fragments = [heading]
+    for label, raw_value in fields:
+        prefix = f"<b>{html.escape(label, quote=False)}:</b>\n"
+        value = raw_value or "None"
+        available = max(1, TELEGRAM_MAX_MESSAGE_CHARS - len(prefix))
+        value_chunks = _split_escaped_text(value, available)
+        fragments.append(prefix + html.escape(value_chunks[0], quote=False))
+        fragments.extend(html.escape(chunk, quote=False) for chunk in value_chunks[1:])
+    chunks: list[str] = []
+    current = ""
+    for fragment in fragments:
+        candidate = fragment if not current else f"{current}\n{fragment}"
+        if current and len(candidate) > TELEGRAM_MAX_MESSAGE_CHARS:
+            chunks.append(current)
+            current = fragment
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def send_agent_proposal_request(
+    api: TelegramBotApi,
+    chat_id: int | str,
+    *,
+    proposal_id: int,
+    title: str,
+    rationale: str,
+    instruction: str,
+    actions: str,
+    references: list[str],
+    nonce: str | None = None,
+) -> ApprovalDelivery:
+    """Send an Assistant proposal with complete Act instructions and opaque controls."""
+
+    _require_chat_id(chat_id)
+    callback_nonce = nonce or create_callback_nonce()
+    nonce_hash = hash_callback_nonce(callback_nonce)
+    approve, _ = build_proposal_callback_data(proposal_id, "approve", callback_nonce)
+    deny, _ = build_proposal_callback_data(proposal_id, "deny", callback_nonce)
+    markup = {
+        "inline_keyboard": [[
+            {"text": "✅ Approve plan", "callback_data": approve},
+            {"text": "❌ Deny", "callback_data": deny},
+        ]]
+    }
+    _validate_reply_markup(markup)
+    chunks = _agent_proposal_html_chunks(
+        heading="🤔 <b>Assistant plan approval</b>",
+        title=title,
+        rationale=rationale,
+        instruction=instruction,
+        actions=actions,
+        references=references,
+    )
+    message_ids: list[int] = []
+    for index, text in enumerate(chunks):
+        _validate_message_text(text)
+        result = api.send_message(
+            chat_id,
+            text,
+            parse_mode="HTML",
+            reply_markup=markup if index == 0 else None,
+        )
+        message_id = result.get("message_id") if isinstance(result, Mapping) else None
+        if isinstance(message_id, bool) or not isinstance(message_id, int) or message_id < 1:
+            raise TelegramProviderError("provider_unavailable", "Telegram returned an invalid message id")
+        message_ids.append(message_id)
+    return ApprovalDelivery(
+        message_ids=tuple(message_ids),
+        nonce=callback_nonce,
+        nonce_hash=nonce_hash,
+        approve_callback_data=approve,
+        deny_callback_data=deny,
+    )
+
+
+def edit_agent_proposal_outcome(
+    api: TelegramBotApi,
+    chat_id: int | str,
+    message_id: int,
+    *,
+    title: str,
+    rationale: str,
+    instruction: str,
+    actions: str,
+    references: list[str],
+    status: str,
+    execution_status: str | None,
+) -> None:
+    """Replace the Assistant proposal status message and remove decision controls."""
+
+    _require_chat_id(chat_id)
+    _require_message_id(message_id)
+    if status == "denied":
+        heading = "❌ <b>Assistant plan denied</b>"
+    elif execution_status == "succeeded":
+        heading = "✅ <b>Approved · Act completed</b>"
+    elif execution_status in {"failed", "interrupted"}:
+        heading = "⚠️ <b>Approved · Act did not complete</b>"
+    elif execution_status == "running":
+        heading = "⏳ <b>Approved · Act is working</b>"
+    else:
+        heading = "✅ <b>Approved · Act queued</b>"
+    text = _agent_proposal_html_chunks(
+        heading=heading,
+        title=title,
+        rationale=rationale,
+        instruction=instruction,
+        actions=actions,
+        references=references,
+    )[0]
+    api.edit_message_text(
+        chat_id,
+        message_id,
+        text,
+        parse_mode="HTML",
+        reply_markup={"inline_keyboard": []},
     )
 
 
@@ -1159,9 +1330,11 @@ __all__ = [
     "UrllibTelegramProviderAdapter",
     "UrllibTelegramBotApi",
     "build_callback_data",
+    "build_proposal_callback_data",
     "chunk_text_for_telegram",
     "create_callback_nonce",
     "create_pairing_code",
+    "edit_agent_proposal_outcome",
     "edit_approval_outcome",
     "hash_callback_nonce",
     "hash_pairing_code",
@@ -1170,6 +1343,7 @@ __all__ = [
     "parse_pairing_update",
     "parse_start_command",
     "render_approval_text",
+    "send_agent_proposal_request",
     "send_approval_request",
     "send_notification",
     "validate_callback_origin",

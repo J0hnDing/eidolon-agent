@@ -60,6 +60,12 @@ def test_local_schema_migrates_legacy_statuses_task_columns_and_retired_skill_fi
         )
         connection.execute(text("CREATE TABLE skill_schedules (id INTEGER PRIMARY KEY, status VARCHAR(32))"))
         connection.execute(text("INSERT INTO skill_schedules (id, status) VALUES (1, 'deleted')"))
+        connection.execute(
+            text(
+                "CREATE TABLE schedule_runtime_states ("
+                "schedule_key VARCHAR(160) PRIMARY KEY, definition_fingerprint VARCHAR(64))"
+            )
+        )
         connection.execute(text("CREATE TABLE codex_routing_settings (id INTEGER PRIMARY KEY, settings_json JSON)"))
         connection.execute(
             text(
@@ -108,6 +114,10 @@ def test_local_schema_migrates_legacy_statuses_task_columns_and_retired_skill_fi
     }
     assert "relay_container_id" in {
         column["name"] for column in inspector.get_columns("web_app_instances")
+    }
+    assert {"enabled", "configuration_json"} <= {
+        column["name"]
+        for column in inspector.get_columns("schedule_runtime_states")
     }
     assert "proposed_skill_type" not in {
         column["name"] for column in inspector.get_columns("skill_generation_requests")

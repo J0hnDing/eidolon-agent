@@ -148,7 +148,7 @@ function isStoredConversation(value: unknown): value is ChatConversation {
   return (
     typeof raw.id === "string" &&
     typeof raw.title === "string" &&
-    (raw.mode === "project" || raw.mode === "act") &&
+    (raw.mode === "project" || raw.mode === "act" || raw.mode === "observer" || raw.mode === "assistant") &&
     Array.isArray(raw.messages) &&
     typeof raw.createdAt === "string" &&
     typeof raw.updatedAt === "string"

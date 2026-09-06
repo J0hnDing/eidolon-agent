@@ -4,6 +4,7 @@ import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom"
 import ApprovalRequestsPage from "./pages/ApprovalRequestsPage";
 import AgentRunDetailPage from "./pages/AgentRunDetailPage";
 import AgentRunsPage from "./pages/AgentRunsPage";
+import AgentsPage from "./pages/AgentsPage";
 import ChatPage from "./pages/ChatPage";
 import FunctionsPage from "./pages/FunctionsPage";
 import MemoryPage from "./pages/MemoryPage";
@@ -17,6 +18,7 @@ import eidolonLogo from "../resource/logo/eidolon_logo_exact.svg";
 
 type NavIcon =
   | "chat"
+  | "agents"
   | "memory"
   | "skills"
   | "functions"
@@ -34,6 +36,7 @@ const navGroups: Array<{
     label: "Workspace",
     items: [
       { to: "/chat", label: "Chat", icon: "chat" },
+      { to: "/agents", label: "Agents", icon: "agents" },
       { to: "/memory", label: "Memory", icon: "memory" },
     ],
   },
@@ -138,6 +141,8 @@ export default function App() {
             <Route path="/" element={<Navigate to="/chat" replace />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/act" element={<Navigate to="/chat" replace />} />
+            <Route path="/agents" element={<AgentsPage />} />
+            <Route path="/agents/:agentId" element={<AgentsPage />} />
             <Route path="/memory" element={<MemoryPage />} />
             <Route path="/skills" element={<SkillsPage />} />
             <Route path="/functions" element={<FunctionsPage />} />
@@ -165,6 +170,7 @@ export default function App() {
 function NavigationIcon({ name }: { name: NavIcon }) {
   const paths: Record<NavIcon, React.ReactNode> = {
     chat: <path d="M5 6.75A2.75 2.75 0 0 1 7.75 4h8.5A2.75 2.75 0 0 1 19 6.75v5.5A2.75 2.75 0 0 1 16.25 15H11l-4.5 3v-3.29A2.75 2.75 0 0 1 5 12.25v-5.5Z" />,
+    agents: <path d="M8.5 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7-1a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM3.5 19v-2.25A3.75 3.75 0 0 1 7.25 13h2.5a3.75 3.75 0 0 1 3.75 3.75V19m.5-6h1.75A3.25 3.25 0 0 1 19 16.25V19" />,
     memory: <path d="M8 5.5A2.5 2.5 0 0 1 10.5 3H16v15h-5.5A2.5 2.5 0 0 0 8 20.5v-15Zm0 0v15m0-15A2.5 2.5 0 0 0 5.5 3H4v15h1.5A2.5 2.5 0 0 1 8 20.5" />,
     skills: <path d="m12 3 2.15 4.35L19 8.06l-3.5 3.41.83 4.82L12 14.02l-4.33 2.27.83-4.82L5 8.06l4.85-.71L12 3Zm0 15.5v2" />,
     functions: <path d="M9 4H7.75A1.75 1.75 0 0 0 6 5.75v12.5C6 19.22 6.78 20 7.75 20H9m6-16h1.25C17.22 4 18 4.78 18 5.75v12.5c0 .97-.78 1.75-1.75 1.75H15M10 9l4 3-4 3" />,

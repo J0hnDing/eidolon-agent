@@ -17,7 +17,7 @@ const conversation = {
 };
 
 describe("ChatWorkspace", () => {
-  it("marks immutable conversation modes and creates a selected mode", () => {
+  it("opens the new-chat popover at the bottom of the sidebar and creates each conversation mode", () => {
     const onDraftChange = vi.fn();
     const onNewConversation = vi.fn();
     const onDeleteConversation = vi.fn();
@@ -57,17 +57,34 @@ describe("ChatWorkspace", () => {
     expect(screen.queryByText("assistant")).toBeNull();
     expect(screen.getAllByText("Project").length).toBeGreaterThan(0);
     expect(screen.getByText("Act")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "New Chat" })).toBeNull();
-    expect(screen.queryByLabelText("Assistant mode")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "New Project" }));
-    fireEvent.click(screen.getByRole("button", { name: "New Act" }));
+    const sidebar = screen.getByRole("complementary", { name: "Chats" });
+    expect(sidebar.querySelector(".chat-thread-list")?.nextElementSibling?.classList.contains("chat-create-actions")).toBe(true);
+    expect(screen.getByRole("button", { name: "New Chat" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "New Chat" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+    expect(screen.getByRole("dialog", { name: "New Chat" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create Project" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create Act" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create Project" }).classList.contains("project")).toBe(true);
+    expect(screen.getByRole("button", { name: "Create Act" }).classList.contains("act")).toBe(true);
+    expect(screen.getByRole("button", { name: "Create Observer" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create Assistant" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Act" }));
+    fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Observer" }));
+    fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Assistant" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
     fireEvent.change(screen.getByLabelText("Conversation message"), { target: { value: "changed" } });
     expect(onNewConversation).toHaveBeenNthCalledWith(1, "project");
     expect(onNewConversation).toHaveBeenNthCalledWith(2, "act");
+    expect(onNewConversation).toHaveBeenNthCalledWith(3, "observer");
+    expect(onNewConversation).toHaveBeenNthCalledWith(4, "assistant");
     expect(onDraftChange).toHaveBeenCalledWith("changed");
     expect(onDeleteConversation).toHaveBeenCalledWith(conversation.id);
-    expect(onNewConversation).toHaveBeenCalledTimes(2);
+    expect(onNewConversation).toHaveBeenCalledTimes(4);
     expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy();
   });
 

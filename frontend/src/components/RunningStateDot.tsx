@@ -7,3 +7,12 @@ export default function RunningStateDot() {
     />
   );
 }
+
+export function RunningStatus() {
+  return (
+    <span className="running-state-status">
+      <RunningStateDot />
+      <span aria-hidden="true">running</span>
+    </span>
+  );
+}

@@ -61,6 +61,8 @@ class ProductManagerSessionService:
         base_instructions: str | None = None,
         sandbox: str = "read-only",
         approval_policy: str = "never",
+        config: dict[str, Any] | None = None,
+        permissions: str | None = None,
     ) -> str:
         params: dict[str, Any] = {
             "cwd": str(Path(cwd).resolve()) if cwd is not None else str(Path.cwd().resolve()),
@@ -73,6 +75,11 @@ class ProductManagerSessionService:
         }
         if reasoning_effort:
             params["config"] = {"model_reasoning_effort": reasoning_effort}
+        if config is not None:
+            params["config"] = {**params.get("config", {}), **config}
+        if permissions is not None:
+            params.pop("sandbox", None)
+            params["permissions"] = permissions
         response = self.client.request("thread/start", params)
         metadata = self._metadata(response)
         with self._threads_lock:
@@ -89,6 +96,8 @@ class ProductManagerSessionService:
         developer_instructions: str | None = None,
         sandbox: str | None = None,
         approval_policy: str | None = None,
+        config: dict[str, Any] | None = None,
+        permissions: str | None = None,
     ) -> ProductManagerThreadMetadata:
         params: dict[str, Any] = {"threadId": thread_id}
         if cwd is not None:
@@ -103,6 +112,11 @@ class ProductManagerSessionService:
             params["sandbox"] = sandbox
         if approval_policy is not None:
             params["approvalPolicy"] = approval_policy
+        if config is not None:
+            params["config"] = {**params.get("config", {}), **config}
+        if permissions is not None:
+            params.pop("sandbox", None)
+            params["permissions"] = permissions
         response = self.client.request("thread/resume", params)
         metadata = self._metadata(response, expected_thread_id=thread_id)
         with self._threads_lock:

@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { SchedulePayload, ScheduleType, SkillSchedule, api } from "../api/client";
-import RunningStateDot from "../components/RunningStateDot";
+import { RunningStatus } from "../components/RunningStateDot";
 import { parseBackendDateTime } from "../lib/dateTime";
 import { formatDisplayName } from "../lib/displayName";
 import { usePolling } from "../lib/usePolling";
@@ -20,7 +20,7 @@ export default function SchedulesPage() {
 
   usePolling(
     () => loadSchedules({ showLoading: false }),
-    schedules.some((schedule) => schedule.read_only
+    schedules.some((schedule) => schedule.schedule_kind === "platform"
       ? schedule.status === "active"
       : schedule.skill_enabled === true),
     5000,
@@ -52,6 +52,33 @@ export default function SchedulesPage() {
   }
 
   const editing = schedules.find((schedule) => schedule.id === editingId) ?? null;
+
+  function isEnabled(schedule: SkillSchedule): boolean {
+    return schedule.schedule_kind === "platform"
+      ? schedule.status === "active"
+      : schedule.skill_enabled === true;
+  }
+
+  async function toggleSchedule(schedule: SkillSchedule) {
+    const enabled = isEnabled(schedule);
+    if (schedule.service_id === "backend.assistant.assessment") {
+      await act(() => api.updateAssistantAssessment(!enabled));
+    } else if (schedule.schedule_kind === "platform") {
+      await act(() => api.updatePlatformScheduleAvailability(schedule.service_id!, !enabled));
+    } else {
+      await act(() => api.updateSkill(schedule.skill_id!, { enabled: !enabled }));
+    }
+  }
+
+  async function runNow(schedule: SkillSchedule) {
+    if (schedule.service_id === "backend.assistant.assessment") {
+      await act(() => api.runAssistantAssessment());
+    } else if (schedule.schedule_kind === "platform") {
+      await act(() => api.runPlatformScheduleNow(schedule.service_id!));
+    } else {
+      await act(() => api.runScheduleNow(schedule.id));
+    }
+  }
 
   return (
     <section className="page stack">
@@ -91,9 +118,6 @@ export default function SchedulesPage() {
                 <tr key={`${schedule.schedule_kind}-${schedule.id}`}>
                   <td>
                     <span className="entry-title-line">
-                      <span className="running-state-slot">
-                        {schedule.is_running && <RunningStateDot />}
-                      </span>
                       <strong>
                         {schedule.skill_id !== null ? (
                           <Link className="table-title-link reveal-arrow-link" to={`/skills/${schedule.skill_id}`}>
@@ -106,8 +130,11 @@ export default function SchedulesPage() {
                   </td>
                   <td>{humanSchedule(schedule)}</td>
                   <td>
-                    <span className={`badge status-${schedule.read_only ? schedule.status : schedule.skill_enabled ? "active" : "paused"}`}>
-                      {schedule.read_only ? schedule.status : schedule.skill_enabled ? "active" : "paused"}
+                    <span className="table-status-stack">
+                      <span className={`badge status-${isEnabled(schedule) ? "active" : "paused"}`}>
+                        {isEnabled(schedule) ? "active" : "paused"}
+                      </span>
+                      {schedule.is_running && <RunningStatus />}
                     </span>
                   </td>
                   <td>{formatTimestamp(schedule.next_run_at, "not scheduled")}</td>
@@ -124,27 +151,31 @@ export default function SchedulesPage() {
                     </span>
                   </td>
                   <td>
-                    {schedule.read_only ? (
-                      <span className="muted">Managed by Eidolon</span>
-                    ) : (
-                      <div className="button-row schedule-actions">
-                        {schedule.skill_enabled ? (
-                          <button type="button" className="secondary schedule-state-action" onClick={() => act(() => api.updateSkill(schedule.skill_id!, { enabled: false }))} disabled={isWorking}>
-                            Disable
-                          </button>
-                        ) : (
-                          <button type="button" className="schedule-state-action" onClick={() => act(() => api.updateSkill(schedule.skill_id!, { enabled: true }))} disabled={isWorking}>
-                            Enable
-                          </button>
-                        )}
-                        <button type="button" className="secondary" onClick={() => act(() => api.runScheduleNow(schedule.id))} disabled={isWorking || !schedule.skill_enabled}>
-                          Run Now
-                        </button>
+                    <div className="button-row schedule-actions">
+                      <button
+                        type="button"
+                        className={`${isEnabled(schedule) ? "secondary " : ""}schedule-state-action`}
+                        onClick={() => toggleSchedule(schedule)}
+                        disabled={isWorking}
+                      >
+                        {isEnabled(schedule) ? "Disable" : "Enable"}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => runNow(schedule)}
+                        disabled={isWorking || (schedule.service_id !== "backend.assistant.assessment" && !isEnabled(schedule))}
+                      >
+                        Run Now
+                      </button>
+                      {schedule.service_id === "backend.assistant.assessment" ? (
+                        <Link className="button-link secondary" to="/agents/assistant">Edit</Link>
+                      ) : (
                         <button type="button" className="secondary" onClick={() => setEditingId(schedule.id)} disabled={isWorking}>
                           Edit
                         </button>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -160,10 +191,15 @@ export default function SchedulesPage() {
         <ScheduleEditor
           key={editing.id}
           schedule={editing}
+          inputEditable={editing.schedule_kind === "service"}
           isWorking={isWorking}
           onCancel={() => setEditingId(null)}
           onSave={(payload) => act(async () => {
-            await api.updateSchedule(editing.id, payload);
+            if (editing.schedule_kind === "platform") {
+              await api.updatePlatformSchedule(editing.service_id!, payload);
+            } else {
+              await api.updateSchedule(editing.id, payload);
+            }
             setEditingId(null);
           })}
         />
@@ -172,8 +208,9 @@ export default function SchedulesPage() {
   );
 }
 
-function ScheduleEditor({ schedule, isWorking, onCancel, onSave }: {
+function ScheduleEditor({ schedule, inputEditable, isWorking, onCancel, onSave }: {
   schedule: SkillSchedule;
+  inputEditable: boolean;
   isWorking: boolean;
   onCancel: () => void;
   onSave: (payload: { name: string; schedule: SchedulePayload }) => Promise<void>;
@@ -260,7 +297,7 @@ function ScheduleEditor({ schedule, isWorking, onCancel, onSave }: {
           )}
           <label>Timezone<input value={timezone} onChange={(event) => setTimezone(event.target.value)} required /></label>
         </div>
-        <label>Input JSON<textarea rows={7} value={input} onChange={(event) => setInput(event.target.value)} /></label>
+        {inputEditable && <label>Input JSON<textarea rows={7} value={input} onChange={(event) => setInput(event.target.value)} /></label>}
         {inputError && <p className="error-text">{inputError}</p>}
         <div className="button-row">
           <button type="submit" disabled={isWorking}>Save Schedule</button>

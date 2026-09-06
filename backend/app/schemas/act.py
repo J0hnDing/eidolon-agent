@@ -34,6 +34,7 @@ class ActSessionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    agent_id: str = "act"
     title: str
     origin: str
     status: str
@@ -46,6 +47,7 @@ class ActSessionSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    agent_id: str = "act"
     title: str
     origin: str
     status: str

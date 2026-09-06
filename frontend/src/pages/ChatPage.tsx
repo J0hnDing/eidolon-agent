@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 
-import { ActSession, ActTurn, ConversationMode, api } from "../api/client";
+import { ActSession, ActTurn, AgentId, ConversationMode, api } from "../api/client";
 import {
   ChatWorkspace,
   buildApprovalMessage,
@@ -57,16 +57,16 @@ export default function ChatPage() {
     3000,
   );
 
-  async function syncActConversation(conversationId: string, sessionId: number): Promise<boolean> {
+  async function syncActConversation(conversationId: string, sessionId: number, agentId: AgentId): Promise<boolean> {
     try {
-      const session = await api.getActSession(sessionId);
+      const session = await (agentId === "act" ? api.getActSession(sessionId) : api.getAgentSession(agentId, sessionId));
       const activeTurn = [...session.turns].reverse().find(isActiveActTurn) ?? null;
       setActStateNeedsPolling(Boolean(activeTurn));
       if (conversationId === chat.activeConversationId) setActiveActTurnId(activeTurn?.id ?? null);
       chat.updateConversation(conversationId, (conversation) => ({
         ...conversation,
         title: session.title,
-        messages: actSessionMessages(session),
+        messages: actSessionMessages(session, agentId),
         updatedAt: session.updated_at,
       }));
       return true;
@@ -76,10 +76,12 @@ export default function ChatPage() {
   }
 
   useEffect(() => {
-    void api.listActSessions()
-      .then(chat.importActSessions)
-      .catch((reason) => setError(reason instanceof Error ? reason.message : "Could not load Act conversations"));
-    // Active Act sessions are imported once when the shared conversation page mounts.
+    for (const agentId of ["act", "observer", "assistant"] as const) {
+      const request = agentId === "act" ? api.listActSessions() : api.listAgentSessions(agentId);
+      void request.then((sessions) => chat.importAgentSessions(agentId, sessions))
+        .catch((reason) => setError(reason instanceof Error ? reason.message : `Could not load ${agentId} conversations`));
+    }
+    // Active agent sessions are imported once when the shared conversation page mounts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -87,30 +89,30 @@ export default function ChatPage() {
     setActiveActTurnId(null);
     setActStateNeedsPolling(false);
     const sessionId = chat.activeConversation?.actSessionId;
-    if (chat.mode === "act" && sessionId !== undefined) {
-      void syncActConversation(chat.activeConversationId, sessionId);
+    if (chat.mode !== "project" && sessionId !== undefined) {
+      void syncActConversation(chat.activeConversationId, sessionId, chat.mode);
     }
-    // Act synchronization is keyed only by the active local conversation binding.
+    // Agent synchronization is keyed only by the active local conversation binding.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat.activeConversationId, chat.mode, chat.activeConversation?.actSessionId]);
 
   usePolling(
     async () => {
       const sessionId = chat.activeConversation?.actSessionId;
-      if (sessionId !== undefined) await syncActConversation(chat.activeConversationId, sessionId);
+      if (chat.mode !== "project" && sessionId !== undefined) await syncActConversation(chat.activeConversationId, sessionId, chat.mode);
     },
-    chat.mode === "act" && actStateNeedsPolling,
+    chat.mode !== "project" && actStateNeedsPolling,
     1000,
   );
 
   async function handleNewConversation(mode: ConversationMode) {
     setError(null);
-    if (mode !== "act") {
+    if (mode === "project") {
       chat.createNewConversation(mode);
       return;
     }
-    const conversationId = chat.createNewConversation("act");
-    const sessionPromise = api.createActSession();
+    const conversationId = chat.createNewConversation(mode);
+    const sessionPromise = mode === "act" ? api.createActSession() : api.createAgentSession(mode);
     pendingActSessions.current.set(conversationId, sessionPromise);
     try {
       const session = await sessionPromise;
@@ -122,7 +124,7 @@ export default function ChatPage() {
       }));
     } catch (reason) {
       chat.deleteConversation(conversationId);
-      setError(reason instanceof Error ? reason.message : "Could not create Act conversation");
+      setError(reason instanceof Error ? reason.message : "Could not create conversation");
     } finally {
       pendingActSessions.current.delete(conversationId);
     }
@@ -132,12 +134,13 @@ export default function ChatPage() {
     const conversation = chat.conversations.find((item) => item.id === conversationId);
     if (!conversation) return;
     setError(null);
-    if (conversation.mode === "act" && conversation.actSessionId !== undefined) {
+    if (conversation.mode !== "project" && conversation.actSessionId !== undefined) {
       try {
-        await api.archiveActSession(conversation.actSessionId);
+        if (conversation.mode === "act") await api.archiveActSession(conversation.actSessionId);
+        else await api.archiveAgentSession(conversation.mode, conversation.actSessionId);
         chat.deleteConversation(conversationId);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Could not archive Act conversation");
+        setError(err instanceof Error ? err.message : "Could not archive conversation");
       }
       return;
     }
@@ -173,14 +176,15 @@ export default function ChatPage() {
     setIsSending(true);
     setError(null);
     try {
-      if (mode === "act") {
+      if (mode !== "project") {
         if (actSessionId === undefined) {
           actSessionId = (await pendingActSessions.current.get(conversationId))?.id;
         }
-        if (actSessionId === undefined) throw new Error("This Act conversation is not connected to a session.");
-        await api.runActTurn(actSessionId, content);
+        if (actSessionId === undefined) throw new Error("This conversation is not connected to a session.");
+        if (mode === "act") await api.runActTurn(actSessionId, content);
+        else await api.runAgentTurn(mode, actSessionId, content);
         setActStateNeedsPolling(true);
-        await syncActConversation(conversationId, actSessionId);
+        await syncActConversation(conversationId, actSessionId, mode);
         return;
       }
       const response = await api.sendProjectMessage(
@@ -233,7 +237,7 @@ export default function ChatPage() {
       }
     } catch (err) {
       chat.removeMessageFromConversation(conversationId, thinkingId);
-      if (mode === "act" && actSessionId !== undefined && await syncActConversation(conversationId, actSessionId)) {
+      if (mode !== "project" && actSessionId !== undefined && await syncActConversation(conversationId, actSessionId, mode)) {
         setError(null);
         return;
       }
@@ -253,13 +257,14 @@ export default function ChatPage() {
 
   async function handleCancelAct() {
     const sessionId = chat.activeConversation?.actSessionId;
-    if (sessionId === undefined || activeActTurnId === null) return;
+    if (chat.mode === "project" || sessionId === undefined || activeActTurnId === null) return;
     setError(null);
     try {
-      await api.cancelActTurn(sessionId, activeActTurnId);
-      await syncActConversation(chat.activeConversationId, sessionId);
+      if (chat.mode === "act") await api.cancelActTurn(sessionId, activeActTurnId);
+      else await api.cancelAgentTurn(chat.mode, sessionId, activeActTurnId);
+      await syncActConversation(chat.activeConversationId, sessionId, chat.mode);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not cancel the Act turn");
+      setError(reason instanceof Error ? reason.message : "Could not cancel the turn");
     }
   }
 
@@ -437,14 +442,14 @@ function isActiveActTurn(turn: ActTurn): boolean {
   return turn.status === "queued" || turn.status === "running";
 }
 
-function actSessionMessages(session: ActSession): ChatMessage[] {
+function actSessionMessages(session: ActSession, agentId: AgentId): ChatMessage[] {
   return [
-    ...initialMessagesForMode("act"),
+    ...initialMessagesForMode(agentId),
     ...session.turns.flatMap((turn) => {
       const active = isActiveActTurn(turn);
       const result = active
         ? "Eidolon is thinking..."
-        : turn.assistant_message ?? turn.error_message ?? "Act did not return a response.";
+        : turn.assistant_message ?? turn.error_message ?? `${agentId} did not return a response.`;
       return [
         { id: turn.id * 10 + 2, role: "user" as const, content: turn.user_message, actTurnId: turn.id },
         {

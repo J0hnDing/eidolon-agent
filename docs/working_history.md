@@ -842,3 +842,42 @@ Added trusted Quercus token and course settings, incremental backend mirroring i
 ### Limitations
 
 Act knowledge is instruction-read-only until TODO-026 adds filesystem enforcement; files larger than 8 GiB or with unknown size remain metadata-only and have no lazy-fetch endpoint.
+
+## 2026-09-03 19:53 — Add Quercus raw and processed file mirror
+
+- Category: feature
+- Area: Quercus integration
+
+### Summary
+
+Added database-owned Quercus processing settings and per-file/per-course status, migrated mirrored originals into files/raw, added deterministic files/processed Markdown output, trusted sequential Marker plus Surya llama.cpp execution with atomic retryable placeholders, dynamic Act guidance, settings APIs and UI, and independent synchronization/processing reporting. Verified the existing ECO101 mirror migrated 48 downloaded files with no workspace metadata.
+
+### Limitations
+
+Marker is not currently available on the backend process PATH, so processing remains disabled by default and the live processed tree is empty until the user installs Marker and enables the method in Settings. Knowledge read-only enforcement remains instruction-only under the existing high-priority TODO.
+
+## 2026-09-05 21:35 — Show Observer and Assistant sessions in Chat
+
+- Category: feature
+- Area: frontend/chat
+
+### Summary
+
+Chat now loads and continues shared Observer and Assistant sessions alongside Act, using their backend APIs for creation, turns, cancellation, and archiving. New Chat opens a keyboard-accessible side drawer offering Create Project, Act, Observer, and Assistant. Observer icons are green and Assistant icons purple in Chat and Agents. Updated frontend behavior documentation and focused tests.
+
+### Limitations
+
+Live browser visual verification was not performed.
+
+## 2026-09-05 14:37 — Unified actions for all scheduled services
+
+- Category: feature
+- Area: Scheduling
+
+### Summary
+
+Added durable enable/disable, Run Now, and schedule editing for backend-owned platform services; unified Assistant assessment controls with the Agents endpoints; updated UI, API contracts, persistence migration, documentation, and regression coverage.
+
+### Limitations
+
+Assistant assessment recurrence remains backend-defined; its Edit action opens Agents > Assistant. Backend-owned platform schedules do not accept input payloads.

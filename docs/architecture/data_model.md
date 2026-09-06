@@ -10,7 +10,7 @@ Compatibility storage for chat messages with role, content, optional conversatio
 
 ### codex_routing_settings
 
-Stores the single-user Codex invocation routing document. It contains independent Act settings, ProductManager action settings, Builder default/difficulty/repair/update settings, and Tester task/final/update settings. Model ids and reasoning efforts are user-owned settings; ProductManager task DAG output does not contain them. Legacy stored `chat` routing values are ignored.
+Stores the single-user Codex invocation routing document. It contains independent Act, Observer, and Assistant assessment settings, ProductManager action settings, Builder default/difficulty/repair/update settings, and Tester task/final/update settings. Model ids and reasoning efforts are user-owned settings; ProductManager task DAG output does not contain them. Legacy stored `chat` routing values are ignored.
 
 ### codex_mcp_settings
 
@@ -129,7 +129,7 @@ Stores exactly one schedule definition for each installed generated service. `sk
 
 ### schedule_runtime_states and schedule_occurrences
 
-`schedule_runtime_states` stores the current definition fingerprint, active-since boundary, and stable interval anchor for both generated-service and platform schedules. Paused schedules have no active boundary.
+`schedule_runtime_states` stores the current definition fingerprint, active-since boundary, and stable interval anchor for both generated-service and platform schedules. Its enabled flag and optional configuration JSON persist backend-owned platform service availability and schedule overrides; disabled schedules have no active boundary.
 
 `schedule_occurrences` is the durable at-most-once ledger. Each row has one deterministic key for a schedule definition and intended UTC fire time, plus its trigger reason, status, timestamps, error, and optional resulting `skill_run`. The unique occurrence key is claimed before execution. Every terminal result consumes the occurrence; failed, blocked, partial, and interrupted occurrences are never retried.
 
@@ -216,3 +216,7 @@ DAG task node statuses:
 ```text
 pending, ready, building, testing, fixing, done, failed, blocked
 ```
+
+## Persistent agent state
+
+`act_sessions.agent_id` attributes existing sessions to Act and new sessions to their immutable agent. `agent_policies` holds editable function policies/model overrides; `agent_credentials` holds revocable session credential hashes. `agent_proposals` stores approval and execution state independently of retained sessions. `assistant_assessment_state` holds the paused/enabled 72-hour anchor and next/last state; occurrences reuse `schedule_occurrences`. MCP audits carry agent/session/turn attribution without storing tool arguments.

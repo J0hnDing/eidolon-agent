@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -116,16 +116,62 @@ function ChatSidebar({
   | "onNewConversation"
   | "onSelectConversation"
 >) {
+  const [isCreatePopoverOpen, setIsCreatePopoverOpen] = useState(false);
+  const createButtonRef = useRef<HTMLButtonElement>(null);
+  const firstCreateOptionRef = useRef<HTMLButtonElement>(null);
+  const createPopoverRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!isCreatePopoverOpen) return undefined;
+    firstCreateOptionRef.current?.focus();
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (createPopoverRef.current?.contains(target) || createButtonRef.current?.contains(target)) return;
+      setIsCreatePopoverOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setIsCreatePopoverOpen(false);
+        createButtonRef.current?.focus();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const popover = createPopoverRef.current;
+      if (!popover) return;
+      const focusable = Array.from(popover.querySelectorAll<HTMLElement>(
+        "button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])",
+      ));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!popover.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isCreatePopoverOpen]);
+
+  function closeCreatePopover() {
+    setIsCreatePopoverOpen(false);
+    createButtonRef.current?.focus();
+  }
+
   return (
     <aside className="chat-sidebar" aria-label="Chats">
-      <div className="chat-create-actions" aria-label="Create conversation">
-        {(["project", "act"] as ConversationMode[]).map((mode) => (
-          <button key={mode} type="button" onClick={() => onNewConversation(mode)}>
-            <span className="conversation-mode-symbol" aria-hidden="true">{modeSymbol(mode)}</span>
-            <span>New {modeLabel(mode)}</span>
-          </button>
-        ))}
-      </div>
       <div className="chat-thread-list">
         {conversations.map((conversation) => (
           <div
@@ -148,6 +194,62 @@ function ChatSidebar({
           </div>
         ))}
       </div>
+      <div className="chat-create-actions" aria-label="Create conversation">
+        <button
+          ref={createButtonRef}
+          type="button"
+          aria-haspopup="dialog"
+          aria-expanded={isCreatePopoverOpen}
+          aria-controls="chat-create-popover"
+          onClick={() => setIsCreatePopoverOpen((open) => !open)}
+        >
+          <span className="conversation-mode-symbol" aria-hidden="true">＋</span>
+          <span>New Chat</span>
+        </button>
+        {isCreatePopoverOpen && (
+          <div className="chat-create-popover-layer">
+            <aside
+              id="chat-create-popover"
+              className="chat-create-popover"
+              ref={createPopoverRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="chat-create-popover-title"
+            >
+              <header className="chat-create-popover-header">
+                <div>
+                  <h2 id="chat-create-popover-title">New Chat</h2>
+                  <p className="muted">Choose a conversation mode.</p>
+                </div>
+                <button type="button" className="square-icon-button secondary" onClick={closeCreatePopover} aria-label="Close new chat menu">
+                  ×
+                </button>
+              </header>
+              <div className="chat-create-options">
+                {conversationModeOptions.map((option, index) => (
+                  <button
+                    key={option.mode}
+                    ref={index === 0 ? firstCreateOptionRef : undefined}
+                    type="button"
+                    className={`chat-create-option ${option.mode}`}
+                    aria-label={`Create ${option.label}`}
+                    onClick={() => {
+                      onNewConversation(option.mode);
+                      closeCreatePopover();
+                    }}
+                  >
+                    <span className="conversation-mode-symbol" aria-hidden="true">{modeSymbol(option.mode)}</span>
+                    <span>
+                      <strong>Create {option.label}</strong>
+                      <small>{option.description}</small>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </aside>
+          </div>
+        )}
+      </div>
     </aside>
   );
 }
@@ -160,10 +262,9 @@ function ConversationModeBar({
 }: Pick<ChatWorkspaceProps, "mode" | "activeConversationId" | "isBusy" | "onDeleteConversation">) {
   return (
     <div className="chat-mode-bar">
+      <ConversationModeMarker mode={mode} />
       <span className="muted">
-        {mode === "project"
-          ? "Project mode creates proposed skills after approval."
-          : "Act works persistently in the shared workspace with Eidolon tools."}
+        {modeDescription(mode)}
       </span>
       <DeleteIconButton
         onClick={() => onDeleteConversation(activeConversationId)}
@@ -240,10 +341,10 @@ function ChatComposer({
         onChange={(event) => onDraftChange(event.target.value)}
         placeholder={
           isBusy
-            ? mode === "project" ? "Project build is running..." : "Eidolon is thinking..."
+            ? mode === "project" ? "Project build is running..." : `${modeLabel(mode)} is thinking...`
             : mode === "project"
               ? "Describe the skill you want to propose"
-              : "Ask Act to work in its workspace"
+              : `Ask ${modeLabel(mode)} ${mode === "act" ? "to work in its workspace" : mode === "observer" ? "to inspect local context" : "to assess goals and propose work"}`
         }
         aria-label="Conversation message"
         disabled={isBusy && mode === "project"}
@@ -263,7 +364,7 @@ function ChatComposer({
           </svg>
         )}
       </button>
-      {mode === "act" && activeActTurnId !== null && (
+      {mode !== "project" && activeActTurnId !== null && (
         <button type="button" className="secondary" onClick={onCancelAct}>Cancel</button>
       )}
     </form>
@@ -271,11 +372,15 @@ function ChatComposer({
 }
 
 function modeLabel(mode: ConversationMode): string {
-  return mode === "project" ? "Project" : "Act";
+  return conversationModeOptions.find((option) => option.mode === mode)?.label ?? mode;
 }
 
 function modeSymbol(mode: ConversationMode): string {
-  return mode === "project" ? "◇" : "↯";
+  return mode === "project" ? "◇" : mode === "act" ? "↯" : mode === "observer" ? "◉" : "✦";
+}
+
+function modeDescription(mode: ConversationMode): string {
+  return conversationModeOptions.find((option) => option.mode === mode)?.description ?? "";
 }
 
 function ConversationModeMarker({ mode, showSymbol = true }: { mode: ConversationMode; showSymbol?: boolean }) {
@@ -286,6 +391,13 @@ function ConversationModeMarker({ mode, showSymbol = true }: { mode: Conversatio
     </span>
   );
 }
+
+const conversationModeOptions: Array<{ mode: ConversationMode; label: string; description: string }> = [
+  { mode: "project", label: "Project", description: "Creates proposed skills after approval." },
+  { mode: "act", label: "Act", description: "Works persistently in the shared workspace with Eidolon tools." },
+  { mode: "observer", label: "Observer", description: "Reads local context without making changes." },
+  { mode: "assistant", label: "Assistant", description: "Assesses goals and proposes work for Act." },
+];
 
 function MessageBody({
   message,

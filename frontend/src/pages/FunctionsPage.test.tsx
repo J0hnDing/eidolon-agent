@@ -58,7 +58,11 @@ describe("FunctionTable", () => {
     expect(screen.getByRole("cell", { name: "User" })).toBeTruthy();
     expect(screen.getByRole("cell", { name: "GitHub" })).toBeTruthy();
     expect(screen.getByRole("columnheader", { name: "Source" })).toBeTruthy();
-    expect(screen.getByLabelText("Running").getAttribute("title")).toBe("Running");
+    const runningDot = screen.getByLabelText("Running");
+    expect(runningDot.getAttribute("title")).toBe("Running");
+    expect(runningDot.closest("td")?.cellIndex).toBe(2);
+    expect(runningDot.closest("td")?.textContent).toContain("running");
+    expect(runningDot.closest("tr")?.firstElementChild?.querySelector(".running-state-dot")).toBeNull();
     expect(screen.getByText("Skill is disabled")).toBeTruthy();
     expect(screen.getByText("GitHub connection is not configured")).toBeTruthy();
   });

@@ -1,3 +1,4 @@
+from app.models.agents import AgentCredential, AgentPolicy, AgentProposal, AssistantAssessmentState
 from app.models.entities import (
     ActSession,
     ActTelegramBinding,
@@ -35,6 +36,10 @@ from app.models.entities import (
 )
 
 __all__ = [
+    "AgentCredential",
+    "AgentPolicy",
+    "AgentProposal",
+    "AssistantAssessmentState",
     "ActSession",
     "ActTelegramBinding",
     "ActTurn",

@@ -164,7 +164,62 @@ def test_search_and_conversation_normalize_without_attachment_content(
     assert "format=full" in calls[-1]
 
 
-def test_read_new_fetches_every_message_before_removing_unread(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_and_mark_new_fetches_every_message_before_removing_unread(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = UrllibGmailProviderAdapter()
+    bypass_refresh(monkeypatch)
+    calls: list[tuple[str, str, bytes | None]] = []
+    responses = iter(
+        [
+            {"messages": [{"id": "message-1"}, {"id": "message-2"}], "nextPageToken": "more"},
+            gmail_message("message-1"),
+            gmail_message("message-2"),
+        ]
+    )
+
+    def request_json(url: str, *, method: str, body: bytes | None, **_kwargs):
+        calls.append((method, url, body))
+        return next(responses)
+
+    def request_bytes(url: str, *, method: str, body: bytes | None, **_kwargs):
+        calls.append((method, url, body))
+        return b""
+
+    monkeypatch.setattr(adapter, "_request_json", request_json)
+    monkeypatch.setattr(adapter, "_request_bytes", request_bytes)
+    result = adapter.execute(OPERATIONS["email.read_and_mark_new"], {}, credential())
+
+    assert result["count"] == 2
+    assert result["has_more"] is True
+    assert [method for method, _url, _body in calls] == ["GET", "GET", "GET", "POST"]
+    assert READ_NEW_QUERY in parse_qs(urlsplit(calls[0][1]).query)["q"]
+    assert json.loads(calls[-1][2]) == {"ids": ["message-1", "message-2"], "removeLabelIds": ["UNREAD"]}
+
+
+def test_read_and_mark_new_does_not_mark_any_message_when_one_fetch_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = UrllibGmailProviderAdapter()
+    bypass_refresh(monkeypatch)
+    modify_called = False
+    responses = iter([{"messages": [{"id": "message-1"}, {"id": "message-2"}]}, gmail_message("message-1")])
+
+    def request_json(*_args, **_kwargs):
+        try:
+            return next(responses)
+        except StopIteration:
+            raise RuntimeError("second fetch failed") from None
+
+    def request_bytes(*_args, **_kwargs):
+        nonlocal modify_called
+        modify_called = True
+        return b""
+
+    monkeypatch.setattr(adapter, "_request_json", request_json)
+    monkeypatch.setattr(adapter, "_request_bytes", request_bytes)
+    with pytest.raises(RuntimeError, match="second fetch failed"):
+        adapter.execute(OPERATIONS["email.read_and_mark_new"], {}, credential())
+    assert modify_called is False
+
+
+def test_read_new_fetches_every_message_without_removing_unread(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = UrllibGmailProviderAdapter()
     bypass_refresh(monkeypatch)
     calls: list[tuple[str, str, bytes | None]] = []
@@ -190,33 +245,8 @@ def test_read_new_fetches_every_message_before_removing_unread(monkeypatch: pyte
 
     assert result["count"] == 2
     assert result["has_more"] is True
-    assert [method for method, _url, _body in calls] == ["GET", "GET", "GET", "POST"]
+    assert [method for method, _url, _body in calls] == ["GET", "GET", "GET"]
     assert READ_NEW_QUERY in parse_qs(urlsplit(calls[0][1]).query)["q"]
-    assert json.loads(calls[-1][2]) == {"ids": ["message-1", "message-2"], "removeLabelIds": ["UNREAD"]}
-
-
-def test_read_new_does_not_mark_any_message_when_one_fetch_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = UrllibGmailProviderAdapter()
-    bypass_refresh(monkeypatch)
-    modify_called = False
-    responses = iter([{"messages": [{"id": "message-1"}, {"id": "message-2"}]}, gmail_message("message-1")])
-
-    def request_json(*_args, **_kwargs):
-        try:
-            return next(responses)
-        except StopIteration:
-            raise RuntimeError("second fetch failed") from None
-
-    def request_bytes(*_args, **_kwargs):
-        nonlocal modify_called
-        modify_called = True
-        return b""
-
-    monkeypatch.setattr(adapter, "_request_json", request_json)
-    monkeypatch.setattr(adapter, "_request_bytes", request_bytes)
-    with pytest.raises(RuntimeError, match="second fetch failed"):
-        adapter.execute(OPERATIONS["email.read_new"], {}, credential())
-    assert modify_called is False
 
 
 def test_send_builds_only_bounded_plain_text_mime(monkeypatch: pytest.MonkeyPatch) -> None:

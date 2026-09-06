@@ -49,6 +49,8 @@ class CodexRoutingSettingsPayload(BaseModel):
 
     project_build_workflow_override: Literal["single_codex", "task_dag"] | None = None
     act: InvocationChoice = Field(default_factory=InvocationChoice)
+    observer: InvocationChoice = Field(default_factory=InvocationChoice)
+    assessment: InvocationChoice = Field(default_factory=InvocationChoice)
     product_manager: ProductManagerRouting = Field(default_factory=ProductManagerRouting)
     builder: BuilderRouting = Field(default_factory=BuilderRouting)
     tester: TesterRouting = Field(default_factory=TesterRouting)

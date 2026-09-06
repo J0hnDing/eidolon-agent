@@ -8,8 +8,9 @@ from typing import Any
 from sqlalchemy import select, update
 
 from app.db import SessionLocal
-from app.models import ActSession, ActTurn
-from app.services.act_app_server_service import act_app_server_service, is_missing_rollout_error
+from app.models import ActSession, ActTurn, AgentCredential
+from app.services.act_app_server_service import act_app_server_service, agent_app_servers, is_missing_rollout_error
+from app.services.agent_policy_service import AgentPolicyService
 from app.services.codex_routing_service import CodexRoutingService
 
 ACT_RESPONSE_SCHEMA = {
@@ -21,13 +22,18 @@ ACT_RESPONSE_SCHEMA = {
 
 
 class ActTurnDispatcher:
-    def __init__(self) -> None:
+    def __init__(self, agent_id: str = "act") -> None:
+        self.agent_id = agent_id
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._worker: threading.Thread | None = None
         self._lifecycle_lock = threading.Lock()
         self._active_lock = threading.Lock()
         self._active: tuple[str, str] | None = None
+
+    @property
+    def app_server(self):
+        return act_app_server_service if self.agent_id == "act" else agent_app_servers[self.agent_id]
 
     def start(self) -> None:
         with self._lifecycle_lock:
@@ -51,17 +57,17 @@ class ActTurnDispatcher:
                 active = self._active
             if active is not None:
                 try:
-                    act_app_server_service.sessions.interrupt_turn(*active)
+                    self.app_server.sessions.interrupt_turn(*active)
                 except Exception:
                     pass
             worker = self._worker
             if worker is not None:
                 worker.join(timeout=10)
                 if worker.is_alive():
-                    act_app_server_service.stop()
+                    self.app_server.stop()
                     worker.join(timeout=5)
             self._worker = None
-            act_app_server_service.stop()
+            self.app_server.stop()
 
     def notify(self) -> None:
         self._wake.set()
@@ -69,9 +75,11 @@ class ActTurnDispatcher:
     def recover(self) -> int:
         db = SessionLocal()
         try:
+            db.execute(update(AgentCredential).where(AgentCredential.agent_id == self.agent_id).values(revoked=True))
             delivery_ids = list(
                 db.scalars(
-                    select(ActTurn.id).where(
+                    select(ActTurn.id).join(ActSession).where(
+                        ActSession.agent_id == self.agent_id,
                         ActTurn.status == "running",
                         ActTurn.delivery_status == "pending",
                     )
@@ -80,7 +88,7 @@ class ActTurnDispatcher:
             now = datetime.now(UTC)
             result = db.execute(
                 update(ActTurn)
-                .where(ActTurn.status == "running")
+                .where(ActTurn.status == "running", ActTurn.session_id.in_(select(ActSession.id).where(ActSession.agent_id == self.agent_id)))
                 .values(
                     status="interrupted",
                     error_message="Eidolon restarted while this Act turn was running.",
@@ -102,8 +110,8 @@ class ActTurnDispatcher:
         needs_delivery = False
         try:
             turn = db.scalar(
-                select(ActTurn)
-                .where(ActTurn.status == "queued")
+                select(ActTurn).join(ActSession)
+                .where(ActTurn.status == "queued", ActSession.agent_id == self.agent_id)
                 .order_by(ActTurn.created_at, ActTurn.id)
                 .limit(1)
             )
@@ -154,22 +162,31 @@ class ActTurnDispatcher:
             self._fail(db, turn, "Act session is no longer active")
             return
         try:
-            routing = CodexRoutingService(db).resolve(role="act", action="act")
+            route = "assessment" if self.agent_id == "assistant" else self.agent_id
+            routing = CodexRoutingService(db).resolve(role=route, action=route)
+            policy = AgentPolicyService(db).policy(self.agent_id)
+            model = policy.model or routing.effective_model
+            effort = policy.reasoning_effort or routing.effective_reasoning_effort
             recovered_thread = False
             try:
-                act_app_server_service.resume_thread(
-                    db,
-                    session.codex_thread_id,
-                    model=routing.effective_model,
-                    reasoning_effort=routing.effective_reasoning_effort,
-                )
+                if session.codex_thread_id.startswith("pending:"):
+                    session.codex_thread_id = self.app_server.start_thread(
+                        db, model=model, reasoning_effort=effort, session_id=session.id,
+                    )
+                    db.commit()
+                else:
+                    self.app_server.resume_thread(
+                        db, session.codex_thread_id, model=model,
+                        reasoning_effort=effort, session_id=session.id,
+                    )
             except Exception as exc:
                 if not is_missing_rollout_error(exc):
                     raise
-                session.codex_thread_id = act_app_server_service.start_thread(
+                session.codex_thread_id = self.app_server.start_thread(
                     db,
-                    model=routing.effective_model,
-                    reasoning_effort=routing.effective_reasoning_effort,
+                    session_id=session.id,
+                    model=model,
+                    reasoning_effort=effort,
                 )
                 db.commit()
                 recovered_thread = True
@@ -177,44 +194,47 @@ class ActTurnDispatcher:
             def on_started(codex_turn_id: str) -> None:
                 turn.codex_turn_id = codex_turn_id
                 db.commit()
+                from app.services.agent_proposal_service import AgentProposalService
+                AgentProposalService(db).refresh_execution(session.id)
                 with self._active_lock:
                     self._active = (session.codex_thread_id, codex_turn_id)
                 db.refresh(turn)
                 if turn.cancel_requested_at is not None or self._stop.is_set():
-                    act_app_server_service.sessions.interrupt_turn(
+                    self.app_server.sessions.interrupt_turn(
                         session.codex_thread_id,
                         codex_turn_id,
                     )
 
             input_text = self._turn_input(db, turn, recovered_thread=recovered_thread)
             try:
-                result = act_app_server_service.sessions.run_structured_turn(
+                result = self.app_server.sessions.run_structured_turn(
                     session.codex_thread_id,
                     input_text,
                     ACT_RESPONSE_SCHEMA,
                     timeout_seconds=900,
-                    model=routing.effective_model,
-                    reasoning_effort=routing.effective_reasoning_effort,
+                    model=model,
+                    reasoning_effort=effort,
                     on_turn_started=on_started,
                 )
             except Exception as exc:
                 db.refresh(turn)
                 if recovered_thread or turn.codex_turn_id is not None or not is_missing_rollout_error(exc):
                     raise
-                session.codex_thread_id = act_app_server_service.start_thread(
+                session.codex_thread_id = self.app_server.start_thread(
                     db,
-                    model=routing.effective_model,
-                    reasoning_effort=routing.effective_reasoning_effort,
+                    session_id=session.id,
+                    model=model,
+                    reasoning_effort=effort,
                 )
                 db.commit()
                 recovered_thread = True
-                result = act_app_server_service.sessions.run_structured_turn(
+                result = self.app_server.sessions.run_structured_turn(
                     session.codex_thread_id,
                     self._turn_input(db, turn, recovered_thread=True),
                     ACT_RESPONSE_SCHEMA,
                     timeout_seconds=900,
-                    model=routing.effective_model,
-                    reasoning_effort=routing.effective_reasoning_effort,
+                    model=model,
+                    reasoning_effort=effort,
                     on_turn_started=on_started,
                 )
             db.refresh(turn)
@@ -238,8 +258,26 @@ class ActTurnDispatcher:
             else:
                 self._fail(db, turn, str(exc))
         finally:
-            with self._active_lock:
-                self._active = None
+            try:
+                AgentPolicyService(db).revoke(session.id)
+                db.commit()
+                from app.services.agent_proposal_service import AgentProposalService
+                AgentProposalService(db).refresh_execution(session.id)
+                if self.agent_id == "assistant":
+                    if session.origin == "assessment" and turn.id == db.scalar(
+                        select(ActTurn.id).where(ActTurn.session_id == session.id).order_by(ActTurn.id).limit(1)
+                    ):
+                        from app.services.assistant_assessment_service import AssistantAssessmentService
+                        AssistantAssessmentService(db).notify_completed(turn)
+                    from app.services.act_session_service import ActSessionError, ActSessionService
+                    try:
+                        ActSessionService(db, agent_id="assistant").prune_assistant_sessions()
+                        db.commit()
+                    except ActSessionError:
+                        db.rollback()
+            finally:
+                with self._active_lock:
+                    self._active = None
 
     @staticmethod
     def _turn_input(db, turn: ActTurn, *, recovered_thread: bool) -> str:
@@ -334,3 +372,5 @@ def _activities(items: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 
 act_turn_dispatcher = ActTurnDispatcher()
+
+agent_dispatchers = {"act": act_turn_dispatcher, "observer": ActTurnDispatcher("observer"), "assistant": ActTurnDispatcher("assistant")}

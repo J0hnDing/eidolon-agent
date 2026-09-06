@@ -71,17 +71,18 @@ typography:
     letterSpacing: -0.025em
   body-md:
     fontFamily: Plus Jakarta Sans
-    fontSize: 14px
+    fontSize: 15px
     fontWeight: 400
     lineHeight: 1.5
+    wordSpacing: 0.04em
   body-sm:
     fontFamily: Plus Jakarta Sans
-    fontSize: 12px
+    fontSize: 13px
     fontWeight: 400
     lineHeight: 1.5
   label-md:
     fontFamily: Plus Jakarta Sans
-    fontSize: 13px
+    fontSize: 14px
     fontWeight: 500
     lineHeight: 1.4
   metadata-md:
@@ -110,14 +111,13 @@ rounded:
   bubble: 14px
   full: 9999px
 spacing:
-  micro: 2px
   xs: 4px
   sm: 8px
-  md: 12px
-  lg: 16px
-  xl: 24px
-  2xl: 28px
-  3xl: 44px
+  md: 16px
+  lg: 24px
+  xl: 32px
+  2xl: 48px
+  page-x: "clamp(20px, 3.5vw, 44px)"
   page-top: 34px
   page-bottom: 60px
   sidebar-width: 220px
@@ -131,7 +131,7 @@ components:
     backgroundColor: "{colors.sidebar}"
     textColor: "{colors.text-secondary}"
     width: "{spacing.sidebar-width}"
-    padding: 16px
+    padding: 24px 16px 16px
   topbar:
     backgroundColor: "{colors.topbar}"
     textColor: "{colors.text}"
@@ -159,7 +159,7 @@ components:
     textColor: "{colors.button-text}"
     typography: "{typography.label-md}"
     rounded: "{rounded.sm}"
-    padding: 8px
+    padding: 8px 16px
     height: 32px
   button-primary-hover-wave:
     backgroundColor: "{colors.tertiary}"
@@ -168,7 +168,7 @@ components:
     backgroundColor: "transparent"
     textColor: "{colors.text}"
     rounded: "{rounded.sm}"
-    padding: 8px
+    padding: 8px 16px
     height: 32px
   navigation-active-indicator:
     backgroundColor: "{colors.primary}"
@@ -210,7 +210,7 @@ components:
     backgroundColor: "{colors.surface-hover}"
     textColor: "{colors.text}"
     rounded: "{rounded.sm}"
-    padding: 9px
+    padding: 8px 16px
     height: 40px
   modal:
     backgroundColor: "{colors.panel}"
@@ -297,13 +297,13 @@ Light theme is a deliberate counterpart, not a simple inversion. It uses white c
 
 **IBM Plex Mono** identifies machine-adjacent information: function names, code, timestamps, technical metadata, table headings, navigation group labels, and compact state details. Small mono labels may be uppercase with deliberate letter spacing. Do not set normal descriptions or long-form interface copy in monospace.
 
-Page titles use the display token and scale responsively from `2.25rem` to `3.25rem`. Most body copy is `14px`; compact rows and secondary copy use `12px` or `11px`. Preserve readable line height and avoid adding more type sizes when an existing semantic level fits.
+Page titles use the display token and scale responsively from `2.25rem` to `3.25rem`. Body copy uses `15px`, secondary and compact body copy use `13px`, and labels use `14px`. Body text uses `0.04em` word spacing. Preserve readable line height and avoid adding more type sizes when an existing semantic level fits.
 
 ## Layout
 
-Desktop uses a persistent `220px` sidebar and a fluid main column. Main content has `34px 44px 60px` page padding and stops growing at `1280px`. Page headers put the title and descriptive copy first, actions second, and end with a divider. Never add an eyebrow line above a page title.
+Desktop uses a persistent `220px` sidebar and a fluid main column. Main content uses `34px` top padding, `clamp(20px, 3.5vw, 44px)` horizontal gutters, and `60px` bottom padding; only the horizontal gutter is clamped. Content stops growing at `1280px`. Page headers put the title and descriptive copy first, actions second, and end with a divider. Never add an eyebrow line above a page title.
 
-The spacing rhythm is based on 4px with practical steps at 8, 12, 16, 24, 28, and 44px. Use whitespace, dividers, aligned rows, and two-column grids before reaching for cards. Cards and bordered containment are reserved for boundaries that matter: approvals, modals, chat workspaces, and sandboxed application chrome.
+The spacing rhythm uses the shared steps `4px`, `8px`, `16px`, `24px`, `32px`, and `48px`. Use whitespace, dividers, aligned rows, and two-column grids before reaching for cards. Cards and bordered containment are reserved for boundaries that matter: approvals, modals, chat workspaces, and sandboxed application chrome.
 
 At `1040px`, narrow the sidebar and collapse paired detail sections. At `800px`, convert the sidebar to a compact horizontal navigation bar. At `640px`, stack headers, grids, and the chat workspace into one column. Tables should scroll horizontally rather than destroy stable column allocation. The UI must remain usable down to `320px`.
 
@@ -327,9 +327,9 @@ Circular geometry is reserved for semantic dots, spinners, and the ambient ring 
 
 **Navigation.** Use grouped destinations with small mono group labels, simple line icons, and quiet text. Hover reveals a subtle blue-gray liquid fill. Selection adds the same surface treatment plus a 3px blue indicator; the icon and label inherit the selected text color. On compact layouts, keep the same destinations in a horizontally scrollable row.
 
-**Buttons.** Primary buttons are compact, `32px` minimum height, medium-weight labels, and a light neutral fill. On hover, a restrained blue liquid-wave fill crosses the control; it is an interaction signature, not a general decorative effect. Secondary buttons are transparent with a strong divider border. Destructive actions use semantic red and switch to a solid red treatment on hover. Icon-only delete controls are square, carry a specific accessible name, and show a matching tooltip.
+**Buttons.** Primary buttons use `8px 16px` padding, a `32px` minimum height, medium-weight `14px` labels, and a light neutral fill. On hover, a restrained blue liquid-wave fill crosses the control; it is an interaction signature, not a general decorative effect. Secondary buttons are transparent with a strong divider border. Destructive actions use semantic red and switch to a solid red treatment on hover. Icon-only delete controls are square, carry a specific accessible name, and show a matching tooltip.
 
-**Inputs.** Inputs use a `40px` minimum height, a 1px strong divider border, graphite hover surface, and `4px` radius. Hover strengthens the border; focus uses the strong interaction color plus the global visible focus ring. Labels are compact medium-weight interface text. Textareas grow vertically and begin at `120px` minimum height.
+**Inputs.** Inputs use `8px 16px` padding, a `40px` minimum height, a 1px strong divider border, graphite hover surface, and `4px` radius. Hover strengthens the border; focus uses the strong interaction color plus the global visible focus ring. Labels use the `14px` compact medium-weight interface token. Textareas grow vertically and begin at `120px` minimum height.
 
 **Lists and tables.** Prefer rows separated by 1px dividers. Table headings are `9px` uppercase mono labels; cells are compact muted text. Hover may change the row surface. Navigable skill, function, application, and schedule names reveal a small blue directional arrow on hover or keyboard focus.
 

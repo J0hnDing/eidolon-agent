@@ -9,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base
 from app.models import ActSession, ActTurn
+from app.services.act_app_server_service import agent_app_servers
 from app.services.act_session_service import ActSessionError, ActSessionService
 from app.services.act_turn_dispatcher import ActTurnDispatcher
 
@@ -54,13 +55,6 @@ def test_session_enqueue_duplicate_cancel_and_archive(
     monkeypatch: pytest.MonkeyPatch,
     session_factory,
 ) -> None:
-    monkeypatch.setattr(
-        "app.services.act_session_service.CodexRoutingService.resolve",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            effective_model="gpt-act",
-            effective_reasoning_effort="high",
-        ),
-    )
     app_server = FakeAppServer()
     db: Session = session_factory()
     try:
@@ -74,7 +68,8 @@ def test_session_enqueue_duplicate_cancel_and_archive(
         cancelled = service.cancel_turn(session.id, turn.id)
         assert cancelled.status == "cancelled"
         service.archive(session.id)
-        assert app_server.sessions.archived == ["thread-act"]
+        assert session.codex_thread_id.startswith("pending:")
+        assert app_server.sessions.archived == []
     finally:
         db.close()
 
@@ -183,6 +178,36 @@ def test_dispatcher_resumes_and_completes_queued_turn(
         assert turn.activity_json == [{"kind": "mcpToolCall", "label": "Used atlas.goals.list"}]
     finally:
         verify.close()
+
+
+@pytest.mark.parametrize(("agent_id", "expected_route"), [("observer", "observer"), ("assistant", "assessment")])
+def test_dispatcher_uses_the_agent_specific_model_route(
+    monkeypatch: pytest.MonkeyPatch,
+    session_factory,
+    agent_id: str,
+    expected_route: str,
+) -> None:
+    db: Session = session_factory()
+    db.add(ActSession(agent_id=agent_id, codex_thread_id="thread-act"))
+    db.commit()
+    session = db.query(ActSession).one()
+    db.add(ActTurn(session_id=session.id, user_message="Use Eidolon", status="queued"))
+    db.commit()
+    db.close()
+    runtime = FakeRuntime()
+    routes: list[tuple[str, str]] = []
+    monkeypatch.setitem(agent_app_servers, agent_id, runtime)  # type: ignore[arg-type]
+    monkeypatch.setattr("app.services.act_turn_dispatcher.SessionLocal", session_factory)
+    monkeypatch.setattr(
+        "app.services.act_turn_dispatcher.CodexRoutingService.resolve",
+        lambda *_args, **kwargs: (
+            routes.append((kwargs["role"], kwargs["action"]))
+            or SimpleNamespace(effective_model="gpt-act", effective_reasoning_effort="medium")
+        ),
+    )
+
+    assert ActTurnDispatcher(agent_id).process_next() is True
+    assert routes == [(expected_route, expected_route)]
 
 
 def test_dispatcher_replaces_missing_rollout_without_replaying_completed_turns(

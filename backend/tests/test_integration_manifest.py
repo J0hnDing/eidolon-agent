@@ -223,6 +223,21 @@ def test_email_send_is_high_risk_and_requires_per_call_approval() -> None:
     assert operation.invocation_approval_required is True
 
 
+def test_email_read_operations_keep_distinct_read_contracts() -> None:
+    read = OPERATIONS["email.read_new"]
+    read_and_mark = OPERATIONS["email.read_and_mark_new"]
+
+    assert read.title == "Read new email"
+    assert read.read_only is True
+    assert read.side_effect == "none"
+    assert read.risk == "low"
+    assert read.contract_version == 2
+    assert read_and_mark.title == "Read and mark new email"
+    assert read_and_mark.read_only is False
+    assert read_and_mark.side_effect == "write"
+    assert read_and_mark.risk == "medium"
+
+
 def test_manifest_rejects_notion_operation_under_another_provider() -> None:
     with pytest.raises(ManifestValidationError, match="must match"):
         validate_manifest(
