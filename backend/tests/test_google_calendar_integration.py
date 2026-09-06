@@ -1,6 +1,5 @@
 import json
 from datetime import UTC, datetime
-from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -8,6 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.db import Base
+from app.execution.context import InvocationContext
 from app.models import GoogleOAuthClientConfig, IntegrationConnection
 from app.services.google_calendar_provider import (
     GOOGLE_CALENDAR_SECRET_NAMESPACE,
@@ -19,6 +19,7 @@ from app.services.integration_service import IntegrationError, IntegrationServic
 from app.services.secret_store import FakeSecretStore, SecretStoreError, WindowsCredentialSecretStore
 
 CLIENT_SECRET_SENTINEL = "EIDOLON_GOOGLE_CLIENT_SECRET_6f5f"
+USER_CONTEXT = InvocationContext(principal_kind="user", origin="http")
 
 
 def test_windows_secret_store_has_google_calendar_namespace() -> None:
@@ -122,10 +123,11 @@ def test_legacy_calendar_connection_migrates_to_shared_oauth_client(db: Session)
 
     shared_status = service.google_oauth_client_status()
     calendar_status = service.google_calendar_connection_status()
-    result = service.invoke_direct(
+    result = service.execute_context(
+        USER_CONTEXT,
         "google_calendar.event.list",
         {"time_min": "2026-08-01T00:00:00Z"},
-    )
+    ).output
 
     connection = db.scalar(
         select(IntegrationConnection).where(
@@ -149,27 +151,40 @@ def test_direct_calls_use_five_operations_and_audit_only_event_id(db: Session) -
     service, _store, provider = connected_service(db)
     start = {"date": "2026-09-01"}
     end = {"date": "2026-09-02"}
-    create_audit = SimpleNamespace(resource=None)
-    created = service.invoke_direct(
+    create_result = service.execute_context(
+        USER_CONTEXT,
         "google_calendar.event.create",
         {"title": "All day", "start": start, "end": end, "recurrence": ["RRULE:FREQ=YEARLY"]},
-        audit_record=create_audit,
     )
-    listed = service.invoke_direct("google_calendar.event.list", {"time_min": "2026-08-01T00:00:00Z"})
-    audit = SimpleNamespace(resource=None)
-    fetched = service.invoke_direct("google_calendar.event.get", {"id": created["id"]}, audit_record=audit)
-    updated = service.invoke_direct(
+    created = create_result.output
+    listed = service.execute_context(
+        USER_CONTEXT,
+        "google_calendar.event.list",
+        {"time_min": "2026-08-01T00:00:00Z"},
+    ).output
+    fetch_result = service.execute_context(
+        USER_CONTEXT,
+        "google_calendar.event.get",
+        {"id": created["id"]},
+    )
+    fetched = fetch_result.output
+    updated = service.execute_context(
+        USER_CONTEXT,
         "google_calendar.event.update",
         {"id": created["id"], "description": "Updated"},
-    )
-    deleted = service.invoke_direct("google_calendar.event.delete", {"id": created["id"]})
+    ).output
+    deleted = service.execute_context(
+        USER_CONTEXT,
+        "google_calendar.event.delete",
+        {"id": created["id"]},
+    ).output
 
     assert listed["events"][0]["id"] == created["id"]
     assert fetched["id"] == created["id"]
     assert updated["description"] == "Updated"
     assert deleted == {"id": created["id"], "deleted": True}
-    assert audit.resource == f"google-calendar-event:{created['id']}"
-    assert create_audit.resource == f"google-calendar-event:{created['id']}"
+    assert fetch_result.audit_resource == f"google-calendar-event:{created['id']}"
+    assert create_result.audit_resource == f"google-calendar-event:{created['id']}"
     assert [call[0] for call in provider.calls] == [
         "google_calendar.event.create",
         "google_calendar.event.list",
@@ -184,7 +199,11 @@ def test_invalid_refresh_marks_connection_invalid(db: Session) -> None:
     provider.error_type = "invalid_credential"
 
     with pytest.raises(IntegrationError) as exc_info:
-        service.invoke_direct("google_calendar.event.list", {"time_min": "2026-08-01T00:00:00Z"})
+        service.execute_context(
+            USER_CONTEXT,
+            "google_calendar.event.list",
+            {"time_min": "2026-08-01T00:00:00Z"},
+        )
 
     assert exc_info.value.error_type == "invalid_credential"
     assert service.google_calendar_connection_status().status == "invalid"

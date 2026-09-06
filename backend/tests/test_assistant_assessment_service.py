@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
+from app.execution.types import InvocationExecutionError, InvocationOutcome
 from app.models import AssistantAssessmentState, ScheduleOccurrence
 from app.services import assistant_assessment_service
 from app.services.act_session_service import AssistantSessionCapacityError
@@ -346,7 +347,6 @@ def test_assessment_cleanup_checks_attachments_and_removes_only_stale_history(
 ):
     from app.models import AgentProposal
     from app.services.github_provider import IntegrationProviderError
-    from app.services.integration_service import IntegrationError
 
     directory = tmp_path / "assistant" / "plans"
     directory.mkdir(parents=True)
@@ -362,19 +362,25 @@ def test_assessment_cleanup_checks_attachments_and_removes_only_stale_history(
         (directory / f"{number}.json").write_text("{}", encoding="utf-8")
     db_session.commit()
 
-    def invoke(operation, payload):
-        assert operation == "notion.todo.list"
-        if unavailable:
-            raise IntegrationError("provider_unavailable", "Unavailable")
-        if "start_cursor" not in payload:
-            return {"todos": [{"id": "done", "done": True}], "has_more": True, "next_cursor": "next"}
-        assert payload["start_cursor"] == "next"
-        return {"todos": [{"id": "active", "done": False}], "has_more": False, "next_cursor": None}
-
-    monkeypatch.setattr(
-        assistant_assessment_service, "build_default_integration_service",
-        lambda db: SimpleNamespace(invoke_direct=invoke),
-    )
+    class Executor:
+        def execute(self, target, payload, context):
+            assert target.target_id == "notion.todo.list"
+            if unavailable:
+                raise InvocationExecutionError("provider_unavailable", "Unavailable")
+            if "start_cursor" not in payload:
+                output = {
+                    "todos": [{"id": "done", "done": True}],
+                    "has_more": True,
+                    "next_cursor": "next",
+                }
+            else:
+                assert payload["start_cursor"] == "next"
+                output = {
+                    "todos": [{"id": "active", "done": False}],
+                    "has_more": False,
+                    "next_cursor": None,
+                }
+            return InvocationOutcome(status="succeeded", output=output)
 
     def request(self, path, payload, **kwargs):
         if unavailable:
@@ -384,7 +390,7 @@ def test_assessment_cleanup_checks_attachments_and_removes_only_stale_history(
         return {"goal": {"progress": 100 if "/done/" in path else 50}}
 
     monkeypatch.setattr(assistant_assessment_service.UrllibAtlasProviderAdapter, "_request", request)
-    AssistantAssessmentService(db_session).cleanup_proposals()
+    AssistantAssessmentService(db_session, executor=Executor()).cleanup_proposals()  # type: ignore[arg-type]
     expected = set(range(1, 8)) if unavailable else {1, 4, 7}
     assert set(db_session.scalars(select(AgentProposal.id))) == expected
     assert {int(path.stem) for path in directory.iterdir()} == expected

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
 from typing import Any
 
 from jsonschema import Draft202012Validator, ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.execution.context import InvocationContext
 from app.models import InvocationApproval, Skill
 from app.services.invocation_approval_contract import (
     MAX_INVOCATION_APPROVAL_INPUT_BYTES,
@@ -29,17 +29,6 @@ class InvocationApprovalError(RuntimeError):
     def __init__(self, error_type: str, message: str) -> None:
         super().__init__(message)
         self.error_type = error_type
-
-
-@dataclass(frozen=True)
-class InvocationCallerAttribution:
-    caller_type: str
-    source: str
-    caller_skill_id: int | None = None
-    caller_version_id: int | None = None
-    caller_run_id: int | None = None
-    web_app_instance_id: str | None = None
-    initiating_action: str | None = None
 
 
 class InvocationApprovalService:
@@ -76,7 +65,7 @@ class InvocationApprovalService:
         target: Skill,
         input_json: dict[str, Any],
         *,
-        attribution: InvocationCallerAttribution,
+        context: InvocationContext,
     ) -> InvocationApproval:
         from app.services.function_registry_service import FunctionRegistryService
 
@@ -114,13 +103,13 @@ class InvocationApprovalService:
             target_version_id=target.active_version_id,
             target_contract_fingerprint=registry.target_contract_fingerprint(target),
             target_description=manifest.description,
-            caller_type=attribution.caller_type,
-            source=attribution.source,
-            caller_skill_id=attribution.caller_skill_id,
-            caller_version_id=attribution.caller_version_id,
-            caller_run_id=attribution.caller_run_id,
-            web_app_instance_id=attribution.web_app_instance_id,
-            initiating_action=attribution.initiating_action,
+            caller_type=context.approval_caller_type(),
+            source=context.approval_source("user"),
+            caller_skill_id=context.caller_skill_id,
+            caller_version_id=context.caller_version_id,
+            caller_run_id=context.caller_run_id,
+            web_app_instance_id=context.web_app_instance_id,
+            initiating_action=context.initiating_action,
             input_json=business_input,
             input_hash=self._input_hash(business_input),
             reason_to_call=reason,
@@ -128,12 +117,12 @@ class InvocationApprovalService:
                 build_approval_presentation(
                     approval_id=0,
                     action=target.name,
-                    caller=attribution.source,
+                    caller=self._presentation_caller(context, "user"),
                     input_json=business_input,
                     reason=reason,
                 )
             ),
-            dispatch_metadata_json={},
+            dispatch_metadata_json={"invocation_context_v1": context.serialize()},
         )
         return self._commit_and_deliver(approval)
 
@@ -146,7 +135,7 @@ class InvocationApprovalService:
         target_contract_fingerprint: str,
         provider: str,
         provider_account_id: str,
-        attribution: InvocationCallerAttribution,
+        context: InvocationContext,
         target_description: str = "",
         dispatch_metadata_json: dict[str, Any] | None = None,
     ) -> InvocationApproval:
@@ -164,13 +153,13 @@ class InvocationApprovalService:
             target_description=target_description or operation_id,
             provider=provider,
             provider_account_id=provider_account_id,
-            caller_type=attribution.caller_type,
-            source=attribution.source,
-            caller_skill_id=attribution.caller_skill_id,
-            caller_version_id=attribution.caller_version_id,
-            caller_run_id=attribution.caller_run_id,
-            web_app_instance_id=attribution.web_app_instance_id,
-            initiating_action=attribution.initiating_action,
+            caller_type=context.approval_caller_type(),
+            source=context.approval_source("integration"),
+            caller_skill_id=context.caller_skill_id,
+            caller_version_id=context.caller_version_id,
+            caller_run_id=context.caller_run_id,
+            web_app_instance_id=context.web_app_instance_id,
+            initiating_action=context.initiating_action,
             input_json=business_input,
             input_hash=self._input_hash(business_input),
             reason_to_call=normalized_reason,
@@ -178,12 +167,15 @@ class InvocationApprovalService:
                 build_approval_presentation(
                     approval_id=0,
                     action=operation_id,
-                    caller=attribution.source,
+                    caller=self._presentation_caller(context, "integration"),
                     input_json=business_input,
                     reason=normalized_reason,
                 )
             ),
-            dispatch_metadata_json=dispatch_metadata_json or {},
+            dispatch_metadata_json={
+                **(dispatch_metadata_json or {}),
+                "invocation_context_v1": context.serialize(),
+            },
         )
         return self._commit_and_deliver(approval)
 
@@ -300,37 +292,18 @@ class InvocationApprovalService:
         from app.models.entities import utc_now
 
         try:
-            agent = (approval.dispatch_metadata_json or {}).get("agent_identity")
-            if agent is not None:
-                from app.services.agent_policy_service import AgentPolicyService
-                AgentPolicyService(self.db).require_session(agent["agent_id"], agent["session_id"])
-                AgentPolicyService(self.db).require_function(agent["agent_id"], approval.target_id)
-            if approval.target_kind == "user_function":
-                from app.services.function_registry_service import FunctionRegistryService
+            from app.execution.executor import InvocationExecutor
 
-                run = FunctionRegistryService(
-                    self.db, project_root=self.project_root
-                ).invoke_approved(approval)
-                if run.status not in {"succeeded", "partial"} or not isinstance(run.output_json, dict):
-                    raise InvocationApprovalError(
-                        "function_failed",
-                        run.error_message or f"Approved function invocation {run.status}",
-                    )
-                approval.result_json = run.output_json
-            elif approval.target_kind == "integration":
-                from app.services.integration_service import build_default_integration_service
-
-                approval.result_json = build_default_integration_service(
-                    self.db
-                ).invoke_approved_direct(
-                    approval.target_id,
-                    approval.input_json,
-                    expected_contract_fingerprint=approval.target_contract_fingerprint,
-                    expected_provider_account_id=approval.provider_account_id,
-                    approval_context=approval,
+            outcome = InvocationExecutor(
+                self.db,
+                project_root=self.project_root,
+            ).execute_approved(approval)
+            if outcome.output is None:
+                raise InvocationApprovalError(
+                    outcome.error_type or "execution_failed",
+                    outcome.error_message or "Approved invocation returned no output",
                 )
-            else:
-                raise InvocationApprovalError("invalid_target", "Invocation approval target is unsupported")
+            approval.result_json = outcome.output
             approval.execution_status = "succeeded"
             approval.execution_completed_at = utc_now()
             self.db.commit()
@@ -357,16 +330,6 @@ class InvocationApprovalService:
             return approval
 
     def _commit_and_deliver(self, approval: InvocationApproval) -> InvocationApproval:
-        from app.services.agent_policy_service import current_agent
-        identity = current_agent.get()
-        if identity is not None:
-            approval.dispatch_metadata_json = {**(approval.dispatch_metadata_json or {}), "agent_identity": {"agent_id": identity[0], "session_id": identity[1]}}
-            approval.source = f"agent:{identity[0]}"
-            approval.presentation_json = presentation_snapshot(build_approval_presentation(
-                approval_id=0, action=approval.target_id,
-                caller=f"{identity[0].title()} session {identity[1]}",
-                input_json=approval.input_json, reason=approval.reason_to_call,
-            ))
         self.db.add(approval)
         self.db.commit()
         self.db.refresh(approval)
@@ -383,6 +346,12 @@ class InvocationApprovalService:
             self.db.commit()
             self.db.refresh(approval)
         return approval
+
+    @staticmethod
+    def _presentation_caller(context: InvocationContext, category: str) -> str:
+        if context.principal_kind == "agent":
+            return f"{str(context.agent_id).title()} session {context.agent_session_id}"
+        return context.approval_source(category)
 
     def _update_telegram_outcome(self, approval: InvocationApproval) -> None:
         try:

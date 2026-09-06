@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.db import Base
+from app.execution.types import InvocationOutcome
 from app.models import CodexMcpSettings, McpAuditRecord, Skill, SkillRun
 from app.services.mcp_function_service import McpFunctionError, McpFunctionService
 
@@ -150,19 +151,27 @@ def test_user_invocation_uses_codex_mcp_history_and_sanitized_audit(
     )
     db.add(target)
     db.commit()
-    runner = FakeRunner(db)
+    class Executor:
+        def execute(self, target_ref, input_json, context):
+            run = SkillRun(
+                skill_id=target.id,
+                status="succeeded",
+                input_json=input_json,
+                output_json={"result": "ok"},
+                invocation_source=context.function_source(),
+                started_at=datetime.now(UTC),
+                ended_at=datetime.now(UTC),
+            )
+            db.add(run)
+            db.commit()
+            db.refresh(run)
+            return InvocationOutcome(
+                status="succeeded",
+                output=run.output_json,
+                skill_run_id=run.id,
+            )
 
-    class Registry:
-        def invoke_direct(self, skill, input_json, *, source, initiating_action):
-            return runner.run(skill.id, tmp_path, input_json, context=type("Context", (), {
-                "invocation_source": source,
-            })())
-
-    monkeypatch.setattr(
-        "app.services.mcp_function_service.FunctionRegistryService",
-        lambda *_args, **_kwargs: Registry(),
-    )
-    service = McpFunctionService(db, project_root=tmp_path)
+    service = McpFunctionService(db, project_root=tmp_path, executor=Executor())  # type: ignore[arg-type]
     sentinel = "MCP_ARGUMENT_SENTINEL_93ef"
 
     result = service.invoke(McpFunctionService.tool_name("user", "future_user"), {"value": sentinel})

@@ -5,7 +5,8 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from app.models import Skill
+from app.execution.context import InvocationContext
+from app.models import Skill, WebAppInstance
 from app.schemas.skill_codex import SkillCodexRequest
 from app.services.codex_service import CodexService
 from app.services.manifest_validator import validate_manifest_file
@@ -26,19 +27,51 @@ class SkillCodexRuntimeService:
     db: Session
     project_root: Path
 
-    def call(
+    def call_context(
         self,
-        skill: Skill,
+        context: InvocationContext,
         payload: SkillCodexRequest,
-        *,
-        expected_version_id: int | None = None,
     ) -> dict[str, object]:
+        if context.caller_skill_id is None:
+            raise SkillCodexUnavailable("Codex calls require an authenticated skill caller")
+        skill = self.db.get(Skill, context.caller_skill_id)
+        if skill is None:
+            raise SkillCodexUnavailable("Codex caller no longer exists")
         if skill.status != "installed":
             raise SkillCodexUnavailable("Only installed skills can call Codex")
         if not skill.enabled:
             raise SkillCodexUnavailable("Skill is disabled")
-        if expected_version_id is not None and skill.active_version_id != expected_version_id:
+        if skill.active_version_id != context.caller_version_id:
             raise SkillCodexUnavailable("Runtime caller version is no longer active")
+
+        if context.principal_kind == "skill":
+            if skill.runtime not in {"function", "service"}:
+                raise SkillCodexUnavailable("Runtime caller is not eligible to call Codex")
+            if skill.runtime == "service" and context.source_schedule_id is None:
+                raise SkillCodexUnavailable(
+                    "Services can call Codex only during a schedule-attributed run"
+                )
+        elif context.principal_kind == "web_app":
+            instance = self.db.get(WebAppInstance, context.web_app_instance_id)
+            if (
+                skill.runtime != "web_app"
+                or instance is None
+                or instance.status != "healthy"
+                or instance.skill_id != skill.id
+                or instance.version_id != context.caller_version_id
+            ):
+                raise SkillCodexUnavailable("Web application capability is no longer authorized")
+        elif context.principal_kind == "user":
+            if skill.runtime == "service":
+                raise SkillCodexUnavailable(
+                    "Services can call Codex only during a schedule-attributed run"
+                )
+            if skill.runtime != "function":
+                raise SkillCodexUnavailable(
+                    "Services and web applications require their scoped runtime capability"
+                )
+        else:
+            raise SkillCodexUnavailable("Codex caller is not eligible")
 
         permission_decision = PermissionService(
             self.db,
@@ -56,14 +89,8 @@ class SkillCodexRuntimeService:
         except (FileNotFoundError, ProposedSkillError, ValueError) as exc:
             raise SkillCodexInvalidRequest(str(exc)) from exc
 
-        if manifest.runtime not in {"function", "service"}:
-            raise SkillCodexUnavailable(
-                "web_app skills must use a scoped instance capability for privileged backend calls"
-            )
-        if manifest.runtime == "service" and expected_version_id is None:
-            raise SkillCodexUnavailable(
-                "Services can call Codex only during a schedule-attributed run"
-            )
+        if manifest.runtime != skill.runtime:
+            raise SkillCodexUnavailable("Active manifest runtime does not match the caller")
         if payload.codex_permissions.call_response is False:
             raise SkillCodexInvalidRequest("Codex call_response permission is required")
         if manifest.permissions.codex.call_response is False:

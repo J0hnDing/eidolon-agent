@@ -7,6 +7,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.execution.context_factory import InvocationContextFactory
+from app.execution.executor import InvocationExecutor
+from app.execution.types import InvocationExecutionError, InvocationTargetRef
 from app.models import ActTelegramBinding, ActTurn, AgentProposal, AssistantAssessmentState, TelegramBotConnection
 from app.services.act_session_service import (
     ActSessionError,
@@ -16,7 +19,6 @@ from app.services.act_session_service import (
 from app.services.act_workspace_service import ensure_act_workspace
 from app.services.atlas_provider import UrllibAtlasProviderAdapter
 from app.services.github_provider import IntegrationProviderError
-from app.services.integration_service import IntegrationError, build_default_integration_service
 
 ASSISTANT_ASSESSMENT_INTERVAL = timedelta(days=3)
 ASSISTANT_ASSESSMENT_INSTRUCTION = r"""Act as a proactive personal assistant. Your job is to identify concrete, worthwhile ways Act could help the user, based on the user's todos and goals as well as user's broader situation.
@@ -66,9 +68,11 @@ class AssistantAssessmentService:
         db: Session,
         *,
         now: Callable[[], datetime] | None = None,
+        executor: InvocationExecutor | None = None,
     ) -> None:
         self.db = db
         self._now = now or utc_now
+        self.executor = executor or InvocationExecutor(db)
 
     def notify_completed(self, turn: ActTurn) -> None:
         import logging
@@ -214,12 +218,25 @@ class AssistantAssessmentService:
         todo_refs = {ref for ref in references if ref.startswith("todo:")}
         if todo_refs:
             try:
-                integrations = build_default_integration_service(self.db)
+                context = InvocationContextFactory.trusted_system(
+                    "assistant_assessment_cleanup",
+                    initiating_action="Assistant proposal reference cleanup",
+                )
                 active = set()
                 payload: dict[str, Any] = {"page_size": 100}
                 seen = set()
                 for _ in range(100):
-                    page = integrations.invoke_direct("notion.todo.list", payload)
+                    outcome = self.executor.execute(
+                        InvocationTargetRef(category="integration", target_id="notion.todo.list"),
+                        payload,
+                        context,
+                    )
+                    if outcome.output is None:
+                        raise InvocationExecutionError(
+                            "internal_failure",
+                            "Notion todo listing returned no output",
+                        )
+                    page = outcome.output
                     active.update(f"todo:{todo['id']}" for todo in page["todos"] if not todo["done"])
                     if not page["has_more"]:
                         inactive.update(todo_refs - active)
@@ -229,7 +246,7 @@ class AssistantAssessmentService:
                         break
                     seen.add(cursor)
                     payload["start_cursor"] = cursor
-            except IntegrationError:
+            except InvocationExecutionError:
                 # Unavailable or incomplete sources are not evidence of deletion.
                 pass
         goal_refs = {ref for ref in references if ref.startswith("goal:")}

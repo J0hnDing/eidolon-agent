@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.db import Base
+from app.execution.context import InvocationContext
 from app.models import (
     ApprovalRequest,
     IntegrationAuditRecord,
@@ -20,7 +21,7 @@ from app.models import (
 from app.schemas.manifest import SkillManifest, manifest_permission_requests
 from app.services.atlas_provider import FakeAtlasProviderAdapter
 from app.services.github_provider import FakeGitHubProviderAdapter
-from app.services.integration_service import IntegrationCaller, IntegrationError, IntegrationService
+from app.services.integration_service import IntegrationError, IntegrationService
 from app.services.permission_service import PermissionService
 from app.services.report_service import FakeReportProvider
 from app.services.secret_store import FakeSecretStore
@@ -41,6 +42,26 @@ def db() -> Session:
     Base.metadata.create_all(engine)
     with Session(engine) as session:
         yield session
+
+
+def caller_context(skill: Skill, *, version_id: int | None = None) -> InvocationContext:
+    return InvocationContext(
+        principal_kind="web_app" if skill.runtime == "web_app" else "skill",
+        origin="web_app_runtime" if skill.runtime == "web_app" else "skill_runtime",
+        caller_skill_id=skill.id,
+        caller_version_id=version_id if version_id is not None else skill.active_version_id,
+        caller_runtime=skill.runtime,
+    )
+
+
+def invoke(
+    service: IntegrationService,
+    operation_id: str,
+    input_json: dict,
+    context: InvocationContext | None = None,
+) -> dict:
+    context = context or InvocationContext(principal_kind="user", origin="http")
+    return service.execute_context(context, operation_id, input_json).output
 
 
 def integration_requirement(
@@ -520,16 +541,17 @@ def test_notion_todo_operations_use_existing_authorization_audit_and_fake_provid
     service.put_notion_connection(NOTION_SENTINEL, "source-id", "report-source-id")
     authorization = authorize(service, skill, manifest)
     assert authorization.approval_request.risk_level == "medium"
-    caller = IntegrationCaller(skill_id=skill.id, version_id=skill.active_version_id, runtime="function")
+    caller = caller_context(skill)
 
-    created = service.invoke(caller, "notion.todo.create", {"title": "Title only"})
-    updated = service.invoke(
-        caller,
+    created = invoke(service, "notion.todo.create", {"title": "Title only"}, caller)
+    updated = invoke(
+        service,
         "notion.todo.update",
         {"id": created["id"], "done": True, "notes": None},
+        caller,
     )
-    listed = service.invoke(caller, "notion.todo.list", {"page_size": 1})
-    removed = service.invoke(caller, "notion.todo.delete", {"id": created["id"]})
+    listed = invoke(service, "notion.todo.list", {"page_size": 1}, caller)
+    removed = invoke(service, "notion.todo.delete", {"id": created["id"]}, caller)
 
     assert updated["notes"] is None
     assert updated["done"] is True
@@ -579,17 +601,18 @@ def test_notion_report_operations_use_separate_contained_source_and_raw_blocks(
     service.put_notion_connection(NOTION_SENTINEL, "todo-source", "report-source")
     authorization = authorize(service, skill, manifest)
     assert authorization.approval_request.risk_level == "medium"
-    caller = IntegrationCaller(skill_id=skill.id, version_id=skill.active_version_id, runtime="function")
+    caller = caller_context(skill)
     children = [{"type": "divider", "divider": {}}]
 
-    created = service.invoke(
-        caller,
+    created = invoke(
+        service,
         "notion.report.create",
         {"name": "Weekly report", "select": "GitHub Projects", "children": children},
+        caller,
     )
-    listed = service.invoke(caller, "notion.report.list", {"page_size": 10})
-    fetched = service.invoke(caller, "notion.report.get", {"id": created["id"]})
-    removed = service.invoke(caller, "notion.report.delete", {"id": created["id"]})
+    listed = invoke(service, "notion.report.list", {"page_size": 10}, caller)
+    fetched = invoke(service, "notion.report.get", {"id": created["id"]}, caller)
+    removed = invoke(service, "notion.report.delete", {"id": created["id"]}, caller)
 
     assert listed["reports"] == [created]
     assert fetched["report"] == created
@@ -656,10 +679,11 @@ def test_declared_approved_call_is_normalized_audited_and_secret_free(
     service = connected_service(db, tmp_path)
     authorize(service, skill, manifest)
 
-    output = service.invoke(
-        IntegrationCaller(skill_id=skill.id, version_id=skill.active_version_id, runtime="function"),
+    output = invoke(
+        service,
         "github.repository.get",
         {"owner": "octo", "repository": "demo"},
+        caller_context(skill),
     )
 
     assert output["full_name"] == "octo/demo"
@@ -697,37 +721,36 @@ def test_missing_authorization_connection_and_secret_are_normalized(
     skill, manifest = create_installed_skill(db, tmp_path)
     store = FakeSecretStore()
     service = connected_service(db, tmp_path, store=store)
-    caller = IntegrationCaller(
-        skill_id=skill.id,
-        version_id=skill.active_version_id,
-        runtime="function",
-    )
+    caller = caller_context(skill)
 
     with pytest.raises(IntegrationError) as missing_authorization:
-        service.invoke(
-            caller,
+        invoke(
+            service,
             "github.repository.get",
             {"owner": "octo", "repository": "demo"},
+            caller,
         )
     assert missing_authorization.value.error_type == "authorization_missing_or_stale"
 
     authorize(service, skill, manifest)
     service.remove_github_connection()
     with pytest.raises(IntegrationError) as missing_connection:
-        service.invoke(
-            caller,
+        invoke(
+            service,
             "github.repository.get",
             {"owner": "octo", "repository": "demo"},
+            caller,
         )
     assert missing_connection.value.error_type == "connection_unavailable"
 
     service.put_github_connection(SENTINEL)
     store.fail_get = True
     with pytest.raises(IntegrationError) as unavailable_secret:
-        service.invoke(
-            caller,
+        invoke(
+            service,
             "github.repository.get",
             {"owner": "octo", "repository": "demo"},
+            caller,
         )
     assert unavailable_secret.value.error_type == "connection_unavailable"
     audits = db.scalars(select(IntegrationAuditRecord).order_by(IntegrationAuditRecord.id)).all()
@@ -763,10 +786,11 @@ def test_invocation_denials_are_normalized_and_safely_audited(
     authorize(service, skill, manifest)
 
     with pytest.raises(IntegrationError) as exc_info:
-        service.invoke(
-            IntegrationCaller(skill_id=skill.id, version_id=skill.active_version_id, runtime="function"),
+        invoke(
+            service,
             operation,
             input_json,
+            caller_context(skill),
         )
     assert exc_info.value.error_type == expected
     audit = db.scalar(select(IntegrationAuditRecord))
@@ -792,10 +816,11 @@ def test_trending_rejects_caller_query_construction(
     authorize(service, skill, manifest)
 
     with pytest.raises(IntegrationError) as exc_info:
-        service.invoke(
-            IntegrationCaller(skill_id=skill.id, version_id=skill.active_version_id, runtime="function"),
+        invoke(
+            service,
             "github.repository.trending.list",
             {"language": "python stars:>1000"},
+            caller_context(skill),
         )
     assert exc_info.value.error_type == "invalid_input"
 
@@ -813,10 +838,11 @@ def test_provider_errors_are_normalized_and_safely_audited(
     provider.error_type = error_type
 
     with pytest.raises(IntegrationError) as exc_info:
-        service.invoke(
-            IntegrationCaller(skill_id=skill.id, version_id=skill.active_version_id, runtime="function"),
+        invoke(
+            service,
             "github.repository.get",
             {"owner": "octo", "repository": "demo"},
+            caller_context(skill),
         )
     assert exc_info.value.error_type == error_type
     audit = db.scalar(select(IntegrationAuditRecord))
@@ -833,18 +859,20 @@ def test_removed_connection_blocks_calls_but_retains_authorization_and_audit(
     skill, manifest = create_installed_skill(db, tmp_path)
     service = connected_service(db, tmp_path)
     authorization = authorize(service, skill, manifest)
-    service.invoke(
-        IntegrationCaller(skill_id=skill.id, version_id=skill.active_version_id, runtime="function"),
+    invoke(
+        service,
         "github.repository.get",
         {"owner": "octo", "repository": "demo"},
+        caller_context(skill),
     )
     service.remove_github_connection()
 
     with pytest.raises(IntegrationError) as exc_info:
-        service.invoke(
-            IntegrationCaller(skill_id=skill.id, version_id=skill.active_version_id, runtime="function"),
+        invoke(
+            service,
             "github.repository.get",
             {"owner": "octo", "repository": "demo"},
+            caller_context(skill),
         )
     assert exc_info.value.error_type == "connection_unavailable"
     assert db.get(IntegrationAuthorization, authorization.id) is not None
@@ -890,20 +918,22 @@ def test_disabled_and_stale_version_are_rejected_before_provider_call(
     skill.enabled = False
     db.commit()
     with pytest.raises(IntegrationError) as disabled:
-        service.invoke(
-            IntegrationCaller(skill_id=skill.id, version_id=skill.active_version_id, runtime="function"),
+        invoke(
+            service,
             "github.repository.get",
             {"owner": "octo", "repository": "demo"},
+            caller_context(skill),
         )
     assert disabled.value.error_type == "authorization_missing_or_stale"
 
     skill.enabled = True
     db.commit()
     with pytest.raises(IntegrationError) as stale:
-        service.invoke(
-            IntegrationCaller(skill_id=skill.id, version_id=skill.active_version_id + 100, runtime="function"),
+        invoke(
+            service,
             "github.repository.get",
             {"owner": "octo", "repository": "demo"},
+            caller_context(skill, version_id=skill.active_version_id + 100),
         )
     assert stale.value.error_type == "authorization_missing_or_stale"
     assert provider.calls == []
@@ -917,7 +947,8 @@ def test_direct_user_integration_path_preserves_provider_boundaries_without_skil
     provider = FakeGitHubProviderAdapter()
     service = connected_service(db, tmp_path, store=store, provider=provider)
 
-    output = service.invoke_direct(
+    output = invoke(
+        service,
         "github.repository.get",
         {"owner": "outside", "repository": "token-allowed"},
     )
@@ -928,14 +959,15 @@ def test_direct_user_integration_path_preserves_provider_boundaries_without_skil
     ]
     store.fail_get = True
     with pytest.raises(IntegrationError) as unavailable:
-        service.invoke_direct(
+        invoke(
+            service,
             "github.repository.get",
             {"owner": "outside", "repository": "token-allowed"},
         )
     assert unavailable.value.error_type == "connection_unavailable"
 
     with pytest.raises(IntegrationError) as invalid:
-        service.invoke_direct("github.repository.get", {"owner": "invalid owner", "repository": "repo"})
+        invoke(service, "github.repository.get", {"owner": "invalid owner", "repository": "repo"})
     assert invalid.value.error_type == "invalid_input"
     assert len(provider.calls) == 1
 
@@ -969,8 +1001,8 @@ def test_direct_user_notion_and_atlas_calls_reuse_configured_containment(
     )
     service.provider_connected = lambda provider: provider == "atlas"  # type: ignore[method-assign]
 
-    notion_output = service.invoke_direct("notion.todo.list", {"page_size": 10})
-    atlas_output = service.invoke_direct("atlas.person.get", {})
+    notion_output = invoke(service, "notion.todo.list", {"page_size": 10})
+    atlas_output = invoke(service, "atlas.person.get", {})
 
     assert notion_output == {"todos": [], "has_more": False, "next_cursor": None}
     assert configured_sources[-1] == "only-configured-source"
@@ -1015,10 +1047,11 @@ def test_atlas_know_uses_bounded_codex_and_audits_only_node_id(db: Session, tmp_
     service.provider_connected = lambda provider: provider == "atlas"  # type: ignore[method-assign]
     authorize(service, skill, manifest)
 
-    result = service.invoke(
-        IntegrationCaller(skill_id=skill.id, version_id=skill.active_version_id, runtime="function"),
+    result = invoke(
+        service,
         "atlas.knowledge.node.know",
         {"node_id": 42},
+        caller_context(skill),
     )
 
     assert result["node"]["status"] == "known"

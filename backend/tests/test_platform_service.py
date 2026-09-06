@@ -5,7 +5,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from app.services.integration_service import IntegrationError
+from app.execution.context import InvocationContext
+from app.execution.types import InvocationExecutionError, InvocationOutcome
 from app.services.platform_service import (
     NOTION_DONE_CLEANUP_SERVICE_ID,
     NotionDoneCleanupService,
@@ -14,35 +15,42 @@ from app.services.platform_service import (
 )
 
 
-class FakeIntegrations:
+class FakeExecutor:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
         self.pages: dict[str | None, dict] = {}
         self.delete_failures: dict[str, str] = {}
         self.list_error: str | None = None
 
-    def invoke_direct(self, operation_id: str, input_json: dict) -> dict:
+    def execute(self, target, input_json: dict, context) -> InvocationOutcome:
+        operation_id = target.target_id
         self.calls.append((operation_id, dict(input_json)))
         if operation_id == "notion.todo.list":
             if self.list_error:
-                raise IntegrationError(self.list_error, "safe list failure")
-            return self.pages[input_json.get("start_cursor")]
+                raise InvocationExecutionError(self.list_error, "safe list failure")
+            return InvocationOutcome(
+                status="succeeded",
+                output=self.pages[input_json.get("start_cursor")],
+            )
         todo_id = input_json["id"]
         if todo_id in self.delete_failures:
-            raise IntegrationError(self.delete_failures[todo_id], "safe delete failure")
-        return {"id": todo_id, "removed": True}
+            raise InvocationExecutionError(self.delete_failures[todo_id], "safe delete failure")
+        return InvocationOutcome(status="succeeded", output={"id": todo_id, "removed": True})
 
 
 def todo(todo_id: str, *, done: bool) -> dict:
     return {"id": todo_id, "done": done}
 
 
-def service(fake: FakeIntegrations) -> NotionDoneCleanupService:
-    return NotionDoneCleanupService(fake)  # type: ignore[arg-type]
+def service(fake: FakeExecutor) -> NotionDoneCleanupService:
+    return NotionDoneCleanupService(
+        fake,  # type: ignore[arg-type]
+        InvocationContext(principal_kind="system", origin="scheduler"),
+    )
 
 
 def test_cleanup_paginates_and_deletes_only_done_todos() -> None:
-    fake = FakeIntegrations()
+    fake = FakeExecutor()
     fake.pages = {
         None: {
             "todos": [todo("done-1", done=True), todo("open-1", done=False)],
@@ -68,7 +76,7 @@ def test_cleanup_paginates_and_deletes_only_done_todos() -> None:
 
 
 def test_cleanup_continues_after_individual_delete_failure() -> None:
-    fake = FakeIntegrations()
+    fake = FakeExecutor()
     fake.pages = {
         None: {
             "todos": [todo("failed", done=True), todo("deleted", done=True)],
@@ -86,7 +94,7 @@ def test_cleanup_continues_after_individual_delete_failure() -> None:
 
 
 def test_cleanup_normalizes_list_failure_without_deleting() -> None:
-    fake = FakeIntegrations()
+    fake = FakeExecutor()
     fake.list_error = "connection_unavailable"
 
     result = service(fake).run()
@@ -98,10 +106,10 @@ def test_cleanup_normalizes_list_failure_without_deleting() -> None:
 
 def test_platform_dispatcher_is_endpoint_only_and_not_in_function_catalog() -> None:
     engine = create_engine("sqlite:///:memory:")
-    fake = FakeIntegrations()
+    fake = FakeExecutor()
     fake.pages = {None: {"todos": [], "has_more": False, "next_cursor": None}}
     with Session(engine) as db:
-        dispatcher = PlatformServiceDispatcher(db, integrations=fake)  # type: ignore[arg-type]
+        dispatcher = PlatformServiceDispatcher(db, executor=fake)  # type: ignore[arg-type]
         result = dispatcher.invoke(NOTION_DONE_CLEANUP_SERVICE_ID)
         with pytest.raises(PlatformServiceError, match="Unknown platform service"):
             dispatcher.invoke("unknown.service")

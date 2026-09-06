@@ -2,6 +2,18 @@
 
 `runtime = function` is the machine-facing, one-shot JSON protocol. Installed functions do not host HTTP services. The backend records backend-core, installed user, and integration functions in one persistent catalog at `runtime/function_catalog.json`.
 
+## Execution Kernel
+
+All catalog callable invocations follow one backend route:
+
+```text
+authenticated adapter -> immutable InvocationContext -> InvocationExecutor -> category handler -> domain service/provider/runtime -> InvocationOutcome
+```
+
+`InvocationContextFactory` consumes agent credentials, bounded-run capability tokens, or scoped web-application instance capabilities and emits identifier-only attribution. Contexts distinguish the current principal (`user`, `agent`, `skill`, `web_app`, or trusted named `system`) from the originating transport. They contain no bearer token, agent credential, provider credential, or ORM object, and callers cannot supply context fields through invocation JSON.
+
+Targets are explicitly category-qualified as `user`, `integration`, `backend_core`, or `agent_private`; a target string alone never selects a handler. `InvocationExecutor` rechecks live agent session and function policy, then delegates current-contract resolution, authorization, approval submission, execution, output validation, and audit metadata to the registered category handler. `FunctionRegistryService` and `IntegrationService` remain domain services behind those handlers and are not alternate production dispatchers. The checked-in backend-core handlers currently cover `act.document.download` and `backend.codex.call`; the private Assistant handler covers `plan_approval_request`.
+
 ## Registry Contract
 
 `GET /functions/catalog` reads the persisted projection and returns all catalog entries with category, description, input/output JSON Schemas, invocation guidance, derived risk, availability state, availability reasons, and an `is_running` projection for active user-function runs and function audit records. It does not reconcile installed skill files, probe providers, or rewrite the catalog. Startup reconciles installed skills once and rebuilds the projection; skill lifecycle, runtime approval, active-version, and integration mutations rebuild it when relevant state changes. The transient running projection is added only to the UI response; only available entries and their stable contracts are included in ProductManager prompts.
@@ -46,7 +58,7 @@ The backend evaluates the direct caller-to-target relationship on every call:
 
 Function-access approval is specific to one caller skill and one target function. Its fingerprint covers target risk, permissions, dependencies, input/output schemas, and the target's transitive function graph. Code-only target version changes retain approval; a changed fingerprint makes the relationship stale and requires review. Approval does not authorize other callers. The parent's runtime review inherits the transitive permission union, while execution still gives each process only its own manifest permissions.
 
-Direct user runs and backend actions keep their existing authorization boundaries. A scheduled service receives caller authority only for its schedule-attributed run. None of these paths creates a synthetic caller skill. Function-target paths converge on the registry service for availability checks, operation locking, bounded execution, and audit attribution.
+Direct user runs and backend actions keep their existing authorization boundaries. Trusted backend callers use a named system context but receive no generic approval bypass. A scheduled service receives caller authority only for its schedule-attributed run. None of these paths creates a synthetic caller skill. Function-target paths converge through `InvocationExecutor`; the user-function handler coordinates registry availability checks, operation locking, bounded execution, and audit attribution.
 
 ## Runtime and Audit
 

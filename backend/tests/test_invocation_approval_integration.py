@@ -5,6 +5,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.db import Base
+from app.execution.context import InvocationContext
+from app.execution.executor import InvocationExecutor
+from app.execution.types import InvocationTargetRef
 from app.models import IntegrationConnection, InvocationApproval
 from app.services.gmail_provider import FakeGmailProviderAdapter
 from app.services.google_calendar_provider import FakeGoogleCalendarProviderAdapter
@@ -73,10 +76,10 @@ def test_email_send_is_deferred_stripped_denied_stale_and_recovered(monkeypatch,
             "_telegram_service",
             lambda _self: PairedTelegram(),
         )
-        import app.services.integration_service as integration_module
+        import app.execution.handlers.integration as integration_handler_module
 
         monkeypatch.setattr(
-            integration_module,
+            integration_handler_module,
             "build_default_integration_service",
             lambda _db: integration,
         )
@@ -87,7 +90,19 @@ def test_email_send_is_deferred_stripped_denied_stale_and_recovered(monkeypatch,
             "body": "Complete body",
             "reason_to_call": "Send the requested update",
         }
-        receipt = integration.invoke_direct("email.send", payload)
+        def submit() -> dict:
+            outcome = InvocationExecutor(
+                db,
+                project_root=tmp_path,
+                integration_service=integration,
+            ).execute(
+                InvocationTargetRef(category="integration", target_id="email.send"),
+                payload,
+                InvocationContext(principal_kind="user", origin="http"),
+            )
+            return outcome.output or {}
+
+        receipt = submit()
         assert receipt == {"status": "pending_approval", "approval_id": 1}
         assert store.get_count == 0
         assert gmail.calls == []
@@ -104,7 +119,7 @@ def test_email_send_is_deferred_stripped_denied_stale_and_recovered(monkeypatch,
             "Body",
         ]
 
-        denied_receipt = integration.invoke_direct("email.send", payload)
+        denied_receipt = submit()
         denied = InvocationApprovalService(db, project_root=tmp_path).deny(
             denied_receipt["approval_id"], decided_via="local", decided_by="tester"
         )
@@ -118,7 +133,7 @@ def test_email_send_is_deferred_stripped_denied_stale_and_recovered(monkeypatch,
         assert gmail.calls == [("email.send", approval.input_json)]
         assert store.get_count == 2
 
-        stale_receipt = integration.invoke_direct("email.send", payload)
+        stale_receipt = submit()
         connection = integration._connection("gmail")
         assert connection is not None
         connection.account_id = "account-2"
@@ -128,7 +143,7 @@ def test_email_send_is_deferred_stripped_denied_stale_and_recovered(monkeypatch,
         )
         assert stale.execution_status == "stale"
 
-        interrupted_receipt = integration.invoke_direct("email.send", payload)
+        interrupted_receipt = submit()
         interrupted = db.get(InvocationApproval, interrupted_receipt["approval_id"])
         assert interrupted is not None
         interrupted.decision_status = "approved"

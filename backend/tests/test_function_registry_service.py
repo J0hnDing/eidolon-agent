@@ -12,6 +12,10 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
+from app.execution.context import InvocationContext
+from app.execution.context_factory import InvocationContextFactory
+from app.execution.executor import InvocationExecutor
+from app.execution.types import InvocationOutcome
 from app.models import (
     ApprovalRequest,
     InvocationApproval,
@@ -23,7 +27,6 @@ from app.models import (
 from app.schemas.manifest import SkillManifest
 from app.services.function_catalog_service import FunctionCatalogService
 from app.services.function_registry_service import (
-    FunctionCaller,
     FunctionRegistryError,
     FunctionRegistryService,
 )
@@ -73,6 +76,30 @@ class FakeRunner:
         self.db.commit()
         self.db.refresh(run)
         return run
+
+
+def runtime_context(caller: Skill, *, run_id: int | None = None) -> InvocationContext:
+    return InvocationContext(
+        principal_kind="skill",
+        origin="skill_runtime",
+        caller_skill_id=caller.id,
+        caller_version_id=caller.active_version_id,
+        caller_run_id=run_id,
+        caller_runtime=caller.runtime,
+        initiating_action="test_call",
+    )
+
+
+def invoke_registry(
+    registry: FunctionRegistryService,
+    target: Skill,
+    input_json: dict[str, Any],
+    context: InvocationContext,
+):
+    error = registry.caller_authorization_error(target, context)
+    if error is not None:
+        return registry.blocked_run_for_context(target, input_json, error, context)
+    return registry.execute_resolved(target, input_json, context)
 
 
 def make_function(
@@ -222,24 +249,33 @@ def test_invocation_approval_projects_contract_and_defers_execution(
     manifest_json["requires_invocation_approval"] = True
     manifest_path.write_text(json.dumps(manifest_json), encoding="utf-8")
 
-    approval = registry.invoke_direct(
+    approval = registry.execute_resolved(
         target,
         {"value": "execute later", "reason_to_call": "The user requested it."},
+        InvocationContext(
+            principal_kind="user",
+            origin="http",
+            initiating_action="direct_user",
+        ),
     )
 
     assert isinstance(approval, InvocationApproval)
     assert approval.input_json == {"value": "execute later"}
     assert approval.reason_to_call == "The user requested it."
     assert approval.decision_status == "pending"
+    assert approval.dispatch_metadata_json["invocation_context_v1"] == {
+        "principal_kind": "user",
+        "origin": "http",
+        "initiating_action": "direct_user",
+    }
     assert runner.calls == []
 
     monkeypatch.setattr(
-        FunctionRegistryService,
-        "invoke_approved",
-        lambda _self, _approval: SimpleNamespace(
+        InvocationExecutor,
+        "execute_approved",
+        lambda _self, _approval: InvocationOutcome(
             status="succeeded",
-            output_json={"result": "ok"},
-            error_message=None,
+            output={"result": "ok"},
         ),
     )
     decided = InvocationApprovalService(db_session, project_root=tmp_path).approve(
@@ -397,12 +433,11 @@ def test_declared_low_risk_function_invokes_without_caller_approval(
     runner = FakeRunner(db_session)
     registry = service(db_session, tmp_path, runner)
 
-    run = registry.invoke_declared(
-        FunctionCaller(caller, caller.active_version_id),
-        target.name,
+    run = invoke_registry(
+        registry,
+        target,
         {"value": "Hello"},
-        source="skill",
-        initiating_action="test_call",
+        runtime_context(caller),
     )
 
     assert run.status == "succeeded"
@@ -428,11 +463,14 @@ def test_codex_mcp_direct_call_keeps_run_history_lock_context_and_nested_capabil
     runner = FakeRunner(db_session)
     registry = service(db_session, tmp_path, runner)
 
-    run = registry.invoke_direct(
+    run = registry.execute_resolved(
         target,
         {"value": "Hello"},
-        source="codex_mcp",
-        initiating_action="codex_mcp",
+        InvocationContext(
+            principal_kind="user",
+            origin="codex_mcp",
+            initiating_action="codex_mcp",
+        ),
     )
 
     assert run.status == "succeeded"
@@ -447,12 +485,12 @@ def test_undeclared_function_call_is_blocked_before_execution(tmp_path: Path, db
     caller = make_function(db_session, tmp_path, "caller")
     runner = FakeRunner(db_session)
 
-    run = service(db_session, tmp_path, runner).invoke_declared(
-        FunctionCaller(caller, caller.active_version_id),
-        target.name,
+    registry = service(db_session, tmp_path, runner)
+    run = invoke_registry(
+        registry,
+        target,
         {"value": "Hello"},
-        source="skill",
-        initiating_action="test_call",
+        runtime_context(caller),
     )
 
     assert run.status == "blocked"
@@ -474,23 +512,21 @@ def test_medium_risk_relationship_requires_specific_approval(tmp_path: Path, db_
 
     assert review[0].approval_required is True
     assert review[0].access_state == "pending"
-    blocked = registry.invoke_declared(
-        FunctionCaller(caller, caller.active_version_id),
-        target.name,
+    blocked = invoke_registry(
+        registry,
+        target,
         {"value": "Hello"},
-        source="skill",
-        initiating_action="test_call",
+        runtime_context(caller),
     )
     assert blocked.status == "blocked"
     request = db_session.get(ApprovalRequest, review[0].approval_request_id)
     PermissionService(db_session, project_root=tmp_path).approve_request(request)
 
-    allowed = registry.invoke_declared(
-        FunctionCaller(caller, caller.active_version_id),
-        target.name,
+    allowed = invoke_registry(
+        registry,
+        target,
         {"value": "Hello"},
-        source="skill",
-        initiating_action="test_call",
+        runtime_context(caller),
     )
     assert allowed.status == "succeeded"
     assert runner.calls[-1]["context"].caller_skill_id == caller.id
@@ -518,12 +554,11 @@ def test_changed_target_permission_contract_makes_approval_stale(
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     assert registry.list_contracts(caller)[1].access_state in {"stale", "not_declared"}
-    run = registry.invoke_declared(
-        FunctionCaller(caller, caller.active_version_id),
-        target.name,
+    run = invoke_registry(
+        registry,
+        target,
         {"value": "Hello"},
-        source="skill",
-        initiating_action="test_call",
+        runtime_context(caller),
     )
     assert run.status == "blocked"
     assert run.error_message == "Runtime permissions do not match the current manifest"
@@ -543,23 +578,21 @@ def test_incompatible_input_is_blocked_and_output_contract_is_enforced(
     runner = FakeRunner(db_session, output={"unexpected": True})
     registry = service(db_session, tmp_path, runner)
 
-    bad_input = registry.invoke_declared(
-        FunctionCaller(caller, caller.active_version_id),
-        target.name,
+    bad_input = invoke_registry(
+        registry,
+        target,
         {"value": 123},
-        source="skill",
-        initiating_action="test_call",
+        runtime_context(caller),
     )
     assert bad_input.status == "blocked"
     assert "input JSON is incompatible" in bad_input.error_message
     assert runner.calls == []
 
-    bad_output = registry.invoke_declared(
-        FunctionCaller(caller, caller.active_version_id),
-        target.name,
+    bad_output = invoke_registry(
+        registry,
+        target,
         {"value": "Hello"},
-        source="skill",
-        initiating_action="test_call",
+        runtime_context(caller),
     )
     assert bad_output.status == "failed"
     assert "output JSON is incompatible" in bad_output.error_message
@@ -590,11 +623,14 @@ def test_nested_function_capability_resolves_direct_caller(tmp_path: Path, db_se
     db_session.add(run)
     db_session.commit()
 
-    resolved = FunctionRegistryService(db_session, project_root=tmp_path).caller_from_capability(token)
+    resolved = InvocationContextFactory(
+        db_session,
+        project_root=tmp_path,
+    ).from_runtime_capability(token)
 
-    assert resolved.skill.id == caller.id
-    assert resolved.version_id == caller.active_version_id
-    assert resolved.run_id == run.id
+    assert resolved.caller_skill_id == caller.id
+    assert resolved.caller_version_id == caller.active_version_id
+    assert resolved.caller_run_id == run.id
 
 
 def test_function_capability_chain_can_continue_beyond_three_hops(
@@ -630,7 +666,11 @@ def test_function_capability_chain_can_continue_beyond_three_hops(
 
     parent_run_id = active_run.id
     for target in functions[1:]:
-        run = registry.invoke_from_capability(token, target.name, {"value": target.name})
+        context = InvocationContextFactory(
+            db_session,
+            project_root=tmp_path,
+        ).from_runtime_capability(token)
+        run = invoke_registry(registry, target, {"value": target.name}, context)
         assert run.status == "succeeded"
         context = runner.calls[-1]["context"]
         assert context.parent_run_id == parent_run_id
@@ -671,10 +711,12 @@ def test_function_cycle_is_rejected_by_graph_availability(
     db_session.add(active_run)
     db_session.commit()
     runner = FakeRunner(db_session)
-    registry = service(db_session, tmp_path, runner)
 
     with pytest.raises(FunctionRegistryError, match="cycle"):
-        registry.invoke_from_capability(token, target.name, {"value": "again"})
+        InvocationContextFactory(
+            db_session,
+            project_root=tmp_path,
+        ).from_runtime_capability(token)
 
     assert runner.calls == []
 
@@ -726,10 +768,16 @@ def test_schedule_attributed_service_capability_can_invoke_declared_function(
     db_session.commit()
     runner = FakeRunner(db_session)
 
-    run = service(db_session, tmp_path, runner).invoke_from_capability(
-        token,
-        target.name,
+    registry = service(db_session, tmp_path, runner)
+    context = InvocationContextFactory(
+        db_session,
+        project_root=tmp_path,
+    ).from_runtime_capability(token)
+    run = invoke_registry(
+        registry,
+        target,
         {"value": "Hello"},
+        context,
     )
 
     assert run.status == "succeeded"

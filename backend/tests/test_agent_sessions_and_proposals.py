@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
+from app.execution.context import InvocationContext
 from app.models import (
     ActSession,
     ActTelegramBinding,
@@ -20,7 +21,6 @@ from app.services.act_session_service import (
     ActSessionService,
     AssistantSessionCapacityError,
 )
-from app.services.agent_policy_service import current_agent
 from app.services.agent_proposal_service import AgentProposalService
 
 
@@ -59,6 +59,15 @@ def isolate_proposal_side_effects(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(AgentProposalService, "mirror", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(AgentProposalService, "_telegram", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("app.services.act_turn_dispatcher.act_turn_dispatcher.notify", lambda: None)
+
+
+def assistant_context(session_id: int) -> InvocationContext:
+    return InvocationContext(
+        principal_kind="agent",
+        origin="agent_mcp",
+        agent_id="assistant",
+        agent_session_id=session_id,
+    )
 
 
 def test_assistant_retains_five_most_recent_sessions_across_all_origins(db: Session) -> None:
@@ -136,20 +145,16 @@ def test_pruning_oldest_assistant_session_clears_telegram_selection(db: Session)
 def test_proposal_history_survives_source_session_retention(db: Session) -> None:
     service = ActSessionService(db, app_server=FakeAppServer(), agent_id="assistant")  # type: ignore[arg-type]
     source = service.create_session(origin="assessment")
-    token = current_agent.set(("assistant", source.id))
-    try:
-        proposal = AgentProposalService(db).submit(
-            source.id,
-            {
-                "title": "Finish the report",
-                "rationale": "The remaining section is bounded and ready.",
-                "instruction": "Complete the remaining report section.",
-                "actions": "Review the draft and finish the remaining section.",
-                "references": ["TODO-12"],
-            },
-        )
-    finally:
-        current_agent.reset(token)
+    proposal = AgentProposalService(db).submit(
+        assistant_context(source.id),
+        {
+            "title": "Finish the report",
+            "rationale": "The remaining section is bounded and ready.",
+            "instruction": "Complete the remaining report section.",
+            "actions": "Review the draft and finish the remaining section.",
+            "references": ["TODO-12"],
+        },
+    )
     for _ in range(4):
         service.create_session(origin="web")
 
@@ -173,24 +178,21 @@ def test_agent_session_service_denies_cross_agent_reads(db: Session) -> None:
 def test_thread_proposal_limit_excludes_duplicates_and_unlimited_replacements(db: Session) -> None:
     source = ActSessionService(db, app_server=FakeAppServer(), agent_id="assistant").create_session()
     service = AgentProposalService(db)
-    token = current_agent.set(("assistant", source.id))
+    context = assistant_context(source.id)
     arguments = {"title": "Plan", "rationale": "Useful", "actions": "Work", "instruction": "Plan 0"}
-    try:
-        originals = [service.submit(source.id, {**arguments, "instruction": f"Plan {i}"}) for i in range(5)]
-        assert service.submit(source.id, arguments).id == originals[0].id
-        for i in range(7):
-            service.submit(source.id, {
-                **arguments, "instruction": f"Replacement {i}",
-                "replaces_proposal_id": originals[0].id, "material_change": "Updated requirements",
-            })
-        # Deleting history must not replenish the thread's lifetime allowance.
-        db.delete(originals[-1])
-        db.commit()
-        with pytest.raises(ValueError, match="limit of 5"):
-            service.submit(source.id, {**arguments, "instruction": "Sixth new plan"})
-        assert db.get(ActSession, source.id).proposal_count == 5
-    finally:
-        current_agent.reset(token)
+    originals = [service.submit(context, {**arguments, "instruction": f"Plan {i}"}) for i in range(5)]
+    assert service.submit(context, arguments).id == originals[0].id
+    for i in range(7):
+        service.submit(context, {
+            **arguments, "instruction": f"Replacement {i}",
+            "replaces_proposal_id": originals[0].id, "material_change": "Updated requirements",
+        })
+    # Deleting history must not replenish the thread's lifetime allowance.
+    db.delete(originals[-1])
+    db.commit()
+    with pytest.raises(ValueError, match="limit of 5"):
+        service.submit(context, {**arguments, "instruction": "Sixth new plan"})
+    assert db.get(ActSession, source.id).proposal_count == 5
 
 
 def test_concurrent_proposals_cannot_claim_the_same_last_slot(db: Session) -> None:
@@ -202,17 +204,14 @@ def test_concurrent_proposals_cannot_claim_the_same_last_slot(db: Session) -> No
 
     def submit(number):
         with factory() as other:
-            token = current_agent.set(("assistant", session_id))
             try:
-                AgentProposalService(other).submit(session_id, {
+                AgentProposalService(other).submit(assistant_context(session_id), {
                     "title": "Plan", "rationale": "Useful", "actions": "Work", "instruction": f"Plan {number}",
                 })
                 return "created"
             except ValueError as exc:
                 assert "limit of 5" in str(exc)
                 return "limited"
-            finally:
-                current_agent.reset(token)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         assert sorted(pool.map(submit, range(2))) == ["created", "limited"]

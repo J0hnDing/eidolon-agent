@@ -9,14 +9,14 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, ValidationError
 from mcp import types
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import ActTurn, CodexMcpSettings, InvocationApproval, McpAuditRecord, Skill
+from app.execution.context import InvocationContext
+from app.execution.context_factory import InvocationContextFactory
+from app.execution.executor import InvocationExecutor
+from app.execution.types import InvocationExecutionError, InvocationTargetRef
+from app.models import CodexMcpSettings, McpAuditRecord
 from app.services.function_catalog_service import FunctionCatalogService
-from app.services.function_registry_service import FunctionRegistryService
-from app.services.integration_service import IntegrationError, build_default_integration_service
-from app.services.invocation_approval_contract import pending_approval_receipt
 
 MAX_MCP_INPUT_BYTES = 256 * 1024
 MAX_MCP_OUTPUT_BYTES = 1024 * 1024
@@ -73,10 +73,19 @@ class McpInvocationResult:
 class McpFunctionService:
     """Snapshots catalog tools and routes bounded Codex MCP invocations."""
 
-    def __init__(self, db: Session, *, project_root=None, agent_token: str | None = None) -> None:
+    def __init__(
+        self,
+        db: Session,
+        *,
+        project_root=None,
+        agent_token: str | None = None,
+        executor: InvocationExecutor | None = None,
+    ) -> None:
         self.db = db
         self.project_root = project_root
         self.agent_token = agent_token
+        self.executor = executor or InvocationExecutor(db, project_root=project_root)
+        self.context_factory = InvocationContextFactory(db, project_root=project_root)
         self.agent_identity = None
         if agent_token is not None:
             from app.services.agent_policy_service import AgentPolicyService
@@ -120,21 +129,27 @@ class McpFunctionService:
         return len(self._tools)
 
     def invoke(self, tool_name: str, arguments: dict[str, Any]) -> McpInvocationResult:
-        from app.services.agent_policy_service import AgentPermissionError, AgentPolicyService, current_agent
-        marker = current_agent.set(None)
-        try:
-            if self.agent_token is not None:
-                try:
-                    identity = AgentPolicyService(self.db).authenticate(self.agent_token)
-                except AgentPermissionError as exc:
-                    self._audit_agent_denial(tool_name, exc.error_type)
-                    raise McpFunctionError(exc.error_type, str(exc)) from None
-                current_agent.set(identity)
-            return self._invoke(tool_name, arguments)
-        finally:
-            current_agent.reset(marker)
+        if self.agent_token is not None:
+            from app.services.agent_policy_service import AgentPermissionError
 
-    def _invoke(self, tool_name: str, arguments: dict[str, Any]) -> McpInvocationResult:
+            try:
+                context = self.context_factory.from_agent_credential(self.agent_token)
+            except AgentPermissionError as exc:
+                self._audit_agent_denial(tool_name, exc.error_type)
+                raise McpFunctionError(exc.error_type, str(exc)) from None
+        else:
+            context = self.context_factory.direct_user(
+                origin="codex_mcp",
+                initiating_action="codex_mcp",
+            )
+        return self._invoke(tool_name, arguments, context)
+
+    def _invoke(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        context: InvocationContext,
+    ) -> McpInvocationResult:
         snapshot = self._tools.get(tool_name)
         if snapshot is None:
             self._audit_agent_denial(tool_name, "unknown_tool")
@@ -148,19 +163,14 @@ class McpFunctionService:
             request_size=request_size,
             started_at=utc_now(),
         )
-        if self.agent_identity is not None:
+        if context.principal_kind == "agent":
             audit.caller_type = "agent"
-            audit.agent_id, audit.agent_session_id = self.agent_identity
-            audit.agent_turn_id = self.db.scalar(select(ActTurn.id).where(ActTurn.session_id == audit.agent_session_id, ActTurn.status == "running"))
+            audit.agent_id = context.agent_id
+            audit.agent_session_id = context.agent_session_id
+            audit.agent_turn_id = context.agent_turn_id
         self.db.add(audit)
         self._commit_audit()
         try:
-            if self.agent_identity is not None:
-                from app.services.agent_policy_service import AgentPermissionError, AgentPolicyService
-                try:
-                    AgentPolicyService(self.db).require_function(self.agent_identity[0], snapshot.function_id)
-                except AgentPermissionError as exc:
-                    raise McpFunctionError(exc.error_type, str(exc)) from None
             if request_size > MAX_MCP_INPUT_BYTES:
                 raise McpFunctionError("request_too_large", "MCP tool input exceeds the bounded request limit.")
             self._require_enabled()
@@ -171,37 +181,24 @@ class McpFunctionService:
                 path = ".".join(str(item) for item in exc.absolute_path)
                 location = f" at {path}" if path else ""
                 raise McpFunctionError("invalid_input", f"MCP tool input is invalid{location}.") from None
-            if snapshot.category == "agent_private" and snapshot.function_id == "plan_approval_request":
-                from app.services.agent_proposal_service import AgentProposalService
-                try:
-                    proposal = AgentProposalService(self.db).submit(self.agent_identity[1], arguments)
-                except ValueError as exc:
-                    raise McpFunctionError("invalid_input", str(exc)) from None
-                output = {"status": proposal.status, "proposal_id": proposal.id}
-                status = "pending_approval"
-            elif snapshot.category == "user":
-                output, status = self._invoke_user(snapshot, arguments)
-            elif snapshot.category == "integration":
-                output = build_default_integration_service(self.db).invoke_direct(
-                    snapshot.function_id,
-                    arguments,
-                    audit_record=audit,
+            outcome = self.executor.execute(
+                InvocationTargetRef(
+                    category=snapshot.category,
+                    target_id=snapshot.function_id,
+                ),
+                arguments,
+                context,
+            )
+            if outcome.status not in {"succeeded", "partial", "pending_approval"}:
+                raise McpFunctionError(
+                    outcome.error_type or "function_failed",
+                    outcome.error_message or f"Eidolon invocation {outcome.status}.",
                 )
-                status = (
-                    "pending_approval"
-                    if output.get("status") == "pending_approval"
-                    else "succeeded"
-                )
-            elif snapshot.category == "backend_core" and snapshot.function_id == "act.document.download":
-                from app.services.act_download_service import ActDownloadError, download_document
-
-                try:
-                    output = download_document(arguments)
-                except ActDownloadError as exc:
-                    raise McpFunctionError("download_failed", str(exc)) from None
-                status = "succeeded"
-            else:
-                raise McpFunctionError("not_exposed", "Backend-core functions require a registered direct MCP handler.")
+            if not isinstance(outcome.output, dict):
+                raise McpFunctionError("internal_failure", "Eidolon invocation returned no object output.")
+            output = outcome.output
+            status = outcome.status
+            audit.resource = outcome.audit_resource
             response_size = self._json_size(output)
             if response_size > MAX_MCP_OUTPUT_BYTES:
                 raise McpFunctionError("response_too_large", "MCP tool output exceeds the bounded response limit.")
@@ -223,7 +220,7 @@ class McpFunctionService:
         except McpFunctionError as exc:
             self._fail_audit(audit, exc.error_type)
             raise
-        except IntegrationError as exc:
+        except InvocationExecutionError as exc:
             self._fail_audit(audit, exc.error_type)
             raise McpFunctionError(exc.error_type, str(exc)) from None
         except Exception:
@@ -242,27 +239,6 @@ class McpFunctionService:
                                   category="agent", status="failed", error_type=error_type,
                                   started_at=utc_now(), completed_at=utc_now()))
         self._commit_audit()
-
-    def _invoke_user(
-        self,
-        snapshot: McpToolSnapshot,
-        arguments: dict[str, Any],
-    ) -> tuple[dict[str, Any], str]:
-        target = self.db.scalar(select(Skill).where(Skill.name == snapshot.function_id))
-        if target is None:
-            raise McpFunctionError("function_unavailable", "The installed function is no longer available.")
-        run = FunctionRegistryService(self.db, project_root=self.project_root).invoke_direct(
-            target,
-            arguments,
-            source="codex_mcp",
-            initiating_action="codex_mcp",
-        )
-        if isinstance(run, InvocationApproval):
-            return pending_approval_receipt(run.id), "pending_approval"
-        if run.status not in {"succeeded", "partial"} or not isinstance(run.output_json, dict):
-            error_type = "function_blocked" if run.status == "blocked" else "function_failed"
-            raise McpFunctionError(error_type, f"Eidolon function invocation {run.status}.")
-        return run.output_json, run.status
 
     def _require_enabled(self) -> None:
         if self.agent_token is not None:

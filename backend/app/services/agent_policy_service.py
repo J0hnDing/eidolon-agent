@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from contextvars import ContextVar
 
 from sqlalchemy import update
 from sqlalchemy.orm import Session
@@ -18,7 +17,6 @@ AGENTS = {
 }
 PLAN_TOOL_ID = "plan_approval_request"
 RISK = {"low": 0, "medium": 1, "high": 2}
-current_agent: ContextVar[tuple[str, int] | None] = ContextVar("current_agent", default=None)
 
 
 class AgentPermissionError(ValueError):

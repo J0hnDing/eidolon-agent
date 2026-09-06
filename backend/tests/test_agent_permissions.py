@@ -1,10 +1,9 @@
-from types import SimpleNamespace
-
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.db import Base
+from app.execution.types import InvocationExecutionError, InvocationOutcome
 from app.models import ActSession, InvocationApproval, McpAuditRecord
 from app.schemas.agents import AgentPolicyUpdate
 from app.services.agent_policy_service import AgentPermissionError, AgentPolicyService
@@ -91,10 +90,19 @@ def test_agent_mcp_identity_discovery_live_revocation_and_audit(context, monkeyp
     name = McpFunctionService.tool_name("integration", "read")
     assert [tool.name for tool in service.list_tools()] == [name]
     calls = []
-    monkeypatch.setattr(
-        "app.services.mcp_function_service.build_default_integration_service",
-        lambda _db: SimpleNamespace(invoke_direct=lambda *args, **kwargs: calls.append(args) or {}),
-    )
+    class Executor:
+        def execute(self, target, arguments, invocation_context):
+            try:
+                AgentPolicyService(db).require_function(
+                    invocation_context.agent_id,
+                    target.target_id,
+                )
+            except AgentPermissionError as exc:
+                raise InvocationExecutionError(exc.error_type, str(exc)) from None
+            calls.append((target, arguments, invocation_context))
+            return InvocationOutcome(status="succeeded", output={})
+
+    service.executor = Executor()  # type: ignore[assignment]
     service.invoke(name, {})
     audit = db.scalar(select(McpAuditRecord))
     assert audit.agent_id == "observer"
@@ -145,18 +153,15 @@ def test_deferred_approval_rechecks_agent_policy(context, monkeypatch, tmp_path)
     )
     db.add(approval)
     db.commit()
-    calls = []
-    monkeypatch.setattr(
-        "app.services.integration_service.build_default_integration_service", lambda _db: calls.append(True)
-    )
     result = InvocationApprovalService(db, project_root=tmp_path)._dispatch_claimed(approval)
     assert result.execution_status == "failed"
     assert result.error_type == "agent_permission_denied"
-    assert calls == []
     AgentPolicyService(db).update("observer", AgentPolicyUpdate(allowed_functions=["write"]))
     session.status = "archived"
+    approval.execution_status = "executing"
+    approval.error_type = None
+    approval.error_message = None
     db.commit()
     result = InvocationApprovalService(db, project_root=tmp_path)._dispatch_claimed(approval)
     assert result.error_type == "agent_permission_denied"
     assert "session" in result.error_message
-    assert calls == []

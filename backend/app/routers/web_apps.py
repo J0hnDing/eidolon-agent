@@ -8,20 +8,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import InvocationApproval, Skill, WebAppAuditRecord, WebAppInstance
+from app.execution.context_factory import InvocationContextFactory
+from app.execution.executor import InvocationExecutor
+from app.execution.types import InvocationExecutionError, InvocationTargetRef
+from app.models import Skill, SkillRun, WebAppAuditRecord, WebAppInstance
 from app.schemas.function_registry import FunctionInvocationRequest, FunctionInvocationResponse
 from app.schemas.integration import IntegrationInvocationRequest, IntegrationInvocationResponse
 from app.schemas.manifest import SkillManifest
 from app.schemas.skill_codex import SkillCodexRequest, SkillCodexResponse
 from app.schemas.skill_run import SkillRunRead
 from app.schemas.web_app import WebAppAuditRecordRead, WebAppInstanceRead, WebAppOpenResponse
-from app.services.codex_service import CodexGenerationError, CodexService
-from app.services.function_registry_service import FunctionRegistryError, FunctionRegistryService
-from app.services.integration_service import (
-    IntegrationCaller,
-    IntegrationError,
-    build_default_integration_service,
-)
+from app.services.function_registry_service import FunctionRegistryError
 from app.services.manifest_validator import validate_manifest_file
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
 from app.services.web_app_runtime_service import WebAppRuntimeError, WebAppRuntimeService
@@ -102,45 +99,57 @@ def web_app_codex_capability(
     token = _bearer_token(authorization)
     runtime = WebAppRuntimeService(db)
     try:
-        instance, skill, manifest = runtime.instance_for_capability(token)
+        context = InvocationContextFactory(
+            db,
+            project_root=runtime.project_root,
+            web_app_runtime=runtime,
+        ).from_web_app_capability(
+            token,
+            initiating_action="backend.codex.call",
+        )
+        instance = db.get(WebAppInstance, context.web_app_instance_id)
+        outcome = InvocationExecutor(db, project_root=runtime.project_root).execute(
+            InvocationTargetRef(category="backend_core", target_id="backend.codex.call"),
+            payload.model_dump(mode="json"),
+            context,
+        )
     except WebAppRuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
-    if not manifest.permissions.codex.call_response or not payload.codex_permissions.call_response:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex call/response is not allowed")
+    except InvocationExecutionError as exc:
+        instance = db.get(WebAppInstance, context.web_app_instance_id) if "context" in locals() else None
+        if instance is not None:
+            runtime.record_audit(
+                instance,
+                "codex_call",
+                "failed",
+                request={
+                    "prompt_characters": len(payload.prompt),
+                    "internet_access": payload.codex_permissions.internet_access,
+                },
+                error_message=str(exc),
+            )
+        code = status.HTTP_502_BAD_GATEWAY if exc.error_type == "codex_failed" else status.HTTP_409_CONFLICT
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    if instance is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Web application is unavailable")
     internet_requested = payload.codex_permissions.internet_access
-    if internet_requested and not manifest.permissions.network:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Codex internet access requires approved runtime network permission",
-        )
-    if internet_requested and not manifest.permissions.codex.internet_access:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Web application manifest does not allow Codex internet access",
-        )
-    try:
-        result = CodexService(db).skill_runtime_codex_call(
-            skill,
-            payload,
-            internet_access=bool(internet_requested and manifest.permissions.network),
-        )
-    except CodexGenerationError as exc:
+    if outcome.output is None:
         runtime.record_audit(
             instance,
             "codex_call",
             "failed",
             request={"prompt_characters": len(payload.prompt), "internet_access": internet_requested},
-            error_message=str(exc),
+            error_message="Codex invocation returned no output",
         )
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Codex invocation returned no output")
     runtime.record_audit(
         instance,
         "codex_call",
         "succeeded",
         request={"prompt_characters": len(payload.prompt), "internet_access": internet_requested},
-        response={"response_characters": len(str(result.get("response", "")))},
+        response={"response_characters": len(str(outcome.output.get("response", "")))},
     )
-    return SkillCodexResponse(**result)
+    return SkillCodexResponse(**outcome.output)
 
 
 @router.post("/capabilities/functions/{function_name}", response_model=FunctionInvocationResponse)
@@ -153,26 +162,37 @@ def web_app_function_capability(
     token = _bearer_token(authorization)
     runtime = WebAppRuntimeService(db)
     try:
-        instance, skill, _manifest = runtime.instance_for_capability(token)
-        run = FunctionRegistryService(db).invoke_from_web_app(
-            skill,
-            instance.version_id,
-            instance.id,
-            function_name,
-            payload.input,
+        context = InvocationContextFactory(
+            db,
+            project_root=runtime.project_root,
+            web_app_runtime=runtime,
+        ).from_web_app_capability(
+            token,
+            initiating_action=None,
         )
-    except (FunctionRegistryError, WebAppRuntimeError) as exc:
+        instance = db.get(WebAppInstance, context.web_app_instance_id)
+        outcome = InvocationExecutor(db, project_root=runtime.project_root).execute(
+            InvocationTargetRef(category="user", target_id=function_name),
+            payload.input,
+            context,
+        )
+    except (FunctionRegistryError, WebAppRuntimeError, InvocationExecutionError) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    if isinstance(run, InvocationApproval):
-        receipt = {"status": "pending_approval", "approval_id": run.id}
+    if instance is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Web application is unavailable")
+    if outcome.approval_id is not None:
+        receipt = {"status": "pending_approval", "approval_id": outcome.approval_id}
         runtime.record_audit(
             instance,
             "function_call",
             "pending_approval",
             request={"function_name": function_name, "input": payload.input},
-            response={"approval_id": run.id, "status": "pending_approval"},
+            response={"approval_id": outcome.approval_id, "status": "pending_approval"},
         )
         return FunctionInvocationResponse(output=receipt, approval=receipt)
+    run = db.get(SkillRun, outcome.skill_run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Function run was not recorded")
     runtime.record_audit(
         instance,
         "function_call",
@@ -201,28 +221,30 @@ def web_app_integration_capability(
     token = _bearer_token(authorization)
     runtime = WebAppRuntimeService(db)
     try:
-        instance, skill, _manifest = runtime.instance_for_capability(token)
-        output = build_default_integration_service(db).invoke(
-            IntegrationCaller(
-                skill_id=skill.id,
-                version_id=instance.version_id,
-                runtime="web_app",
-                web_app_instance_id=instance.id,
-            ),
-            payload.operation,
+        context = InvocationContextFactory(
+            db,
+            project_root=runtime.project_root,
+            web_app_runtime=runtime,
+        ).from_web_app_capability(
+            token,
+            initiating_action=f"integration:{payload.operation}",
+        )
+        outcome = InvocationExecutor(db, project_root=runtime.project_root).execute(
+            InvocationTargetRef(category="integration", target_id=payload.operation),
             payload.input,
+            context,
         )
     except WebAppRuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"type": "authorization_missing_or_stale", "message": str(exc)},
         ) from None
-    except IntegrationError as exc:
+    except InvocationExecutionError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"type": exc.error_type, "message": str(exc)},
         ) from None
-    return IntegrationInvocationResponse(output=output)
+    return IntegrationInvocationResponse(output=outcome.output or {})
 
 
 @gateway_router.api_route(

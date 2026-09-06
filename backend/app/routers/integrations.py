@@ -3,6 +3,9 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.execution.context_factory import InvocationContextFactory
+from app.execution.executor import InvocationExecutor
+from app.execution.types import InvocationExecutionError, InvocationTargetRef
 from app.schemas.integration import (
     GitHubConnectionStatus,
     GitHubCredentialWrite,
@@ -28,11 +31,10 @@ from app.schemas.integration import (
     TelegramPairingStart,
 )
 from app.services.function_catalog_service import FunctionCatalogService
-from app.services.function_registry_service import FunctionRegistryError, FunctionRegistryService
+from app.services.function_registry_service import FunctionRegistryError
 from app.services.gmail_provider import GMAIL_OAUTH_RETURN_URL
 from app.services.google_calendar_provider import GOOGLE_OAUTH_RETURN_URL
 from app.services.integration_service import (
-    IntegrationCaller,
     IntegrationError,
     build_default_integration_service,
 )
@@ -581,25 +583,23 @@ def invoke_function_integration(
     db: Session = Depends(get_db),
 ) -> IntegrationInvocationResponse:
     try:
-        caller = FunctionRegistryService(db).caller_from_capability(_bearer_token(authorization))
-        output = build_default_integration_service(db).invoke(
-            IntegrationCaller(
-                skill_id=caller.skill.id,
-                version_id=caller.version_id,
-                runtime=caller.skill.runtime,
-                skill_run_id=caller.run_id,
-            ),
-            payload.operation,
+        context = InvocationContextFactory(db).from_runtime_capability(
+            _bearer_token(authorization),
+            initiating_action=f"integration:{payload.operation}",
+        )
+        outcome = InvocationExecutor(db).execute(
+            InvocationTargetRef(category="integration", target_id=payload.operation),
             payload.input,
+            context,
         )
     except FunctionRegistryError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"type": "authorization_missing_or_stale", "message": str(exc)},
         ) from None
-    except IntegrationError as exc:
-        raise _http_error(exc) from None
-    return IntegrationInvocationResponse(output=output)
+    except InvocationExecutionError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
+    return IntegrationInvocationResponse(output=outcome.output or {})
 
 
 def _bearer_token(authorization: str | None) -> str:

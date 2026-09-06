@@ -5,11 +5,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.services.integration_service import (
-    IntegrationError,
-    IntegrationService,
-    build_default_integration_service,
-)
+from app.execution.context import InvocationContext
+from app.execution.context_factory import InvocationContextFactory
+from app.execution.executor import InvocationExecutor
+from app.execution.types import InvocationExecutionError, InvocationTargetRef
+from app.services.integration_service import IntegrationService
 
 NOTION_DONE_CLEANUP_SERVICE_ID = "backend.notion.todo.cleanup_done"
 QUERCUS_SYNC_SERVICE_ID = "backend.quercus.knowledge.sync"
@@ -54,7 +54,18 @@ PLATFORM_SCHEDULE_BY_ID = {definition.service_id: definition for definition in P
 
 @dataclass
 class NotionDoneCleanupService:
-    integrations: IntegrationService
+    executor: InvocationExecutor
+    context: InvocationContext
+
+    def _invoke(self, operation_id: str, input_json: dict[str, Any]) -> dict[str, Any]:
+        outcome = self.executor.execute(
+            InvocationTargetRef(category="integration", target_id=operation_id),
+            input_json,
+            self.context,
+        )
+        if outcome.output is None:
+            raise InvocationExecutionError("internal_failure", "Integration returned no output")
+        return outcome.output
 
     def run(self) -> dict[str, Any]:
         scanned_count = 0
@@ -72,8 +83,8 @@ class NotionDoneCleanupService:
             if cursor is not None:
                 list_input["start_cursor"] = cursor
             try:
-                page = self.integrations.invoke_direct("notion.todo.list", list_input)
-            except IntegrationError as exc:
+                page = self._invoke("notion.todo.list", list_input)
+            except InvocationExecutionError as exc:
                 return self._result(
                     status="partial" if scanned_count else "failed",
                     scanned_count=scanned_count,
@@ -94,8 +105,8 @@ class NotionDoneCleanupService:
                 matched_count += 1
                 todo_id = str(todo["id"])
                 try:
-                    self.integrations.invoke_direct("notion.todo.delete", {"id": todo_id})
-                except IntegrationError as exc:
+                    self._invoke("notion.todo.delete", {"id": todo_id})
+                except InvocationExecutionError as exc:
                     if len(failures) < MAX_REPORTED_ITEMS:
                         failures.append({"id": todo_id, "error_type": exc.error_type})
                     else:
@@ -177,11 +188,20 @@ class NotionDoneCleanupService:
 class PlatformServiceDispatcher:
     db: Session
     integrations: IntegrationService | None = None
+    executor: InvocationExecutor | None = None
 
     def invoke(self, service_id: str) -> dict[str, Any]:
         if service_id == NOTION_DONE_CLEANUP_SERVICE_ID:
-            integrations = self.integrations or build_default_integration_service(self.db)
-            return NotionDoneCleanupService(integrations).run()
+            executor = self.executor or InvocationExecutor(
+                self.db,
+                integration_service=self.integrations,
+            )
+            context = InvocationContextFactory.trusted_system(
+                NOTION_DONE_CLEANUP_SERVICE_ID,
+                origin="scheduler",
+                initiating_action="Daily Notion Done Cleanup",
+            )
+            return NotionDoneCleanupService(executor, context).run()
         if service_id == QUERCUS_SYNC_SERVICE_ID:
             from app.services.quercus_service import QuercusSyncService
 

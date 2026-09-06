@@ -7,10 +7,11 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.execution.context import InvocationContext
 from app.models import ActSession, ActTurn, AgentProposal
 from app.schemas.agents import AgentPlanRequest
 from app.services.act_workspace_service import _write_managed_file, ensure_act_workspace
-from app.services.agent_policy_service import AgentPermissionError, AgentPolicyService, current_agent
+from app.services.agent_policy_service import AgentPermissionError, AgentPolicyService
 
 
 class AgentProposalService:
@@ -20,9 +21,15 @@ class AgentProposalService:
     def list(self) -> list[dict]:
         return [self.serialize(row) for row in self.db.scalars(select(AgentProposal).order_by(AgentProposal.id.desc()))]
 
-    def submit(self, session_id: int, arguments: dict) -> AgentProposal:
-        if current_agent.get() != ("assistant", session_id):
+    def submit(self, context: InvocationContext, arguments: dict) -> AgentProposal:
+        if (
+            context.principal_kind != "agent"
+            or context.agent_id != "assistant"
+            or context.agent_session_id is None
+        ):
             raise AgentPermissionError("Plan requests require an authenticated Assistant session")
+        session_id = context.agent_session_id
+        AgentPolicyService(self.db).require_session("assistant", session_id)
         AgentPolicyService(self.db).require_function("assistant", "plan_approval_request")
         request = AgentPlanRequest.model_validate(arguments)
         if (

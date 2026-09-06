@@ -10,6 +10,7 @@ from jsonschema import Draft202012Validator, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.execution.context import InvocationContext
 from app.models import (
     ApprovalRequest,
     FunctionAccessApproval,
@@ -17,6 +18,7 @@ from app.models import (
     Skill,
     SkillRun,
     SkillVersion,
+    WebAppInstance,
 )
 from app.schemas.function_registry import FunctionContractRead, FunctionRequirementReview
 from app.schemas.manifest import SkillManifest
@@ -24,7 +26,6 @@ from app.services.invocation_approval_contract import effective_invocation_contr
 from app.services.invocation_approval_service import (
     InvocationApprovalError,
     InvocationApprovalService,
-    InvocationCallerAttribution,
 )
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
 from app.services.permission_service import PermissionService
@@ -40,14 +41,6 @@ class FunctionRegistryError(ValueError):
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
-
-
-@dataclass(frozen=True)
-class FunctionCaller:
-    skill: Skill
-    version_id: int
-    run_id: int | None = None
-    web_app_instance_id: str | None = None
 
 
 @dataclass
@@ -245,146 +238,55 @@ class FunctionRegistryService:
             )
         return reviews
 
-    def caller_from_capability(self, token: str) -> FunctionCaller:
-        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-        run = self.db.scalar(
-            select(SkillRun)
-            .where(SkillRun.function_capability_token_hash == token_hash)
-            .where(SkillRun.status == "running")
-            .where(SkillRun.ended_at.is_(None))
-            .order_by(SkillRun.id.desc())
-        )
-        if run is None:
-            raise FunctionRegistryError("Function caller capability is invalid or expired")
-        caller = self.db.get(Skill, run.skill_id)
-        if caller is None or run.version_id is None:
-            raise FunctionRegistryError("Function caller identity is no longer available")
-        valid_runtime = caller.runtime == "function" or (
-            caller.runtime == "service"
-            and run.invocation_source == "schedule"
-            and run.source_schedule_id is not None
-        )
+    def caller_authorization_error(
+        self,
+        target: Skill,
+        context: InvocationContext,
+    ) -> str | None:
+        if context.principal_kind not in {"skill", "web_app"}:
+            return None
+        caller = self.db.get(Skill, context.caller_skill_id)
         if (
-            caller.status != "installed"
-            or not valid_runtime
+            caller is None
+            or caller.status != "installed"
             or not caller.enabled
-            or caller.active_version_id != run.version_id
+            or caller.active_version_id != context.caller_version_id
+            or caller.runtime != context.caller_runtime
         ):
-            raise FunctionRegistryError("Runtime caller is no longer installed, eligible, and version-current")
-        permission_decision = PermissionService(self.db, project_root=self.project_root).can_run(caller)
-        if not permission_decision.allowed:
-            raise FunctionRegistryError(permission_decision.reason)
-        return FunctionCaller(skill=caller, version_id=run.version_id, run_id=run.id)
-
-    def invoke_from_capability(
-        self, token: str, target_name: str, input_json: dict[str, Any]
-    ) -> SkillRun | InvocationApproval:
-        caller = self.caller_from_capability(token)
-        return self.invoke_declared(
-            caller,
-            target_name,
-            input_json,
-            source="skill",
-            initiating_action=f"function_call_from_run_{caller.run_id}",
-        )
-
-    def invoke_from_web_app(
-        self,
-        caller_skill: Skill,
-        caller_version_id: int,
-        web_app_instance_id: str,
-        target_name: str,
-        input_json: dict[str, Any],
-    ) -> SkillRun | InvocationApproval:
-        return self.invoke_declared(
-            FunctionCaller(
-                skill=caller_skill,
-                version_id=caller_version_id,
-                web_app_instance_id=web_app_instance_id,
-            ),
-            target_name,
-            input_json,
-            source="web_app",
-            initiating_action=f"web_app_instance_{web_app_instance_id}",
-        )
-
-    def invoke_declared(
-        self,
-        caller: FunctionCaller,
-        target_name: str,
-        input_json: dict[str, Any],
-        *,
-        source: str,
-        initiating_action: str,
-    ) -> SkillRun | InvocationApproval:
-        requirement_declared = target_name in self._requirements_by_name(caller.skill)
-        target = self.db.scalar(select(Skill).where(Skill.name == target_name))
-        if target is None or target.runtime != "function":
-            raise FunctionRegistryError("Target function is not installed")
-        if not requirement_declared:
-            return self._blocked_run(
-                target,
-                input_json,
-                f"Caller skill {caller.skill.name} did not declare required function {target_name}",
-                source=source,
-                caller=caller,
-                initiating_action=initiating_action,
-            )
+            return "Original caller is no longer installed, enabled, and version-current"
+        if context.principal_kind == "web_app":
+            instance = self.db.get(WebAppInstance, context.web_app_instance_id)
+            if (
+                caller.runtime != "web_app"
+                or instance is None
+                or instance.status != "healthy"
+                or instance.skill_id != caller.id
+                or instance.version_id != context.caller_version_id
+            ):
+                return "Web application caller is no longer authorized"
+        elif caller.runtime not in {"function", "service"}:
+            return "Runtime caller is not eligible"
+        elif caller.runtime == "service" and context.source_schedule_id is None:
+            return "Service caller is no longer schedule-attributed"
+        permission = PermissionService(self.db, project_root=self.project_root).can_run(caller)
+        if not permission.allowed:
+            return permission.reason
+        if target.name not in self._requirements_by_name(caller):
+            return f"Caller skill {caller.name} did not declare required function {target.name}"
         contract = self.contract_for_skill(target)
         if contract.availability != "available":
-            return self._blocked_run(
-                target,
-                input_json,
-                "; ".join(contract.availability_reasons) or "Target function is unavailable",
-                source=source,
-                caller=caller,
-                initiating_action=initiating_action,
-            )
-        if contract.risk_level in {"medium", "high"} and self._access_state(caller.skill, target) != "approved":
-            return self._blocked_run(
-                target,
-                input_json,
-                f"Caller-specific approval is required for {caller.skill.name} to invoke {target.name}",
-                source=source,
-                caller=caller,
-                initiating_action=initiating_action,
-            )
-        return self._invoke(
-            target,
-            input_json,
-            source=source,
-            caller=caller,
-            initiating_action=initiating_action,
-        )
+            return "; ".join(contract.availability_reasons) or "Target function is unavailable"
+        if contract.risk_level in {"medium", "high"} and self._access_state(caller, target) != "approved":
+            return f"Caller-specific approval is required for {caller.name} to invoke {target.name}"
+        return None
 
-    def invoke_direct(
+    def execute_resolved(
         self,
         target: Skill,
         input_json: dict[str, Any],
-        *,
-        source: str = "direct_user",
-        source_schedule_id: int | None = None,
-        initiating_action: str | None = None,
+        context: InvocationContext,
     ) -> SkillRun | InvocationApproval:
-        return self._invoke(
-            target,
-            input_json,
-            source=source,
-            source_schedule_id=source_schedule_id,
-            initiating_action=initiating_action or source,
-        )
-
-    def _invoke(
-        self,
-        target: Skill,
-        input_json: dict[str, Any],
-        *,
-        source: str,
-        caller: FunctionCaller | None = None,
-        source_schedule_id: int | None = None,
-        initiating_action: str | None = None,
-        bypass_invocation_approval: bool = False,
-    ) -> SkillRun | InvocationApproval:
+        source = context.function_source()
         contract = self.contract_for_skill(target)
         availability_reasons = list(contract.availability_reasons)
         if source in {"direct_user", "backend", "schedule"}:
@@ -399,92 +301,84 @@ class FunctionRegistryService:
                 }
             ]
         if availability_reasons:
-            return self._blocked_run(
+            return self.blocked_run_for_context(
                 target,
                 input_json,
                 "; ".join(availability_reasons),
-                source=source,
-                caller=caller,
-                source_schedule_id=source_schedule_id,
-                initiating_action=initiating_action,
+                context,
             )
         contract_input = dict(input_json)
         if source == "schedule":
             contract_input.pop("_schedule", None)
-        input_schema = contract.input_schema
-        if bypass_invocation_approval:
-            input_schema = self._active_manifest(target).input_schema
         input_error = (
-            self._schema_error(contract_input, input_schema, "input")
-            if input_schema is not None
+            self._schema_error(contract_input, contract.input_schema, "input")
+            if contract.input_schema is not None
             else None
         )
         if input_error:
-            return self._blocked_run(
+            return self.blocked_run_for_context(
                 target,
                 input_json,
                 input_error,
-                source=source,
-                caller=caller,
-                source_schedule_id=source_schedule_id,
-                initiating_action=initiating_action,
+                context,
             )
-        if contract.requires_invocation_approval and not bypass_invocation_approval:
+        if contract.requires_invocation_approval:
             try:
                 return InvocationApprovalService(
                     self.db, project_root=self.project_root
                 ).submit_user_function(
                     target,
                     input_json,
-                    attribution=InvocationCallerAttribution(
-                        caller_type=(
-                            "skill"
-                            if caller is not None and source == "skill"
-                            else "web_app"
-                            if caller is not None and source == "web_app"
-                            else source
-                        ),
-                        source=source,
-                        caller_skill_id=caller.skill.id if caller is not None else None,
-                        caller_version_id=caller.version_id if caller is not None else None,
-                        caller_run_id=caller.run_id if caller is not None else None,
-                        web_app_instance_id=(
-                            caller.web_app_instance_id if caller is not None else None
-                        ),
-                        initiating_action=initiating_action,
-                    ),
+                    context=context,
                 )
             except InvocationApprovalError as exc:
-                return self._blocked_run(
+                return self.blocked_run_for_context(
                     target,
                     input_json,
                     str(exc),
-                    source=source,
-                    caller=caller,
-                    source_schedule_id=source_schedule_id,
-                    initiating_action=initiating_action,
+                    context,
                 )
+        return self._execute_run(
+            target,
+            input_json,
+            context,
+            output_schema=contract.output_schema,
+        )
+
+    def _execute_run(
+        self,
+        target: Skill,
+        input_json: dict[str, Any],
+        context: InvocationContext,
+        *,
+        output_schema: dict[str, Any] | None,
+    ) -> SkillRun:
+        source = context.function_source()
         capability_token = secrets.token_urlsafe(32)
-        context = FunctionRunContext(
+        run_context = FunctionRunContext(
             version_id=target.active_version_id,
             invocation_source=source,
-            caller_skill_id=caller.skill.id if caller is not None else None,
-            caller_version_id=caller.version_id if caller is not None else None,
-            parent_run_id=caller.run_id if caller is not None else None,
-            source_schedule_id=source_schedule_id,
-            web_app_instance_id=caller.web_app_instance_id if caller is not None else None,
-            initiating_action=initiating_action,
+            caller_skill_id=context.caller_skill_id,
+            caller_version_id=context.caller_version_id,
+            parent_run_id=context.caller_run_id,
+            source_schedule_id=context.source_schedule_id,
+            web_app_instance_id=context.web_app_instance_id,
+            initiating_action=context.initiating_action,
             capability_token=capability_token,
         )
         try:
-            with SkillOperationGuard(self.db).locked(target, "run", reason=initiating_action or source):
+            with SkillOperationGuard(self.db).locked(
+                target,
+                "run",
+                reason=context.initiating_action or source,
+            ):
                 runner = self.runner_factory(self.db)
                 try:
                     run = runner.run(
                         skill_id=target.id,
                         skill_dir=self.proposed_service.skill_dir_for_record(target),
                         input_json=input_json,
-                        context=context,
+                        context=run_context,
                     )
                 except TypeError as exc:
                     if "context" not in str(exc):
@@ -495,18 +389,12 @@ class FunctionRegistryService:
                         input_json=input_json,
                     )
         except SkillOperationConflict as exc:
-            return self._blocked_run(
+            return self.blocked_run_for_context(
                 target,
                 input_json,
                 str(exc),
-                source=source,
-                caller=caller,
-                source_schedule_id=source_schedule_id,
-                initiating_action=initiating_action,
+                context,
             )
-        output_schema = contract.output_schema
-        if bypass_invocation_approval:
-            output_schema = self._active_manifest(target).output_schema
         if run.output_json is not None and output_schema is not None:
             output_error = self._schema_error(run.output_json, output_schema, "output")
             if output_error:
@@ -517,7 +405,11 @@ class FunctionRegistryService:
                 self.db.refresh(run)
         return run
 
-    def invoke_approved(self, approval: InvocationApproval) -> SkillRun:
+    def execute_claimed_approval(
+        self,
+        approval: InvocationApproval,
+        context: InvocationContext,
+    ) -> SkillRun:
         if approval.target_kind != "user_function" or approval.target_skill_id is None:
             raise InvocationApprovalError("invalid_target", "Approval is not for a user function")
         target = self.db.get(Skill, approval.target_skill_id)
@@ -534,49 +426,24 @@ class FunctionRegistryService:
         ).effective_contract(target, manifest=manifest)
         if not (manifest.requires_invocation_approval or graph.risk_level == "high"):
             raise InvocationApprovalError("stale_contract", "Function approval requirement has changed")
-        caller: FunctionCaller | None = None
-        if approval.caller_skill_id is not None:
-            caller_skill = self.db.get(Skill, approval.caller_skill_id)
-            if (
-                caller_skill is None
-                or caller_skill.status != "installed"
-                or not caller_skill.enabled
-                or caller_skill.active_version_id != approval.caller_version_id
-            ):
-                raise InvocationApprovalError("stale_contract", "Original caller is no longer current")
-            if target.name not in self._requirements_by_name(caller_skill):
-                raise InvocationApprovalError("stale_contract", "Original caller declaration has changed")
-            if (
-                self.contract_for_skill(target).risk_level in {"medium", "high"}
-                and self._access_state(caller_skill, target) != "approved"
-            ):
-                raise InvocationApprovalError("stale_contract", "Original caller access is no longer approved")
-            caller = FunctionCaller(
-                skill=caller_skill,
-                version_id=approval.caller_version_id,
-                run_id=approval.caller_run_id,
-                web_app_instance_id=approval.web_app_instance_id,
-            )
-        return self._invoke(
+        caller_error = self.caller_authorization_error(target, context)
+        if caller_error is not None:
+            raise InvocationApprovalError("stale_contract", caller_error)
+        return self._execute_run(
             target,
             approval.input_json,
-            source=approval.source,
-            caller=caller,
-            initiating_action=approval.initiating_action,
-            bypass_invocation_approval=True,
+            context,
+            output_schema=manifest.output_schema,
         )
 
-    def _blocked_run(
+    def blocked_run_for_context(
         self,
         target: Skill,
         input_json: dict[str, Any],
         reason: str,
-        *,
-        source: str,
-        caller: FunctionCaller | None = None,
-        source_schedule_id: int | None = None,
-        initiating_action: str | None = None,
+        context: InvocationContext,
     ) -> SkillRun:
+        source = context.function_source()
         run = SkillRun(
             skill_id=target.id,
             version_id=target.active_version_id,
@@ -586,12 +453,12 @@ class FunctionRegistryService:
             ended_at=utc_now(),
             error_message=reason,
             invocation_source=source,
-            caller_skill_id=caller.skill.id if caller is not None else None,
-            caller_version_id=caller.version_id if caller is not None else None,
-            parent_run_id=caller.run_id if caller is not None else None,
-            source_schedule_id=source_schedule_id,
-            web_app_instance_id=caller.web_app_instance_id if caller is not None else None,
-            initiating_action=initiating_action,
+            caller_skill_id=context.caller_skill_id,
+            caller_version_id=context.caller_version_id,
+            parent_run_id=context.caller_run_id,
+            source_schedule_id=context.source_schedule_id,
+            web_app_instance_id=context.web_app_instance_id,
+            initiating_action=context.initiating_action,
         )
         self.db.add(run)
         self.db.commit()

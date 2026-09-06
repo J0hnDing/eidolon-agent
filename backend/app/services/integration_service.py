@@ -11,6 +11,7 @@ from jsonschema import Draft202012Validator, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.execution.context import InvocationContext
 from app.models import (
     ApprovalRequest,
     GoogleOAuthClientConfig,
@@ -64,7 +65,6 @@ from app.services.invocation_approval_contract import (
 from app.services.invocation_approval_service import (
     InvocationApprovalError,
     InvocationApprovalService,
-    InvocationCallerAttribution,
 )
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
 from app.services.notion_report_provider import NotionReportProvider
@@ -180,12 +180,9 @@ def utc_now() -> datetime:
 
 
 @dataclass(frozen=True)
-class IntegrationCaller:
-    skill_id: int
-    version_id: int
-    runtime: str
-    skill_run_id: int | None = None
-    web_app_instance_id: str | None = None
+class IntegrationExecutionResult:
+    output: dict[str, Any]
+    audit_resource: str | None = None
 
 
 @dataclass
@@ -1168,22 +1165,37 @@ class IntegrationService:
             for requirement in manifest.integration_requirements
         ]
 
-    def invoke(
+    def execute_context(
         self,
-        caller: IntegrationCaller,
+        context: InvocationContext,
         operation_id: str,
         input_json: dict[str, Any],
-    ) -> dict[str, Any]:
-        skill = self.db.get(Skill, caller.skill_id)
-        if skill is None:
+    ) -> IntegrationExecutionResult:
+        if context.principal_kind not in {"skill", "web_app"}:
+            operation = OPERATIONS.get(operation_id)
+            if operation is not None and operation.invocation_approval_required:
+                return IntegrationExecutionResult(
+                    output=self._submit_integration_approval(
+                        operation_id,
+                        input_json,
+                        context=context,
+                    )
+                )
+            return self._invoke_operation(
+                operation_id,
+                input_json,
+                allowed_repositories=None,
+            )
+        skill = self.db.get(Skill, context.caller_skill_id)
+        if skill is None or context.caller_version_id is None:
             raise IntegrationError("connection_unavailable", "Integration caller no longer exists")
-        if skill.active_version_id != caller.version_id:
+        if skill.active_version_id != context.caller_version_id:
             raise IntegrationError("authorization_missing_or_stale", "Integration caller version is stale")
         audit = IntegrationAuditRecord(
             skill_id=skill.id,
-            version_id=caller.version_id,
-            skill_run_id=caller.skill_run_id,
-            web_app_instance_id=caller.web_app_instance_id,
+            version_id=context.caller_version_id,
+            skill_run_id=context.caller_run_id,
+            web_app_instance_id=context.web_app_instance_id,
             operation_id=operation_id,
             status="running",
             request_size=len(json.dumps(input_json, separators=(",", ":")).encode("utf-8")),
@@ -1192,12 +1204,15 @@ class IntegrationService:
         self.db.add(audit)
         self._commit_audit()
         try:
-            output = self._invoke_checked(skill, caller, operation_id, input_json, audit)
+            result = self._invoke_checked(skill, context, operation_id, input_json)
             audit.status = "succeeded"
-            audit.response_size = len(json.dumps(output, separators=(",", ":")).encode("utf-8"))
+            audit.resource = result.audit_resource
+            audit.response_size = len(
+                json.dumps(result.output, separators=(",", ":")).encode("utf-8")
+            )
             audit.completed_at = utc_now()
             self._commit_audit()
-            return output
+            return result
         except IntegrationError as exc:
             audit.status = "failed"
             audit.error_type = exc.error_type
@@ -1211,51 +1226,32 @@ class IntegrationService:
             self._commit_audit()
             raise IntegrationError("internal_failure", "Integration failed safely") from None
 
-    def invoke_direct(
+    def execute_claimed_approval(
         self,
-        operation_id: str,
-        input_json: dict[str, Any],
-        *,
-        audit_record: Any | None = None,
-    ) -> dict[str, Any]:
-        """Invoke a provider operation as the trusted local user, without skill authorization."""
-
-        operation = OPERATIONS.get(operation_id)
-        if operation is not None and operation.invocation_approval_required:
-            return self._submit_integration_approval(
-                operation_id,
-                input_json,
-                attribution=InvocationCallerAttribution(
-                    caller_type="mcp" if audit_record is not None else "local_user",
-                    source="mcp" if audit_record is not None else "direct_integration",
-                ),
-            )
-        return self._invoke_operation(operation_id, input_json, audit_record=audit_record, allowed_repositories=None)
-
-    def invoke_approved_direct(
-        self,
-        operation_id: str,
-        input_json: dict[str, Any],
-        *,
-        expected_contract_fingerprint: str,
-        expected_provider_account_id: str | None,
-        approval_context: Any | None = None,
-    ) -> dict[str, Any]:
+        approval,
+        context: InvocationContext,
+    ) -> IntegrationExecutionResult:
+        operation_id = approval.target_id
         operation = OPERATIONS.get(operation_id)
         if operation is None or not operation.invocation_approval_required:
             raise IntegrationError("stale_contract", "Approved integration contract is no longer current")
-        if self.operation_contract_fingerprint(operation_id) != expected_contract_fingerprint:
+        if self.operation_contract_fingerprint(operation_id) != approval.target_contract_fingerprint:
             raise IntegrationError("stale_contract", "Approved integration contract has changed")
         connection = self._connection(operation.provider)
-        if connection is None or connection.account_id != expected_provider_account_id:
+        if connection is None or connection.account_id != approval.provider_account_id:
             raise IntegrationError("connection_changed", "Approved integration account has changed")
-        if approval_context is not None and approval_context.caller_skill_id is not None:
-            caller_skill = self.db.get(Skill, approval_context.caller_skill_id)
+        if context.caller_skill_id is not None:
+            caller_skill = self.db.get(Skill, context.caller_skill_id)
             if (
                 caller_skill is None
                 or caller_skill.status != "installed"
                 or not caller_skill.enabled
-                or caller_skill.active_version_id != approval_context.caller_version_id
+                or caller_skill.active_version_id != context.caller_version_id
+                or caller_skill.runtime != context.caller_runtime
+                or (
+                    caller_skill.runtime == "service"
+                    and context.source_schedule_id is None
+                )
             ):
                 raise IntegrationError("authorization_missing_or_stale", "Original integration caller is no longer current")
             try:
@@ -1277,22 +1273,33 @@ class IntegrationService:
                 project_root=self.project_root,
             ).can_run(caller_skill, include_integrations=False).allowed:
                 raise IntegrationError("authorization_missing_or_stale", "Original caller runtime approval is no longer current")
-        return self._invoke_operation(operation_id, input_json, audit_record=None, allowed_repositories=None)
+        return self._invoke_operation(
+            operation_id,
+            approval.input_json,
+            allowed_repositories=None,
+        )
 
     def _invoke_checked(
         self,
         skill: Skill,
-        caller: IntegrationCaller,
+        context: InvocationContext,
         operation_id: str,
         input_json: dict[str, Any],
-        audit: IntegrationAuditRecord,
-    ) -> dict[str, Any]:
+    ) -> IntegrationExecutionResult:
         # The order is deliberate: GitHub credentials are retrieved only after every
         # caller, manifest, approval, connection, scope, and schema check passes.
         if skill.status != "installed" or not skill.enabled:
             raise IntegrationError("authorization_missing_or_stale", "Integration caller is not installed and enabled")
-        if skill.runtime != caller.runtime or caller.runtime not in {"function", "web_app", "service"}:
+        if (
+            skill.runtime != context.caller_runtime
+            or context.caller_runtime not in {"function", "web_app", "service"}
+        ):
             raise IntegrationError("authorization_missing_or_stale", "Integration caller runtime is not eligible")
+        if skill.runtime == "service" and context.source_schedule_id is None:
+            raise IntegrationError(
+                "authorization_missing_or_stale",
+                "Service integration caller is not schedule-attributed",
+            )
         try:
             manifest = validate_manifest_file(self.proposed_service.skill_dir_for_record(skill) / "manifest.json")
         except (ManifestValidationError, ProposedSkillError, FileNotFoundError):
@@ -1315,22 +1322,16 @@ class IntegrationService:
             raise IntegrationError("authorization_missing_or_stale", "Integration authorization is missing or stale")
         operation = OPERATIONS.get(operation_id)
         if operation is not None and operation.invocation_approval_required:
-            return self._submit_integration_approval(
-                operation_id,
-                input_json,
-                attribution=InvocationCallerAttribution(
-                    caller_type=caller.runtime,
-                    source="integration_capability",
-                    caller_skill_id=caller.skill_id,
-                    caller_version_id=caller.version_id,
-                    caller_run_id=caller.skill_run_id,
-                    web_app_instance_id=caller.web_app_instance_id,
-                ),
+            return IntegrationExecutionResult(
+                output=self._submit_integration_approval(
+                    operation_id,
+                    input_json,
+                    context=context,
+                )
             )
         return self._invoke_operation(
             operation_id,
             input_json,
-            audit_record=audit,
             allowed_repositories=set(requirement.resource_scope.repositories),
         )
 
@@ -1339,9 +1340,8 @@ class IntegrationService:
         operation_id: str,
         input_json: dict[str, Any],
         *,
-        audit_record: Any | None,
         allowed_repositories: set[str] | None,
-    ) -> dict[str, Any]:
+    ) -> IntegrationExecutionResult:
         # Credentials are retrieved only after operation, connection, containment,
         # and input validation. Direct-user calls intentionally omit only the
         # skill-specific manifest and authorization checks above.
@@ -1384,8 +1384,6 @@ class IntegrationService:
             event_id = input_json.get("id")
             if isinstance(event_id, str):
                 resource = f"google-calendar-event:{event_id}"
-        if audit_record is not None:
-            audit_record.resource = resource
         if (
             allowed_repositories is not None
             and scoped_resource is not None
@@ -1493,13 +1491,12 @@ class IntegrationService:
         except ValidationError:
             raise IntegrationError("internal_failure", "Integration returned an invalid normalized result") from None
         if (
-            audit_record is not None
-            and resource is None
+            resource is None
             and operation.provider == "google_calendar"
             and isinstance(output.get("id"), str)
         ):
-            audit_record.resource = f"google-calendar-event:{output['id']}"
-        return output
+            resource = f"google-calendar-event:{output['id']}"
+        return IntegrationExecutionResult(output=output, audit_resource=resource)
 
     def _commit_audit(self) -> None:
         try:
@@ -1536,7 +1533,7 @@ class IntegrationService:
         operation_id: str,
         input_json: dict[str, Any],
         *,
-        attribution: InvocationCallerAttribution,
+        context: InvocationContext,
     ) -> dict[str, Any]:
         operation = OPERATIONS.get(operation_id)
         if operation is None or not operation.invocation_approval_required:
@@ -1571,7 +1568,7 @@ class IntegrationService:
                 target_contract_fingerprint=self.operation_contract_fingerprint(operation_id),
                 provider=operation.provider,
                 provider_account_id=connection.account_id or "",
-                attribution=attribution,
+                context=context,
                 target_description=operation.description,
             )
         except InvocationApprovalError as exc:

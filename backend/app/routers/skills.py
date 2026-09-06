@@ -5,7 +5,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import ApprovalRequest, InvocationApproval, Skill, SkillRun, SkillSchedule, SkillVersion
+from app.execution.context_factory import InvocationContextFactory
+from app.execution.executor import InvocationExecutor
+from app.execution.types import InvocationExecutionError, InvocationTargetRef
+from app.models import ApprovalRequest, Skill, SkillRun, SkillSchedule, SkillVersion
 from app.routers.schedules import get_scheduler_service
 from app.schemas.agent_run import AgentRunRead
 from app.schemas.approval_request import ApprovalRequestRead
@@ -25,17 +28,11 @@ from app.schemas.skill_version import (
     SkillVersionRead,
 )
 from app.services.agent_workflow_service import AgentWorkflowError, AgentWorkflowService
-from app.services.codex_service import CodexGenerationError
 from app.services.function_registry_service import FunctionRegistryService
 from app.services.permission_service import PermissionError, PermissionService
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
 from app.services.runtime_state_service import RuntimeStateService
 from app.services.scheduler_service import ScheduleError, SchedulerService
-from app.services.skill_codex_runtime_service import (
-    SkillCodexInvalidRequest,
-    SkillCodexRuntimeService,
-    SkillCodexUnavailable,
-)
 from app.services.skill_graph_service import SkillGraphService
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
 from app.services.skill_runner import get_runner_status
@@ -120,15 +117,19 @@ def run_skill(
     if not permission_decision.allowed:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=permission_decision.reason)
 
-    result = FunctionRegistryService(db).invoke_direct(
-        skill,
+    outcome = InvocationExecutor(db).execute(
+        InvocationTargetRef(category="user", target_id=skill.name),
         payload.input,
-        source="direct_user",
-        initiating_action="Manual skill run",
+        InvocationContextFactory.direct_user(
+            initiating_action="Manual skill run",
+        ),
     )
-    if isinstance(result, InvocationApproval):
-        return PendingApprovalReceipt(approval_id=result.id)
-    return result
+    if outcome.approval_id is not None:
+        return PendingApprovalReceipt(approval_id=outcome.approval_id)
+    run = db.get(SkillRun, outcome.skill_run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Function run was not recorded")
+    return run
 
 
 @router.post("/{skill_id}/codex", response_model=SkillCodexResponse)
@@ -141,17 +142,26 @@ def call_codex_for_skill(
     if skill is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
     try:
-        result = SkillCodexRuntimeService(db, project_root=PROJECT_ROOT).call(
-            skill,
-            payload,
+        outcome = InvocationExecutor(db, project_root=PROJECT_ROOT).execute(
+            InvocationTargetRef(category="backend_core", target_id="backend.codex.call"),
+            payload.model_dump(mode="json"),
+            InvocationContextFactory.direct_user(
+                initiating_action="Manual skill Codex call",
+                caller_skill_id=skill.id,
+                caller_version_id=skill.active_version_id,
+                caller_runtime=skill.runtime,
+            ),
         )
-    except SkillCodexInvalidRequest as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except SkillCodexUnavailable as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    except CodexGenerationError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    return SkillCodexResponse(**result)
+    except InvocationExecutionError as exc:
+        code = (
+            status.HTTP_400_BAD_REQUEST
+            if exc.error_type == "invalid_input"
+            else status.HTTP_502_BAD_GATEWAY
+            if exc.error_type == "codex_failed"
+            else status.HTTP_409_CONFLICT
+        )
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return SkillCodexResponse(**(outcome.output or {}))
 
 
 @router.get("/{skill_id}/runs", response_model=list[SkillRunRead])
