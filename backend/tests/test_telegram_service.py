@@ -321,7 +321,7 @@ def test_observer_and_assistant_bots_keep_independent_pairing_and_session_select
         assert observer_connection.id != assistant_connection.id
 
 
-def test_assistant_proposal_uses_notification_bot_and_denial_is_idempotent() -> None:
+def test_assistant_proposal_uses_assistant_bot_and_denial_is_idempotent() -> None:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -339,6 +339,9 @@ def test_assistant_proposal_uses_notification_bot_and_denial_is_idempotent() -> 
             connection.bot_id,
             PairingMessage(update_id=1, code=pairing.pairing_code, chat_id=11, user_id=22),
         )
+        connection.role = TELEGRAM_ASSISTANT_ROLE
+        service.role = TELEGRAM_ASSISTANT_ROLE
+        db.commit()
         source = ActSession(agent_id="assistant", codex_thread_id="assistant-thread")
         db.add(source)
         db.flush()
@@ -402,6 +405,9 @@ def test_agent_proposal_terminal_outcome_retries_once_after_delivery_failure() -
             connection.bot_id,
             PairingMessage(update_id=1, code=pairing.pairing_code, chat_id=11, user_id=22),
         )
+        connection.role = TELEGRAM_ASSISTANT_ROLE
+        service.role = TELEGRAM_ASSISTANT_ROLE
+        db.commit()
         source = ActSession(agent_id="assistant", codex_thread_id="assistant-retry-thread")
         db.add(source)
         db.flush()

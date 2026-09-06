@@ -294,10 +294,10 @@ class TelegramService:
         self.db.refresh(approval)
 
     def send_agent_proposal(self, proposal: AgentProposal) -> None:
-        if self.role != TELEGRAM_ROLE:
+        if self.role != TELEGRAM_ASSISTANT_ROLE:
             raise TelegramServiceError(
                 "authorization_missing_or_stale",
-                "Assistant proposals can only use the Notification / Approval bot",
+                "Assistant proposals can only use the Assistant bot",
             )
         row, token = self._connected_api_credential()
         try:
@@ -376,7 +376,7 @@ class TelegramService:
                     else "pairing"
                 )
                 self.db.commit()
-            if self.role == TELEGRAM_ROLE and row.status == "connected":
+            if self.role == TELEGRAM_ASSISTANT_ROLE and row.status == "connected":
                 self._sync_agent_proposals()
             return processed
         except TelegramProviderError as exc:
@@ -412,6 +412,8 @@ class TelegramService:
         row.pairing_expires_at = None
         row.status = "connected"
         self.db.commit()
+        if self.role == TELEGRAM_ASSISTANT_ROLE:
+            self._sync_agent_proposals(force_pending_delivery=True)
         if self.role != TELEGRAM_ROLE:
             return
         unresolved = self.db.scalars(
@@ -425,10 +427,9 @@ class TelegramService:
                 self.deliver_invocation_approval(approval)
             except Exception:
                 self.db.rollback()
-        self._sync_agent_proposals(force_pending_delivery=True)
 
     def _handle_callback(self, connection_id: int, bot_id: str, callback: TelegramApprovalCallback) -> None:
-        if self.role != TELEGRAM_ROLE:
+        if self.role not in {TELEGRAM_ROLE, TELEGRAM_ASSISTANT_ROLE}:
             return
         row = self.db.get(TelegramBotConnection, connection_id)
         if row is None:
@@ -437,7 +438,10 @@ class TelegramService:
         if row.bot_id != bot_id or row.paired_chat_id is None or row.paired_user_id is None:
             return
         if callback.kind == "proposal":
-            self._handle_proposal_callback(row, callback)
+            if self.role == TELEGRAM_ASSISTANT_ROLE:
+                self._handle_proposal_callback(row, callback)
+            return
+        if self.role != TELEGRAM_ROLE:
             return
         approval = self.db.get(InvocationApproval, callback.approval_id)
         if approval is None:
@@ -505,6 +509,9 @@ class TelegramService:
                 self.db.rollback()
 
     def _sync_agent_proposals(self, *, force_pending_delivery: bool = False) -> None:
+        if self.role != TELEGRAM_ASSISTANT_ROLE:
+            return
+        connection = self._connection()
         pending = list(
             self.db.scalars(
                 select(AgentProposal)
@@ -513,7 +520,8 @@ class TelegramService:
             )
         )
         for proposal in pending:
-            if force_pending_delivery or not proposal.telegram_message_ids_json:
+            if (force_pending_delivery or not proposal.telegram_message_ids_json
+                    or (connection is not None and proposal.telegram_connection_id != connection.id)):
                 self.send_agent_proposal(proposal)
         resolved = list(
             self.db.scalars(

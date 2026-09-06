@@ -148,7 +148,7 @@ class AgentProposalService:
         from app.services.telegram_service import TelegramService
 
         try:
-            telegram = TelegramService(self.db)
+            telegram = TelegramService(self.db, role="assistant_agent")
             if initial:
                 telegram.send_agent_proposal(proposal)
             else:
