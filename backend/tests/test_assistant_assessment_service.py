@@ -91,14 +91,8 @@ def test_configure_starts_first_assessment_after_72_hours_and_resume_reanchors(
     assert resumed["next_run_at"].replace(tzinfo=UTC) == resumed_at + timedelta(days=3)
 
 
-def test_assessment_instruction_requires_grounded_proactive_context_and_proposals() -> None:
-    assert ASSISTANT_ASSESSMENT_INSTRUCTION.startswith("Act as a proactive personal assistant.")
-    assert r"knowledge\assistant" in ASSISTANT_ASSESSMENT_INSTRUCTION
-    assert "internet search" in ASSISTANT_ASSESSMENT_INSTRUCTION
-    assert "State any material assumptions in the proposal." in ASSISTANT_ASSESSMENT_INSTRUCTION
-    assert "expected benefit justifies interrupting the user" in ASSISTANT_ASSESSMENT_INSTRUCTION
-    assert "read the Assistant proposal history" in ASSISTANT_ASSESSMENT_INSTRUCTION
-    assert "finish quietly without submitting a proposal" in ASSISTANT_ASSESSMENT_INSTRUCTION
+def test_assessment_uses_the_short_trigger_instruction() -> None:
+    assert ASSISTANT_ASSESSMENT_INSTRUCTION == "Do an assessment now."
 
 
 def test_run_now_creates_fresh_assistant_session_and_queues_assessment(

@@ -10,6 +10,8 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base
 from app.execution.context import InvocationContext
+from app.integrations.authorization import IntegrationAuthorizationService
+from app.integrations.registry import DEFAULT_INTEGRATION_REGISTRY
 from app.models import (
     ApprovalRequest,
     IntegrationAuditRecord,
@@ -100,8 +102,8 @@ def create_installed_skill(
         "description": "Read approved GitHub data.",
         "runtime": runtime,
         "entrypoint": entrypoint,
-        "input_schema": {"type": "object"} if runtime == "function" else None,
-        "output_schema": {"type": "object"} if runtime == "function" else None,
+        "input_schema": {"type": "object"} if runtime in {"function", "service"} else None,
+        "output_schema": {"type": "object"} if runtime in {"function", "service"} else None,
         "function_requirements": [],
         "integration_requirements": [requirement],
         "dependencies": [],
@@ -112,6 +114,16 @@ def create_installed_skill(
             "secrets": [],
             "shell": False,
         },
+        "schedule": (
+            {
+                "type": "daily",
+                "time": "09:00",
+                "timezone": "America/Toronto",
+                "input": {},
+            }
+            if runtime == "service"
+            else None
+        ),
     }
     (skill_dir / "manifest.json").write_text(json.dumps(manifest_json), encoding="utf-8")
     manifest = SkillManifest.model_validate(manifest_json)
@@ -906,6 +918,28 @@ def test_unchanged_contract_reuses_authorization_but_expansion_requires_reapprov
     assert service.authorization_state(skill, expanded.integration_requirements[0]) == "pending"
 
 
+def test_semantically_equivalent_legacy_authorization_is_upgraded_in_place(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    skill, manifest = create_installed_skill(db, tmp_path)
+    service = connected_service(db, tmp_path)
+    authorization = authorize(service, skill, manifest)
+    requirement = manifest.integration_requirements[0]
+    authorization_service = IntegrationAuthorizationService(
+        db,
+        DEFAULT_INTEGRATION_REGISTRY,
+    )
+    authorization.contract_fingerprint = authorization_service.legacy_contract_fingerprint(
+        requirement
+    )
+    db.commit()
+
+    assert service.authorization_state(skill, requirement) == "approved"
+    db.refresh(authorization)
+    assert authorization.contract_fingerprint == service.contract_fingerprint(requirement)
+
+
 def test_disabled_and_stale_version_are_rejected_before_provider_call(
     db: Session,
     tmp_path: Path,
@@ -936,7 +970,77 @@ def test_disabled_and_stale_version_are_rejected_before_provider_call(
             caller_context(skill, version_id=skill.active_version_id + 100),
         )
     assert stale.value.error_type == "authorization_missing_or_stale"
+
+
+def test_service_without_schedule_attribution_is_rejected_before_provider_call(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    skill, manifest = create_installed_skill(db, tmp_path, runtime="service")
+    provider = FakeGitHubProviderAdapter()
+    service = connected_service(db, tmp_path, provider=provider)
+    authorize(service, skill, manifest)
+
+    with pytest.raises(IntegrationError) as exc_info:
+        invoke(
+            service,
+            "github.repository.get",
+            {"owner": "octo", "repository": "demo"},
+            caller_context(skill),
+        )
+
+    assert exc_info.value.error_type == "authorization_missing_or_stale"
     assert provider.calls == []
+
+
+def test_stale_web_app_instance_is_rejected_before_provider_call(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    skill, manifest = create_installed_skill(db, tmp_path, runtime="web_app")
+    provider = FakeGitHubProviderAdapter()
+    service = connected_service(db, tmp_path, provider=provider)
+    authorize(service, skill, manifest)
+
+    context = caller_context(skill)
+    context = InvocationContext(
+        **{
+            **context.serialize(),
+            "web_app_instance_id": "missing-instance",
+        }
+    )
+    with pytest.raises(IntegrationError) as exc_info:
+        invoke(
+            service,
+            "github.repository.get",
+            {"owner": "octo", "repository": "demo"},
+            context,
+        )
+
+    assert exc_info.value.error_type == "authorization_missing_or_stale"
+    assert provider.calls == []
+
+
+def test_system_invocation_still_uses_normal_connection_and_provider_path(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    provider = FakeGitHubProviderAdapter()
+    service = connected_service(db, tmp_path, provider=provider)
+
+    output = invoke(
+        service,
+        "github.repository.get",
+        {"owner": "octo", "repository": "demo"},
+        InvocationContext(
+            principal_kind="system",
+            origin="backend",
+            system_principal="integration_test",
+        ),
+    )
+
+    assert output["full_name"] == "octo/demo"
+    assert [call[0] for call in provider.calls] == ["github.repository.get"]
 
 
 def test_direct_user_integration_path_preserves_provider_boundaries_without_skill_scope(

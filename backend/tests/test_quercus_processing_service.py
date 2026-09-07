@@ -401,7 +401,7 @@ def test_supported_file_failure_modes_are_retryable(
     ) == FAILURE_PLACEHOLDER
 
 
-def test_disabling_retains_output_and_updates_agent_guidance(
+def test_disabling_retains_output_without_managed_agent_guidance(
     db_session: Session, course: QuercusCourse, tmp_path: Path
 ) -> None:
     processed = (
@@ -420,9 +420,7 @@ def test_disabling_retains_output_and_updates_agent_guidance(
     service.set_method("none")
 
     assert processed.read_text(encoding="utf-8") == "existing"
-    instructions = (tmp_path / "act" / "AGENTS.md").read_text(encoding="utf-8")
-    assert "inspect only the originals" in instructions
-    assert "Ignore `files/processed/`" in instructions
+    assert not (tmp_path / "act" / "AGENTS.md").exists()
     assert service.status()["status"] == "disabled"
 
 

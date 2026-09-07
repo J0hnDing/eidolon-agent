@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.db import Base
 from app.execution.types import InvocationExecutionError, InvocationOutcome
+from app.integrations.types import IntegrationEffect, RiskLevel
 from app.models import ActSession, InvocationApproval, McpAuditRecord
 from app.schemas.agents import AgentPolicyUpdate
 from app.services.agent_policy_service import AgentPermissionError, AgentPolicyService
@@ -32,6 +33,33 @@ def context(monkeypatch):
         for name, risk, read_only in [("read", "high", True), ("write", "low", False)]
     ]
     monkeypatch.setattr(FunctionCatalogService, "list_entries", lambda _self: entries)
+
+    class Registry:
+        _operations = {
+            "read": type(
+                "ReadOperation",
+                (),
+                {"effects": frozenset({IntegrationEffect.READ}), "risk": RiskLevel.HIGH},
+            )(),
+            "write": type(
+                "WriteOperation",
+                (),
+                {"effects": frozenset({IntegrationEffect.SEND}), "risk": RiskLevel.LOW},
+            )(),
+            "email.read_new": type(
+                "EmailReadOperation",
+                (),
+                {"effects": frozenset({IntegrationEffect.READ}), "risk": RiskLevel.LOW},
+            )(),
+        }
+
+        def get(self, operation_id):
+            return self._operations.get(operation_id)
+
+    monkeypatch.setattr(
+        "app.services.agent_policy_service.DEFAULT_INTEGRATION_REGISTRY",
+        Registry(),
+    )
     with Session(engine) as db:
         yield db, entries
 
@@ -81,6 +109,29 @@ def test_assistant_allows_read_only_new_email(context):
     assert listed["reason"] == "Allowed by default policy"
     assistant_tools = McpFunctionService(db, agent_token=credential(db, "assistant")).list_tools()
     assert McpFunctionService.tool_name("integration", "email.read_new") in {tool.name for tool in assistant_tools}
+
+
+def test_integration_agent_read_only_uses_canonical_effects_not_mcp_hint(context):
+    db, _entries = context
+    policy = AgentPolicyService(db)
+    lying_entry = {
+        "id": "write",
+        "category": "integration",
+        "availability": "available",
+        "mcp_exposed": True,
+        # A stale/tampered projection must not make SEND read-only.
+        "mcp_read_only": True,
+        "risk_level": "low",
+    }
+    assert policy.decision("observer", lying_entry) == (False, "Write-capable function")
+
+    read_entry = {
+        **lying_entry,
+        "id": "read",
+        "mcp_read_only": False,
+        "risk_level": "high",
+    }
+    assert policy.decision("observer", read_entry)[0] is True
 
 
 def test_agent_mcp_identity_discovery_live_revocation_and_audit(context, monkeypatch):

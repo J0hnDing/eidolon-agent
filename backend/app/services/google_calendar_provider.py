@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
@@ -8,6 +9,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.integrations.types import IntegrationOperationSpec
 from app.services.github_provider import IntegrationProviderError
 from app.services.google_oauth import (
     MAX_OAUTH_RESPONSE_BYTES,
@@ -19,7 +21,6 @@ from app.services.google_oauth import (
     parse_google_oauth_credential,
     refresh_google_access_token,
 )
-from app.services.integration_registry import IntegrationOperation
 
 GOOGLE_CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
 GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events.owned"
@@ -48,10 +49,40 @@ class GoogleCalendarProviderAdapter(Protocol):
 
     def execute(
         self,
-        operation: IntegrationOperation,
+        operation: IntegrationOperationSpec,
         input_json: dict[str, Any],
         credential: str,
     ) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class GoogleCalendarTransportOperation:
+    """Provider-private request limits, not semantic registry metadata."""
+
+    operation_id: str
+    timeout_seconds: float = 15
+    max_provider_response_bytes: int = 2_000_000
+
+
+_TRANSPORT_OPERATIONS = {
+    operation_id: GoogleCalendarTransportOperation(operation_id)
+    for operation_id in (
+        "google_calendar.event.create",
+        "google_calendar.event.list",
+        "google_calendar.event.get",
+        "google_calendar.event.update",
+        "google_calendar.event.delete",
+    )
+}
+
+
+def _transport_operation(operation: IntegrationOperationSpec) -> GoogleCalendarTransportOperation:
+    try:
+        return _TRANSPORT_OPERATIONS[operation.id]
+    except KeyError:
+        raise IntegrationProviderError(
+            "operation_undeclared", "Google Calendar operation is not implemented"
+        ) from None
 
 
 class UrllibGoogleCalendarProviderAdapter:
@@ -81,10 +112,11 @@ class UrllibGoogleCalendarProviderAdapter:
 
     def execute(
         self,
-        operation: IntegrationOperation,
+        operation: IntegrationOperationSpec,
         input_json: dict[str, Any],
         credential: str,
     ) -> dict[str, Any]:
+        operation = _transport_operation(operation)
         bundle = self._credential_bundle(credential)
         access_token = self._refresh_access_token(bundle)
         headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
@@ -139,7 +171,7 @@ class UrllibGoogleCalendarProviderAdapter:
 
     def _list_events(
         self,
-        operation: IntegrationOperation,
+        operation: GoogleCalendarTransportOperation,
         input_json: dict[str, Any],
         headers: dict[str, str],
     ) -> dict[str, Any]:
@@ -461,10 +493,11 @@ class FakeGoogleCalendarProviderAdapter:
 
     def execute(
         self,
-        operation: IntegrationOperation,
+        operation: IntegrationOperationSpec,
         input_json: dict[str, Any],
         credential: str,
     ) -> dict[str, Any]:
+        operation = _transport_operation(operation)
         if self.error_type:
             raise IntegrationProviderError(self.error_type, "Fake Google Calendar failure")
         self.calls.append((operation.operation_id, input_json))

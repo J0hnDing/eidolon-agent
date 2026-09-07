@@ -39,6 +39,7 @@ class FakeQuercusProvider:
         self.file_metadata_count = 0
         self.files_forbidden = False
         self.page_failure = False
+        self.page_listing_not_found = False
         self.course_values = [
             {
                 "id": "course-1",
@@ -74,6 +75,15 @@ class FakeQuercusProvider:
                 "title": "Welcome",
                 "body": '<p>Read me</p><form><input value="secret"></form>',
                 "updated_at": "2026-09-01T10:00:00Z",
+            }
+        ]
+        self.module_page_values: list[dict[str, Any]] = [
+            {
+                "page_id": "page-2",
+                "url": "instructions-regarding-problem-sets",
+                "title": "Instructions Regarding Problem Sets",
+                "body": "<p>Submit the suggested exercises by email.</p>",
+                "updated_at": "2026-09-06T10:00:00Z",
             }
         ]
         self.file_values = [
@@ -114,9 +124,22 @@ class FakeQuercusProvider:
         return self.assignment_values
 
     def pages(self, course_id: str) -> list[dict[str, Any]]:
+        if self.page_listing_not_found:
+            raise QuercusProviderError("not_found", "page listing unavailable")
         if self.page_failure:
             raise QuercusProviderError("provider_unavailable", "page listing failed")
         return self.page_values
+
+    def pages_from_modules(self, course_id: str) -> list[dict[str, Any]]:
+        return self.module_page_values
+
+    def pages_for_sync(self, course_id: str) -> tuple[list[dict[str, Any]], bool]:
+        try:
+            return self.pages(course_id), True
+        except QuercusProviderError as exc:
+            if exc.error_type not in {"provider_forbidden", "not_found"}:
+                raise
+            return self.pages_from_modules(course_id), False
 
     def announcements(self, course_id: str) -> list[dict[str, Any]]:
         return [{"id": "news-1", "title": "News", "message": "Hello"}]
@@ -158,6 +181,13 @@ class FakeQuercusProvider:
                         "content_id": "assignment-1",
                         "title": "Project: One",
                         "position": 1,
+                    },
+                    {
+                        "type": "Page",
+                        "page_url": "instructions-regarding-problem-sets",
+                        "html_url": "https://q.utoronto.ca/courses/course-1/modules/items/page-2",
+                        "title": "Instructions Regarding Problem Sets",
+                        "position": 2,
                     }
                 ],
             }
@@ -329,6 +359,28 @@ def test_sync_is_incremental_sanitized_and_keeps_metadata_out_of_knowledge(
         select(QuercusSyncResource).where(QuercusSyncResource.download_state.like("skipped%"))
     ).all()
     assert {row.download_state for row in skipped} == {"skipped_too_large", "skipped_unknown_size"}
+
+
+def test_sync_falls_back_to_accessible_module_pages_when_page_listing_is_unavailable(
+    db_session: Session, act_root: Path
+) -> None:
+    provider = FakeQuercusProvider()
+    provider.page_listing_not_found = True
+    service, _store = connected_service(db_session, provider)
+    service.select_courses(["course-1"])
+
+    result = QuercusSyncService(db_session, quercus=service).run()
+
+    course = db_session.get(QuercusCourse, "course-1")
+    assert course is not None
+    course_root = act_root / "knowledge" / "quercus" / course.local_path
+    page = course_root / "pages" / "Instructions Regarding Problem Sets.md"
+    module = course_root / "modules" / "01-Getting Started" / "README.md"
+
+    assert result["status"] == "succeeded"
+    assert course.last_error_type is None
+    assert "Submit the suggested exercises by email." in page.read_text(encoding="utf-8")
+    assert "../../pages/Instructions Regarding Problem Sets.md" in module.read_text(encoding="utf-8")
 
 
 def test_forbidden_bulk_file_listing_falls_back_to_content_links_without_cleanup(

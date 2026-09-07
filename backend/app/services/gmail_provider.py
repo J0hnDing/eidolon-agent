@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+from dataclasses import dataclass
 from datetime import date
 from email.message import EmailMessage
 from email.policy import SMTP
@@ -13,6 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from app.integrations.types import IntegrationOperationSpec
 from app.services.github_provider import IntegrationProviderError
 from app.services.google_oauth import (
     GoogleOAuthStateStore,
@@ -23,7 +25,6 @@ from app.services.google_oauth import (
     parse_google_oauth_credential,
     refresh_google_access_token,
 )
-from app.services.integration_registry import IntegrationOperation
 
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
@@ -77,10 +78,38 @@ class GmailProviderAdapter(Protocol):
 
     def execute(
         self,
-        operation: IntegrationOperation,
+        operation: IntegrationOperationSpec,
         input_json: dict[str, Any],
         credential: str,
     ) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class GmailTransportOperation:
+    """Provider-private request limits, separate from catalog semantics."""
+
+    operation_id: str
+    timeout_seconds: float
+    max_provider_response_bytes: int
+
+
+_TRANSPORT_OPERATIONS = {
+    value.operation_id: value
+    for value in (
+        GmailTransportOperation("email.search", 20, 4_000_000),
+        GmailTransportOperation("email.conversation.get", 20, 4_000_000),
+        GmailTransportOperation("email.read_new", 20, 4_000_000),
+        GmailTransportOperation("email.read_and_mark_new", 30, 4_000_000),
+        GmailTransportOperation("email.send", 20, 2_000_000),
+    )
+}
+
+
+def _transport_operation(operation: IntegrationOperationSpec) -> GmailTransportOperation:
+    try:
+        return _TRANSPORT_OPERATIONS[operation.id]
+    except KeyError:
+        raise IntegrationProviderError("operation_undeclared", "Gmail operation is not implemented") from None
 
 
 class UrllibGmailProviderAdapter:
@@ -110,10 +139,11 @@ class UrllibGmailProviderAdapter:
 
     def execute(
         self,
-        operation: IntegrationOperation,
+        operation: IntegrationOperationSpec,
         input_json: dict[str, Any],
         credential: str,
     ) -> dict[str, Any]:
+        operation = _transport_operation(operation)
         bundle = parse_google_oauth_credential(credential)
         access_token = refresh_google_access_token(self._request_json, bundle)
         headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
@@ -131,7 +161,7 @@ class UrllibGmailProviderAdapter:
 
     def _search(
         self,
-        operation: IntegrationOperation,
+        operation: GmailTransportOperation,
         input_json: dict[str, Any],
         headers: dict[str, str],
     ) -> dict[str, Any]:
@@ -167,7 +197,7 @@ class UrllibGmailProviderAdapter:
 
     def _conversation(
         self,
-        operation: IntegrationOperation,
+        operation: GmailTransportOperation,
         input_json: dict[str, Any],
         headers: dict[str, str],
     ) -> dict[str, Any]:
@@ -180,15 +210,15 @@ class UrllibGmailProviderAdapter:
         self._enforce_result_budget(result)
         return result
 
-    def _read_new(self, operation: IntegrationOperation, headers: dict[str, str]) -> dict[str, Any]:
+    def _read_new(self, operation: GmailTransportOperation, headers: dict[str, str]) -> dict[str, Any]:
         return self._fetch_new(operation, headers, mark_read=False)
 
-    def _read_and_mark_new(self, operation: IntegrationOperation, headers: dict[str, str]) -> dict[str, Any]:
+    def _read_and_mark_new(self, operation: GmailTransportOperation, headers: dict[str, str]) -> dict[str, Any]:
         return self._fetch_new(operation, headers, mark_read=True)
 
     def _fetch_new(
         self,
-        operation: IntegrationOperation,
+        operation: GmailTransportOperation,
         headers: dict[str, str],
         *,
         mark_read: bool,
@@ -239,7 +269,7 @@ class UrllibGmailProviderAdapter:
 
     def _send(
         self,
-        operation: IntegrationOperation,
+        operation: GmailTransportOperation,
         input_json: dict[str, Any],
         headers: dict[str, str],
     ) -> dict[str, Any]:
@@ -270,7 +300,7 @@ class UrllibGmailProviderAdapter:
 
     def _get_thread(
         self,
-        operation: IntegrationOperation,
+        operation: GmailTransportOperation,
         conversation_id: str,
         headers: dict[str, str],
         *,
@@ -622,10 +652,11 @@ class FakeGmailProviderAdapter:
 
     def execute(
         self,
-        operation: IntegrationOperation,
+        operation: IntegrationOperationSpec,
         input_json: dict[str, Any],
         credential: str,
     ) -> dict[str, Any]:
+        operation = _transport_operation(operation)
         if self.error_type:
             raise IntegrationProviderError(self.error_type, "Fake Gmail failure")
         self.calls.append((operation.operation_id, input_json))

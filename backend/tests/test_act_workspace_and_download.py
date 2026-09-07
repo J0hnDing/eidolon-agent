@@ -8,10 +8,8 @@ import pytest
 from app.services import act_workspace_service
 from app.services.act_download_service import ActDownloadError, download_document
 from app.services.act_workspace_service import (
-    AGENT_INSTRUCTIONS,
     ensure_act_workspace,
     open_act_root,
-    refresh_act_agent_instructions,
 )
 
 
@@ -54,26 +52,11 @@ def public_resolver(_host: str, _port: int, **_kwargs):
 def test_workspace_is_bootstrapped_with_empty_memory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("app.services.act_workspace_service.ACT_ROOT", tmp_path / "act")
     workspace = ensure_act_workspace()
-    assert workspace.instructions.read_text(encoding="utf-8") == AGENT_INSTRUCTIONS
     assert workspace.memory.is_dir()
     assert list(workspace.memory.iterdir()) == []
     assert workspace.quercus.is_dir()
     assert workspace.downloads.is_dir()
-    workspace.instructions.write_text("stale", encoding="utf-8")
-    assert ensure_act_workspace().instructions.read_text(encoding="utf-8") == "stale"
-    refresh_act_agent_instructions("none")
-    assert workspace.instructions.read_text(encoding="utf-8") == AGENT_INSTRUCTIONS
-
-
-def test_workspace_instructions_follow_quercus_processing_mode(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr("app.services.act_workspace_service.ACT_ROOT", tmp_path / "act")
-    workspace = refresh_act_agent_instructions("marker_surya_llamacpp")
-    content = workspace.instructions.read_text(encoding="utf-8")
-    assert "`files/processed/` directory first" in content
-    assert "Consult the original in `files/raw/` only" in content
-    assert "never modify `knowledge/`" in content
+    assert not (workspace.root / "AGENTS.md").exists()
 
 
 def test_workspace_preserves_agent_created_memory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -83,7 +66,7 @@ def test_workspace_preserves_agent_created_memory(monkeypatch: pytest.MonkeyPatc
     (memory / "unexpected.md").write_text("data", encoding="utf-8")
     workspace = ensure_act_workspace()
     assert (workspace.memory / "unexpected.md").read_text(encoding="utf-8") == "data"
-    assert "never modify `knowledge/`" in workspace.instructions.read_text(encoding="utf-8")
+    assert not (workspace.root / "AGENTS.md").exists()
 
 
 def test_open_act_root_uses_only_the_managed_agent_directory(

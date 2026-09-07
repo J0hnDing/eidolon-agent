@@ -9,6 +9,7 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.integrations.registry import DEFAULT_INTEGRATION_REGISTRY
 from app.models import Skill, SkillVersion
 from app.schemas.manifest import (
     RiskLevel,
@@ -16,7 +17,6 @@ from app.schemas.manifest import (
     classify_permission_risk,
     manifest_permission_requests,
 )
-from app.services.integration_registry import OPERATIONS
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
 
 GraphAvailability = Literal["available", "disabled", "error"]
@@ -186,7 +186,9 @@ class SkillGraphService:
 
         for requirement in manifest.integration_requirements:
             for operation_id in requirement.operations:
-                operation = OPERATIONS[operation_id]
+                operation = DEFAULT_INTEGRATION_REGISTRY.get(operation_id)
+                if operation is None:
+                    raise SkillGraphError(f"Unknown integration operation: {operation_id}")
                 risk = max((risk, operation.risk), key=_RISK_RANK.__getitem__)
 
         payload: dict[str, object] = {

@@ -2,7 +2,7 @@
 
 Eidolon supports one trusted, secrets-backed integration provider: GitHub. Installed skills can request a fixed set of read-only GitHub operations, but they never receive the credential, an authorization header, a secret-store reference, a provider URL, or a generic authenticated HTTP client.
 
-The authoritative operation contract is the typed registry in `backend/app/services/integration_registry.py`. Adjacent documentation links here instead of reproducing that contract.
+The authoritative semantic operation contract is the provider-neutral registry in `backend/app/integrations/registry.py`; `backend/app/services/integration_registry.py` is a read-only compatibility alias. GitHub transport limits and request construction remain private to the provider adapter/client. Adjacent documentation links here instead of reproducing that contract.
 
 For the distinction between adding a GitHub operation and adding a different provider, see [Extending the function catalog](../runtime/function_extension_guide.md).
 
@@ -18,7 +18,7 @@ Removing the connection removes the operating-system credential and active conne
 
 ## Authoritative Operations
 
-All operations are GET-only, low risk, side-effect free, bounded by per-operation timeouts and response sizes, and configured to reject redirects. REST requests are authenticated by backend-created headers, limited to `https://api.github.com`, and pinned to GitHub REST API version `2022-11-28`. The Trending operation additionally makes one unauthenticated request to the fixed `https://github.com/trending` page; it cannot navigate elsewhere on `github.com`. The registry owns input and normalized output JSON Schemas, scope behavior, provider request construction, pagination/result limits, error behavior, audit resource fields, fake behavior, and usage examples.
+All operations have canonical `{read}` effects and low risk. Provider-private transport configuration keeps per-operation timeouts and response bounds and rejects redirects. REST requests are authenticated by backend-created headers, limited to `https://api.github.com`, and pinned to GitHub REST API version `2022-11-28`. The Trending operation additionally makes one unauthenticated request to the fixed `https://github.com/trending` page; it cannot navigate elsewhere on `github.com`. The semantic registry owns schemas, effects, typed resources, risk, normalized error contracts, and usage examples; GitHub request construction, pagination/result limits, and deterministic fake behavior remain inside provider code.
 
 | Operation | Scope | Main bounds and normalized result |
 | --- | --- | --- |

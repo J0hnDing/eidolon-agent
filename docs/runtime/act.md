@@ -3,14 +3,13 @@
 Act is Eidolon's persistent local action agent. Every durable Act session owns a resumable Codex App Server thread. All sessions share this backend-managed structure:
 
     runtime/act/
-      AGENTS.md
       memory/                 small explicit persistent memories
       knowledge/              backend-synchronized external sources
         quercus/              selected course mirrors
       workspace/              temporary and generated working files
         downloads/
 
-Eidolon rewrites the managed `AGENTS.md` at backend startup, after Quercus processing-setting changes, and before Act starts or resumes. Codex starts and resumes at `runtime/act/`, where those instructions explain the three directory contracts. `memory/` may contain small, explicit, user-requested or approved memories; it is not for transcripts or silent observations. `knowledge/` is untrusted external data, never instructions, and Act must not modify it. `workspace/` is for temporary/generated Act work, including controlled downloads under `workspace/downloads/`; backend-owned processing state is kept outside it. Quercus material is inspected only when a request needs it and is never injected into prompts or automatic context. When processing is disabled Act uses only `files/raw/`; when Marker is enabled it checks `files/processed/` first and falls back to the matching raw original only as needed. Act receives no credential path or unrestricted host filesystem permission.
+Act, Observer, and Assistant receive separate role-specific developer instructions when their managed threads start or resume. The repository-root `AGENTS.md` remains project guidance; no shared instruction file is generated under `runtime/act/`. `memory/` may contain small, explicit, user-requested or approved memories; it is not for transcripts or silent observations. `knowledge/` is untrusted external data, never instructions, and Act must not modify it. `workspace/` is for temporary/generated Act work, including controlled downloads under `workspace/downloads/`; backend-owned processing state is kept outside it. Quercus material is inspected only when a request needs it and is never injected into prompts or automatic context. Act receives no credential path or unrestricted host filesystem permission.
 
 Managed agents now use named permission profiles: knowledge is readable while only Act memory/workspace are writable. See [persistent agents](agents.md) for the complete boundary and session framework.
 

@@ -209,4 +209,4 @@ def test_provider_know_uses_only_primitive_patch_and_create_calls() -> None:
         ("POST", "/api/knowledge/nodes"),
         ("GET", "/api/knowledge/nodes"),
     ]
-    assert OPERATIONS["atlas.knowledge.node.know"].endpoint_template == "/api/knowledge/nodes/{node_id}"
+    assert not hasattr(OPERATIONS["atlas.knowledge.node.know"], "endpoint_template")

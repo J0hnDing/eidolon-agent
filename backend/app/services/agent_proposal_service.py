@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -10,8 +13,30 @@ from sqlalchemy.orm import Session
 from app.execution.context import InvocationContext
 from app.models import ActSession, ActTurn, AgentProposal
 from app.schemas.agents import AgentPlanRequest
-from app.services.act_workspace_service import _write_managed_file, ensure_act_workspace
+from app.services.act_workspace_service import ensure_act_workspace
 from app.services.agent_policy_service import AgentPermissionError, AgentPolicyService
+
+
+def _write_managed_file(path: Path, content: str) -> None:
+    encoded = content.encode("utf-8")
+    if path.exists() and path.read_bytes() == encoded:
+        return
+    temporary_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary.write(encoded)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            temporary_path = Path(temporary.name)
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
 
 
 class AgentProposalService:

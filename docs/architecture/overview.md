@@ -78,7 +78,21 @@ An explicitly installed local STDIO MCP server snapshots the available eligible 
 
 ## Trusted Integrations
 
-GitHub, local Eidolon-Atlas, Notion Todos/Reports, and Google Calendar are trusted providers. GitHub and Notion use write-only tokens; Google Calendar uses a backend-owned OAuth authorization-code flow; Atlas uses its native API whenever it is running and unlocked, with an optional stored passphrase only for Eidolon-owned process unlock. Skills declare exact registry operations and receive provider-specific approval. GitHub retains exact repository scope, Atlas has no caller-selected resource scope, Notion fixes separate configured Todo and Reports data sources, and Google Calendar fixes every event operation to the authenticated account's primary calendar. Function and web-application containers call one scoped relay helper, and the backend performs provider traffic and returns normalized data. Eidolon never mirrors Notion content or Google Calendar events locally. See [GitHub integration capability](../integrations/github.md), [Eidolon-Atlas integration](../integrations/atlas.md), [Notion integration](../integrations/notion.md), and [Google Calendar integration](../integrations/google_calendar.md).
+Catalog integration calls use one provider-neutral security path:
+
+```text
+InvocationExecutor
+  -> IntegrationHandler
+  -> IntegrationOperationRegistry
+  -> IntegrationCapabilityPolicy
+  -> AuthorizedIntegrationInvocation
+  -> IntegrationRuntime
+  -> ProviderAdapter
+```
+
+The checked-in registry is the canonical semantic contract and the persisted function catalog is only its discovery/UI/MCP projection. Canonical effects (`read`, `create`, `update`, `delete`, `send`, `execute`) drive read-only and destructive presentation; MCP annotations are not authorization facts. Canonical risk is the only operation-level invocation-approval rule: `HIGH` always enters the backend approval state machine, while `LOW` and `MEDIUM` do not. Approval replay re-resolves the operation and rechecks current caller, permissions, declaration, standing authorization, typed resource scope, connection account, risk, effects, and contract before runtime dispatch.
+
+Provider adapters translate already-authorized calls into provider requests, load credentials through backend-controlled connection state, normalize responses/errors, and return explicit audit-resource metadata. They never authorize callers. GitHub retains exact typed repository scope; current Atlas, Notion, Calendar, Gmail, and Telegram containment remains provider/connection-owned where no caller-selected scope existed. `IntegrationService` remains a settings and connection compatibility façade, not the catalog execution/security monolith. See the provider-specific integration documents for connection and transport behavior.
 
 ## Current Constraints
 

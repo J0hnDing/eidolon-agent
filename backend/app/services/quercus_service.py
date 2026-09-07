@@ -560,10 +560,22 @@ class QuercusSyncService:
             ("new_quiz", lambda: provider.new_quizzes(course.course_id), self._quiz_markdown),
         ):
             try:
-                items = loader()
+                complete_enumeration = True
+                if resource_type == "page":
+                    items, complete_enumeration = provider.pages_for_sync(course.course_id)
+                else:
+                    items = loader()
                 if resource_type == "assignment":
                     assignments = items
-                self._sync_text_group(course, course_root, resource_type, items, generation, writer)
+                self._sync_text_group(
+                    course,
+                    course_root,
+                    resource_type,
+                    items,
+                    generation,
+                    writer,
+                    complete_enumeration=complete_enumeration,
+                )
             except (QuercusProviderError, OSError, ValueError):
                 failures.append(resource_type)
         try:
@@ -617,6 +629,8 @@ class QuercusSyncService:
         items: list[dict[str, Any]],
         generation: int,
         writer: Callable[[QuercusCourse, dict[str, Any], str], str],
+        *,
+        complete_enumeration: bool = True,
     ) -> None:
         folder = {
             "assignment": "assignments",
@@ -626,7 +640,10 @@ class QuercusSyncService:
             "new_quiz": "quizzes",
         }[resource_type]
         for item in items:
-            resource_id = str(item.get("id") or item.get("page_id") or item.get("url") or "")
+            if resource_type == "page":
+                resource_id = str(item.get("url") or item.get("page_id") or item.get("id") or "")
+            else:
+                resource_id = str(item.get("id") or item.get("page_id") or item.get("url") or "")
             if not resource_id:
                 continue
             title = str(item.get("title") or item.get("name") or "Untitled")
@@ -640,7 +657,8 @@ class QuercusSyncService:
                 generation,
                 item=item,
             )
-        self._cleanup_missing(course, course_root, resource_type, generation)
+        if complete_enumeration:
+            self._cleanup_missing(course, course_root, resource_type, generation)
 
     def _sync_modules(
         self, provider: QuercusProvider, course: QuercusCourse, course_root: Path, generation: int
@@ -747,7 +765,6 @@ class QuercusSyncService:
         for loader in (
             provider.modules,
             provider.assignment_index,
-            provider.pages,
             provider.announcements,
         ):
             try:
@@ -755,6 +772,12 @@ class QuercusSyncService:
             except QuercusProviderError as exc:
                 if exc.error_type not in {"provider_forbidden", "not_found"}:
                     source_failed = True
+        try:
+            pages, _complete_enumeration = provider.pages_for_sync(course.course_id)
+            sources.extend(pages)
+        except QuercusProviderError as exc:
+            if exc.error_type not in {"provider_forbidden", "not_found"}:
+                source_failed = True
         references = _discover_file_references(sources)
         files: list[dict[str, Any]] = []
         for resource_id, reference in references.items():
@@ -976,10 +999,17 @@ class QuercusSyncService:
             "Discussion": "announcement",
         }
         resource_type = type_map.get(str(item.get("type")))
-        resource_id = item.get("content_id") or item.get("page_url")
-        if not resource_type or resource_id is None:
+        resource_ids = [item.get("content_id"), item.get("page_url")]
+        if not resource_type or not any(resource_id is not None for resource_id in resource_ids):
             return str(item.get("external_url")) if item.get("external_url") else None
-        row = self._resource(course, resource_type, str(resource_id))
+        row = next(
+            (
+                self._resource(course, resource_type, str(resource_id))
+                for resource_id in resource_ids
+                if resource_id is not None
+            ),
+            None,
+        )
         if row is None or not row.relative_path:
             return str(item.get("html_url")) if item.get("html_url") else None
         module_dir = PurePosixPath(module_relative).parent

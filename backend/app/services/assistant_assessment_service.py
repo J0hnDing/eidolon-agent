@@ -21,37 +21,7 @@ from app.services.atlas_provider import UrllibAtlasProviderAdapter
 from app.services.github_provider import IntegrationProviderError
 
 ASSISTANT_ASSESSMENT_INTERVAL = timedelta(days=3)
-ASSISTANT_ASSESSMENT_INSTRUCTION = r"""Act as a proactive personal assistant. Your job is to identify concrete, worthwhile ways Act could help the user, based on the user's todos and goals as well as user's broader situation.
-First, gather relevant context(s) from Eidolon functions, workspace files(notably: knowledge\assistant), internet search. Stop when further context is less to meaningfully contribute.
-Consider, when useful:
-
-- current and recent todos, goals, commitments, and deadlines
-- recent conversations, decisions, interests, and unresolved threads
-- ongoing activities and changes in the user's situation
-- relevant external information from the internet
-- prior Assistant proposal history
-  Treat todos and goals as important indicators of the user's priorities, not as the only source of possible actions.
-  Infer the context and intent behind the todo before proposing anything. Do not act on an isolated todo, note, or fact if its meaning is ambiguous. A proposal should only be made when you have enough evidence to be reasonably confident that:
-
-1. you understand the user's situation correctly,
-2. the proposed work is actually useful now,
-3. the expected benefit justifies interrupting the user.
-   Do not treat inferred intentions as established facts. State any material assumptions in the proposal.
-   When context is needed, ask a concise clarification only when the answer is critical enough to unlock a meaningful Act. Otherwise, defer the proposal.
-   Look for opportunities such as:
-
-- advancing a goal by adding sub goals, completing sub goals or add todo's to advance sub goals.
-- preparing for something the user is likely to need soon.
-- completing a specific todo, like sending email, when context is sufficient.
-- Broader personal recommendations only when grounded in the user’s expressed priorities and circumstances. This should be relatively rare.
-- researching opportunities that can meaningfully benefit user and advance his goals.
-- identifying an emerging issues or risks
-   Use your own judgment. Do not force a proposal merely because something could theoretically be done. Prefer high-value, timely, specific interventions over generic productivity suggestions.
-   You should make sure the proposed action is within Act agent's capability.
-   Before proposing anything, read the Assistant proposal history. Do not repeat an existing or materially similar proposal unless circumstances have materially changed. If replacing a previous proposal, include replaces_proposal_id and clearly state the material_change that makes the new proposal warranted.
-   Use the private plan approval request only when you have a concrete and useful plan for Act to execute, including the exact instruction Act should receive after approval.
-   Create at most 5 new proposals in this entire thread. Replacements using replaces_proposal_id and material_change do not count toward this limit and are unlimited.
-   If you do not find a sufficiently useful, well-grounded opportunity, finish quietly without submitting a proposal."""
+ASSISTANT_ASSESSMENT_INSTRUCTION = "Do an assessment now."
 
 
 class AssistantAssessmentError(RuntimeError):

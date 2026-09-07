@@ -24,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import QuercusCourse, QuercusProcessingSetting, QuercusSyncResource
-from app.services.act_workspace_service import ensure_act_workspace, refresh_act_agent_instructions
+from app.services.act_workspace_service import ensure_act_workspace
 from app.services.quercus_runtime import QUERCUS_WORK_LOCK
 
 logger = logging.getLogger(__name__)
@@ -437,11 +437,7 @@ class QuercusProcessingService:
         self._recover_interrupted_locked(method)
         self._cleanup_temporary_output_locked()
         self._migrate_layout_locked()
-        refresh_act_agent_instructions(method)
         return method
-
-    def refresh_agent_instructions(self) -> None:
-        refresh_act_agent_instructions(self.method())
 
     def method(self) -> str:
         setting = self._setting()
@@ -468,7 +464,6 @@ class QuercusProcessingService:
         setting.llama_cpp_directory = normalized_directory
         self._update_course_states(method)
         self.db.commit()
-        refresh_act_agent_instructions(method)
 
     def set_method(self, method: str) -> None:
         if method not in PROCESSING_METHODS:
@@ -477,7 +472,6 @@ class QuercusProcessingService:
         setting.method = method
         self._update_course_states(method)
         self.db.commit()
-        refresh_act_agent_instructions(method)
 
     def _update_course_states(self, method: str) -> None:
         if method == PROCESSING_NONE:

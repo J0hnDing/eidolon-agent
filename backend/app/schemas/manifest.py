@@ -179,25 +179,36 @@ class ManifestIntegrationResourceScope(BaseModel):
 class ManifestIntegrationRequirement(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["github", "atlas", "notion", "google_calendar", "gmail", "telegram"]
+    provider: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     operations: list[str] = Field(min_length=1, max_length=20)
     resource_scope: ManifestIntegrationResourceScope = Field(default_factory=ManifestIntegrationResourceScope)
 
     @model_validator(mode="after")
     def validate_requirement(self) -> "ManifestIntegrationRequirement":
-        from app.services.integration_registry import OPERATIONS
+        from app.integrations.registry import DEFAULT_INTEGRATION_REGISTRY
 
         if len(self.operations) != len(set(self.operations)):
             raise ValueError("integration requirement operations cannot contain duplicates")
-        unknown = [operation_id for operation_id in self.operations if operation_id not in OPERATIONS]
+        providers = {provider.id for provider in DEFAULT_INTEGRATION_REGISTRY.providers()}
+        if self.provider not in providers:
+            raise ValueError(f"unknown integration provider: {self.provider}")
+        unknown = [
+            operation_id
+            for operation_id in self.operations
+            if DEFAULT_INTEGRATION_REGISTRY.get(operation_id) is None
+        ]
         if unknown:
             raise ValueError(f"unknown integration operations: {unknown}")
-        if any(OPERATIONS[operation_id].provider != self.provider for operation_id in self.operations):
+        if any(
+            DEFAULT_INTEGRATION_REGISTRY.get(operation_id).provider_id != self.provider
+            for operation_id in self.operations
+        ):
             raise ValueError("integration operations must match their declared provider")
         repository_operations = [
             operation_id
             for operation_id in self.operations
-            if OPERATIONS[operation_id].resource_scope == "repository"
+            if DEFAULT_INTEGRATION_REGISTRY.get(operation_id).resource.type
+            == "github.repository"
         ]
         if repository_operations and not self.resource_scope.repositories:
             raise ValueError("repository-scoped integration operations require exact repository scope")

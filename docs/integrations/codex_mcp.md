@@ -6,12 +6,12 @@ Eidolon can register one local STDIO MCP server in the host-level Codex configur
 
 The MCP process initializes the database without starting FastAPI, schedulers, Atlas lifecycle management, Codex usage monitoring, or web-application maintenance. At process startup it snapshots every currently `available` catalog entry that is eligible for MCP:
 
-- integration operations are derived automatically from `integration_registry.py`;
+- integration operations are derived automatically from the checked-in provider-neutral registry;
 - installed enabled user functions are derived automatically from their active manifest;
 - `backend.codex.call` has `mcp_exposed: false` and is excluded to prevent recursive Codex invocation;
 - future backend-core entries remain excluded until they have an explicit trusted direct handler.
 
-Tool names are stable and have the form `<category>_<normalized-id>_<8-character-id-hash>`. Each tool preserves the catalog title, description, input schema, output schema, and risk-derived safety context. Integration read-only status comes from `IntegrationOperation.read_only`; `notion.todo.delete` and `notion.report.delete` are destructive. User functions default to write-capable because their metadata does not prove semantic purity. GitHub, Notion, and networked user functions are marked open-world.
+Tool names are stable and have the form `<category>_<normalized-id>_<8-character-id-hash>`. Each tool preserves the catalog title, description, input schema, output schema, and risk-derived safety context. For integrations, read-only and destructive annotations are derived from canonical effects; all delete operations are destructive, and create/update/send/execute operations are write-capable. These annotations are presentation only and never authorize execution. User-function annotations retain their existing contract. Provider presentation metadata determines open-world hints.
 
 There is no generic function-id dispatcher tool. Catalog additions appear when a new Codex session starts; an already-running session keeps its snapshot. Every call rechecks the enabled-state row, current availability, and the snapshotted callable contract. A changed contract fails with a bounded restart-required error instead of running against stale metadata.
 
@@ -19,7 +19,7 @@ There is no generic function-id dispatcher tool. Catalog additions appear when a
 
 After process-snapshot validation, MCP constructs either a direct-user or authenticated agent `InvocationContext`, supplies the snapshot's explicit category and id to `InvocationExecutor`, and translates the returned `InvocationOutcome`. Installed user functions retain `invocation_source="codex_mcp"`; runtime approval, input/output validation, per-skill operation locking, run history, active-version checks, and declared nested integration/function capabilities remain enforced by the user-function handler and registry domain service.
 
-Integration tools use the executor's integration handler with direct-user attribution. It omits only skill-specific manifest authorization. Provider connection checks, schema validation, GitHub and Atlas boundaries, separate Notion Todo/Reports data-source containment, credential isolation, timeouts, provider response limits, output validation, and normalized errors remain in the existing trusted provider services. GitHub direct tools may use any repository allowed by the configured token; generated skills keep their manifest repository scopes. Provider-discovered audit resources return as explicit outcome metadata instead of serving as caller identity.
+Integration tools use the executor's integration handler with direct-user attribution. It omits only skill-specific manifest and standing `IntegrationAuthorization` checks. Operation existence, schema, risk approval, current connection/account, and agent policy still pass through `IntegrationCapabilityPolicy`; only its secret-free authorized invocation can enter `IntegrationRuntime`. Provider adapters retain credential isolation, transport bounds, response validation, and normalized errors. GitHub direct tools may use any repository allowed by the configured token; generated skills keep exact typed repository scopes. Provider-discovered audit resources return as explicit outcome metadata instead of serving as caller identity.
 
 Provider credentials stay in Windows Credential Manager. MCP results return exact validated object output as `structuredContent` plus a short non-sensitive text summary. Generic MCP request and response bounds apply in addition to provider/runtime bounds.
 

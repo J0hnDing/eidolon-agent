@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
-from app.services.act_app_server_service import ActAppServerError, ActAppServerService
+from app.services.act_app_server_service import (
+    ACT_INSTRUCTIONS,
+    ASSISTANT_INSTRUCTIONS_TEMPLATE,
+    OBSERVER_INSTRUCTIONS,
+    ActAppServerError,
+    ActAppServerService,
+    render_agent_instructions,
+)
 from app.services.act_workspace_service import ActWorkspace
 from app.services.function_catalog_service import FunctionCatalogError, FunctionCatalogService
 
@@ -117,9 +122,8 @@ def test_agent_thread_has_private_mcp_credential_and_named_permissions(monkeypat
     from app.models import ActSession
     workspace = ActWorkspace(root=tmp_path, memory=tmp_path / "memory", knowledge=tmp_path / "knowledge",
                              quercus=tmp_path / "knowledge" / "quercus", workspace=tmp_path / "workspace",
-                             downloads=tmp_path / "workspace" / "downloads", instructions=tmp_path / "AGENTS.md")
+                             downloads=tmp_path / "workspace" / "downloads")
     monkeypatch.setattr("app.services.act_app_server_service.ensure_act_workspace", lambda: workspace)
-    monkeypatch.setattr("app.services.act_app_server_service.QuercusProcessingService", lambda db: SimpleNamespace(refresh_agent_instructions=lambda: None))
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
     with Session(engine) as db:
@@ -143,6 +147,16 @@ def test_agent_thread_has_private_mcp_credential_and_named_permissions(monkeypat
         assert any("unsafe-plugin" in item for item in client.extra_args)
         assert client.started == 2
         assert ("mcpServerStatus/list", {"threadId": "thread-act"}) in client.requests
+        assert params["developerInstructions"] == OBSERVER_INSTRUCTIONS
+
+
+def test_managed_agents_receive_only_their_role_specific_instructions() -> None:
+    assert render_agent_instructions("act", []) == ACT_INSTRUCTIONS
+    assert render_agent_instructions("observer", []) == OBSERVER_INSTRUCTIONS
+    assistant = render_agent_instructions("assistant", [])
+    assert "[ACT_CAPABILITY_CATALOG]" not in assistant
+    assert assistant.endswith("The following catalog describes Act capabilities, not tools you can call:\n[]\n")
+    assert ASSISTANT_INSTRUCTIONS_TEMPLATE.endswith("[ACT_CAPABILITY_CATALOG]\n")
 
 
 def test_agent_start_fails_closed_when_inherited_plugin_tools_remain(
@@ -162,14 +176,9 @@ def test_agent_start_fails_closed_when_inherited_plugin_tools_remain(
         quercus=tmp_path / "knowledge" / "quercus",
         workspace=tmp_path / "workspace",
         downloads=tmp_path / "workspace" / "downloads",
-        instructions=tmp_path / "AGENTS.md",
     )
     monkeypatch.setattr(
         "app.services.act_app_server_service.ensure_act_workspace", lambda: workspace
-    )
-    monkeypatch.setattr(
-        "app.services.act_app_server_service.QuercusProcessingService",
-        lambda db: SimpleNamespace(refresh_agent_instructions=lambda: None),
     )
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
@@ -208,14 +217,9 @@ def test_agent_start_requires_private_eidolon_server_after_thread_start(
         quercus=tmp_path / "knowledge" / "quercus",
         workspace=tmp_path / "workspace",
         downloads=tmp_path / "workspace" / "downloads",
-        instructions=tmp_path / "AGENTS.md",
     )
     monkeypatch.setattr(
         "app.services.act_app_server_service.ensure_act_workspace", lambda: workspace
-    )
-    monkeypatch.setattr(
-        "app.services.act_app_server_service.QuercusProcessingService",
-        lambda db: SimpleNamespace(refresh_agent_instructions=lambda: None),
     )
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
@@ -255,14 +259,9 @@ def test_agent_inventory_verification_reads_every_page(
         quercus=tmp_path / "knowledge" / "quercus",
         workspace=tmp_path / "workspace",
         downloads=tmp_path / "workspace" / "downloads",
-        instructions=tmp_path / "AGENTS.md",
     )
     monkeypatch.setattr(
         "app.services.act_app_server_service.ensure_act_workspace", lambda: workspace
-    )
-    monkeypatch.setattr(
-        "app.services.act_app_server_service.QuercusProcessingService",
-        lambda db: SimpleNamespace(refresh_agent_instructions=lambda: None),
     )
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
@@ -305,14 +304,9 @@ def test_agent_start_error_does_not_disclose_private_credential(
         quercus=tmp_path / "knowledge" / "quercus",
         workspace=tmp_path / "workspace",
         downloads=tmp_path / "workspace" / "downloads",
-        instructions=tmp_path / "AGENTS.md",
     )
     monkeypatch.setattr(
         "app.services.act_app_server_service.ensure_act_workspace", lambda: workspace
-    )
-    monkeypatch.setattr(
-        "app.services.act_app_server_service.QuercusProcessingService",
-        lambda db: SimpleNamespace(refresh_agent_instructions=lambda: None),
     )
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
@@ -342,16 +336,26 @@ def test_agent_process_config_restricts_paths_and_inherited_tools(monkeypatch, t
     from app.services.act_app_server_service import managed_config
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     (tmp_path / "config.toml").write_text('[mcp_servers.untrusted]\ncommand="unsafe"\n[plugins.unsafe]\nenabled=true\n')
-    config = managed_config("observer", tmp_path / "root")
+    root = tmp_path / "root"
+    config = managed_config("observer", root)
     profile = config["permissions.eidolon_agent"]
     assert profile["network"]["enabled"] is False
-    assert set(profile["filesystem"].values()) == {"read"}
+    assert profile["filesystem"] == {":minimal": "read", str(root): "read"}
     assert config["mcp_servers"]["untrusted"]["enabled"] is False
     assert config["plugins"]["unsafe"]["enabled"] is False
     assert config["web_search"] == "disabled"
-    act = managed_config("act", tmp_path / "root")["permissions.eidolon_agent"]["filesystem"]
-    assert act[str(tmp_path / "root" / "workspace")] == "write"
-    assert act[str(tmp_path / "root" / "memory")] == "write"
+
+    assistant = managed_config("assistant", root)["permissions.eidolon_agent"]
+    assert assistant["filesystem"] == {":minimal": "read", str(root): "read"}
+
+    act = managed_config("act", root)["permissions.eidolon_agent"]
+    assert act["filesystem"] == {
+        ":minimal": "read",
+        str(root): "read",
+        str(root / "workspace"): "write",
+        str(root / "memory"): "write",
+    }
+    assert str(root / "knowledge") not in act["filesystem"]
 
 
 def test_act_download_is_mcp_only_and_not_offered_to_project_agents(

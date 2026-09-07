@@ -113,6 +113,12 @@ def test_email_send_is_deferred_stripped_denied_stale_and_recovered(monkeypatch,
         assert approval.presentation_json["preset"] == "email_send"
         assert approval.presentation_json["caller"] == "direct_integration"
         assert approval.presentation_json["reason"] == payload["reason_to_call"]
+        assert approval.dispatch_metadata_json["integration_security_v2"] == {
+            "provider": "gmail",
+            "risk": "high",
+            "effects": ["send"],
+            "resource": None,
+        }
         assert [field["label"] for field in approval.presentation_json["fields"]] == [
             "To",
             "Subject",
@@ -132,6 +138,12 @@ def test_email_send_is_deferred_stripped_denied_stale_and_recovered(monkeypatch,
         assert approved.execution_status == "succeeded"
         assert gmail.calls == [("email.send", approval.input_json)]
         assert store.get_count == 2
+
+        approved_again = InvocationApprovalService(db, project_root=tmp_path).approve(
+            approval.id, decided_via="local", decided_by="tester"
+        )
+        assert approved_again.execution_status == "succeeded"
+        assert gmail.calls == [("email.send", approval.input_json)]
 
         stale_receipt = submit()
         connection = integration._connection("gmail")

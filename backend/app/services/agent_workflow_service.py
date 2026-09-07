@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.integrations.registry import DEFAULT_INTEGRATION_REGISTRY
 from app.models import AgentRun, AgentRunStep, ApprovalRequest, Skill, SkillGenerationRequest
 from app.schemas.manifest import ManifestPermissions, classify_permission_risk
 from app.schemas.proposed_skill import ProposedSkillValidationRead
@@ -25,7 +26,6 @@ from app.services.default_permissions import (
     planning_permission_policy,
 )
 from app.services.function_catalog_service import FunctionCatalogService
-from app.services.integration_registry import OPERATIONS
 from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
 from app.services.permission_service import PermissionService
 from app.services.proposed_skill_service import ProposedSkillService
@@ -1815,7 +1815,10 @@ class AgentWorkflowService:
         integration_requirements = []
         operations_by_provider: dict[str, list[str]] = {}
         for operation_id in integration_operations:
-            provider = OPERATIONS[operation_id].provider
+            operation = DEFAULT_INTEGRATION_REGISTRY.get(operation_id)
+            if operation is None:
+                raise AgentWorkflowError(f"Unknown integration operation: {operation_id}")
+            provider = operation.provider_id
             operations_by_provider.setdefault(provider, []).append(operation_id)
         for provider, provider_operations in sorted(operations_by_provider.items()):
             integration_requirements.append(

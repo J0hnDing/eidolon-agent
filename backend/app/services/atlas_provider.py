@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import base64
 import json
+from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from app.integrations.types import IntegrationOperationSpec
 from app.services.github_provider import IntegrationProviderError
-from app.services.integration_registry import IntegrationOperation
 
 ATLAS_BASE_URL = "http://127.0.0.1:4817"
 
@@ -16,11 +17,43 @@ ATLAS_BASE_URL = "http://127.0.0.1:4817"
 class AtlasProviderAdapter(Protocol):
     def execute(
         self,
-        operation: IntegrationOperation,
+        operation: IntegrationOperationSpec,
         input_json: dict[str, Any],
     ) -> dict[str, Any]: ...
 
     def establish(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class AtlasTransportOperation:
+    """Provider-private request bounds, separate from the semantic operation contract."""
+
+    operation_id: str
+    timeout_seconds: float
+    max_provider_response_bytes: int
+
+
+_TRANSPORT_OPERATIONS = {
+    value.operation_id: value
+    for value in (
+        AtlasTransportOperation("atlas.person.get", 10, 1_000_000),
+        AtlasTransportOperation("atlas.experience.list", 10, 2_000_000),
+        AtlasTransportOperation("atlas.goal.list", 10, 3_000_000),
+        AtlasTransportOperation("atlas.project.list", 10, 2_000_000),
+        AtlasTransportOperation("atlas.relationship.list", 10, 3_000_000),
+        AtlasTransportOperation("atlas.knowledge.frontier.list", 10, 2_000_000),
+        AtlasTransportOperation("atlas.knowledge.search", 10, 1_000_000),
+        AtlasTransportOperation("atlas.knowledge.node.get", 10, 1_000_000),
+        AtlasTransportOperation("atlas.knowledge.node.know", 180, 2_000_000),
+    )
+}
+
+
+def _transport_operation(operation: IntegrationOperationSpec) -> AtlasTransportOperation:
+    try:
+        return _TRANSPORT_OPERATIONS[operation.id]
+    except KeyError:
+        raise IntegrationProviderError("internal_failure", "Atlas operation is unsupported") from None
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -41,9 +74,10 @@ class UrllibAtlasProviderAdapter:
 
     def execute(
         self,
-        operation: IntegrationOperation,
+        operation: IntegrationOperationSpec,
         input_json: dict[str, Any],
     ) -> dict[str, Any]:
+        operation = _transport_operation(operation)
         route = self._record_routes.get(operation.operation_id)
         if route is not None:
             payload = self._request(
@@ -354,7 +388,7 @@ class UrllibAtlasProviderAdapter:
         return records
 
     def _goal_progressions(
-        self, records: list[dict[str, Any]], operation: IntegrationOperation
+        self, records: list[dict[str, Any]], operation: AtlasTransportOperation
     ) -> list[dict[str, Any]]:
         by_parent: dict[str | None, list[dict[str, Any]]] = {}
         for record in records:
@@ -664,7 +698,8 @@ class FakeAtlasProviderAdapter:
             "children": [],
         }
 
-    def execute(self, operation: IntegrationOperation, input_json: dict[str, Any]) -> dict[str, Any]:
+    def execute(self, operation: IntegrationOperationSpec, input_json: dict[str, Any]) -> dict[str, Any]:
+        operation = _transport_operation(operation)
         self.calls.append((operation.operation_id, dict(input_json)))
         if self.error_type:
             raise IntegrationProviderError(self.error_type, "Fake Atlas operation failed")

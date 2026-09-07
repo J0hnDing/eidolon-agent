@@ -105,7 +105,7 @@ whole-workflow budgets, and partial recovery are not part of these hard limits a
 
 ## Sandbox Modes
 
-- Act: persistent resumable threads with `workspace-write` rooted only at `runtime/act/workspace`; the reserved memory directory and managed instructions remain outside that writable root.
+- Managed Act agents: persistent resumable threads use a backend-supplied Codex permission profile. Every role can read `runtime/act`; only Act can write `runtime/act/memory` and `runtime/act/workspace`. Observer and Assistant remain read-only, and backend-owned `runtime/act/knowledge` has no agent write grant. Role-specific developer instructions are supplied by the backend rather than stored in the managed root.
 - ProductManager planning: a persistent App Server thread with a final-response JSON Schema for the combined decision/blueprint/permission contract.
 - ProductManager workflow actions: read-only `runtime/product_manager` workspace. ProductManager returns CLI-schema-constrained JSON on stdout; the backend parses and sanitizes it, then writes workflow artifacts such as `blueprint.json`, `permissions.json`, and `task_dag.json`.
 - Builder/Tester skill generation, build, repair, and update: `workspace-write` scoped to the controlled skill or draft-version directory passed with `-C`.

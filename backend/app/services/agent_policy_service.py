@@ -6,6 +6,8 @@ import secrets
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
+from app.integrations.registry import DEFAULT_INTEGRATION_REGISTRY
+from app.integrations.types import IntegrationEffect
 from app.models import ActSession, AgentCredential, AgentPolicy
 from app.schemas.agents import AgentPolicyUpdate
 from app.services.function_catalog_service import FunctionCatalogService
@@ -65,15 +67,52 @@ class AgentPolicyService:
             return False, "Explicitly banned"
         if function_id == PLAN_TOOL_ID:
             return (agent_id == "assistant", "Assistant-only plan request")
+
+        # Catalog entries are a discovery projection. Integration effects and
+        # risk must come from the checked-in canonical registry at decision
+        # time, so a stale or tampered MCP annotation cannot grant access.
+        operation = None
+        if entry.get("category") == "integration":
+            operation = DEFAULT_INTEGRATION_REGISTRY.get(str(function_id))
+            if operation is None:
+                return False, "Unavailable to agents"
+
         if entry.get("availability") != "available" or entry.get("mcp_exposed") is not True:
             return False, "Unavailable to agents"
         if function_id in policy.allowed_functions:
             return True, "Explicitly allowed"
-        if RISK.get(entry.get("risk_level"), 99) > RISK[policy.max_risk]:
+
+        risk_value = (
+            self._risk_value(operation)
+            if operation is not None
+            else str(entry.get("risk_level", ""))
+        )
+        if RISK.get(risk_value, 99) > RISK[policy.max_risk]:
             return False, "Exceeds risk limit"
-        if policy.read_only and entry.get("mcp_read_only") is not True:
-            return False, "Write-capable function"
+
+        if policy.read_only:
+            if operation is not None:
+                if not self._is_read_only(operation):
+                    return False, "Write-capable function"
+            elif entry.get("mcp_read_only") is not True:
+                # This phase replaces MCP metadata only for integration
+                # authorization. Existing backend-core/user semantics remain
+                # unchanged until they have their own canonical effect model.
+                return False, "Write-capable function"
         return True, "Allowed by default policy"
+
+    @staticmethod
+    def _risk_value(operation: object) -> str:
+        risk = getattr(operation, "risk", "")
+        return str(getattr(risk, "value", risk))
+
+    @staticmethod
+    def _is_read_only(operation: object) -> bool:
+        effects = {
+            str(getattr(effect, "value", effect))
+            for effect in getattr(operation, "effects", ())
+        }
+        return bool(effects) and effects == {IntegrationEffect.READ.value}
 
     def require_function(self, agent_id: str, function_id: str) -> None:
         entry = next(

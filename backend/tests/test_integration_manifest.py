@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from app.integrations.types import IntegrationEffect
 from app.services.default_permissions import planning_permission_policy
 from app.services.integration_registry import OPERATIONS
 from app.services.manifest_validator import ManifestValidationError, validate_manifest
@@ -220,7 +221,7 @@ def test_email_send_is_high_risk_and_requires_per_call_approval() -> None:
     operation = OPERATIONS["email.send"]
 
     assert operation.risk == "high"
-    assert operation.invocation_approval_required is True
+    assert operation.requires_invocation_approval is True
 
 
 def test_email_read_operations_keep_distinct_read_contracts() -> None:
@@ -229,12 +230,14 @@ def test_email_read_operations_keep_distinct_read_contracts() -> None:
 
     assert read.title == "Read new email"
     assert read.read_only is True
-    assert read.side_effect == "none"
+    assert read.effects == frozenset({IntegrationEffect.READ})
     assert read.risk == "low"
     assert read.contract_version == 2
     assert read_and_mark.title == "Read and mark new email"
     assert read_and_mark.read_only is False
-    assert read_and_mark.side_effect == "write"
+    assert read_and_mark.effects == frozenset(
+        {IntegrationEffect.READ, IntegrationEffect.UPDATE}
+    )
     assert read_and_mark.risk == "medium"
 
 

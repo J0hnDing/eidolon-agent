@@ -4,13 +4,14 @@ import base64
 import binascii
 import json
 import re
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from app.services.integration_registry import IntegrationOperation
+from app.integrations.types import IntegrationOperationSpec
 
 GITHUB_API_BASE = "https://api.github.com"
 GITHUB_WEB_BASE = "https://github.com"
@@ -46,10 +47,45 @@ class GitHubProviderAdapter(Protocol):
 
     def execute(
         self,
-        operation: IntegrationOperation,
+        operation: IntegrationOperationSpec,
         input_json: dict[str, Any],
         credential: str,
     ) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class GitHubTransportOperation:
+    """Provider-private transport limits; never part of the semantic registry."""
+
+    operation_id: str
+    timeout_seconds: float
+    max_results: int
+    max_provider_response_bytes: int
+    fake_behavior: str
+    repository_scoped: bool
+
+
+_TRANSPORT_OPERATIONS = {
+    value.operation_id: value
+    for value in (
+        GitHubTransportOperation("github.repository.get", 10, 1, 1_000_000, "repository_metadata", True),
+        GitHubTransportOperation("github.repository.tree.list", 15, 500, 5_000_000, "repository_tree", True),
+        GitHubTransportOperation("github.repository.file.read", 10, 1, 1_000_000, "repository_file", True),
+        GitHubTransportOperation("github.issue.list", 10, 100, 3_000_000, "issue_list", True),
+        GitHubTransportOperation("github.pull_request.list", 10, 100, 3_000_000, "pull_request_list", True),
+        GitHubTransportOperation(
+            "github.repository.trending.list", 15, 25, 5_000_000, "trending_repositories", False
+        ),
+    )
+}
+
+
+def _transport_operation(operation: IntegrationOperationSpec) -> GitHubTransportOperation:
+    operation_id = operation.id
+    try:
+        return _TRANSPORT_OPERATIONS[operation_id]
+    except KeyError:
+        raise IntegrationProviderError("internal_failure", "Integration operation is unsupported") from None
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -171,10 +207,11 @@ class UrllibGitHubProviderAdapter:
 
     def execute(
         self,
-        operation: IntegrationOperation,
+        operation: IntegrationOperationSpec,
         input_json: dict[str, Any],
         credential: str,
     ) -> dict[str, Any]:
+        operation = _transport_operation(operation)
         operation_id = operation.operation_id
         if operation_id == "github.repository.get":
             payload = self._request(
@@ -199,7 +236,7 @@ class UrllibGitHubProviderAdapter:
 
     def _tree(
         self,
-        operation: IntegrationOperation,
+        operation: GitHubTransportOperation,
         value: dict[str, Any],
         credential: str,
     ) -> dict[str, Any]:
@@ -249,7 +286,7 @@ class UrllibGitHubProviderAdapter:
 
     def _file(
         self,
-        operation: IntegrationOperation,
+        operation: GitHubTransportOperation,
         value: dict[str, Any],
         credential: str,
     ) -> dict[str, Any]:
@@ -292,7 +329,7 @@ class UrllibGitHubProviderAdapter:
 
     def _issues(
         self,
-        operation: IntegrationOperation,
+        operation: GitHubTransportOperation,
         value: dict[str, Any],
         credential: str,
     ) -> dict[str, Any]:
@@ -315,7 +352,7 @@ class UrllibGitHubProviderAdapter:
 
     def _pull_requests(
         self,
-        operation: IntegrationOperation,
+        operation: GitHubTransportOperation,
         value: dict[str, Any],
         credential: str,
     ) -> dict[str, Any]:
@@ -338,7 +375,7 @@ class UrllibGitHubProviderAdapter:
 
     def _trending(
         self,
-        operation: IntegrationOperation,
+        operation: GitHubTransportOperation,
         value: dict[str, Any],
         credential: str,
     ) -> dict[str, Any]:
@@ -611,17 +648,18 @@ class FakeGitHubProviderAdapter:
 
     def execute(
         self,
-        operation: IntegrationOperation,
+        operation: IntegrationOperationSpec,
         input_json: dict[str, Any],
         credential: str,
     ) -> dict[str, Any]:
         del credential
+        operation = _transport_operation(operation)
         self.calls.append((operation.operation_id, dict(input_json)))
         if self.error_type:
             raise IntegrationProviderError(self.error_type, f"Fake {self.error_type}")
         repository = (
             f"{input_json['owner'].lower()}/{input_json['repository'].lower()}"
-            if operation.resource_scope == "repository"
+            if operation.repository_scoped
             else None
         )
         base_repository = {

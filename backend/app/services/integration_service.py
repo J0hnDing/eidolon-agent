@@ -1,21 +1,21 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from jsonschema import Draft202012Validator, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.execution.context import InvocationContext
+from app.integrations.authorization import IntegrationAuthorizationService
+from app.integrations.registry import DEFAULT_INTEGRATION_REGISTRY
+from app.integrations.types import RiskLevel
 from app.models import (
     ApprovalRequest,
     GoogleOAuthClientConfig,
-    IntegrationAuditRecord,
     IntegrationAuthorization,
     IntegrationConnection,
     Skill,
@@ -28,7 +28,6 @@ from app.schemas.integration import (
     NotionConnectionStatus,
 )
 from app.schemas.manifest import ManifestIntegrationRequirement, SkillManifest
-from app.services.atlas_knowledge_service import AtlasKnowledgeError, AtlasKnowledgeService
 from app.services.atlas_provider import AtlasProviderAdapter, UrllibAtlasProviderAdapter
 from app.services.github_provider import (
     GitHubProviderAdapter,
@@ -56,23 +55,12 @@ from app.services.google_oauth import (
     parse_google_oauth_credential,
     serialize_google_oauth_client,
 )
-from app.services.integration_registry import OPERATIONS, registry_contract_identity
-from app.services.invocation_approval_contract import (
-    InvocationApprovalContractError,
-    effective_invocation_contract,
-    split_approval_input,
-)
-from app.services.invocation_approval_service import (
-    InvocationApprovalError,
-    InvocationApprovalService,
-)
-from app.services.manifest_validator import ManifestValidationError, validate_manifest_file
 from app.services.notion_report_provider import NotionReportProvider
 from app.services.notion_todo_provider import NotionTodoProvider
-from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
-from app.services.report_service import ReportProvider, ReportService
+from app.services.proposed_skill_service import ProposedSkillService
+from app.services.report_service import ReportProvider
 from app.services.secret_store import SecretStore, SecretStoreError, default_secret_store
-from app.services.todo_service import TodoProvider, TodoService
+from app.services.todo_service import TodoProvider
 
 
 class IntegrationError(RuntimeError):
@@ -157,8 +145,6 @@ PROVIDER_DISPLAY_NAMES = {
     "gmail": "Gmail",
 }
 GOOGLE_OAUTH_CLIENT_CONFIG_ID = 1
-
-
 def provider_error_message(provider: str, error_type: str) -> str:
     if provider == "atlas":
         messages = ATLAS_PROVIDER_ERROR_MESSAGES
@@ -1055,11 +1041,10 @@ class IntegrationService:
         authorizations: list[IntegrationAuthorization] = []
         for requirement in manifest.integration_requirements:
             fingerprint = self.contract_fingerprint(requirement)
-            current = self._authorization_for_fingerprint(
-                skill,
-                requirement.provider,
-                fingerprint,
-            )
+            current = IntegrationAuthorizationService(
+                self.db,
+                DEFAULT_INTEGRATION_REGISTRY,
+            ).authorization(skill, requirement)
             if current is not None:
                 if current.approval_request.status in {"pending", "approved"}:
                     authorizations.append(current)
@@ -1069,7 +1054,10 @@ class IntegrationService:
                 self.operation_available(operation_id)
                 for operation_id in requirement.operations
             )
-            operations = [OPERATIONS[operation_id] for operation_id in requirement.operations]
+            operations = [
+                DEFAULT_INTEGRATION_REGISTRY.operation_mapping[operation_id]
+                for operation_id in requirement.operations
+            ]
             repositories = list(requirement.resource_scope.repositories)
             read_only = all(operation.read_only for operation in operations)
             provider_name = PROVIDER_DISPLAY_NAMES.get(requirement.provider, requirement.provider.title())
@@ -1078,7 +1066,7 @@ class IntegrationService:
                 " The Knowledge write uses one internet-enabled Codex call, writes one selected node, and may create "
                 "immediate unassessed children through primitive Atlas operations; it cannot rename, move, delete, "
                 "merge, or recursively expand nodes. The node update and each child creation are separately atomic."
-                if any(operation.operation_id == "atlas.knowledge.node.know" for operation in operations)
+                if any(operation.id == "atlas.knowledge.node.know" for operation in operations)
                 else ""
             )
             explanation = (
@@ -1093,7 +1081,13 @@ class IntegrationService:
                 skill_id=skill.id,
                 request_scope="runtime",
                 request_type="integration_access",
-                risk_level="medium" if any(operation.risk == "medium" for operation in operations) else "low",
+                risk_level=(
+                    "high"
+                    if any(operation.risk is RiskLevel.HIGH for operation in operations)
+                    else "medium"
+                    if any(operation.risk is RiskLevel.MEDIUM for operation in operations)
+                    else "low"
+                ),
                 requested_permissions_json={
                     "provider": requirement.provider,
                     "operations": list(requirement.operations),
@@ -1138,15 +1132,10 @@ class IntegrationService:
         return authorizations
 
     def authorization_state(self, skill: Skill, requirement: ManifestIntegrationRequirement) -> str:
-        authorization = self._authorization_for_fingerprint(
-            skill,
-            requirement.provider,
-            self.contract_fingerprint(requirement),
-        )
-        if authorization is None:
-            return "missing"
-        status = authorization.approval_request.status
-        return "stale" if status in {"expired", "superseded"} else status
+        return IntegrationAuthorizationService(
+            self.db,
+            DEFAULT_INTEGRATION_REGISTRY,
+        ).authorization_state(skill, requirement)
 
     def integration_review(self, skill: Skill, manifest: SkillManifest) -> list[dict[str, Any]]:
         return [
@@ -1154,7 +1143,10 @@ class IntegrationService:
                     "provider": requirement.provider,
                     "operations": list(requirement.operations),
                     "contract_fingerprint": self.contract_fingerprint(requirement),
-                    "read_only": all(OPERATIONS[operation_id].read_only for operation_id in requirement.operations),
+                    "read_only": all(
+                        DEFAULT_INTEGRATION_REGISTRY.operation_mapping[operation_id].read_only
+                        for operation_id in requirement.operations
+                    ),
                 "resource_scope": requirement.resource_scope.model_dump(mode="json"),
                 "connection_available": all(
                     self.operation_available(operation_id)
@@ -1171,409 +1163,67 @@ class IntegrationService:
         operation_id: str,
         input_json: dict[str, Any],
     ) -> IntegrationExecutionResult:
-        if context.principal_kind not in {"skill", "web_app"}:
-            operation = OPERATIONS.get(operation_id)
-            if operation is not None and operation.invocation_approval_required:
-                return IntegrationExecutionResult(
-                    output=self._submit_integration_approval(
-                        operation_id,
-                        input_json,
-                        context=context,
-                    )
-                )
-            return self._invoke_operation(
-                operation_id,
-                input_json,
-                allowed_repositories=None,
-            )
-        skill = self.db.get(Skill, context.caller_skill_id)
-        if skill is None or context.caller_version_id is None:
-            raise IntegrationError("connection_unavailable", "Integration caller no longer exists")
-        if skill.active_version_id != context.caller_version_id:
-            raise IntegrationError("authorization_missing_or_stale", "Integration caller version is stale")
-        audit = IntegrationAuditRecord(
-            skill_id=skill.id,
-            version_id=context.caller_version_id,
-            skill_run_id=context.caller_run_id,
-            web_app_instance_id=context.web_app_instance_id,
-            operation_id=operation_id,
-            status="running",
-            request_size=len(json.dumps(input_json, separators=(",", ":")).encode("utf-8")),
-            started_at=utc_now(),
+        """Compatibility façade for callers not yet constructed through the handler."""
+        from app.integrations.invocation import (
+            IntegrationInvocationError,
+            IntegrationInvocationService,
         )
-        self.db.add(audit)
-        self._commit_audit()
+
         try:
-            result = self._invoke_checked(skill, context, operation_id, input_json)
-            audit.status = "succeeded"
-            audit.resource = result.audit_resource
-            audit.response_size = len(
-                json.dumps(result.output, separators=(",", ":")).encode("utf-8")
-            )
-            audit.completed_at = utc_now()
-            self._commit_audit()
-            return result
-        except IntegrationError as exc:
-            audit.status = "failed"
-            audit.error_type = exc.error_type
-            audit.completed_at = utc_now()
-            self._commit_audit()
-            raise
-        except Exception:
-            audit.status = "failed"
-            audit.error_type = "internal_failure"
-            audit.completed_at = utc_now()
-            self._commit_audit()
-            raise IntegrationError("internal_failure", "Integration failed safely") from None
+            result = IntegrationInvocationService(
+                self.db,
+                compatibility_service=self,
+                project_root=self.project_root,
+            ).execute(context, operation_id, input_json)
+        except IntegrationInvocationError as exc:
+            raise IntegrationError(exc.error_type, str(exc)) from None
+        return IntegrationExecutionResult(
+            output=result.output,
+            audit_resource=result.audit_resource,
+        )
 
     def execute_claimed_approval(
         self,
         approval,
         context: InvocationContext,
     ) -> IntegrationExecutionResult:
-        operation_id = approval.target_id
-        operation = OPERATIONS.get(operation_id)
-        if operation is None or not operation.invocation_approval_required:
-            raise IntegrationError("stale_contract", "Approved integration contract is no longer current")
-        if self.operation_contract_fingerprint(operation_id) != approval.target_contract_fingerprint:
-            raise IntegrationError("stale_contract", "Approved integration contract has changed")
-        connection = self._connection(operation.provider)
-        if connection is None or connection.account_id != approval.provider_account_id:
-            raise IntegrationError("connection_changed", "Approved integration account has changed")
-        if context.caller_skill_id is not None:
-            caller_skill = self.db.get(Skill, context.caller_skill_id)
-            if (
-                caller_skill is None
-                or caller_skill.status != "installed"
-                or not caller_skill.enabled
-                or caller_skill.active_version_id != context.caller_version_id
-                or caller_skill.runtime != context.caller_runtime
-                or (
-                    caller_skill.runtime == "service"
-                    and context.source_schedule_id is None
-                )
-            ):
-                raise IntegrationError("authorization_missing_or_stale", "Original integration caller is no longer current")
-            try:
-                manifest = validate_manifest_file(
-                    self.proposed_service.skill_dir_for_record(caller_skill) / "manifest.json"
-                )
-            except (ManifestValidationError, ProposedSkillError, FileNotFoundError):
-                raise IntegrationError("authorization_missing_or_stale", "Original integration caller manifest is invalid") from None
-            requirement = next(
-                (item for item in manifest.integration_requirements if operation_id in item.operations),
-                None,
-            )
-            if requirement is None or self.authorization_state(caller_skill, requirement) != "approved":
-                raise IntegrationError("authorization_missing_or_stale", "Original integration authorization is no longer current")
-            from app.services.permission_service import PermissionService
+        """Compatibility façade; approved execution still re-enters policy."""
+        from app.integrations.invocation import (
+            IntegrationInvocationError,
+            IntegrationInvocationService,
+        )
 
-            if not PermissionService(
+        try:
+            result = IntegrationInvocationService(
                 self.db,
+                compatibility_service=self,
                 project_root=self.project_root,
-            ).can_run(caller_skill, include_integrations=False).allowed:
-                raise IntegrationError("authorization_missing_or_stale", "Original caller runtime approval is no longer current")
-        return self._invoke_operation(
-            operation_id,
-            approval.input_json,
-            allowed_repositories=None,
+            ).execute_approved(approval, context)
+        except IntegrationInvocationError as exc:
+            raise IntegrationError(exc.error_type, str(exc)) from None
+        return IntegrationExecutionResult(
+            output=result.output,
+            audit_resource=result.audit_resource,
         )
-
-    def _invoke_checked(
-        self,
-        skill: Skill,
-        context: InvocationContext,
-        operation_id: str,
-        input_json: dict[str, Any],
-    ) -> IntegrationExecutionResult:
-        # The order is deliberate: GitHub credentials are retrieved only after every
-        # caller, manifest, approval, connection, scope, and schema check passes.
-        if skill.status != "installed" or not skill.enabled:
-            raise IntegrationError("authorization_missing_or_stale", "Integration caller is not installed and enabled")
-        if (
-            skill.runtime != context.caller_runtime
-            or context.caller_runtime not in {"function", "web_app", "service"}
-        ):
-            raise IntegrationError("authorization_missing_or_stale", "Integration caller runtime is not eligible")
-        if skill.runtime == "service" and context.source_schedule_id is None:
-            raise IntegrationError(
-                "authorization_missing_or_stale",
-                "Service integration caller is not schedule-attributed",
-            )
-        try:
-            manifest = validate_manifest_file(self.proposed_service.skill_dir_for_record(skill) / "manifest.json")
-        except (ManifestValidationError, ProposedSkillError, FileNotFoundError):
-            raise IntegrationError("authorization_missing_or_stale", "Integration caller manifest is invalid") from None
-        from app.services.permission_service import PermissionService
-
-        runtime_permissions = PermissionService(self.db, project_root=self.project_root).can_run(
-            skill,
-            include_integrations=False,
-        )
-        if not runtime_permissions.allowed:
-            raise IntegrationError("authorization_missing_or_stale", "Runtime permission approval is missing or stale")
-        requirement = next(
-            (item for item in manifest.integration_requirements if operation_id in item.operations),
-            None,
-        )
-        if requirement is None:
-            raise IntegrationError("operation_undeclared", "Integration operation is not declared by the active manifest")
-        if self.authorization_state(skill, requirement) != "approved":
-            raise IntegrationError("authorization_missing_or_stale", "Integration authorization is missing or stale")
-        operation = OPERATIONS.get(operation_id)
-        if operation is not None and operation.invocation_approval_required:
-            return IntegrationExecutionResult(
-                output=self._submit_integration_approval(
-                    operation_id,
-                    input_json,
-                    context=context,
-                )
-            )
-        return self._invoke_operation(
-            operation_id,
-            input_json,
-            allowed_repositories=set(requirement.resource_scope.repositories),
-        )
-
-    def _invoke_operation(
-        self,
-        operation_id: str,
-        input_json: dict[str, Any],
-        *,
-        allowed_repositories: set[str] | None,
-    ) -> IntegrationExecutionResult:
-        # Credentials are retrieved only after operation, connection, containment,
-        # and input validation. Direct-user calls intentionally omit only the
-        # skill-specific manifest and authorization checks above.
-        operation = OPERATIONS.get(operation_id)
-        if operation is None:
-            raise IntegrationError("operation_undeclared", "Integration operation does not exist")
-        connection = self._connection(operation.provider)
-        if operation.provider == "atlas":
-            if not self.provider_connected("atlas"):
-                from app.services.atlas_settings_service import AtlasSettingsService
-
-                status = AtlasSettingsService(self.db, secret_store=self.secret_store).status()
-                if status.running and status.locked:
-                    raise IntegrationError("atlas_locked", "Atlas is locked")
-                raise IntegrationError("connection_unavailable", "Atlas is unavailable")
-        elif operation.provider == "telegram":
-            from app.services.telegram_service import TelegramService
-
-            if not TelegramService(self.db, secret_store=self.secret_store).approval_available():
-                raise IntegrationError("connection_unavailable", "Telegram connection is unavailable")
-        elif connection is None or connection.status != "connected":
-            provider_name = PROVIDER_DISPLAY_NAMES.get(operation.provider, operation.provider.title())
-            raise IntegrationError("connection_unavailable", f"{provider_name} connection is unavailable")
-        if not self.operation_available(operation_id):
-            raise IntegrationError(
-                "connection_unavailable",
-                "The configured resource for this integration operation is unavailable",
-            )
-        scoped_resource = self._resource(operation.resource_scope, input_json)
-        resource = scoped_resource
-        if resource is None and "node_id" in operation.audit_resource_fields:
-            node_id = input_json.get("node_id")
-            if isinstance(node_id, int) and not isinstance(node_id, bool):
-                resource = f"node:{node_id}"
-        if resource is None and operation.provider == "notion" and "id" in operation.audit_resource_fields:
-            page_id = input_json.get("id")
-            if isinstance(page_id, str):
-                resource = f"notion-page:{page_id}"
-        if resource is None and operation.provider == "google_calendar" and "id" in operation.audit_resource_fields:
-            event_id = input_json.get("id")
-            if isinstance(event_id, str):
-                resource = f"google-calendar-event:{event_id}"
-        if (
-            allowed_repositories is not None
-            and scoped_resource is not None
-            and scoped_resource not in allowed_repositories
-        ):
-            raise IntegrationError("repository_outside_scope", "GitHub repository is outside the approved scope")
-        try:
-            Draft202012Validator(operation.input_schema).validate(input_json)
-        except ValidationError as exc:
-            path = ".".join(str(item) for item in exc.absolute_path)
-            location = f" at {path}" if path else ""
-            raise IntegrationError("invalid_input", f"Integration input is invalid{location}") from None
-        credential = ""
-        if operation.provider not in {"atlas", "telegram"}:
-            assert connection is not None
-            if (
-                self.secret_store is None
-                or self.secret_store.implementation_id != connection.secret_store_id
-            ):
-                raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
-            try:
-                namespace = {
-                    "notion": "notion",
-                    "google_calendar": GOOGLE_CALENDAR_SECRET_NAMESPACE,
-                    "gmail": GMAIL_SECRET_NAMESPACE,
-                }.get(operation.provider, "github")
-                credential = self.secret_store.get(connection.secret_reference, namespace=namespace)
-                if operation.provider in {"google_calendar", "gmail"}:
-                    credential = self._google_runtime_credential(credential)
-            except IntegrationError:
-                raise
-            except (SecretStoreError, RuntimeError):
-                raise IntegrationError(
-                    "connection_unavailable", "Stored integration credential is unavailable"
-                ) from None
-        try:
-            try:
-                if operation.operation_id == "atlas.knowledge.node.know":
-                    inspected = self.atlas.execute(
-                        OPERATIONS["atlas.knowledge.node.get"], {"node_id": input_json["node_id"]}
-                    )
-                    output = AtlasKnowledgeService(
-                        self.atlas,
-                        adapter=self.codex_adapter,
-                        project_root=self.project_root,
-                    ).know(inspected["node"], input_json.get("explanation"))
-                elif operation.provider == "atlas":
-                    output = self.atlas.execute(operation, input_json)
-                elif operation.provider == "notion":
-                    assert connection is not None
-                    if operation.operation_id.startswith("notion.report."):
-                        assert connection.configured_report_resource_id is not None
-                        assert self.notion_report_provider_factory is not None
-                        output = ReportService(
-                            self.notion_report_provider_factory(
-                                credential,
-                                connection.configured_report_resource_id,
-                            )
-                        ).invoke(operation.operation_id, input_json)
-                    else:
-                        assert connection.configured_resource_id is not None
-                        assert self.notion_provider_factory is not None
-                        output = TodoService(
-                            self.notion_provider_factory(credential, connection.configured_resource_id)
-                        ).invoke(operation.operation_id, input_json)
-                elif operation.provider == "google_calendar":
-                    assert self.google_calendar is not None
-                    output = self.google_calendar.execute(operation, input_json, credential)
-                elif operation.provider == "gmail":
-                    assert self.gmail is not None
-                    output = self.gmail.execute(operation, input_json, credential)
-                elif operation.provider == "telegram":
-                    from app.services.telegram_service import TelegramService
-
-                    output = TelegramService(
-                        self.db,
-                        secret_store=self.secret_store,
-                    ).execute_notification(input_json)
-                else:
-                    output = self.github.execute(operation, input_json, credential)
-            except IntegrationProviderError as exc:
-                if (
-                    operation.provider in {"github", "notion", "google_calendar", "gmail", "telegram"}
-                    and exc.error_type == "invalid_credential"
-                    and connection is not None
-                ):
-                    connection.status = "invalid"
-                    connection.error_type = "invalid_credential"
-                raise IntegrationError(
-                    exc.error_type,
-                    (
-                        f"{provider_error_message(operation.provider, exc.error_type)}; retry after "
-                        f"{exc.retry_after_seconds} seconds"
-                        if exc.error_type == "rate_limited" and exc.retry_after_seconds is not None
-                        else provider_error_message(operation.provider, exc.error_type)
-                    ),
-                    retry_after_seconds=exc.retry_after_seconds,
-                ) from None
-            except AtlasKnowledgeError as exc:
-                raise IntegrationError(exc.error_type, str(exc)) from None
-        finally:
-            credential = ""
-        try:
-            Draft202012Validator(operation.output_schema).validate(output)
-        except ValidationError:
-            raise IntegrationError("internal_failure", "Integration returned an invalid normalized result") from None
-        if (
-            resource is None
-            and operation.provider == "google_calendar"
-            and isinstance(output.get("id"), str)
-        ):
-            resource = f"google-calendar-event:{output['id']}"
-        return IntegrationExecutionResult(output=output, audit_resource=resource)
-
-    def _commit_audit(self) -> None:
-        try:
-            self.db.commit()
-        except Exception:
-            self.db.rollback()
-            raise IntegrationError("internal_failure", "Integration audit failed safely") from None
 
     def contract_fingerprint(self, requirement: ManifestIntegrationRequirement) -> str:
-        payload = {
-            "provider": requirement.provider,
-            "operations": sorted(requirement.operations),
-            "resource_scope": {
-                "repositories": sorted(requirement.resource_scope.repositories),
-            },
-            "registry_contract": registry_contract_identity(requirement.operations),
-        }
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()
+        return IntegrationAuthorizationService(
+            self.db,
+            DEFAULT_INTEGRATION_REGISTRY,
+        ).contract_fingerprint(requirement)
 
     def operation_contract_fingerprint(self, operation_id: str) -> str:
-        operation = OPERATIONS.get(operation_id)
+        operation = DEFAULT_INTEGRATION_REGISTRY.get(operation_id)
         if operation is None:
             raise IntegrationError("operation_undeclared", "Integration operation does not exist")
-        encoded = json.dumps(
-            registry_contract_identity([operation_id]),
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()
+        from app.integrations.policy import IntegrationCapabilityPolicy
 
-    def _submit_integration_approval(
-        self,
-        operation_id: str,
-        input_json: dict[str, Any],
-        *,
-        context: InvocationContext,
-    ) -> dict[str, Any]:
-        operation = OPERATIONS.get(operation_id)
-        if operation is None or not operation.invocation_approval_required:
-            raise IntegrationError("operation_undeclared", "Integration operation does not require approval")
-        connection = self._connection(operation.provider)
-        if (
-            connection is None
-            or connection.status != "connected"
-            or not self.operation_available(operation_id)
-        ):
-            raise IntegrationError("connection_unavailable", f"{PROVIDER_DISPLAY_NAMES.get(operation.provider, operation.provider)} connection is unavailable")
-        try:
-            effective = effective_invocation_contract(
-                description=operation.description,
-                input_schema=operation.input_schema,
-                output_schema=operation.output_schema,
-                requires_invocation_approval=True,
-            )
-            Draft202012Validator(effective.input_schema).validate(input_json)
-            reason, business_input = split_approval_input(input_json)
-            Draft202012Validator(operation.input_schema).validate(business_input)
-        except (InvocationApprovalContractError, ValidationError) as exc:
-            raise IntegrationError("invalid_input", f"Integration input is invalid: {exc}") from None
-        try:
-            approval = InvocationApprovalService(
-                self.db,
-                project_root=self.project_root,
-            ).submit_integration(
-                operation_id,
-                business_input,
-                reason,
-                target_contract_fingerprint=self.operation_contract_fingerprint(operation_id),
-                provider=operation.provider,
-                provider_account_id=connection.account_id or "",
-                context=context,
-                target_description=operation.description,
-            )
-        except InvocationApprovalError as exc:
-            raise IntegrationError(exc.error_type, str(exc)) from None
-        return InvocationApprovalService.receipt(approval)
+        return IntegrationCapabilityPolicy(
+            self.db,
+            registry=DEFAULT_INTEGRATION_REGISTRY,
+            connection_service=self,
+            project_root=self.project_root,
+        ).operation_contract_fingerprint(operation)
 
     def invalidate_provider_authorizations(self, provider: str, reason: str) -> None:
         authorizations = self.db.scalars(
@@ -1818,11 +1468,11 @@ class IntegrationService:
         return True
 
     def operation_available(self, operation_id: str) -> bool:
-        operation = OPERATIONS.get(operation_id)
+        operation = DEFAULT_INTEGRATION_REGISTRY.get(operation_id)
         if operation is None:
             return False
-        if operation.provider != "notion":
-            return self.provider_connected(operation.provider)
+        if operation.provider_id != "notion":
+            return self.provider_connected(operation.provider_id)
         connection = self._connection("notion")
         if (
             connection is None

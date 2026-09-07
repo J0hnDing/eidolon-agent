@@ -107,6 +107,42 @@ class QuercusProvider:
             {"include[]": ["body"], "sort": "title", "per_page": 100},
         )
 
+    def page(self, course_id: str, page_url: str) -> dict[str, Any]:
+        safe_course_id = quote(course_id, safe="")
+        safe_page_url = quote(page_url, safe="")
+        value = self.get_json(f"/courses/{safe_course_id}/pages/{safe_page_url}")
+        if not isinstance(value, dict) or not str(value.get("page_id") or value.get("url") or "").strip():
+            raise QuercusProviderError("provider_unavailable", "Quercus returned invalid page content")
+        return value
+
+    def pages_from_modules(self, course_id: str) -> list[dict[str, Any]]:
+        found: dict[str, dict[str, Any]] = {}
+        for module in self.modules(course_id):
+            for item in module.get("items") or []:
+                if not isinstance(item, dict) or item.get("type") != "Page":
+                    continue
+                page_url = item.get("page_url")
+                if not isinstance(page_url, str) or not page_url.strip():
+                    continue
+                try:
+                    page = self.page(course_id, page_url)
+                except QuercusProviderError as exc:
+                    if exc.error_type in {"provider_forbidden", "not_found"}:
+                        continue
+                    raise
+                resource_id = str(page.get("url") or page.get("page_id") or "")
+                if resource_id:
+                    found[resource_id] = page
+        return list(found.values())
+
+    def pages_for_sync(self, course_id: str) -> tuple[list[dict[str, Any]], bool]:
+        try:
+            return self.pages(course_id), True
+        except QuercusProviderError as exc:
+            if exc.error_type not in {"provider_forbidden", "not_found"}:
+                raise
+            return self.pages_from_modules(course_id), False
+
     def announcements(self, course_id: str) -> list[dict[str, Any]]:
         return self.get_pages(
             f"/courses/{course_id}/discussion_topics",

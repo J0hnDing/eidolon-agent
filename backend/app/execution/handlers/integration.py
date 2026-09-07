@@ -3,11 +3,10 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.execution.context import InvocationContext
-from app.execution.context_factory import InvocationContextFactory
 from app.execution.types import InvocationExecutionError, InvocationOutcome, InvocationTargetRef
+from app.integrations.invocation import IntegrationInvocationError, IntegrationInvocationService
 from app.models import InvocationApproval
-from app.services.function_registry_service import FunctionRegistryError
-from app.services.integration_service import IntegrationError, IntegrationService, build_default_integration_service
+from app.services.integration_service import IntegrationService, build_default_integration_service
 
 
 class IntegrationHandler:
@@ -15,6 +14,11 @@ class IntegrationHandler:
         self.db = db
         self.project_root = project_root
         self.service = service or build_default_integration_service(db)
+        self.invocations = IntegrationInvocationService(
+            db,
+            compatibility_service=self.service,
+            project_root=project_root,
+        )
 
     def execute(
         self,
@@ -23,8 +27,8 @@ class IntegrationHandler:
         context: InvocationContext,
     ) -> InvocationOutcome:
         try:
-            result = self.service.execute_context(context, target.target_id, input_json)
-        except IntegrationError as exc:
+            result = self.invocations.execute(context, target.target_id, input_json)
+        except IntegrationInvocationError as exc:
             raise InvocationExecutionError(exc.error_type, str(exc)) from None
         approval_id = None
         status = "succeeded"
@@ -45,14 +49,9 @@ class IntegrationHandler:
     ) -> InvocationOutcome:
         if approval.target_kind != "integration":
             raise InvocationExecutionError("invalid_target", "Approval is not for an integration")
-        if context.principal_kind == "web_app":
-            try:
-                InvocationContextFactory(self.db, project_root=self.project_root).require_current_web_app(context)
-            except FunctionRegistryError as exc:
-                raise InvocationExecutionError("authorization_missing_or_stale", str(exc)) from None
         try:
-            result = self.service.execute_claimed_approval(approval, context)
-        except IntegrationError as exc:
+            result = self.invocations.execute_approved(approval, context)
+        except IntegrationInvocationError as exc:
             raise InvocationExecutionError(exc.error_type, str(exc)) from None
         return InvocationOutcome(
             status="succeeded",

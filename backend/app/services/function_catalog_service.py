@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import dataclass
@@ -9,9 +10,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.integrations.registry import DEFAULT_INTEGRATION_REGISTRY
+from app.integrations.types import IntegrationEffect
 from app.models import Skill
 from app.services.atlas_knowledge_service import codex_available
-from app.services.integration_registry import OPERATIONS
 from app.services.integration_service import build_default_integration_service
 from app.services.invocation_approval_contract import effective_invocation_contract
 from app.services.invocation_approval_service import InvocationApprovalService
@@ -172,18 +174,25 @@ class FunctionCatalogService:
             self.db, project_root=self.project_root
         ).approval_available()
         atlas_codex_available = codex_available()
-        for operation in OPERATIONS.values():
+        # Integration definitions are owned by the provider-neutral registry.
+        # The persisted catalog is only a discovery projection: connection
+        # availability is still resolved through the existing compatibility
+        # facade, while all semantic/security metadata comes from the current
+        # canonical spec.
+        for operation in DEFAULT_INTEGRATION_REGISTRY.list():
+            operation_id = str(operation.id)
+            provider_id = str(operation.provider_id)
             availability_group = (
                 "report"
-                if operation.operation_id.startswith("notion.report.")
+                if operation_id.startswith("notion.report.")
                 else "todo"
-                if operation.provider == "notion"
+                if provider_id == "notion"
                 else "provider"
             )
-            availability_key = (operation.provider, availability_group)
+            availability_key = (provider_id, availability_group)
             if availability_key not in integration_availability:
                 integration_availability[availability_key] = integrations.operation_available(
-                    operation.operation_id
+                    operation_id
                 )
             connected = integration_availability[availability_key]
             unavailable_reason = {
@@ -193,9 +202,13 @@ class FunctionCatalogService:
                 "google_calendar": "Google Calendar connection is not configured",
                 "gmail": "Gmail connection is not configured",
                 "telegram": "Telegram bot is not paired",
-            }.get(operation.provider, f"{operation.provider} connection is not configured")
+            }.get(provider_id, f"{provider_id} connection is not configured")
             reasons = [] if connected else [unavailable_reason]
-            requires_invocation_approval = operation.invocation_approval_required
+            risk_level = self._risk_value(operation)
+            effects = self._effect_values(operation)
+            # HIGH is the only operation-level approval trigger.  Do not read
+            # a compatibility flag from a catalog/provider implementation.
+            requires_invocation_approval = risk_level == "high"
             effective = effective_invocation_contract(
                 description=operation.description,
                 input_schema=operation.input_schema,
@@ -204,45 +217,118 @@ class FunctionCatalogService:
             )
             if requires_invocation_approval and not approval_available:
                 reasons.append("Telegram approval bot is not paired")
-            if operation.operation_id == "atlas.knowledge.node.know" and not atlas_codex_available:
+            if operation_id == "atlas.knowledge.node.know" and not atlas_codex_available:
                 reasons.append("A compatible Codex CLI is unavailable")
             available = connected and not reasons
+            operation_context = operation.agent_context()
+            # Keep the rich agent-facing context, but make the canonical
+            # effect/risk values explicit in the projection even when a
+            # compatibility implementation returns a narrower context.
+            operation_context.update(
+                {
+                    "operation": operation_id,
+                    "provider": provider_id,
+                    "effects": sorted(effects),
+                    "risk": risk_level,
+                }
+            )
+            operation_context.setdefault(
+                "test_adapter",
+                "In tests, use integration_test_adapter.DeterministicFakeIntegrationAdapter and monkeypatch the "
+                "runtime helper call; use registry-shaped deterministic responses and failures; never use a real "
+                "credential or live provider request.",
+            )
+            contract_fingerprint = self._integration_contract_fingerprint(
+                operation,
+                description=effective.description,
+                input_schema=effective.input_schema,
+                output_schema=effective.output_schema,
+            )
             entries.append(
                 self._with_availability(
                     {
-                        "id": operation.operation_id,
+                        "id": operation_id,
                         "category": "integration",
                         "title": operation.title,
                         "description": effective.description,
-                        "risk_level": operation.risk,
+                        "risk_level": risk_level,
                         "input_schema": effective.input_schema,
                         "output_schema": effective.output_schema,
                         "requires_invocation_approval": requires_invocation_approval,
-                        "provider": operation.provider,
+                        "provider": provider_id,
                         "invocation": {
-                            **operation.agent_context(),
+                            **operation_context,
                             "description": effective.description,
                             "input_schema": effective.input_schema,
                             "output_schema": effective.output_schema,
                             "requires_invocation_approval": requires_invocation_approval,
                         },
                         "mcp_exposed": True,
-                        "mcp_read_only": operation.read_only,
-                        "mcp_destructive": operation.operation_id in {
-                            "notion.todo.delete",
-                            "notion.report.delete",
-                        },
-                        "mcp_open_world": operation.provider in {"github", "notion"},
-                        "mcp_contract_fingerprint": (
-                            f"{operation.operation_id}:v{operation.contract_version}:"
-                            f"approval={int(requires_invocation_approval)}"
-                        ),
+                        # MCP annotations are projections of canonical effects
+                        # and presentation metadata, never authorization
+                        # inputs.
+                        "mcp_read_only": bool(effects)
+                        and effects <= {IntegrationEffect.READ.value},
+                        "mcp_destructive": IntegrationEffect.DELETE.value in effects,
+                        "mcp_open_world": self._open_world(operation),
+                        "mcp_contract_fingerprint": contract_fingerprint,
                     },
                     available,
                     reasons,
                 )
             )
         return entries
+
+    @staticmethod
+    def _risk_value(operation: Any) -> str:
+        risk = getattr(operation, "risk", "")
+        return str(getattr(risk, "value", risk))
+
+    @staticmethod
+    def _effect_values(operation: Any) -> set[str]:
+        values: set[str] = set()
+        for effect in getattr(operation, "effects", ()):
+            values.add(str(getattr(effect, "value", effect)))
+        return values
+
+    @staticmethod
+    def _open_world(operation: Any) -> bool:
+        presentation = getattr(operation, "presentation", None)
+        if presentation is not None and hasattr(presentation, "open_world"):
+            return bool(presentation.open_world)
+        # Provider-level metadata is optional during the staged migration.
+        provider_spec = getattr(operation, "provider_spec", None)
+        if provider_spec is not None and hasattr(provider_spec, "open_world"):
+            return bool(provider_spec.open_world)
+        return bool(getattr(operation, "open_world", False))
+
+    @staticmethod
+    def _integration_contract_fingerprint(
+        operation: Any,
+        *,
+        description: str,
+        input_schema: dict[str, Any],
+        output_schema: dict[str, Any],
+    ) -> str:
+        contract_identity = getattr(operation, "contract_identity", None)
+        if callable(contract_identity):
+            identity = contract_identity()
+        else:
+            identity = {
+                "provider": str(operation.provider_id),
+                "effects": sorted(FunctionCatalogService._effect_values(operation)),
+                "risk": FunctionCatalogService._risk_value(operation),
+                "version": int(operation.contract_version),
+            }
+        payload = {
+            **identity,
+            "id": str(operation.id),
+            "description": description,
+            "input_schema": input_schema,
+            "output_schema": output_schema,
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     def _user_entries(self) -> list[dict[str, Any]]:
         from app.services.function_registry_service import FunctionRegistryService
