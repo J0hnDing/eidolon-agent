@@ -46,6 +46,7 @@ GOOGLE_HOSTS = {
     "openidconnect.googleapis.com",
     "www.googleapis.com",
 }
+MICROSOFT_HOSTS = {"graph.microsoft.com", "login.microsoftonline.com"}
 TELEGRAM_HOSTS = {"api.telegram.org"}
 ATLAS_HOSTS = {"127.0.0.1", "localhost", "::1"}
 ATLAS_MARKERS = (
@@ -206,6 +207,8 @@ class StaticCapabilityScanner:
                             if domain in NOTION_HOSTS
                             else "direct_google_access"
                             if domain in GOOGLE_HOSTS
+                            else "direct_microsoft_access"
+                            if domain in MICROSOFT_HOSTS
                             else "direct_telegram_access"
                             if domain in TELEGRAM_HOSTS
                             else "browser_network"
@@ -339,6 +342,17 @@ class StaticCapabilityScanner:
                             line=getattr(node, "lineno", 1),
                             evidence="contains a direct Google integration host",
                             message="Direct Google access is blocked; use the trusted integration helper.",
+                        )
+                    )
+                if any(host in lowered for host in MICROSOFT_HOSTS):
+                    findings.append(
+                        CapabilityFinding(
+                            capability="direct_microsoft_access",
+                            status="blocked",
+                            path=relative_path,
+                            line=getattr(node, "lineno", 1),
+                            evidence="contains a direct Microsoft Graph or identity host",
+                            message="Direct Microsoft access is blocked; use the trusted email helper.",
                         )
                     )
                 if any(host in lowered for host in TELEGRAM_HOSTS):
@@ -546,6 +560,15 @@ class StaticCapabilityScanner:
                         line=node.lineno,
                         evidence=f"calls {call_name} with Google domain {domain}",
                         message="Direct Google access is blocked; use the trusted integration helper.",
+                    )
+                if domain in MICROSOFT_HOSTS:
+                    return CapabilityFinding(
+                        capability="direct_microsoft_access",
+                        status="blocked",
+                        path=relative_path,
+                        line=node.lineno,
+                        evidence=f"calls {call_name} with Microsoft domain {domain}",
+                        message="Direct Microsoft access is blocked; use the trusted email helper.",
                     )
                 if domain in ATLAS_HOSTS:
                     return CapabilityFinding(

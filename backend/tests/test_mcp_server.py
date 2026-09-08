@@ -84,3 +84,15 @@ def test_server_lists_tools_returns_structured_content_and_sanitized_errors() ->
     )
     assert failed.root.isError is True
     assert failed.root.content[0].text == "bounded_failure: Safe failure"
+
+
+def test_server_wraps_array_results_for_mcp_structured_content() -> None:
+    service = FakeService()
+    service.tool.outputSchema["properties"]["result"] = {"type": "array", "items": {"type": "string"}}
+    service.invoke = lambda *_: McpInvocationResult(output=["2609.00001"], summary="Completed safely.")
+    server = build_server(service)
+    called = asyncio.run(server.request_handlers[types.CallToolRequest](types.CallToolRequest(
+        params=types.CallToolRequestParams(name=service.tool.name, arguments={"value": "month"}),
+    )))
+    assert called.root.isError is False
+    assert called.root.structuredContent == {"result": ["2609.00001"]}

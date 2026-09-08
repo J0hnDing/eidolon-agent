@@ -10,7 +10,15 @@ from sqlalchemy.orm import Session
 from app.execution.context_factory import InvocationContextFactory
 from app.execution.executor import InvocationExecutor
 from app.execution.types import InvocationExecutionError, InvocationTargetRef
-from app.models import ActTelegramBinding, ActTurn, AgentProposal, AssistantAssessmentState, TelegramBotConnection
+from app.models import (
+    ActTelegramBinding,
+    ActTurn,
+    AgentProposal,
+    AssistantAssessmentState,
+    ScheduleRuntimeState,
+    TelegramBotConnection,
+)
+from app.schemas.schedule import SchedulePayload, ScheduleUpdate
 from app.services.act_session_service import (
     ActSessionError,
     ActSessionService,
@@ -22,6 +30,7 @@ from app.services.github_provider import IntegrationProviderError
 
 ASSISTANT_ASSESSMENT_INTERVAL = timedelta(days=3)
 ASSISTANT_ASSESSMENT_INSTRUCTION = "Do an assessment now."
+ASSISTANT_ASSESSMENT_SCHEDULE_KEY = "platform:backend.assistant.assessment"
 
 
 class AssistantAssessmentError(RuntimeError):
@@ -61,6 +70,7 @@ class AssistantAssessmentService:
                 self.db.add(ActTelegramBinding(connection_id=connection.id, active_session_id=turn.session_id))
             else:
                 binding.active_session_id = turn.session_id
+            turn.delivery_provider = "telegram"
             turn.delivery_connection_id = connection.id
             turn.delivery_chat_id = connection.paired_chat_id
             turn.delivery_status = "pending"
@@ -79,11 +89,12 @@ class AssistantAssessmentService:
 
     def configure(self, enabled: bool) -> dict[str, Any]:
         state = self._state()
+        interval = self._interval()
         if enabled and not state.enabled:
             anchor_at = self._as_utc(self._now())
             state.enabled = True
             state.anchor_at = anchor_at
-            state.next_run_at = anchor_at + ASSISTANT_ASSESSMENT_INTERVAL
+            state.next_run_at = anchor_at + interval
         elif not enabled and state.enabled:
             state.enabled = False
             state.anchor_at = None
@@ -94,10 +105,11 @@ class AssistantAssessmentService:
 
     def reconcile(self) -> dict[str, Any]:
         state = self._state()
+        interval = self._interval()
         if state.enabled and state.anchor_at is None:
             state.anchor_at = self._as_utc(self._now())
         if state.enabled and state.next_run_at is None:
-            state.next_run_at = self._as_utc(state.anchor_at) + ASSISTANT_ASSESSMENT_INTERVAL
+            state.next_run_at = self._as_utc(state.anchor_at) + interval
         if not state.enabled and state.next_run_at is not None:
             state.next_run_at = None
         self.db.commit()
@@ -109,14 +121,27 @@ class AssistantAssessmentService:
         if not state.enabled or state.anchor_at is None:
             return None
         anchor_at = self._as_utc(state.anchor_at)
-        first_due_at = anchor_at + ASSISTANT_ASSESSMENT_INTERVAL
+        interval = self._interval()
+        first_due_at = anchor_at + interval
         checked_at = self._as_utc(now or self._now())
         if first_due_at > checked_at:
             return None
         elapsed = checked_at - first_due_at
-        return first_due_at + ASSISTANT_ASSESSMENT_INTERVAL * int(
-            elapsed / ASSISTANT_ASSESSMENT_INTERVAL
-        )
+        return first_due_at + interval * int(elapsed / interval)
+
+    def reschedule_after_edit(self, *, now: datetime | None = None, commit: bool = True) -> dict[str, Any]:
+        state = self._state()
+        if state.enabled:
+            anchor_at = self._as_utc(now or self._now())
+            state.anchor_at = anchor_at
+            state.next_run_at = anchor_at + self._interval()
+        else:
+            state.anchor_at = None
+            state.next_run_at = None
+        if commit:
+            self.db.commit()
+            self.db.refresh(state)
+        return self._serialize(state)
 
     def run_now(self) -> dict[str, Any]:
         state = self._state()
@@ -264,7 +289,7 @@ class AssistantAssessmentService:
         state.last_run_at = self._as_utc(self._now())
         state.last_status = status
         if scheduled_for_at is not None and state.enabled:
-            state.next_run_at = scheduled_for_at + ASSISTANT_ASSESSMENT_INTERVAL
+            state.next_run_at = scheduled_for_at + self._interval()
         elif not state.enabled:
             state.next_run_at = None
         self.db.commit()
@@ -278,6 +303,30 @@ class AssistantAssessmentService:
             self.db.commit()
             self.db.refresh(state)
         return state
+
+    def schedule(self) -> SchedulePayload:
+        runtime_state = self.db.get(ScheduleRuntimeState, ASSISTANT_ASSESSMENT_SCHEDULE_KEY)
+        if runtime_state is not None and runtime_state.configuration_json is not None:
+            try:
+                configured = ScheduleUpdate.model_validate(runtime_state.configuration_json).schedule
+            except ValueError as exc:
+                raise AssistantAssessmentError(
+                    f"Stored Assistant assessment schedule is invalid: {exc}"
+                ) from exc
+            if configured.type != "interval":
+                raise AssistantAssessmentError("Assistant assessment schedule must use an interval")
+            return configured
+        return SchedulePayload(
+            type="interval",
+            every=3,
+            unit="days",
+            timezone="UTC",
+            input={},
+        )
+
+    def _interval(self) -> timedelta:
+        schedule = self.schedule()
+        return timedelta(**{str(schedule.unit): schedule.every})
 
     @staticmethod
     def _serialize(state: AssistantAssessmentState) -> dict[str, Any]:

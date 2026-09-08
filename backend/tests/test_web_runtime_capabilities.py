@@ -46,12 +46,21 @@ def test_trusted_capability_helper_uses_instance_bearer_without_returning_it(
     monkeypatch.setenv("PERSONAL_AGENT_WEB_INSTANCE_TOKEN", "instance-secret")
     monkeypatch.setattr(capabilities, "urlopen", fake_urlopen)
 
-    result = capabilities.call_codex("Summarize", context={"item": "demo"}, timeout_seconds=9)
+    result = capabilities.call_codex(
+        "Summarize",
+        context={"item": "demo"},
+        response_schema={"type": "object", "properties": {"result": {"type": "string"}}},
+        timeout_seconds=9,
+    )
 
     assert result == {"response": "done", "model": None, "internet_access": False}
     assert captured["timeout"] == 9
     request = captured["request"]
     assert request.full_url.endswith("/web-apps/capabilities/codex")
+    assert json.loads(request.data)["response_schema"] == {
+        "type": "object",
+        "properties": {"result": {"type": "string"}},
+    }
     assert request.headers["Authorization"] == "Bearer instance-secret"
     assert "instance-secret" not in request.data.decode("utf-8")
 

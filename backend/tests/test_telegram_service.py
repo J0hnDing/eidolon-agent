@@ -299,9 +299,8 @@ def test_observer_and_assistant_bots_keep_independent_pairing_and_session_select
             {"chat_id": 33, "user_id": 44, "text": "Continue the assessment"},
         )
         assert db.query(ActSession).count() == session_count
-        assert assistant_api.sent_messages[-1]["text"] == (
-            "No Assistant session is selected. Use /new or /use <session id>."
-        )
+        assert assistant_api.sent_messages[-1]["text"] == "Queued Assistant turn #1 in session #3."
+        assert db.get(ActTelegramBinding, assistant_connection.id).active_session_id == 3
 
         observer._handle_message(
             observer_connection.id,

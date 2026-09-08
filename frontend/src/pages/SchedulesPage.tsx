@@ -87,6 +87,9 @@ export default function SchedulesPage() {
           <h1>Schedules</h1>
           <p className="muted">Manage generated service schedules and review backend-owned service jobs.</p>
         </div>
+        <button type="button" className="secondary" onClick={() => void loadSchedules()} disabled={isLoading}>
+          Refresh
+        </button>
       </header>
 
       {error && <p className="error-text">{error}</p>}
@@ -169,13 +172,9 @@ export default function SchedulesPage() {
                       >
                         Run Now
                       </button>
-                      {schedule.service_id === "backend.assistant.assessment" ? (
-                        <Link className="button-link secondary" to="/agents/assistant">Edit</Link>
-                      ) : (
-                        <button type="button" className="secondary" onClick={() => setEditingId(schedule.id)} disabled={isWorking}>
-                          Edit
-                        </button>
-                      )}
+                      <button type="button" className="secondary" onClick={() => setEditingId(schedule.id)} disabled={isWorking}>
+                        Edit
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -193,6 +192,7 @@ export default function SchedulesPage() {
           key={editing.id}
           schedule={editing}
           inputEditable={editing.schedule_kind === "service"}
+          intervalOnly={editing.service_id === "backend.assistant.assessment"}
           isWorking={isWorking}
           onCancel={() => setEditingId(null)}
           onSave={(payload) => act(async () => {
@@ -209,9 +209,10 @@ export default function SchedulesPage() {
   );
 }
 
-function ScheduleEditor({ schedule, inputEditable, isWorking, onCancel, onSave }: {
+function ScheduleEditor({ schedule, inputEditable, intervalOnly, isWorking, onCancel, onSave }: {
   schedule: SkillSchedule;
   inputEditable: boolean;
+  intervalOnly: boolean;
   isWorking: boolean;
   onCancel: () => void;
   onSave: (payload: { name: string; schedule: SchedulePayload }) => Promise<void>;
@@ -221,7 +222,7 @@ function ScheduleEditor({ schedule, inputEditable, isWorking, onCancel, onSave }
   const [type, setType] = useState<ScheduleType>(schedule.schedule_type);
   const [time, setTime] = useState(data.time ?? "08:00");
   const [day, setDay] = useState(data.day ?? "monday");
-  const [every, setEvery] = useState(data.every ?? 60);
+  const [every, setEvery] = useState(data.every ?? (intervalOnly ? 3 : 60));
   const [unit, setUnit] = useState<"minutes" | "hours" | "days">(data.unit ?? "minutes");
   const [timezone, setTimezone] = useState(schedule.timezone);
   const [input, setInput] = useState(JSON.stringify(schedule.input_json, null, 2));
@@ -265,8 +266,8 @@ function ScheduleEditor({ schedule, inputEditable, isWorking, onCancel, onSave }
           <label>
             Type
             <select value={type} onChange={(event) => setType(event.target.value as ScheduleType)}>
-              <option value="daily">daily</option>
-              <option value="weekly">weekly</option>
+              {!intervalOnly && <option value="daily">daily</option>}
+              {!intervalOnly && <option value="weekly">weekly</option>}
               <option value="interval">interval</option>
             </select>
           </label>

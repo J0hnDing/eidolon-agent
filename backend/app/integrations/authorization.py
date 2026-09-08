@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.execution.context import InvocationContext
 from app.models import IntegrationAuthorization, Skill
+from app.models.entities import utc_now
 from app.schemas.manifest import ManifestIntegrationRequirement
 
 from .types import (
@@ -62,6 +63,7 @@ class AuthorizedIntegrationInvocation:
     operation: IntegrationOperationSpec
     input: Mapping[str, Any]
     provider_id: str
+    connection_id: int | None
     provider_account_id: str | None
     resource: ResourceIdentity | None
     effects: frozenset[IntegrationEffect]
@@ -79,6 +81,8 @@ def _issue_authorized_integration_invocation(
     context: InvocationContext,
     operation: IntegrationOperationSpec,
     input_json: Mapping[str, Any],
+    provider_id: str,
+    connection_id: int | None = None,
     provider_account_id: str | None,
     resource: ResourceIdentity | None,
     authorization_id: int | None,
@@ -87,7 +91,8 @@ def _issue_authorized_integration_invocation(
         context=context,
         operation=operation,
         input=input_json,
-        provider_id=operation.provider_id,
+        provider_id=provider_id,
+        connection_id=connection_id,
         provider_account_id=provider_account_id,
         resource=resource,
         effects=operation.effects,
@@ -164,7 +169,7 @@ class IntegrationAuthorizationService:
             "operations": sorted(requirement.operations),
             "resource_scope": self.requirement_scope_value(requirement),
             "operation_contracts": {
-                operation_id: self.registry.get(operation_id).contract_identity()
+                operation_id: self.registry.contract_identity(operation_id)
                 for operation_id in sorted(requirement.operations)
             },
         }
@@ -204,6 +209,26 @@ class IntegrationAuthorizationService:
         )
         if authorization is not None:
             return authorization
+
+        # Email contracts changed from provider-specific Gmail grants to
+        # selector-bound normalized contracts. Do not upgrade an old standing
+        # grant under the legacy fingerprint path; retire it when first seen.
+        if requirement.provider in {"gmail", "outlook"}:
+            stale = self.db.scalars(
+                select(IntegrationAuthorization)
+                .where(IntegrationAuthorization.skill_id == skill.id)
+                .where(IntegrationAuthorization.provider == requirement.provider)
+                .where(IntegrationAuthorization.invalidated_at.is_(None))
+            ).all()
+            if stale:
+                now = utc_now()
+                for item in stale:
+                    item.invalidated_at = now
+                    item.invalidation_reason = "Email provider-neutral contract changed"
+                    if item.approval_request.status in {"pending", "approved"}:
+                        item.approval_request.status = "superseded"
+                self.db.commit()
+            return None
 
         legacy = self._for_fingerprint(
             skill,

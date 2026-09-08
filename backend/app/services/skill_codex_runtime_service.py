@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from jsonschema import Draft202012Validator, SchemaError
 from sqlalchemy.orm import Session
 
 from app.execution.context import InvocationContext
@@ -32,6 +33,11 @@ class SkillCodexRuntimeService:
         context: InvocationContext,
         payload: SkillCodexRequest,
     ) -> dict[str, object]:
+        if payload.response_schema is not None:
+            try:
+                Draft202012Validator.check_schema(payload.response_schema)
+            except SchemaError as exc:
+                raise SkillCodexInvalidRequest("Codex response_schema is invalid") from exc
         if context.caller_skill_id is None:
             raise SkillCodexUnavailable("Codex calls require an authenticated skill caller")
         skill = self.db.get(Skill, context.caller_skill_id)

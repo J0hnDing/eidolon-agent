@@ -75,6 +75,7 @@ class IntegrationCapabilityPolicy:
         operation: IntegrationOperationSpec,
         input_json: Mapping[str, Any],
         *,
+        provider_id: str | None = None,
         approval: InvocationApproval | None = None,
     ) -> AuthorizedIntegrationInvocation | PendingIntegrationApproval:
         current = self.registry.get(operation.id)
@@ -97,9 +98,17 @@ class IntegrationCapabilityPolicy:
                 raise IntegrationPolicyError("invalid_input", f"Integration input is invalid: {exc}") from None
         self._validate_json(business_input, operation.input_schema)
 
+        selected_provider = provider_id or self._selected_provider(operation, business_input)
+        if not self.registry.supports_provider(operation.id, selected_provider):
+            raise IntegrationPolicyError(
+                "provider_unsupported",
+                f"Provider {selected_provider} does not support {operation.id}",
+            )
+
+        connection_id, account_id = self._require_current_connection(operation, selected_provider)
+
         resource = derive_resource_identity(operation, business_input)
-        authorization_id = self._authorize_caller(context, operation, resource)
-        account_id = self._require_current_connection(operation)
+        authorization_id = self._authorize_caller(context, operation, resource, selected_provider)
 
         if approval is not None:
             self._verify_claimed_approval(
@@ -108,6 +117,8 @@ class IntegrationCapabilityPolicy:
                 operation=operation,
                 input_json=business_input,
                 account_id=account_id,
+                connection_id=connection_id,
+                provider_id=selected_provider,
                 resource=resource,
             )
         elif operation.risk is RiskLevel.HIGH:
@@ -118,6 +129,8 @@ class IntegrationCapabilityPolicy:
                 business_input,
                 reason,
                 account_id,
+                connection_id,
+                selected_provider,
                 resource,
             )
 
@@ -125,19 +138,29 @@ class IntegrationCapabilityPolicy:
             context=context,
             operation=operation,
             input_json=business_input,
+            provider_id=selected_provider,
+            connection_id=connection_id,
             provider_account_id=account_id,
             resource=resource,
             authorization_id=authorization_id,
         )
 
-    def operation_contract_fingerprint(self, operation: IntegrationOperationSpec) -> str:
-        return _fingerprint({"id": operation.id, "contract": operation.contract_identity()})
+    def operation_contract_fingerprint(
+        self,
+        operation: IntegrationOperationSpec,
+        provider_id: str | None = None,
+    ) -> str:
+        identity = self.registry.contract_identity(operation.id)
+        if provider_id is not None:
+            identity = {**identity, "selected_provider": provider_id}
+        return _fingerprint({"id": operation.id, "contract": identity})
 
     def _authorize_caller(
         self,
         context: InvocationContext,
         operation: IntegrationOperationSpec,
         resource: ResourceIdentity | None,
+        provider_id: str,
     ) -> int | None:
         if context.principal_kind == "agent":
             if context.agent_id is None or context.agent_session_id is None:
@@ -203,7 +226,11 @@ class IntegrationCapabilityPolicy:
                 "Runtime permission approval is missing or stale",
             )
         requirement = next(
-            (item for item in manifest.integration_requirements if operation.id in item.operations),
+            (
+                item
+                for item in manifest.integration_requirements
+                if item.provider == provider_id and operation.id in item.operations
+            ),
             None,
         )
         if requirement is None:
@@ -227,13 +254,21 @@ class IntegrationCapabilityPolicy:
             raise IntegrationPolicyError(error_type, "Integration resource is outside the approved scope")
         return authorization.id
 
-    def _require_current_connection(self, operation: IntegrationOperationSpec) -> str | None:
+    def _require_current_connection(
+        self,
+        operation: IntegrationOperationSpec,
+        provider_id: str,
+    ) -> tuple[int | None, str | None]:
         try:
-            available = self.connection_service.operation_available(operation.id)
+            available = (
+                self.connection_service.operation_available(operation.id)
+                if operation.id.startswith("notion.")
+                else self.connection_service.provider_connected(provider_id)
+            )
         except Exception:
             available = False
         if not available:
-            if operation.provider_id == "atlas":
+            if provider_id == "atlas":
                 from app.services.atlas_settings_service import AtlasSettingsService
 
                 status = AtlasSettingsService(
@@ -246,8 +281,11 @@ class IntegrationCapabilityPolicy:
                 "connection_unavailable",
                 "Integration connection or configured resource is unavailable",
             )
-        connection = self.connection_service.connection(operation.provider_id)
-        return connection.account_id if connection is not None else None
+        connection = self.connection_service.connection(provider_id)
+        return (
+            (getattr(connection, "id", None) if connection is not None else None),
+            (getattr(connection, "account_id", None) if connection is not None else None),
+        )
 
     def _submit_approval(
         self,
@@ -256,11 +294,15 @@ class IntegrationCapabilityPolicy:
         input_json: dict[str, Any],
         reason: str,
         account_id: str | None,
+        connection_id: int | None,
+        provider_id: str,
         resource: ResourceIdentity | None,
     ) -> PendingIntegrationApproval:
         metadata = {
             "integration_security_v2": {
-                "provider": operation.provider_id,
+                "provider": provider_id,
+                "connection_id": connection_id,
+                "account_id": account_id,
                 "risk": operation.risk.value,
                 "effects": sorted(effect.value for effect in operation.effects),
                 "resource": _resource_value(resource),
@@ -274,9 +316,10 @@ class IntegrationCapabilityPolicy:
                 operation.id,
                 input_json,
                 reason,
-                target_contract_fingerprint=self.operation_contract_fingerprint(operation),
-                provider=operation.provider_id,
+                target_contract_fingerprint=self.operation_contract_fingerprint(operation, provider_id),
+                provider=provider_id,
                 provider_account_id=account_id or "",
+                connection_id=connection_id,
                 context=context,
                 target_description=operation.description,
                 dispatch_metadata_json=metadata,
@@ -293,6 +336,8 @@ class IntegrationCapabilityPolicy:
         operation: IntegrationOperationSpec,
         input_json: Mapping[str, Any],
         account_id: str | None,
+        connection_id: int | None,
+        provider_id: str,
         resource: ResourceIdentity | None,
     ) -> None:
         if approval.target_kind != "integration" or approval.target_id != operation.id:
@@ -302,15 +347,21 @@ class IntegrationCapabilityPolicy:
                 "stale_contract",
                 "Approved integration risk no longer requires invocation approval",
             )
-        if self.operation_contract_fingerprint(operation) != approval.target_contract_fingerprint:
+        if self.operation_contract_fingerprint(operation, provider_id) != approval.target_contract_fingerprint:
             raise IntegrationPolicyError("stale_contract", "Approved integration contract has changed")
         if (account_id or "") != (approval.provider_account_id or ""):
             raise IntegrationPolicyError("connection_changed", "Approved integration account has changed")
+        if provider_id != (approval.provider or ""):
+            raise IntegrationPolicyError("connection_changed", "Approved integration provider has changed")
+        if connection_id != approval.connection_id:
+            raise IntegrationPolicyError("connection_changed", "Approved integration connection has changed")
         if dict(input_json) != approval.input_json:
             raise IntegrationPolicyError("stale_contract", "Approved integration input has changed")
         security = (approval.dispatch_metadata_json or {}).get("integration_security_v2")
         expected = {
-            "provider": operation.provider_id,
+            "provider": provider_id,
+            "connection_id": connection_id,
+            "account_id": account_id,
             "risk": operation.risk.value,
             "effects": sorted(effect.value for effect in operation.effects),
             "resource": _resource_value(resource),
@@ -332,6 +383,21 @@ class IntegrationCapabilityPolicy:
                 "invalid_input",
                 f"Integration input is invalid{location}",
             ) from None
+
+    @staticmethod
+    def _selected_provider(operation: IntegrationOperationSpec, input_json: Mapping[str, Any]) -> str:
+        if operation.provider_selection.value == "multi":
+            providers = input_json.get("providers")
+            if not isinstance(providers, list) or len(providers) != 1:
+                raise IntegrationPolicyError(
+                    "invalid_input",
+                    "Provider-specific authorization requires one selected provider",
+                )
+            return str(providers[0])
+        provider = input_json.get("provider")
+        if not isinstance(provider, str) or not provider:
+            raise IntegrationPolicyError("invalid_input", "provider is required")
+        return provider
 
 
 def _resource_value(resource: ResourceIdentity | None) -> dict[str, Any] | None:

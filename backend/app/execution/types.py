@@ -25,7 +25,7 @@ class InvocationTargetRef:
 @dataclass(frozen=True)
 class InvocationOutcome:
     status: str
-    output: dict[str, Any] | None = None
+    output: dict[str, Any] | list[Any] | None = None
     approval_id: int | None = None
     skill_run_id: int | None = None
     error_type: str | None = None

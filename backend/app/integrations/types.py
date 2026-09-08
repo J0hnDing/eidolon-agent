@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
@@ -19,6 +20,13 @@ class RiskLevel(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+
+
+class ProviderSelectionMode(StrEnum):
+    """How an operation chooses its provider at invocation time."""
+
+    SINGLE = "single"
+    MULTI = "multi"
 
 
 @dataclass(frozen=True)
@@ -47,12 +55,12 @@ class OperationPresentation:
 class ProviderSpec:
     id: str
     display_name: str
+    supported_operations: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
 class IntegrationOperationSpec:
     id: str
-    provider_id: str
     title: str
     description: str
     input_schema: dict[str, Any]
@@ -62,6 +70,7 @@ class IntegrationOperationSpec:
     risk: RiskLevel
     contract_version: int = 1
     presentation: OperationPresentation | None = None
+    provider_selection: ProviderSelectionMode = ProviderSelectionMode.SINGLE
 
     @property
     def requires_invocation_approval(self) -> bool:
@@ -90,6 +99,7 @@ class IntegrationOperationSpec:
             "effects": sorted(effect.value for effect in self.effects),
             "read_only": self.read_only,
             "risk": self.risk.value,
+            "provider_selection": self.provider_selection.value,
             "requires_invocation_approval": self.requires_invocation_approval,
             "normalized_errors": list(presentation.normalized_errors) if presentation else [],
             "usage_example": presentation.usage_example if presentation else {},
@@ -99,10 +109,12 @@ class IntegrationOperationSpec:
             ),
         }
 
-    def contract_identity(self) -> dict[str, Any]:
+    def contract_identity(self, supported_providers: Iterable[str] | None = None) -> dict[str, Any]:
         """Return the complete JSON-serializable semantic and security contract."""
-        return {
-            "provider": self.provider_id,
+        providers = tuple(sorted(supported_providers or ()))
+        identity = {
+            "provider_selection": self.provider_selection.value,
+            "supported_providers": list(providers),
             "input_schema": self.input_schema,
             "output_schema": self.output_schema,
             "effects": sorted(effect.value for effect in self.effects),
@@ -113,6 +125,7 @@ class IntegrationOperationSpec:
             "risk": self.risk.value,
             "version": self.contract_version,
         }
+        return identity
 
 
 # Staged provider modules still import this name for annotations. It has no

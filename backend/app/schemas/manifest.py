@@ -200,10 +200,10 @@ class ManifestIntegrationRequirement(BaseModel):
         if unknown:
             raise ValueError(f"unknown integration operations: {unknown}")
         if any(
-            DEFAULT_INTEGRATION_REGISTRY.get(operation_id).provider_id != self.provider
+            not DEFAULT_INTEGRATION_REGISTRY.supports_provider(operation_id, self.provider)
             for operation_id in self.operations
         ):
-            raise ValueError("integration operations must match their declared provider")
+            raise ValueError("integration operations must match a supported operation for their declared provider")
         repository_operations = [
             operation_id
             for operation_id in self.operations

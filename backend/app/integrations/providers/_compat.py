@@ -10,6 +10,7 @@ _NAMESPACES = {
     "notion": "notion",
     "google_calendar": "google_calendar",
     "gmail": "gmail",
+    "outlook": "outlook",
 }
 
 
@@ -43,6 +44,14 @@ def credential(compatibility_service: Any, provider_id: str) -> tuple[Any, str]:
             raise IntegrationProviderError(
                 str(error_type), "Stored Google authorization is unavailable"
             ) from None
+    if provider_id == "outlook":
+        try:
+            value = compatibility_service._outlook_runtime_credential(value)  # noqa: SLF001
+        except Exception as exc:
+            error_type = getattr(exc, "error_type", "connection_unavailable")
+            raise IntegrationProviderError(
+                str(error_type), "Stored Microsoft authorization is unavailable"
+            ) from None
     return row, value
 
 
@@ -51,4 +60,3 @@ def mark_invalid_credential(row: Any, error: IntegrationProviderError) -> None:
         return
     row.status = "invalid"
     row.error_type = "invalid_credential"
-

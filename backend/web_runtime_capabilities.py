@@ -26,6 +26,7 @@ def call_codex(
     context: dict[str, Any] | None = None,
     model: str | None = None,
     internet_access: bool = False,
+    response_schema: dict[str, Any] | None = None,
     timeout_seconds: float = DEFAULT_SKILL_CAPABILITY_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Call Codex through the instance-scoped Eidolon capability."""
@@ -45,6 +46,10 @@ def call_codex(
     }
     if model is not None:
         payload["model"] = model
+    if response_schema is not None:
+        if not isinstance(response_schema, dict):
+            raise WebRuntimeCapabilityError("Codex response_schema must be a JSON object")
+        payload["response_schema"] = response_schema
     request = Request(
         f"{backend_url}/web-apps/capabilities/codex",
         data=json.dumps(payload).encode("utf-8"),
@@ -136,7 +141,7 @@ def call_integration(
     operation: str,
     input: dict[str, Any],  # noqa: A002 - stable generated-code API
     timeout_seconds: float = 30,
-) -> dict[str, Any]:
+) -> dict[str, Any] | list[Any]:
     """Invoke one declared integration from web-application server code."""
     if not operation.strip():
         raise WebRuntimeIntegrationError("invalid_input", "Integration operation cannot be empty")
@@ -178,7 +183,7 @@ def call_integration(
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise WebRuntimeIntegrationError("internal_failure", "Integration capability returned invalid JSON") from None
     output = result.get("output") if isinstance(result, dict) else None
-    if not isinstance(output, dict):
+    if not isinstance(output, (dict, list)):
         raise WebRuntimeIntegrationError("internal_failure", "Integration capability returned an invalid result")
     return output
 

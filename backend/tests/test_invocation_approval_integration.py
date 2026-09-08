@@ -85,6 +85,7 @@ def test_email_send_is_deferred_stripped_denied_stale_and_recovered(monkeypatch,
         )
 
         payload = {
+            "provider": "gmail",
             "to": ["recipient@example.com"],
             "subject": "Approval test",
             "body": "Complete body",
@@ -115,6 +116,8 @@ def test_email_send_is_deferred_stripped_denied_stale_and_recovered(monkeypatch,
         assert approval.presentation_json["reason"] == payload["reason_to_call"]
         assert approval.dispatch_metadata_json["integration_security_v2"] == {
             "provider": "gmail",
+            "connection_id": 1,
+            "account_id": "account-1",
             "risk": "high",
             "effects": ["send"],
             "resource": None,

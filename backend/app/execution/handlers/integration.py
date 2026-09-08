@@ -32,7 +32,7 @@ class IntegrationHandler:
             raise InvocationExecutionError(exc.error_type, str(exc)) from None
         approval_id = None
         status = "succeeded"
-        if result.output.get("status") == "pending_approval":
+        if isinstance(result.output, dict) and result.output.get("status") == "pending_approval":
             status = "pending_approval"
             approval_id = result.output.get("approval_id")
         return InvocationOutcome(

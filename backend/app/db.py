@@ -41,6 +41,9 @@ def create_db_and_tables() -> None:
 def ensure_local_schema() -> None:
     inspector = inspect(engine)
     table_names = set(inspector.get_table_names())
+    _migrate_integration_connection_uniqueness(inspector, table_names)
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
     with engine.begin() as connection:
         if "agent_proposals" in table_names:
             columns = {column["name"] for column in inspector.get_columns("agent_proposals")}
@@ -68,6 +71,11 @@ def ensure_local_schema() -> None:
                 connection.execute(text("ALTER TABLE approval_requests ADD COLUMN schedule_id INTEGER"))
         if "integration_connections" in table_names:
             columns = {column["name"] for column in inspector.get_columns("integration_connections")}
+            added_default_column = "is_default" not in columns
+            if "is_default" not in columns:
+                connection.execute(
+                    text("ALTER TABLE integration_connections ADD COLUMN is_default BOOLEAN NOT NULL DEFAULT 1")
+                )
             if "credential_kind" not in columns:
                 connection.execute(
                     text("ALTER TABLE integration_connections ADD COLUMN credential_kind VARCHAR(32) NOT NULL DEFAULT 'token'")
@@ -95,6 +103,44 @@ def ensure_local_schema() -> None:
                         "ADD COLUMN configured_report_resource_id VARCHAR(256)"
                     )
                 )
+            if "bot_id" not in columns:
+                connection.execute(text("ALTER TABLE integration_connections ADD COLUMN bot_id VARCHAR(128)"))
+            if added_default_column:
+                connection.execute(
+                    text(
+                        "UPDATE integration_connections SET is_default = CASE WHEN id IN "
+                        "(SELECT MIN(id) FROM integration_connections GROUP BY provider) THEN 1 ELSE 0 END"
+                    )
+                )
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_integration_connections_provider_default "
+                    "ON integration_connections(provider) WHERE is_default = 1"
+                )
+            )
+        if "invocation_approvals" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("invocation_approvals")}
+            if "connection_id" not in columns:
+                connection.execute(text("ALTER TABLE invocation_approvals ADD COLUMN connection_id INTEGER"))
+        if "integration_audit_records" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("integration_audit_records")}
+            additions = {
+                "provider": "VARCHAR(32)",
+                "connection_id": "INTEGER",
+                "account_id": "VARCHAR(128)",
+            }
+            for column, definition in additions.items():
+                if column not in columns:
+                    connection.execute(text(f"ALTER TABLE integration_audit_records ADD COLUMN {column} {definition}"))
+        if "microsoft_oauth_client_configs" not in table_names:
+            connection.execute(
+                text(
+                    "CREATE TABLE microsoft_oauth_client_configs ("
+                    "id INTEGER PRIMARY KEY, client_id VARCHAR(1024) NOT NULL, "
+                    "secret_store_id VARCHAR(64) NOT NULL, secret_reference VARCHAR(256) NOT NULL, "
+                    "authority VARCHAR(256) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)"
+                )
+            )
         if "quercus_courses" in table_names:
             columns = {column["name"] for column in inspector.get_columns("quercus_courses")}
             additions = {
@@ -427,6 +473,7 @@ def ensure_local_schema() -> None:
             columns = {column["name"] for column in inspector.get_columns("act_turns")}
             additions = {
                 "cancel_requested_at": "DATETIME",
+                "delivery_provider": "VARCHAR(32)",
                 "delivery_connection_id": "INTEGER",
                 "delivery_chat_id": "VARCHAR(64)",
                 "delivery_status": "VARCHAR(32)",
@@ -439,11 +486,124 @@ def ensure_local_schema() -> None:
                 text("CREATE INDEX IF NOT EXISTS ix_act_turns_delivery_connection_id ON act_turns (delivery_connection_id)")
             )
             connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_act_turns_delivery_provider ON act_turns (delivery_provider)")
+            )
+            connection.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_act_turns_delivery_status ON act_turns (delivery_status)")
+            )
+        if "wecom_observer_bindings" in table_names and "wecom_observer_user_bindings" in table_names:
+            connection.execute(
+                text(
+                    "INSERT OR IGNORE INTO wecom_observer_user_bindings "
+                    "(connection_id, paired_user_id, active_session_id, created_at, updated_at) "
+                    "SELECT connection_id, paired_user_id, active_session_id, updated_at, updated_at "
+                    "FROM wecom_observer_bindings WHERE paired_user_id IS NOT NULL"
+                )
+            )
+            connection.execute(
+                text(
+                    "UPDATE wecom_observer_bindings SET paired_user_id = NULL, active_session_id = NULL "
+                    "WHERE paired_user_id IS NOT NULL OR active_session_id IS NOT NULL"
+                )
             )
         _remove_retired_product_manager_routing(connection, table_names)
         _remove_retired_skill_contract_json(connection, table_names)
         _remove_retired_manifest_display_name(connection, table_names)
+
+
+def _migrate_integration_connection_uniqueness(inspector, table_names: set[str]) -> None:
+    """Rebuild the legacy table so multiple non-default provider accounts fit safely."""
+
+    if "integration_connections" not in table_names:
+        return
+    unique_constraints = inspector.get_unique_constraints("integration_connections")
+    unique_indexes = inspector.get_indexes("integration_connections")
+    provider_is_unique = any(
+        item.get("column_names") == ["provider"] for item in unique_constraints
+    ) or any(
+        item.get("unique") and item.get("column_names") == ["provider"]
+        for item in unique_indexes
+    )
+    if not provider_is_unique:
+        return
+    columns = {column["name"] for column in inspector.get_columns("integration_connections")}
+    connection_columns = (
+        "id",
+        "provider",
+        "is_default",
+        "secret_store_id",
+        "secret_reference",
+        "credential_kind",
+        "passphrase_secret_store_id",
+        "passphrase_secret_reference",
+        "status",
+        "account_login",
+        "account_id",
+        "bot_id",
+        "workspace_name",
+        "configured_resource_id",
+        "configured_report_resource_id",
+        "error_type",
+        "created_at",
+        "updated_at",
+        "last_validated_at",
+    )
+    defaults = {
+        "is_default": "1",
+        "credential_kind": "'token'",
+        "passphrase_secret_store_id": "NULL",
+        "passphrase_secret_reference": "NULL",
+        "bot_id": "NULL",
+        "workspace_name": "NULL",
+        "configured_resource_id": "NULL",
+        "configured_report_resource_id": "NULL",
+        "error_type": "NULL",
+    }
+    select_columns = ", ".join(
+        column if column in columns else f"{defaults.get(column, 'NULL')} AS {column}"
+        for column in connection_columns
+    )
+    create_sql = (
+        "CREATE TABLE integration_connections_new ("
+        "id INTEGER PRIMARY KEY, provider VARCHAR(32) NOT NULL, "
+        "is_default BOOLEAN NOT NULL DEFAULT 1, secret_store_id VARCHAR(64) NOT NULL, "
+        "secret_reference VARCHAR(256) NOT NULL, credential_kind VARCHAR(32) NOT NULL DEFAULT 'token', "
+        "passphrase_secret_store_id VARCHAR(64), passphrase_secret_reference VARCHAR(256), "
+        "status VARCHAR(32) NOT NULL, account_login VARCHAR(128) NOT NULL, account_id VARCHAR(128) NOT NULL, "
+        "bot_id VARCHAR(128), workspace_name VARCHAR(256), configured_resource_id VARCHAR(256), "
+        "configured_report_resource_id VARCHAR(256), error_type VARCHAR(64), "
+        "created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, last_validated_at DATETIME NOT NULL)"
+    )
+    with engine.connect() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.commit()
+        try:
+            connection.exec_driver_sql("BEGIN")
+            connection.exec_driver_sql(create_sql)
+            connection.exec_driver_sql(
+                f"INSERT INTO integration_connections_new ({', '.join(connection_columns)}) "
+                f"SELECT {select_columns} FROM integration_connections"
+            )
+            connection.exec_driver_sql("UPDATE integration_connections_new SET is_default = 0")
+            connection.exec_driver_sql(
+                "UPDATE integration_connections_new SET is_default = 1 WHERE id IN "
+                "(SELECT MIN(id) FROM integration_connections_new GROUP BY provider)"
+            )
+            connection.exec_driver_sql("DROP TABLE integration_connections")
+            connection.exec_driver_sql("ALTER TABLE integration_connections_new RENAME TO integration_connections")
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_integration_connections_provider ON integration_connections(provider)")
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_integration_connections_is_default ON integration_connections(is_default)")
+            connection.exec_driver_sql(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_integration_connections_provider_default "
+                "ON integration_connections(provider) WHERE is_default = 1"
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            connection.commit()
 
 
 def _remove_retired_product_manager_routing(connection, table_names: set[str]) -> None:

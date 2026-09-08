@@ -42,6 +42,74 @@ def test_native_person_projection_excludes_sensitive_fields() -> None:
     assert "SECRET-ID" not in json.dumps(result)
 
 
+def test_native_interest_projection_returns_hobbies_and_preferences_without_metadata() -> None:
+    adapter = UrllibAtlasProviderAdapter()
+    interests = [
+        record(
+            "preference-1",
+            "interest",
+            "Communication",
+            {
+                "kind": "preference",
+                "domain": "communication",
+                "value": "Async by default",
+                "strength": "strong",
+                "context": "Deep work",
+                "rationale": "Protects focus",
+                "effectiveFrom": "2026-01",
+                "effectiveTo": None,
+                "privateMetadata": "exclude",
+            },
+            revision=4,
+        ),
+        record(
+            "hobby-1",
+            "interest",
+            "Photography",
+            {
+                "kind": "hobby",
+                "description": "Street photography",
+                "engagement": "regular",
+                "skillLevel": "advanced",
+                "started": "2020-05",
+                "notes": "Photo walks",
+            },
+        ),
+    ]
+    adapter._request = lambda *args, **kwargs: interests  # type: ignore[method-assign]  # noqa: SLF001
+
+    result = adapter.execute(OPERATIONS["atlas.interest.get"], {})
+    assert adapter.execute(OPERATIONS["atlas.interest.list"], {}) == result
+
+    assert result == {
+        "hobbies": [
+            {
+                "title": "Photography",
+                "description": "Street photography",
+                "engagement": "regular",
+                "skill_level": "advanced",
+                "started": "2020-05",
+                "notes": "Photo walks",
+            }
+        ],
+        "preferences": [
+            {
+                "title": "Communication",
+                "domain": "communication",
+                "value": "Async by default",
+                "strength": "strong",
+                "context": "Deep work",
+                "rationale": "Protects focus",
+                "effective_from": "2026-01",
+                "effective_to": None,
+            }
+        ],
+    }
+    serialized = json.dumps(result)
+    for field in ("id", "category", "kind", "createdAt", "revision", "privateMetadata"):
+        assert field not in serialized
+
+
 def test_native_experience_and_project_normalization_preserves_ordering() -> None:
     adapter = UrllibAtlasProviderAdapter()
     experiences = [

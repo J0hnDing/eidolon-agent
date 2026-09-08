@@ -36,10 +36,13 @@ beforeEach(() => {
   vi.spyOn(api, "getGoogleOAuthClient").mockImplementation(unavailable);
   vi.spyOn(api, "getGoogleCalendarConnection").mockImplementation(unavailable);
   vi.spyOn(api, "getGmailConnection").mockImplementation(unavailable);
+  vi.spyOn(api, "getMicrosoftOAuthClient").mockImplementation(unavailable);
+  vi.spyOn(api, "getOutlookConnection").mockImplementation(unavailable);
   vi.spyOn(api, "getTelegramConnection").mockImplementation(unavailable);
   vi.spyOn(api, "getTelegramAgentConnection").mockImplementation(unavailable);
   vi.spyOn(api, "getTelegramObserverAgentConnection").mockImplementation(unavailable);
   vi.spyOn(api, "getTelegramAssistantAgentConnection").mockImplementation(unavailable);
+  vi.spyOn(api, "getWeComConnection").mockImplementation(unavailable);
   vi.spyOn(api, "getCodexMcpStatus").mockImplementation(unavailable);
 });
 
@@ -70,6 +73,59 @@ describe("Settings subpages", () => {
     expect(screen.getByText("Shell, subprocess, and arbitrary command execution.")).toBeTruthy();
     expect(document.body.textContent).toContain("python_standard_library");
     expect(usageRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("WeCom Observer users", () => {
+  it("lists paired users and opens one-time pairing and removal modals", async () => {
+    vi.spyOn(api, "getGitHubConnection").mockResolvedValue({
+      provider: "github",
+      connected: false,
+      status: "disconnected",
+      account_login: null,
+      account_id: null,
+      last_validated_at: null,
+      created_at: null,
+      updated_at: null,
+      error_type: null,
+    });
+    const status = {
+      provider: "wecom" as const,
+      agent_id: "observer" as const,
+      connected: true,
+      status: "connected" as const,
+      bot_id: "observer-bot",
+      paired_users: [
+        { user_id: "alice", active_session_id: 42, paired_at: "2026-09-07T12:00:00Z" },
+      ],
+      pairing_expires_at: null,
+      last_validated_at: "2026-09-07T12:00:00Z",
+      created_at: "2026-09-07T12:00:00Z",
+      updated_at: "2026-09-07T12:00:00Z",
+      error_type: null,
+    };
+    vi.spyOn(api, "getWeComConnection").mockResolvedValue(status);
+    vi.spyOn(api, "startWeComUserPairing").mockResolvedValue({
+      connection: { ...status, pairing_expires_at: "2026-09-07T12:10:00Z" },
+      pairing_code: "PAIR1234",
+      expires_at: "2026-09-07T12:10:00Z",
+    });
+    const remove = vi.spyOn(api, "removeWeComUser").mockResolvedValue(undefined);
+
+    renderSettings("integrations");
+
+    expect(await screen.findByText("alice")).toBeTruthy();
+    expect(screen.getByText("#42")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Add user" }));
+    const pairingDialog = await screen.findByRole("dialog", { name: "Add WeCom user" });
+    expect(pairingDialog.textContent).toContain("/pair PAIR1234");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove user" }));
+    expect(screen.getByRole("dialog", { name: "Remove WeCom user?" })).toBeTruthy();
+    const removeButtons = screen.getAllByRole("button", { name: "Remove user" });
+    fireEvent.click(removeButtons[removeButtons.length - 1]);
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("alice"));
   });
 });
 
@@ -170,6 +226,70 @@ describe("GitHub Settings connection", () => {
   });
 });
 
+describe("Outlook Settings connection", () => {
+  it("stores the Microsoft client through the API and uses an Eidolon removal modal", async () => {
+    vi.spyOn(api, "getGitHubConnection").mockResolvedValue({
+      provider: "github",
+      connected: false,
+      status: "disconnected",
+      account_login: null,
+      account_id: null,
+      last_validated_at: null,
+      created_at: null,
+      updated_at: null,
+      error_type: null,
+    });
+    vi.spyOn(api, "getMicrosoftOAuthClient").mockResolvedValue({
+      provider: "microsoft",
+      configured: false,
+      status: "not_configured",
+      authority: "https://login.microsoftonline.com/common/oauth2/v2.0",
+      outlook_redirect_uri: "http://localhost:8000/settings/integrations/outlook/oauth/callback",
+      created_at: null,
+      updated_at: null,
+      error_type: null,
+    });
+    vi.spyOn(api, "getOutlookConnection").mockResolvedValue({
+      provider: "outlook",
+      connected: false,
+      status: "disconnected",
+      account_email: null,
+      account_id: null,
+      last_validated_at: null,
+      created_at: null,
+      updated_at: null,
+      error_type: null,
+      oauth_redirect_uri: "http://localhost:8000/settings/integrations/outlook/oauth/callback",
+    });
+    const clientId = "microsoft-client-id-sentinel";
+    const clientSecret = "microsoft-client-secret-sentinel";
+    const save = vi.spyOn(api, "putMicrosoftOAuthClient").mockResolvedValue({
+      provider: "microsoft",
+      configured: true,
+      status: "configured",
+      authority: "https://login.microsoftonline.com/common/oauth2/v2.0",
+      outlook_redirect_uri: "http://localhost:8000/settings/integrations/outlook/oauth/callback",
+      created_at: "2026-09-07T00:00:00Z",
+      updated_at: "2026-09-07T00:00:00Z",
+      error_type: null,
+    });
+
+    renderSettings("integrations");
+    const idInput = await screen.findByLabelText("Microsoft client ID");
+    fireEvent.change(idInput, { target: { value: clientId } });
+    fireEvent.change(screen.getByLabelText("Microsoft client secret"), { target: { value: clientSecret } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Microsoft OAuth client" }));
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith(clientId, clientSecret));
+    await screen.findByRole("button", { name: "Remove Microsoft OAuth client" });
+    expect(document.body.textContent).not.toContain(clientSecret);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove Microsoft OAuth client" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Remove Microsoft OAuth client?" })).toBeTruthy();
+  });
+});
+
 describe("Quercus Settings", () => {
   it("polls only while Quercus processing is pending or running", async () => {
     vi.spyOn(api, "getGitHubConnection").mockResolvedValue({
@@ -255,7 +375,7 @@ describe("Quercus Settings", () => {
       error_type: null,
       courses: [course],
     });
-    vi.spyOn(api, "getQuercusCourses").mockResolvedValue([course]);
+    const discover = vi.spyOn(api, "getQuercusCourses").mockResolvedValue([course]);
     const save = vi.spyOn(api, "putQuercusCourses").mockResolvedValue([
       { ...course, selected: true, retained: false },
     ]);
@@ -264,6 +384,7 @@ describe("Quercus Settings", () => {
     const { container } = renderSettings("integrations");
 
     const coursesHeading = await screen.findByRole("heading", { name: "Courses" });
+    expect(discover).not.toHaveBeenCalled();
     const disclosure = coursesHeading.closest("details");
     expect(disclosure?.hasAttribute("open")).toBe(false);
     expect(disclosure?.querySelector(".disclosure-chevron")).toBeTruthy();
@@ -310,14 +431,17 @@ describe("Quercus Settings", () => {
       created_at: "2026-09-03T14:00:00Z", updated_at: "2026-09-03T14:00:00Z",
       error_type: null, courses: [],
     });
-    vi.spyOn(api, "getQuercusCourses").mockResolvedValue([course, otherCourse]);
+    const discover = vi.spyOn(api, "getQuercusCourses").mockResolvedValue([course, otherCourse]);
     let finishDelete: (() => void) | undefined;
     const deletion = new Promise<void>((resolve) => { finishDelete = resolve; });
     const remove = vi.spyOn(api, "deleteQuercusCourse").mockReturnValue(deletion);
 
     renderSettings("integrations");
     const coursesHeading = await screen.findByRole("heading", { name: "Courses" });
+    expect(discover).not.toHaveBeenCalled();
     fireEvent.click(coursesHeading.closest("summary")!);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(discover).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole("button", { name: "Delete Compilers" }));
     expect(remove).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Permanently remove course" }));

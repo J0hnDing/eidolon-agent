@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ActSessionCreate(BaseModel):
-    origin: Literal["web", "telegram"] = "web"
+    origin: Literal["web", "telegram", "wecom"] = "web"
 
 
 class ActTurnCreate(BaseModel):
@@ -24,6 +24,7 @@ class ActTurnRead(BaseModel):
     status: str
     error_message: str | None
     cancel_requested_at: datetime | None
+    delivery_provider: str | None
     delivery_status: str | None
     created_at: datetime
     started_at: datetime | None

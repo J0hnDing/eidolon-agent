@@ -80,7 +80,9 @@ def test_invocation_service_authorizes_before_runtime_on_every_execution_path() 
     tree = _tree("integrations/invocation.py")
     service = _class(tree, "IntegrationInvocationService")
 
-    for method_name in ("execute", "execute_approved"):
+    # Public dispatch selects one or more providers, then each helper owns the
+    # policy/runtime boundary for its provider attempt.
+    for method_name in ("_execute_single", "_execute_multi", "execute_approved"):
         method = _method(service, method_name)
         policy_calls = [
             call
@@ -212,7 +214,6 @@ def test_canonical_operation_specs_have_no_independent_approval_or_transport_fie
     }
     assert {
         "id",
-        "provider_id",
         "title",
         "description",
         "input_schema",
@@ -270,7 +271,7 @@ def test_authorized_invocation_is_backend_issued_and_secret_free() -> None:
             context=InvocationContext(principal_kind="user", origin="http"),
             operation=operation,
             input={"owner": "octo", "repository": "demo"},
-            provider_id=operation.provider_id,
+            provider_id="github",
             provider_account_id="account-1",
             resource=None,
             effects=operation.effects,
@@ -332,6 +333,7 @@ def test_high_risk_submission_records_security_metadata_and_does_not_dispatch(
         runtime=runtime,
     )
     payload = {
+        "provider": "gmail",
         "to": ["recipient@example.com"],
         "subject": "Approval boundary",
         "body": "This must wait for approval.",
@@ -348,8 +350,17 @@ def test_high_risk_submission_records_security_metadata_and_does_not_dispatch(
     approval = db_session.get(InvocationApproval, result.output["approval_id"])
     assert approval is not None
     security = approval.dispatch_metadata_json["integration_security_v2"]
-    assert set(security) == {"provider", "risk", "effects", "resource"}
+    assert set(security) == {
+        "provider",
+        "connection_id",
+        "account_id",
+        "risk",
+        "effects",
+        "resource",
+    }
     assert security["provider"] == "gmail"
+    assert security["connection_id"] is None
+    assert security["account_id"] == "gmail-account"
     assert security["risk"] == "high"
     assert security["effects"] == ["send"]
     assert security["resource"] is None

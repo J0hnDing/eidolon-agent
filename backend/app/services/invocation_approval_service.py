@@ -136,6 +136,7 @@ class InvocationApprovalService:
         provider: str,
         provider_account_id: str,
         context: InvocationContext,
+        connection_id: int | None = None,
         target_description: str = "",
         dispatch_metadata_json: dict[str, Any] | None = None,
     ) -> InvocationApproval:
@@ -153,6 +154,7 @@ class InvocationApprovalService:
             target_description=target_description or operation_id,
             provider=provider,
             provider_account_id=provider_account_id,
+            connection_id=connection_id,
             caller_type=context.approval_caller_type(),
             source=context.approval_source("integration"),
             caller_skill_id=context.caller_skill_id,

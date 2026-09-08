@@ -17,6 +17,8 @@ from app.services.integration_registry import OPERATIONS
 EXPECTED_OPERATION_IDS = {
     "atlas.experience.list",
     "atlas.goal.list",
+    "atlas.interest.get",
+    "atlas.interest.list",
     "atlas.knowledge.frontier.list",
     "atlas.knowledge.node.get",
     "atlas.knowledge.node.know",
@@ -40,6 +42,9 @@ EXPECTED_OPERATION_IDS = {
     "google_calendar.event.get",
     "google_calendar.event.list",
     "google_calendar.event.update",
+    "huggingface.get_paper",
+    "huggingface.list_papers",
+    "huggingface.search_papers",
     "notion.report.create",
     "notion.report.delete",
     "notion.report.get",
@@ -73,7 +78,7 @@ def test_registry_rejects_duplicate_operation() -> None:
 
 
 def test_registry_rejects_missing_provider() -> None:
-    with pytest.raises(ValueError, match="references missing provider"):
+    with pytest.raises(ValueError, match="has no supporting provider"):
         IntegrationOperationRegistry((), (_operation(),))
 
 
@@ -113,15 +118,26 @@ def test_default_registry_lookup_and_order_are_deterministic() -> None:
     assert [operation.id for operation in operations] == sorted(EXPECTED_OPERATION_IDS)
     assert DEFAULT_INTEGRATION_REGISTRY.get("github.repository.get") is OPERATIONS["github.repository.get"]
     assert [provider.id for provider in DEFAULT_INTEGRATION_REGISTRY.providers()] == sorted(
-        {operation.provider_id for operation in operations}
+        {
+            "github",
+            "atlas",
+            "notion",
+            "google_calendar",
+            "gmail",
+            "outlook",
+            "telegram",
+            "huggingface",
+            "wecom",
+        }
     )
+    assert DEFAULT_INTEGRATION_REGISTRY.for_provider("wecom") == ()
     assert [operation.id for operation in DEFAULT_INTEGRATION_REGISTRY.for_provider("notion")] == sorted(
         operation_id for operation_id in EXPECTED_OPERATION_IDS if operation_id.startswith("notion.")
     )
 
 
 def test_default_registry_preserves_all_operation_ids() -> None:
-    assert len(OPERATIONS) == 34
+    assert len(OPERATIONS) == 39
     assert set(OPERATIONS) == EXPECTED_OPERATION_IDS
 
 
@@ -140,13 +156,14 @@ def test_effect_risk_and_compatibility_metadata_are_derived() -> None:
 
 
 def test_contract_identity_contains_security_relevant_fields() -> None:
-    identity = _operation().contract_identity()
+    identity = DEFAULT_INTEGRATION_REGISTRY.contract_identity(_operation().id)
     assert identity == {
-        "provider": "github",
         "input_schema": _operation().input_schema,
         "output_schema": _operation().output_schema,
         "effects": ["read"],
         "resource": {"type": "github.repository", "identity_fields": ["owner", "repository"]},
         "risk": "low",
+        "provider_selection": "single",
+        "supported_providers": ["github"],
         "version": 1,
     }

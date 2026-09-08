@@ -82,9 +82,10 @@ def _invocation():
     assert operation is not None
     return _issue_authorized_integration_invocation(
         context=InvocationContext(principal_kind="user", origin="http"),
-        operation=operation,
-        input_json={"owner": "octo", "repository": "demo"},
-        provider_account_id="account-1",
+            operation=operation,
+            input_json={"owner": "octo", "repository": "demo"},
+            provider_id="github",
+            provider_account_id="account-1",
         resource=ResourceIdentity(
             type="github.repository", values={"owner": "octo", "repository": "demo"}
         ),
@@ -187,7 +188,9 @@ def test_default_adapter_composition_is_exact_and_secret_free() -> None:
         "notion",
         "google_calendar",
         "gmail",
+        "outlook",
         "telegram",
+        "huggingface",
     )
     invocation = _invocation()
     result = ProviderExecutionResult(output=_repository_output())

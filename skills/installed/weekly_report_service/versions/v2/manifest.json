@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "name": "weekly_report_service",
-  "description": "Create a deterministic weekly Notion report from the installed GitHub Atlas Project Scout output.",
+  "description": "Create deterministic weekly GitHub Projects and AI Research Notion reports from the installed scout functions.",
   "runtime": "service",
   "entrypoint": "skill.py",
   "instructions_path": null,
@@ -24,12 +24,24 @@
         "required": ["id", "name", "created_time", "select"],
         "additionalProperties": false
       },
-      "repository_count": {"type": "integer", "minimum": 0, "maximum": 10}
+      "repository_count": {"type": "integer", "minimum": 0, "maximum": 6},
+      "research_report": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "name": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "created_time": {"type": "string", "minLength": 1, "maxLength": 64},
+          "select": {"type": "string", "const": "AI Research"}
+        },
+        "required": ["id", "name", "created_time", "select"],
+        "additionalProperties": false
+      },
+      "paper_count": {"type": "integer", "minimum": 0, "maximum": 5}
     },
-    "required": ["report", "repository_count"],
+    "required": ["report", "repository_count", "research_report", "paper_count"],
     "additionalProperties": false
   },
-  "function_requirements": ["github_atlas_project_scout"],
+  "function_requirements": ["github_repo_scout", "research_paper_scout"],
   "integration_requirements": [
     {
       "provider": "notion",
@@ -45,8 +57,8 @@
   "dependencies": [],
   "permissions": {
     "network": [],
-    "filesystem_read": [],
-    "filesystem_write": [],
+    "filesystem_read": ["./cache"],
+    "filesystem_write": ["./cache"],
     "secrets": [],
     "shell": false,
     "codex": {

@@ -140,10 +140,11 @@ def test_search_and_conversation_normalize_without_attachment_content(
     assert searched == {
         "conversations": [
             {
+                "provider": "gmail",
                 "conversation_id": "thread-1",
                 "subject": "Quarterly report",
                 "latest_sender": "Sender <sender@example.com>",
-                "latest_date": "Fri, 28 Aug 2026 12:00:00 +0000",
+                "latest_timestamp": "2026-08-28T12:00:00Z",
                 "snippet": "Hello there",
                 "message_count": 1,
                 "unread": True,
@@ -273,7 +274,12 @@ def test_send_builds_only_bounded_plain_text_mime(monkeypatch: pytest.MonkeyPatc
 
     raw = base64.urlsafe_b64decode(sent_body["raw"] + "=" * (-len(sent_body["raw"]) % 4))
     message = BytesParser(policy=default).parsebytes(raw)
-    assert result == {"sent": True, "message_id": "sent-message", "conversation_id": "sent-thread"}
+    assert result == {
+        "provider": "gmail",
+        "sent": True,
+        "message_id": "sent-message",
+        "conversation_id": "sent-thread",
+    }
     assert message.get_content_type() == "text/plain"
     assert message.get_content().rstrip() == "Plain text only"
     assert list(message.iter_attachments()) == []

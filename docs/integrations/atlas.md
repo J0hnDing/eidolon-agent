@@ -21,6 +21,7 @@ Storing the passphrase makes the Windows account the practical at-rest security 
 The provider exposes these fixed operations:
 
 - `atlas.person.get`: non-sensitive built-in Person projection.
+- `atlas.interest.get` and `atlas.interest.list`: hobbies and preferences with only their meaningful labels and subtype fields; Atlas record metadata and the redundant subtype discriminator are excluded. New generated skills should use `atlas.interest.list`.
 - `atlas.experience.list`: optional title/description keywords, ongoing state, and limit.
 - `atlas.goal.list`: optional importance and horizon filters on top-level goals; retained goals include their complete subgoal trees and progression edges.
 - `atlas.project.list`: optional title/description keywords, status, GitHub-link presence, and limit.
@@ -30,7 +31,7 @@ The provider exposes these fixed operations:
 - `atlas.knowledge.node.get`: one bounded node with path, parent, immediate children, explanation, terms, status, and revision.
 - `atlas.knowledge.node.know`: one explicit medium-risk Knowledge establishment.
 
-These are Eidolon function contracts, not one-for-one Atlas endpoints. Person, Experience, Goal, Project, and Relationship read native `/api/records` categories. Eidolon explicitly projects the existing bounded fields, excludes sensitive Person fields, preserves Experience and Project ordering, rebuilds Goal hierarchy, and fetches native Goal progression graphs for parent goals. Knowledge functions read the primitive flat node list and derive ranking, frontier membership, canonical paths, parents, and immediate children inside Eidolon. Atlas exposes no agent-specific endpoints.
+These are Eidolon function contracts, not one-for-one Atlas endpoints. Person, Interest, Experience, Goal, Project, and Relationship read native `/api/records` categories. Eidolon explicitly projects the existing bounded fields, excludes sensitive Person fields and Interest record metadata, preserves Experience and Project ordering, rebuilds Goal hierarchy, and fetches native Goal progression graphs for parent goals. Knowledge functions read the primitive flat node list and derive ranking, frontier membership, canonical paths, parents, and immediate children inside Eidolon. Atlas exposes no agent-specific endpoints.
 
 Reads are low risk. `atlas.knowledge.node.know` is medium risk because it makes one internet-enabled Codex call, writes the selected Knowledge node, and may add immediate name-only unassessed children. It cannot rename, move, delete, merge, or recursively expand nodes.
 

@@ -623,6 +623,30 @@ export interface GmailConnectionStatus {
   oauth_redirect_uri: string;
 }
 
+export interface MicrosoftOAuthClientStatus {
+  provider: "microsoft";
+  configured: boolean;
+  status: "configured" | "not_configured" | "unavailable";
+  authority: string;
+  outlook_redirect_uri: string;
+  created_at: string | null;
+  updated_at: string | null;
+  error_type: string | null;
+}
+
+export interface OutlookConnectionStatus {
+  provider: "outlook";
+  connected: boolean;
+  status: "connected" | "disconnected" | "unavailable" | "invalid";
+  account_email: string | null;
+  account_id: string | null;
+  last_validated_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  error_type: string | null;
+  oauth_redirect_uri: string;
+}
+
 export interface TelegramConnectionStatus {
   provider: "telegram";
   connected: boolean;
@@ -639,6 +663,30 @@ export interface TelegramConnectionStatus {
 
 export interface TelegramPairingResponse {
   connection: TelegramConnectionStatus;
+  pairing_code: string;
+  expires_at: string;
+}
+
+export interface WeComConnectionStatus {
+  provider: "wecom";
+  agent_id: "observer";
+  connected: boolean;
+  status: "connected" | "disconnected" | "pairing" | "connecting" | "reconnecting" | "unavailable" | "invalid";
+  bot_id: string | null;
+  paired_users: Array<{
+    user_id: string;
+    active_session_id: number | null;
+    paired_at: string;
+  }>;
+  pairing_expires_at: string | null;
+  last_validated_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  error_type: string | null;
+}
+
+export interface WeComPairingResponse {
+  connection: WeComConnectionStatus;
   pairing_code: string;
   expires_at: string;
 }
@@ -1060,7 +1108,8 @@ export const api = {
     }),
   openActRoot: () => request<void>("/act/workspace/open-root", { method: "POST" }),
   listSkills: () => request<Skill[]>("/skills"),
-  listFunctionCatalog: () => request<FunctionCatalogEntry[]>("/functions/catalog"),
+  listFunctionCatalog: (refresh = false) =>
+    request<FunctionCatalogEntry[]>(`/functions/catalog${refresh ? "?refresh=true" : ""}`),
   openWebApp: (skillId: number) =>
     request<WebAppOpenResponse>(`/web-apps/${skillId}/sessions`, { method: "POST" }),
   listWebAppInstances: (skillId: number) => request<WebAppInstance[]>(`/web-apps/${skillId}/instances`),
@@ -1169,6 +1218,23 @@ export const api = {
     }),
   removeGmailConnection: () =>
     request<void>("/settings/integrations/gmail", { method: "DELETE" }),
+  getMicrosoftOAuthClient: () =>
+    request<MicrosoftOAuthClientStatus>("/settings/integrations/microsoft"),
+  putMicrosoftOAuthClient: (clientId: string, clientSecret: string) =>
+    request<MicrosoftOAuthClientStatus>("/settings/integrations/microsoft/oauth-client", {
+      method: "PUT",
+      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+    }),
+  removeMicrosoftOAuthClient: () =>
+    request<MicrosoftOAuthClientStatus>("/settings/integrations/microsoft/oauth-client", { method: "DELETE" }),
+  getOutlookConnection: () =>
+    request<OutlookConnectionStatus>("/settings/integrations/outlook"),
+  startOutlookOAuth: () =>
+    request<{ authorization_url: string }>("/settings/integrations/outlook/oauth/start", {
+      method: "POST",
+    }),
+  removeOutlookConnection: () =>
+    request<void>("/settings/integrations/outlook", { method: "DELETE" }),
   getTelegramConnection: () =>
     request<TelegramConnectionStatus>("/settings/integrations/telegram"),
   getTelegramAgentConnection: () => request<TelegramConnectionStatus>("/settings/integrations/telegram-agent"),
@@ -1203,6 +1269,17 @@ export const api = {
   removeTelegramAgentConnection: () => request<void>("/settings/integrations/telegram-agent", { method: "DELETE" }),
   removeTelegramObserverAgentConnection: () => request<void>("/settings/integrations/telegram-observer-agent", { method: "DELETE" }),
   removeTelegramAssistantAgentConnection: () => request<void>("/settings/integrations/telegram-assistant-agent", { method: "DELETE" }),
+  getWeComConnection: () => request<WeComConnectionStatus>("/settings/integrations/wecom"),
+  connectWeCom: (botId: string, secret: string) =>
+    request<WeComPairingResponse>("/settings/integrations/wecom", {
+      method: "PUT",
+      body: JSON.stringify({ bot_id: botId, secret }),
+    }),
+  startWeComUserPairing: () =>
+    request<WeComPairingResponse>("/settings/integrations/wecom/pairing/start", { method: "POST" }),
+  removeWeComUser: (userId: string) =>
+    request<void>(`/settings/integrations/wecom/users/${encodeURIComponent(userId)}`, { method: "DELETE" }),
+  removeWeComConnection: () => request<void>("/settings/integrations/wecom", { method: "DELETE" }),
   getAtlasStatus: () => request<AtlasIntegrationStatus>("/settings/integrations/atlas"),
   updateAtlasDirectory: (directory: string) =>
     request<AtlasIntegrationStatus>("/settings/integrations/atlas/directory", {

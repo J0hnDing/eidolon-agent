@@ -327,9 +327,9 @@ class ActTurnDispatcher:
     @staticmethod
     def _deliver(turn_id: int) -> None:
         try:
-            from app.services.telegram_service import deliver_act_turn_result
+            from app.services.agent_turn_delivery import deliver_agent_turn_result
 
-            deliver_act_turn_result(turn_id)
+            deliver_agent_turn_result(turn_id)
         except Exception:
             return
 

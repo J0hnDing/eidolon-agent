@@ -23,7 +23,10 @@ from app.models import (
     SkillSchedule,
 )
 from app.schemas.schedule import SchedulePayload, ScheduleUpdate
-from app.services.assistant_assessment_service import AssistantAssessmentService
+from app.services.assistant_assessment_service import (
+    ASSISTANT_ASSESSMENT_SCHEDULE_KEY,
+    AssistantAssessmentService,
+)
 from app.services.permission_service import PermissionError as RuntimePermissionError
 from app.services.permission_service import PermissionService
 from app.services.platform_service import (
@@ -146,26 +149,24 @@ class SchedulerService:
     def register_assistant_assessment(self) -> None:
         if self.scheduler is None:
             return
-        status = AssistantAssessmentService(self.db).reconcile()
+        assessment = AssistantAssessmentService(self.db)
+        status = assessment.reconcile()
         if not status["enabled"]:
             self._remove_assistant_assessment_job()
             return
         next_run_at = status["next_run_at"]
         if next_run_at is None:
             return
+        schedule = assessment.schedule()
+        interval_kwargs = {
+            str(schedule.unit): schedule.every,
+            "start_date": self._as_utc(next_run_at),
+            "timezone": schedule.timezone,
+        }
         if IntervalTrigger is None:
-            trigger: Any = {
-                "type": "interval",
-                "days": 3,
-                "start_date": self._as_utc(next_run_at),
-                "timezone": "UTC",
-            }
+            trigger: Any = {"type": "interval", **interval_kwargs}
         else:
-            trigger = IntervalTrigger(
-                days=3,
-                start_date=self._as_utc(next_run_at),
-                timezone="UTC",
-            )
+            trigger = IntervalTrigger(**interval_kwargs)
         self.scheduler.add_job(
             self.execute_assistant_assessment,
             trigger=trigger,
@@ -356,6 +357,8 @@ class SchedulerService:
 
     def serialize_assistant_assessment_schedule(self) -> dict[str, Any]:
         state = self.assistant_assessment_status()
+        configured = self._assistant_assessment_schedule_update()
+        schedule_data = configured.schedule
         turns = select(ActTurn).join(ActSession).where(
             ActSession.agent_id == "assistant", ActSession.origin == "assessment"
         )
@@ -363,11 +366,12 @@ class SchedulerService:
         running = self.db.scalar(turns.where(ActTurn.status == "running").limit(1))
         return {
             "id": -2, "schedule_kind": "platform", "service_id": ASSISTANT_ASSESSMENT_SERVICE_ID,
-            "read_only": True, "skill_id": None, "skill_name": None, "skill_enabled": None,
-            "is_running": running is not None, "name": "Assistant assessment",
-            "status": "active" if state["enabled"] else "paused", "schedule_type": "interval",
-            "schedule_json": {"type": "interval", "every": 3, "unit": "days", "timezone": "UTC", "input": {}},
-            "input_json": {}, "timezone": "UTC", "next_run_at": state["next_run_at"],
+            "read_only": False, "skill_id": None, "skill_name": None, "skill_enabled": None,
+            "is_running": running is not None, "name": configured.name,
+            "status": "active" if state["enabled"] else "paused", "schedule_type": schedule_data.type,
+            "schedule_json": schedule_data.model_dump(exclude_none=True),
+            "input_json": schedule_data.input, "timezone": schedule_data.timezone,
+            "next_run_at": state["next_run_at"],
             "last_run_at": state["last_run_at"],
             "last_run_status": latest.status if latest and state["last_status"] == "queued" else state["last_status"],
             "created_at": self.platform_started_at, "updated_at": state["last_run_at"] or self.platform_started_at,
@@ -444,6 +448,8 @@ class SchedulerService:
         service_id: str,
         payload: ScheduleUpdate,
     ) -> dict[str, Any]:
+        if service_id == ASSISTANT_ASSESSMENT_SERVICE_ID:
+            return self.update_assistant_assessment_schedule(payload)
         definition = self._platform_definition(service_id)
         schedule_data = self._validated_schedule(payload.schedule)
         if schedule_data.input:
@@ -468,6 +474,42 @@ class SchedulerService:
             raise ScheduleError(f"Platform service schedule could not be updated: {exc}") from exc
         self.db.refresh(state)
         return self.serialize_platform_schedule(definition)
+
+    def update_assistant_assessment_schedule(self, payload: ScheduleUpdate) -> dict[str, Any]:
+        schedule_data = self._validated_schedule(payload.schedule)
+        if schedule_data.type != "interval":
+            raise ScheduleError("Assistant assessment schedule must use an interval")
+        if schedule_data.input:
+            raise ScheduleError("Backend-owned service schedules do not accept input")
+
+        now = utc_now()
+        assessment = AssistantAssessmentService(self.db)
+        runtime_state = self.db.get(ScheduleRuntimeState, self._assistant_assessment_schedule_key())
+        if runtime_state is None:
+            runtime_state = ScheduleRuntimeState(
+                schedule_key=self._assistant_assessment_schedule_key(),
+                definition_fingerprint=self._assistant_assessment_definition_fingerprint(),
+                enabled=assessment.status()["enabled"],
+            )
+            self.db.add(runtime_state)
+        runtime_state.configuration_json = ScheduleUpdate(
+            name=payload.name,
+            schedule=schedule_data,
+        ).model_dump(exclude_none=True)
+        assessment.reschedule_after_edit(now=now, commit=False)
+        enabled = assessment.status()["enabled"]
+        runtime_state.enabled = enabled
+        runtime_state.active_since_at = now if enabled else None
+        runtime_state.interval_anchor_at = (
+            now + timedelta(**{str(schedule_data.unit): schedule_data.every})
+            if enabled
+            else None
+        )
+        runtime_state.definition_fingerprint = self._assistant_assessment_definition_fingerprint()
+        self.db.commit()
+        self.db.refresh(runtime_state)
+        self.register_assistant_assessment()
+        return self.serialize_assistant_assessment_schedule()
 
     def run_platform_service_now(self, service_id: str) -> dict[str, Any]:
         self._platform_definition(service_id)
@@ -1298,6 +1340,26 @@ class SchedulerService:
             schedule=self._default_platform_schedule(definition),
         )
 
+    def _assistant_assessment_schedule_update(self) -> ScheduleUpdate:
+        runtime_state = self.db.get(ScheduleRuntimeState, self._assistant_assessment_schedule_key())
+        if runtime_state is not None and runtime_state.configuration_json is not None:
+            try:
+                return ScheduleUpdate.model_validate(runtime_state.configuration_json)
+            except ValueError as exc:
+                raise ScheduleError(
+                    f"Stored Assistant assessment schedule is invalid: {exc}"
+                ) from exc
+        return ScheduleUpdate(
+            name="Assistant assessment",
+            schedule=SchedulePayload(
+                type="interval",
+                every=3,
+                unit="days",
+                timezone="UTC",
+                input={},
+            ),
+        )
+
     def _build_platform_trigger(
         self,
         definition: PlatformScheduleDefinition,
@@ -1410,9 +1472,7 @@ class SchedulerService:
         return self._fingerprint(
             {
                 "service_id": ASSISTANT_ASSESSMENT_SERVICE_ID,
-                "type": "interval",
-                "every": 3,
-                "unit": "days",
+                "schedule": self._assistant_assessment_schedule_update().schedule.model_dump(exclude_none=True),
                 "enabled": enabled,
                 "anchor_at": anchor_at,
             }
@@ -1445,7 +1505,7 @@ class SchedulerService:
 
     @staticmethod
     def _assistant_assessment_schedule_key() -> str:
-        return f"platform:{ASSISTANT_ASSESSMENT_SERVICE_ID}"
+        return ASSISTANT_ASSESSMENT_SCHEDULE_KEY
 
     @staticmethod
     def _schedule_id_from_key(schedule_key: str) -> int | None:

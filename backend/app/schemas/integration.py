@@ -170,6 +170,37 @@ class GmailConnectionStatus(BaseModel):
     oauth_redirect_uri: str
 
 
+class MicrosoftOAuthClientWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: str = Field(min_length=1, max_length=1024)
+    client_secret: SecretStr
+
+
+class MicrosoftOAuthClientStatus(BaseModel):
+    provider: Literal["microsoft"] = "microsoft"
+    configured: bool
+    status: Literal["configured", "not_configured", "unavailable"]
+    authority: str
+    outlook_redirect_uri: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    error_type: str | None = None
+
+
+class OutlookConnectionStatus(BaseModel):
+    provider: Literal["outlook"] = "outlook"
+    connected: bool
+    status: Literal["connected", "disconnected", "unavailable", "invalid"]
+    account_email: str | None = None
+    account_id: str | None = None
+    last_validated_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    error_type: str | None = None
+    oauth_redirect_uri: str
+
+
 class TelegramPairingStart(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -203,6 +234,39 @@ class TelegramPairingResponse(BaseModel):
     expires_at: datetime
 
 
+class WeComConnectionWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bot_id: str = Field(min_length=1, max_length=128)
+    secret: SecretStr
+
+
+class WeComPairedUser(BaseModel):
+    user_id: str
+    active_session_id: int | None = None
+    paired_at: datetime
+
+
+class WeComConnectionStatus(BaseModel):
+    provider: Literal["wecom"] = "wecom"
+    agent_id: Literal["observer"] = "observer"
+    connected: bool
+    status: Literal["connected", "disconnected", "pairing", "connecting", "reconnecting", "unavailable", "invalid"]
+    bot_id: str | None = None
+    paired_users: list[WeComPairedUser] = Field(default_factory=list)
+    pairing_expires_at: datetime | None = None
+    last_validated_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    error_type: str | None = None
+
+
+class WeComPairingResponse(BaseModel):
+    connection: WeComConnectionStatus
+    pairing_code: str
+    expires_at: datetime
+
+
 class IntegrationInvocationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -211,4 +275,4 @@ class IntegrationInvocationRequest(BaseModel):
 
 
 class IntegrationInvocationResponse(BaseModel):
-    output: dict[str, Any]
+    output: dict[str, Any] | list[Any]

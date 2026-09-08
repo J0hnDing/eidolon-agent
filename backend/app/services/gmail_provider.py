@@ -15,6 +15,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from app.integrations.types import IntegrationOperationSpec
+from app.services.email_contracts import timestamp_key, utc_rfc3339
 from app.services.github_provider import IntegrationProviderError
 from app.services.google_oauth import (
     GoogleOAuthStateStore,
@@ -204,6 +205,7 @@ class UrllibGmailProviderAdapter:
         conversation_id = self._bounded_string(input_json.get("conversation_id"), "conversation_id", 512)
         thread = self._get_thread(operation, conversation_id, headers, format_name="full")
         result = {
+            "provider": "gmail",
             "conversation_id": conversation_id,
             "messages": self._normalized_messages(thread, maximum=MAX_MESSAGE_COUNT),
         }
@@ -256,15 +258,68 @@ class UrllibGmailProviderAdapter:
             "has_more": bool(payload.get("nextPageToken")),
         }
         self._enforce_result_budget(result)
-        if mark_read and message_ids:
-            self._request_bytes(
-                f"{GMAIL_API_BASE}/messages/batchModify",
-                method="POST",
-                headers={**headers, "Content-Type": "application/json"},
-                body=json.dumps({"ids": message_ids, "removeLabelIds": ["UNREAD"]}, separators=(",", ":")).encode(),
-                timeout=operation.timeout_seconds,
-                max_bytes=operation.max_provider_response_bytes,
-            )
+        if mark_read:
+            outcome = {
+                "provider": "gmail",
+                "marked_message_ids": [],
+                "marked_count": 0,
+                "failed_message_ids": [],
+                "failed_count": 0,
+                "unknown_message_ids": [],
+                "unknown_count": 0,
+            }
+            errors: list[dict[str, Any]] = []
+            if message_ids:
+                try:
+                    self._request_bytes(
+                        f"{GMAIL_API_BASE}/messages/batchModify",
+                        method="POST",
+                        headers={**headers, "Content-Type": "application/json"},
+                        body=json.dumps({"ids": message_ids, "removeLabelIds": ["UNREAD"]}, separators=(",", ":")).encode(),
+                        timeout=operation.timeout_seconds,
+                        max_bytes=operation.max_provider_response_bytes,
+                    )
+                    outcome["marked_message_ids"] = list(message_ids)
+                except IntegrationProviderError as exc:
+                    self._reconcile_marked_messages(
+                        message_ids,
+                        headers,
+                        operation,
+                        outcome,
+                        errors,
+                    )
+                    errors.append({
+                        "error_type": exc.error_type,
+                        "message": str(exc),
+                        "retry_after_seconds": exc.retry_after_seconds,
+                    })
+            outcome["marked_count"] = len(outcome["marked_message_ids"])
+            outcome["failed_count"] = len(outcome["failed_message_ids"])
+            outcome["unknown_count"] = len(outcome["unknown_message_ids"])
+            result["mark_outcomes"] = [outcome]
+            result["provider_errors"] = [
+                {
+                    "provider": "gmail",
+                    "error_type": item["error_type"],
+                    "message": item["message"][:500],
+                    **(
+                        {"retry_after_seconds": item["retry_after_seconds"]}
+                        if item.get("retry_after_seconds") is not None
+                        else {}
+                    ),
+                }
+                for item in errors
+            ]
+            if outcome["failed_count"] or outcome["unknown_count"]:
+                result["provider_errors"].insert(
+                    0,
+                    {
+                        "provider": "gmail",
+                        "error_type": "partial_mutation",
+                        "message": "Gmail read state was only partially reconciled",
+                    },
+                )
+            self._enforce_result_budget(result)
         return result
 
     def _send(
@@ -296,7 +351,12 @@ class UrllibGmailProviderAdapter:
         )
         message_id = self._bounded_string(payload.get("id"), "message id", 512, provider_response=True)
         conversation_id = self._bounded_string(payload.get("threadId"), "conversation id", 512, provider_response=True)
-        return {"sent": True, "message_id": message_id, "conversation_id": conversation_id}
+        return {
+            "provider": "gmail",
+            "sent": True,
+            "message_id": message_id,
+            "conversation_id": conversation_id,
+        }
 
     def _get_thread(
         self,
@@ -323,18 +383,22 @@ class UrllibGmailProviderAdapter:
         messages = thread.get("messages")
         if not isinstance(messages, list) or not messages or len(messages) > 10_000:
             raise IntegrationProviderError("provider_unavailable", "Gmail returned an invalid conversation")
-        latest = messages[-1]
-        if not isinstance(latest, dict):
-            raise IntegrationProviderError("provider_unavailable", "Gmail returned an invalid conversation")
-        headers = self._headers(latest)
+        candidates: list[tuple[dict[str, Any], dict[str, str], str]] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                raise IntegrationProviderError("provider_unavailable", "Gmail returned an invalid conversation")
+            headers = self._headers(message)
+            candidates.append((message, headers, self._message_timestamp(message, headers)))
+        latest, headers, latest_timestamp = max(candidates, key=lambda item: item[2])
         snippet = self._bounded_optional_string(latest.get("snippet"), "snippet", 2_000)
         return {
+            "provider": "gmail",
             "conversation_id": conversation_id,
             "subject": headers.get("subject", ""),
             "latest_sender": headers.get("from", ""),
-            "latest_date": headers.get("date", ""),
+            "latest_timestamp": latest_timestamp,
             "snippet": snippet or "",
-            "message_count": min(len(messages), MAX_MESSAGE_COUNT),
+            "message_count": len(messages),
             "unread": any(self._has_label(item, "UNREAD") for item in messages),
             "has_attachment": any(self._attachment_metadata(item) for item in messages),
         }
@@ -343,7 +407,42 @@ class UrllibGmailProviderAdapter:
         messages = thread.get("messages")
         if not isinstance(messages, list) or len(messages) > 10_000:
             raise IntegrationProviderError("provider_unavailable", "Gmail returned an invalid conversation")
-        return [self._normalize_message(item) for item in messages[:maximum]]
+        normalized = [self._normalize_message(item) for item in messages[:maximum]]
+        normalized.sort(key=lambda item: timestamp_key(item["timestamp"]))
+        return normalized
+
+    def _reconcile_marked_messages(
+        self,
+        message_ids: list[str],
+        headers: dict[str, str],
+        operation: GmailTransportOperation,
+        outcome: dict[str, Any],
+        errors: list[dict[str, Any]],
+    ) -> None:
+        for message_id in message_ids:
+            try:
+                state = self._request_json(
+                    f"{GMAIL_API_BASE}/messages/{quote(message_id, safe='')}?format=minimal",
+                    method="GET",
+                    headers=headers,
+                    body=None,
+                    timeout=operation.timeout_seconds,
+                    max_bytes=operation.max_provider_response_bytes,
+                )
+                labels = state.get("labelIds")
+                if not isinstance(labels, list) or any(not isinstance(label, str) for label in labels):
+                    outcome["unknown_message_ids"].append(message_id)
+                elif "UNREAD" in labels:
+                    outcome["failed_message_ids"].append(message_id)
+                else:
+                    outcome["marked_message_ids"].append(message_id)
+            except IntegrationProviderError as exc:
+                outcome["unknown_message_ids"].append(message_id)
+                errors.append({
+                    "error_type": exc.error_type,
+                    "message": str(exc),
+                    "retry_after_seconds": exc.retry_after_seconds,
+                })
 
     def _normalize_message(self, message: Any) -> dict[str, Any]:
         if not isinstance(message, dict):
@@ -359,6 +458,7 @@ class UrllibGmailProviderAdapter:
                 parser.feed(html)
             text = parser.text()
         return {
+            "provider": "gmail",
             "message_id": message_id,
             "conversation_id": conversation_id,
             "from": headers.get("from", ""),
@@ -366,7 +466,7 @@ class UrllibGmailProviderAdapter:
             "cc": self._address_values(headers.get("cc", "")),
             "bcc": self._address_values(headers.get("bcc", "")),
             "subject": headers.get("subject", ""),
-            "date": headers.get("date", ""),
+            "timestamp": self._message_timestamp(message, headers),
             "snippet": self._bounded_optional_string(message.get("snippet"), "snippet", 2_000) or "",
             "text": text,
             "unread": self._has_label(message, "UNREAD"),
@@ -454,6 +554,12 @@ class UrllibGmailProviderAdapter:
                     item["value"], f"{name} header", limits[name], provider_response=True
                 )
         return result
+
+    @staticmethod
+    def _message_timestamp(message: dict[str, Any], headers: dict[str, str]) -> str:
+        """Prefer Gmail's millisecond internal timestamp, with Date fallback."""
+
+        return utc_rfc3339(message.get("internalDate"), fallback=headers.get("date"))
 
     @staticmethod
     def _has_label(message: Any, label: str) -> bool:
@@ -666,10 +772,11 @@ class FakeGmailProviderAdapter:
                 latest = messages[-1]
                 summaries.append(
                     {
+                        "provider": "gmail",
                         "conversation_id": conversation_id,
                         "subject": latest.get("subject", ""),
                         "latest_sender": latest.get("from", ""),
-                        "latest_date": latest.get("date", ""),
+                        "latest_timestamp": utc_rfc3339(latest.get("timestamp"), fallback=latest.get("date")),
                         "snippet": latest.get("snippet", ""),
                         "message_count": len(messages),
                         "unread": any(item.get("unread", False) for item in messages),
@@ -681,7 +788,14 @@ class FakeGmailProviderAdapter:
             conversation_id = input_json["conversation_id"]
             if conversation_id not in self.conversations:
                 raise IntegrationProviderError("not_found", "Fake conversation was not found")
-            return {"conversation_id": conversation_id, "messages": self.conversations[conversation_id][:100]}
+            return {
+                "provider": "gmail",
+                "conversation_id": conversation_id,
+                "messages": [
+                    {**item, "provider": "gmail", "timestamp": utc_rfc3339(item.get("timestamp"), fallback=item.get("date"))}
+                    for item in self.conversations[conversation_id][:100]
+                ],
+            }
         if operation.operation_id in {"email.read_new", "email.read_and_mark_new"}:
             messages = [
                 item
@@ -693,8 +807,36 @@ class FakeGmailProviderAdapter:
             if operation.operation_id == "email.read_and_mark_new":
                 for item in messages:
                     item["unread"] = False
-            return {"messages": returned, "count": len(returned), "has_more": False}
+            return {
+                "messages": [
+                    {**item, "provider": "gmail", "timestamp": utc_rfc3339(item.get("timestamp"), fallback=item.get("date"))}
+                    for item in returned
+                ],
+                "count": len(returned),
+                "has_more": False,
+                **(
+                    {
+                        "mark_outcomes": [{
+                            "provider": "gmail",
+                            "marked_message_ids": [item.get("message_id", "") for item in returned],
+                            "marked_count": len(returned),
+                            "failed_message_ids": [],
+                            "failed_count": 0,
+                            "unknown_message_ids": [],
+                            "unknown_count": 0,
+                        }],
+                        "provider_errors": [],
+                    }
+                    if operation.operation_id == "email.read_and_mark_new"
+                    else {}
+                ),
+            }
         if operation.operation_id == "email.send":
             index = sum(len(messages) for messages in self.conversations.values()) + 1
-            return {"sent": True, "message_id": f"message-{index}", "conversation_id": f"thread-{index}"}
+            return {
+                "provider": "gmail",
+                "sent": True,
+                "message_id": f"message-{index}",
+                "conversation_id": f"thread-{index}",
+            }
         raise IntegrationProviderError("operation_undeclared", "Fake operation is not implemented")

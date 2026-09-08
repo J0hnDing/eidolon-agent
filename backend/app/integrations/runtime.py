@@ -20,7 +20,7 @@ from app.services.telegram_service import TelegramServiceError
 
 @dataclass(frozen=True)
 class ProviderExecutionResult:
-    output: dict[str, Any]
+    output: dict[str, Any] | list[Any]
     audit_resource: str | None = None
 
 
@@ -55,7 +55,9 @@ _PROVIDER_NAMES = {
     "notion": "Notion",
     "google_calendar": "Google Calendar",
     "gmail": "Gmail",
+    "outlook": "Outlook",
     "telegram": "Telegram",
+    "huggingface": "Hugging Face",
 }
 
 _SPECIAL_ERROR_MESSAGES = {
@@ -104,14 +106,14 @@ class IntegrationRuntime:
                 "Authorized integration operation is no longer current",
             )
         if (
-            invocation.provider_id != canonical.provider_id
+            not self.registry.supports_provider(canonical.id, invocation.provider_id)
             or invocation.effects != canonical.effects
         ):
             raise IntegrationRuntimeError(
                 "authorization_missing_or_stale",
                 "Authorized integration security contract is inconsistent",
             )
-        adapter = self.adapters.get(canonical.provider_id)
+        adapter = self.registry.resolve_adapter(invocation.provider_id, self.adapters)
         if adapter is None:
             raise IntegrationRuntimeError(
                 "provider_unavailable", "Integration provider runtime is unavailable"
@@ -121,7 +123,7 @@ class IntegrationRuntime:
         except IntegrationRuntimeError:
             raise
         except IntegrationProviderError as exc:
-            raise self._provider_error(canonical.provider_id, exc) from None
+            raise self._provider_error(invocation.provider_id, exc) from None
         except AtlasKnowledgeError as exc:
             raise IntegrationRuntimeError(
                 exc.error_type,
@@ -138,16 +140,20 @@ class IntegrationRuntime:
             raise IntegrationRuntimeError(
                 "internal_failure", "Integration provider failed safely"
             ) from None
-        if not isinstance(result, ProviderExecutionResult) or not isinstance(result.output, dict):
+        if not isinstance(result, ProviderExecutionResult) or not isinstance(result.output, (dict, list)):
             raise IntegrationRuntimeError(
                 "internal_failure", "Integration returned an invalid normalized result"
             )
-        try:
-            Draft202012Validator(canonical.output_schema).validate(result.output)
-        except ValidationError:
-            raise IntegrationRuntimeError(
-                "internal_failure", "Integration returned an invalid normalized result"
-            ) from None
+        # Email adapters return one provider slice. The invocation service
+        # merges those slices, adds provider errors/mark outcomes, and then
+        # validates the composite public envelope.
+        if not canonical.id.startswith("email."):
+            try:
+                Draft202012Validator(canonical.output_schema).validate(result.output)
+            except ValidationError:
+                raise IntegrationRuntimeError(
+                    "internal_failure", "Integration returned an invalid normalized result"
+                ) from None
         return result
 
     @classmethod

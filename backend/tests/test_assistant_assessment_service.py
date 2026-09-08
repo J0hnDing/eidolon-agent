@@ -18,6 +18,7 @@ from app.services.assistant_assessment_service import (
     AssistantAssessmentError,
     AssistantAssessmentService,
 )
+from app.services.platform_service import ASSISTANT_ASSESSMENT_SERVICE_ID
 from app.services.scheduler_service import (
     ASSISTANT_ASSESSMENT_JOB_ID,
     SchedulerService,
@@ -297,6 +298,47 @@ def test_assessment_is_visible_in_schedules_while_paused(db_session):
     assert ScheduleRead.model_validate(row).status == "paused"
     assert row["service_id"] == "backend.assistant.assessment"
     assert row["schedule_json"]["every"] == 3
+
+
+def test_assessment_schedule_can_be_edited_and_persists(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.schemas.schedule import SchedulePayload, ScheduleUpdate
+    from app.services import scheduler_service
+
+    monkeypatch.setattr(scheduler_service, "IntervalTrigger", None)
+    fake_scheduler = FakeScheduler()
+    AssistantAssessmentService(
+        db_session,
+        now=lambda: datetime(2026, 9, 1, 14, 0, tzinfo=UTC),
+    ).configure(True)
+    scheduler = SchedulerService(db_session, scheduler=fake_scheduler)
+    scheduler.register_assistant_assessment()
+
+    edited = scheduler.update_platform_schedule(
+        ASSISTANT_ASSESSMENT_SERVICE_ID,
+        ScheduleUpdate(
+            name="Assistant assessment schedule",
+            schedule=SchedulePayload(
+                type="interval",
+                every=5,
+                unit="days",
+                timezone="UTC",
+                input={},
+            ),
+        ),
+    )
+
+    assert edited["read_only"] is False
+    assert edited["name"] == "Assistant assessment schedule"
+    assert edited["schedule_json"]["every"] == 5
+    assert fake_scheduler.jobs[ASSISTANT_ASSESSMENT_JOB_ID]["trigger"]["days"] == 5
+    persisted = SchedulerService(
+        db_session,
+        scheduler=fake_scheduler,
+    ).serialize_assistant_assessment_schedule()
+    assert persisted["schedule_json"]["every"] == 5
 
 
 def test_completed_assessment_notifies_even_without_proposals(db_session, monkeypatch):

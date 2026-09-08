@@ -180,14 +180,3 @@ Shared runner lifecycle behavior has one implementation without a reuse-only inh
 
 -Acceptance Criteria:
 Each extraction has a named owner and narrow contract; Codex adapters are separated from workflow facades; UI resource state is split into focused hooks or panels; generic abstractions require concrete reuse; behavior remains tested.
-
-## TODO-026: Enforce Act knowledge directory as read-only
-
-- Priority: high
-- Category: bugfix
-- Area: Act sandbox
-- Dependencies: none
-- Rationale: The managed Act AGENTS.md currently prohibits writes to knowledge/, but instruction-only protection cannot enforce the backend-owned synchronized knowledge boundary.
-
--Acceptance Criteria:
-Act can read runtime/act/knowledge, write runtime/act/memory and runtime/act/workspace, cannot create, modify, rename, or delete anything under runtime/act/knowledge regardless of prompt instructions, and the trusted backend Quercus synchronizer retains write authority to runtime/act/knowledge/quercus.

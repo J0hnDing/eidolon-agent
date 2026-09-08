@@ -33,7 +33,9 @@ def build_server(service: McpFunctionService) -> Server:
             result = service.invoke(name, arguments)
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=result.summary)],
-                structuredContent=result.output,
+                # MCP structuredContent is an object even when the native
+                # integration result is an array; match the projected schema.
+                structuredContent={"result": result.output} if isinstance(result.output, list) else result.output,
                 isError=False,
             )
         except McpFunctionError as exc:

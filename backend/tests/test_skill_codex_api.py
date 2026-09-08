@@ -278,6 +278,54 @@ class FailingCodexAdapter:
         )
 
 
+class StructuredCodexAdapter:
+    def __init__(self, stdout: str) -> None:
+        self.stdout = stdout
+        self.plans: list[dict] = []
+
+    def generate(self, prompt: str, output_dir: Path, plan: dict) -> subprocess.CompletedProcess[str]:
+        del prompt, output_dir
+        self.plans.append(plan)
+        return subprocess.CompletedProcess(
+            args=["structured-codex"],
+            returncode=0,
+            stdout=self.stdout,
+            stderr="",
+        )
+
+
+def test_skill_runtime_codex_enforces_custom_response_schema(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    skill = create_skill(db_session)
+    response_schema = {
+        "type": "object",
+        "properties": {"repositories": {"type": "array", "items": {"type": "string"}}},
+        "required": ["repositories"],
+        "additionalProperties": False,
+    }
+    adapter = StructuredCodexAdapter('{"repositories":["example/project"]}')
+    service = CodexService(db_session, adapter=adapter, project_root=tmp_path)
+
+    response = service.skill_runtime_codex_call(
+        skill,
+        SkillCodexRequest(prompt="Select repositories.", response_schema=response_schema),
+        internet_access=False,
+    )
+
+    assert json.loads(response["response"]) == {"repositories": ["example/project"]}
+    assert adapter.plans[0]["response_schema"] == response_schema
+
+    adapter.stdout = '{"unexpected":true}'
+    with pytest.raises(CodexGenerationError, match="did not match"):
+        service.skill_runtime_codex_call(
+            skill,
+            SkillCodexRequest(prompt="Select repositories.", response_schema=response_schema),
+            internet_access=False,
+        )
+
+
 def test_skill_runtime_codex_tokens_are_added_to_the_active_skill_run(
     tmp_path: Path,
     db_session: Session,

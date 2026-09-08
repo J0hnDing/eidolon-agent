@@ -20,6 +20,7 @@ def call_codex(
     context: dict[str, Any] | None = None,
     model: str | None = None,
     internet_access: bool = False,
+    response_schema: dict[str, Any] | None = None,
     timeout_seconds: float = DEFAULT_SKILL_CAPABILITY_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Call Codex through the current function run's scoped capability."""
@@ -35,6 +36,10 @@ def call_codex(
     }
     if model is not None:
         payload["model"] = model
+    if response_schema is not None:
+        if not isinstance(response_schema, dict):
+            raise FunctionRuntimeCapabilityError("Codex response_schema must be a JSON object")
+        payload["response_schema"] = response_schema
     result = _request(
         "/functions/capabilities/codex",
         method="POST",

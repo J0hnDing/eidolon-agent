@@ -18,6 +18,7 @@ from app.models import (
     GoogleOAuthClientConfig,
     IntegrationAuthorization,
     IntegrationConnection,
+    MicrosoftOAuthClientConfig,
     Skill,
 )
 from app.schemas.integration import (
@@ -25,7 +26,9 @@ from app.schemas.integration import (
     GmailConnectionStatus,
     GoogleCalendarConnectionStatus,
     GoogleOAuthClientStatus,
+    MicrosoftOAuthClientStatus,
     NotionConnectionStatus,
+    OutlookConnectionStatus,
 )
 from app.schemas.manifest import ManifestIntegrationRequirement, SkillManifest
 from app.services.atlas_provider import AtlasProviderAdapter, UrllibAtlasProviderAdapter
@@ -55,8 +58,22 @@ from app.services.google_oauth import (
     parse_google_oauth_credential,
     serialize_google_oauth_client,
 )
+from app.services.huggingface_provider import (
+    HuggingFaceProviderAdapter,
+    UrllibHuggingFaceProviderAdapter,
+)
 from app.services.notion_report_provider import NotionReportProvider
 from app.services.notion_todo_provider import NotionTodoProvider
+from app.services.outlook_provider import (
+    OUTLOOK_AUTHORITY,
+    OUTLOOK_CLIENT_SECRET_NAMESPACE,
+    OUTLOOK_OAUTH_REDIRECT_URI,
+    OUTLOOK_SECRET_NAMESPACE,
+    OutlookProviderAdapter,
+    outlook_oauth_state_store,
+    parse_outlook_credential,
+    serialize_outlook_credential,
+)
 from app.services.proposed_skill_service import ProposedSkillService
 from app.services.report_service import ReportProvider
 from app.services.secret_store import SecretStore, SecretStoreError, default_secret_store
@@ -127,6 +144,17 @@ GMAIL_PROVIDER_ERROR_MESSAGES = {
     "provider_unavailable": "Gmail is unavailable",
     "internal_failure": "Gmail integration failed safely",
 }
+OUTLOOK_PROVIDER_ERROR_MESSAGES = {
+    "invalid_credential": "The Outlook authorization is invalid or revoked",
+    "not_found": "The requested Outlook message or conversation was not found",
+    "provider_forbidden": "Microsoft denied the requested Outlook operation",
+    "rate_limited": "Outlook rate limited the integration request",
+    "provider_timeout": "Outlook did not respond before the timeout",
+    "response_too_large": "Outlook response exceeded the operation limit",
+    "provider_unavailable": "Outlook is unavailable",
+    "partial_mutation": "Outlook read state was only partially reconciled",
+    "internal_failure": "Outlook integration failed safely",
+}
 TELEGRAM_PROVIDER_ERROR_MESSAGES = {
     **GOOGLE_CALENDAR_PROVIDER_ERROR_MESSAGES,
     "invalid_credential": "The Telegram bot token is invalid or revoked",
@@ -137,14 +165,27 @@ TELEGRAM_PROVIDER_ERROR_MESSAGES = {
     "provider_unavailable": "Telegram is unavailable",
     "internal_failure": "Telegram integration failed safely",
 }
+HUGGINGFACE_PROVIDER_ERROR_MESSAGES = {
+    "not_found": "The requested Hugging Face paper was not found",
+    "provider_forbidden": "The paper provider denied the requested operation",
+    "rate_limited": "The paper provider rate limited the integration request",
+    "provider_timeout": "The paper provider did not respond before the timeout",
+    "response_too_large": "The paper provider response exceeded the operation limit",
+    "unsupported_file_type": "The selected paper is not available as readable full text",
+    "provider_unavailable": "Hugging Face or arXiv is unavailable",
+    "internal_failure": "Hugging Face integration failed safely",
+}
 PROVIDER_DISPLAY_NAMES = {
     "github": "GitHub",
     "atlas": "Atlas",
     "notion": "Notion",
     "google_calendar": "Google Calendar",
     "gmail": "Gmail",
+    "outlook": "Outlook",
+    "huggingface": "Hugging Face",
 }
 GOOGLE_OAUTH_CLIENT_CONFIG_ID = 1
+MICROSOFT_OAUTH_CLIENT_CONFIG_ID = 1
 def provider_error_message(provider: str, error_type: str) -> str:
     if provider == "atlas":
         messages = ATLAS_PROVIDER_ERROR_MESSAGES
@@ -154,8 +195,12 @@ def provider_error_message(provider: str, error_type: str) -> str:
         messages = GOOGLE_CALENDAR_PROVIDER_ERROR_MESSAGES
     elif provider == "gmail":
         messages = GMAIL_PROVIDER_ERROR_MESSAGES
+    elif provider == "outlook":
+        messages = OUTLOOK_PROVIDER_ERROR_MESSAGES
     elif provider == "telegram":
         messages = TELEGRAM_PROVIDER_ERROR_MESSAGES
+    elif provider == "huggingface":
+        messages = HUGGINGFACE_PROVIDER_ERROR_MESSAGES
     else:
         messages = PROVIDER_ERROR_MESSAGES
     return messages.get(error_type, messages["internal_failure"])
@@ -167,7 +212,7 @@ def utc_now() -> datetime:
 
 @dataclass(frozen=True)
 class IntegrationExecutionResult:
-    output: dict[str, Any]
+    output: dict[str, Any] | list[Any]
     audit_resource: str | None = None
 
 
@@ -184,6 +229,9 @@ class IntegrationService:
     google_oauth_states: GoogleOAuthStateStore | None = None
     gmail: GmailProviderAdapter | None = None
     gmail_oauth_states: GoogleOAuthStateStore | None = None
+    outlook: OutlookProviderAdapter | None = None
+    outlook_oauth_states: Any | None = None
+    huggingface: HuggingFaceProviderAdapter | None = None
     codex_adapter: Any | None = None
 
     def __post_init__(self) -> None:
@@ -205,6 +253,12 @@ class IntegrationService:
             self.gmail = UrllibGmailProviderAdapter()
         if self.gmail_oauth_states is None:
             self.gmail_oauth_states = gmail_oauth_state_store
+        if self.outlook is None:
+            self.outlook = OutlookProviderAdapter()
+        if self.outlook_oauth_states is None:
+            self.outlook_oauth_states = outlook_oauth_state_store
+        if self.huggingface is None:
+            self.huggingface = UrllibHuggingFaceProviderAdapter()
 
     def connection_status(self) -> GitHubConnectionStatus:
         connection = self._connection()
@@ -250,6 +304,7 @@ class IntegrationService:
             if previous is None:
                 connection = IntegrationConnection(
                     provider="github",
+                    is_default=True,
                     secret_store_id=self.secret_store.implementation_id,
                     secret_reference=new_reference,
                     status="connected",
@@ -259,9 +314,11 @@ class IntegrationService:
                     updated_at=now,
                     last_validated_at=now,
                 )
+                self._make_default("github", connection)
                 self.db.add(connection)
             else:
                 connection = previous
+                self._make_default("github", connection)
                 connection.secret_store_id = self.secret_store.implementation_id
                 connection.secret_reference = new_reference
                 connection.status = "connected"
@@ -486,6 +543,7 @@ class IntegrationService:
             if previous is None:
                 connection = IntegrationConnection(
                     provider="google_calendar",
+                    is_default=True,
                     secret_store_id=self.secret_store.implementation_id,
                     secret_reference=new_reference,
                     credential_kind="oauth_refresh",
@@ -496,9 +554,11 @@ class IntegrationService:
                     updated_at=now,
                     last_validated_at=now,
                 )
+                self._make_default("google_calendar", connection)
                 self.db.add(connection)
             else:
                 connection = previous
+                self._make_default("google_calendar", connection)
                 connection.secret_store_id = self.secret_store.implementation_id
                 connection.secret_reference = new_reference
                 connection.credential_kind = "oauth_refresh"
@@ -603,6 +663,7 @@ class IntegrationService:
             if previous is None:
                 connection = IntegrationConnection(
                     provider="gmail",
+                    is_default=True,
                     secret_store_id=self.secret_store.implementation_id,
                     secret_reference=new_reference,
                     credential_kind="oauth_refresh",
@@ -613,9 +674,11 @@ class IntegrationService:
                     updated_at=now,
                     last_validated_at=now,
                 )
+                self._make_default("gmail", connection)
                 self.db.add(connection)
             else:
                 connection = previous
+                self._make_default("gmail", connection)
                 connection.secret_store_id = self.secret_store.implementation_id
                 connection.secret_reference = new_reference
                 connection.credential_kind = "oauth_refresh"
@@ -641,6 +704,241 @@ class IntegrationService:
             except SecretStoreError:
                 pass
         return self.gmail_connection_status()
+
+    def microsoft_oauth_client_status(self) -> MicrosoftOAuthClientStatus:
+        config = self._microsoft_oauth_client_config()
+        if config is None:
+            return MicrosoftOAuthClientStatus(
+                configured=False,
+                status="not_configured",
+                authority=OUTLOOK_AUTHORITY,
+                outlook_redirect_uri=OUTLOOK_OAUTH_REDIRECT_URI,
+            )
+        available = self.secret_store is not None and self.secret_store.implementation_id == config.secret_store_id
+        return MicrosoftOAuthClientStatus(
+            configured=available,
+            status="configured" if available else "unavailable",
+            authority=config.authority,
+            outlook_redirect_uri=OUTLOOK_OAUTH_REDIRECT_URI,
+            created_at=config.created_at,
+            updated_at=config.updated_at,
+            error_type=None if available else "connection_unavailable",
+        )
+
+    def configure_microsoft_oauth_client(self, client_id: str, client_secret: str) -> MicrosoftOAuthClientStatus:
+        if not 1 <= len(client_id) <= 1024 or not 1 <= len(client_secret) <= 4096:
+            raise IntegrationError("invalid_input", "Microsoft OAuth client credentials must be non-empty bounded strings")
+        if self.secret_store is None:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        existing = self._microsoft_oauth_client_config()
+        if existing is not None and self._connection("outlook") is not None:
+            if self.secret_store.implementation_id != existing.secret_store_id:
+                raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+            try:
+                previous_secret = self.secret_store.get(
+                    existing.secret_reference,
+                    namespace=OUTLOOK_CLIENT_SECRET_NAMESPACE,
+                )
+            except SecretStoreError:
+                previous_secret = ""
+            if previous_secret == client_secret and existing.client_id == client_id:
+                return self.microsoft_oauth_client_status()
+            raise IntegrationError(
+                "microsoft_oauth_configuration_in_use",
+                "Disconnect Outlook before replacing the Microsoft OAuth client",
+            )
+        try:
+            new_reference = self.secret_store.put(client_secret, namespace=OUTLOOK_CLIENT_SECRET_NAMESPACE)
+        except SecretStoreError:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable") from None
+        now = utc_now()
+        previous_reference = existing.secret_reference if existing is not None else None
+        try:
+            if existing is None:
+                self.db.add(
+                    MicrosoftOAuthClientConfig(
+                        id=MICROSOFT_OAUTH_CLIENT_CONFIG_ID,
+                        client_id=client_id,
+                        secret_store_id=self.secret_store.implementation_id,
+                        secret_reference=new_reference,
+                        authority=OUTLOOK_AUTHORITY,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+            else:
+                existing.client_id = client_id
+                existing.secret_store_id = self.secret_store.implementation_id
+                existing.secret_reference = new_reference
+                existing.authority = OUTLOOK_AUTHORITY
+                existing.updated_at = now
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            try:
+                self.secret_store.delete(new_reference, namespace=OUTLOOK_CLIENT_SECRET_NAMESPACE)
+            except SecretStoreError:
+                pass
+            raise IntegrationError("internal_failure", "Microsoft OAuth client could not be saved safely") from None
+        if previous_reference and previous_reference != new_reference:
+            try:
+                self.secret_store.delete(previous_reference, namespace=OUTLOOK_CLIENT_SECRET_NAMESPACE)
+            except SecretStoreError:
+                pass
+        return self.microsoft_oauth_client_status()
+
+    def remove_microsoft_oauth_client(self) -> MicrosoftOAuthClientStatus:
+        config = self._microsoft_oauth_client_config()
+        if config is None:
+            return self.microsoft_oauth_client_status()
+        if self._connection("outlook") is not None:
+            raise IntegrationError(
+                "microsoft_oauth_configuration_in_use",
+                "Disconnect Outlook before removing the Microsoft OAuth client",
+            )
+        if self.secret_store is None or self.secret_store.implementation_id != config.secret_store_id:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        try:
+            self.secret_store.delete(config.secret_reference, namespace=OUTLOOK_CLIENT_SECRET_NAMESPACE)
+            self.db.delete(config)
+            self.db.commit()
+        except SecretStoreError:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage could not remove the client") from None
+        except Exception:
+            self.db.rollback()
+            raise IntegrationError("internal_failure", "Microsoft OAuth client could not be removed safely") from None
+        return self.microsoft_oauth_client_status()
+
+    def outlook_connection_status(self) -> OutlookConnectionStatus:
+        connection = self._connection("outlook")
+        if connection is None:
+            return OutlookConnectionStatus(
+                connected=False,
+                status="disconnected",
+                oauth_redirect_uri=OUTLOOK_OAUTH_REDIRECT_URI,
+            )
+        client = self.microsoft_oauth_client_status()
+        available = client.configured and self.secret_store is not None and self.secret_store.implementation_id == connection.secret_store_id
+        status = connection.status if available else "unavailable"
+        return OutlookConnectionStatus(
+            connected=available and connection.status == "connected",
+            status=status,
+            account_email=connection.account_login,
+            account_id=connection.account_id,
+            last_validated_at=connection.last_validated_at,
+            created_at=connection.created_at,
+            updated_at=connection.updated_at,
+            error_type=(connection.error_type or client.error_type) if status != "connected" else None,
+            oauth_redirect_uri=OUTLOOK_OAUTH_REDIRECT_URI,
+        )
+
+    def start_outlook_oauth(self) -> str:
+        client = self._required_microsoft_oauth_client()
+        assert self.outlook is not None
+        assert self.outlook_oauth_states is not None
+        _state, url = self.outlook.begin_authorization(
+            client["client_id"],
+            client["client_secret"],
+            self.outlook_oauth_states,
+        )
+        return url
+
+    def discard_outlook_oauth(self, state: str) -> None:
+        if not 1 <= len(state) <= 512:
+            raise IntegrationError("invalid_credential", "Microsoft OAuth response is invalid or expired")
+        assert self.outlook_oauth_states is not None
+        try:
+            self.outlook_oauth_states.consume(state)
+        except IntegrationProviderError as exc:
+            raise IntegrationError(exc.error_type, provider_error_message("outlook", exc.error_type)) from None
+
+    def complete_outlook_oauth(self, state: str, code: str) -> OutlookConnectionStatus:
+        if not 1 <= len(state) <= 512 or not 1 <= len(code) <= 8192:
+            raise IntegrationError("invalid_credential", "Microsoft OAuth response is invalid or expired")
+        if self.secret_store is None:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        assert self.outlook_oauth_states is not None
+        assert self.outlook is not None
+        try:
+            pending = self.outlook_oauth_states.consume(state)
+            tokens = self.outlook.exchange_code(pending, code)
+            identity = self.outlook.identity(tokens["access_token"])
+        except IntegrationProviderError as exc:
+            raise IntegrationError(exc.error_type, provider_error_message("outlook", exc.error_type)) from None
+        credential = serialize_outlook_credential(tokens["refresh_token"])
+        try:
+            new_reference = self.secret_store.put(credential, namespace=OUTLOOK_SECRET_NAMESPACE)
+        except SecretStoreError:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable") from None
+        finally:
+            credential = ""
+            tokens = {}
+        previous = self._connection("outlook")
+        previous_reference = previous.secret_reference if previous is not None else None
+        previous_account_id = previous.account_id if previous is not None else None
+        now = utc_now()
+        try:
+            if previous is None:
+                connection = IntegrationConnection(
+                    provider="outlook",
+                    is_default=True,
+                    secret_store_id=self.secret_store.implementation_id,
+                    secret_reference=new_reference,
+                    credential_kind="oauth_refresh",
+                    status="connected",
+                    account_login=identity["email"],
+                    account_id=identity["account_id"],
+                    created_at=now,
+                    updated_at=now,
+                    last_validated_at=now,
+                )
+                self._make_default("outlook", connection)
+                self.db.add(connection)
+            else:
+                previous.is_default = True
+                previous.secret_store_id = self.secret_store.implementation_id
+                previous.secret_reference = new_reference
+                previous.credential_kind = "oauth_refresh"
+                previous.status = "connected"
+                previous.account_login = identity["email"]
+                previous.account_id = identity["account_id"]
+                previous.error_type = None
+                previous.updated_at = now
+                previous.last_validated_at = now
+            if previous_account_id is not None and previous_account_id != identity["account_id"]:
+                self.invalidate_provider_authorizations("outlook", "Outlook account identity changed")
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            try:
+                self.secret_store.delete(new_reference, namespace=OUTLOOK_SECRET_NAMESPACE)
+            except SecretStoreError:
+                pass
+            raise IntegrationError("internal_failure", "Outlook connection could not be saved safely") from None
+        if previous_reference and previous_reference != new_reference:
+            try:
+                self.secret_store.delete(previous_reference, namespace=OUTLOOK_SECRET_NAMESPACE)
+            except SecretStoreError:
+                pass
+        return self.outlook_connection_status()
+
+    def remove_outlook_connection(self) -> OutlookConnectionStatus:
+        connection = self._connection("outlook")
+        if connection is None:
+            return OutlookConnectionStatus(connected=False, status="disconnected", oauth_redirect_uri=OUTLOOK_OAUTH_REDIRECT_URI)
+        if self.secret_store is None or self.secret_store.implementation_id != connection.secret_store_id:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        try:
+            self.secret_store.delete(connection.secret_reference, namespace=OUTLOOK_SECRET_NAMESPACE)
+            self.invalidate_provider_authorizations("outlook", "Outlook connection removed")
+            self.db.delete(connection)
+            self.db.commit()
+        except SecretStoreError:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage could not remove the credential") from None
+        except Exception:
+            self.db.rollback()
+            raise IntegrationError("internal_failure", "Outlook connection could not be removed safely") from None
+        return OutlookConnectionStatus(connected=False, status="disconnected", oauth_redirect_uri=OUTLOOK_OAUTH_REDIRECT_URI)
 
     def notion_connection_status(self) -> NotionConnectionStatus:
         connection = self._connection("notion")
@@ -712,6 +1010,7 @@ class IntegrationService:
             if previous is None:
                 connection = IntegrationConnection(
                     provider="notion",
+                    is_default=True,
                     secret_store_id=self.secret_store.implementation_id,
                     secret_reference=new_reference,
                     status="connected",
@@ -724,8 +1023,10 @@ class IntegrationService:
                     updated_at=now,
                     last_validated_at=now,
                 )
+                self._make_default("notion", connection)
                 self.db.add(connection)
             else:
+                self._make_default("notion", previous)
                 previous.secret_store_id = self.secret_store.implementation_id
                 previous.secret_reference = new_reference
                 previous.status = "connected"
@@ -885,6 +1186,7 @@ class IntegrationService:
             if previous is None:
                 connection = IntegrationConnection(
                     provider="notion",
+                    is_default=True,
                     secret_store_id=self.secret_store.implementation_id,
                     secret_reference=new_reference,
                     status="connected",
@@ -897,9 +1199,11 @@ class IntegrationService:
                     updated_at=now,
                     last_validated_at=now,
                 )
+                self._make_default("notion", connection)
                 self.db.add(connection)
             else:
                 connection = previous
+                self._make_default("notion", connection)
                 connection.secret_store_id = self.secret_store.implementation_id
                 connection.secret_reference = new_reference
                 connection.status = "connected"
@@ -1423,12 +1727,59 @@ class IntegrationService:
             sort_keys=True,
         )
 
+    def _microsoft_oauth_client_config(self) -> MicrosoftOAuthClientConfig | None:
+        return self.db.get(MicrosoftOAuthClientConfig, MICROSOFT_OAUTH_CLIENT_CONFIG_ID)
+
+    def _required_microsoft_oauth_client(self) -> dict[str, str]:
+        config = self._microsoft_oauth_client_config()
+        if config is None:
+            raise IntegrationError("microsoft_oauth_not_configured", "Configure the Microsoft OAuth client first")
+        if self.secret_store is None or self.secret_store.implementation_id != config.secret_store_id:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        try:
+            secret = self.secret_store.get(config.secret_reference, namespace=OUTLOOK_CLIENT_SECRET_NAMESPACE)
+        except SecretStoreError:
+            raise IntegrationError("connection_unavailable", "Stored Microsoft OAuth client is unavailable") from None
+        if not isinstance(secret, str) or not secret:
+            raise IntegrationError("connection_unavailable", "Stored Microsoft OAuth client is unavailable")
+        return {"client_id": config.client_id, "client_secret": secret}
+
+    def _outlook_runtime_credential(self, service_credential: str) -> str:
+        try:
+            refresh = parse_outlook_credential(service_credential)["refresh_token"]
+            client = self._required_microsoft_oauth_client()
+        except (IntegrationProviderError, IntegrationError) as exc:
+            error_type = getattr(exc, "error_type", "connection_unavailable")
+            raise IntegrationError(str(error_type), "Stored Microsoft authorization is unavailable") from None
+        return json.dumps(
+            {
+                "client_id": client["client_id"],
+                "client_secret": client["client_secret"],
+                "refresh_token": refresh,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
+    def _make_default(self, provider: str, connection: IntegrationConnection) -> None:
+        self.db.query(IntegrationConnection).filter(
+            IntegrationConnection.provider == provider,
+            IntegrationConnection.is_default.is_(True),
+            IntegrationConnection.id != connection.id,
+        ).update({IntegrationConnection.is_default: False}, synchronize_session=False)
+        connection.is_default = True
+
     def _connection(self, provider: str = "github") -> IntegrationConnection | None:
         return self.db.scalar(
-            select(IntegrationConnection).where(IntegrationConnection.provider == provider)
+            select(IntegrationConnection)
+            .where(IntegrationConnection.provider == provider)
+            .where(IntegrationConnection.is_default.is_(True))
+            .order_by(IntegrationConnection.id.desc())
         )
 
     def provider_connected(self, provider: str) -> bool:
+        if provider == "huggingface":
+            return True
         if provider == "atlas":
             try:
                 from app.services.atlas_settings_service import AtlasSettingsService
@@ -1465,25 +1816,36 @@ class IntegrationService:
                 or config.secret_store_id != self.secret_store.implementation_id
             ):
                 return False
+        if provider == "outlook":
+            config = self._microsoft_oauth_client_config()
+            if (
+                config is None
+                or self.secret_store is None
+                or config.secret_store_id != self.secret_store.implementation_id
+            ):
+                return False
         return True
 
     def operation_available(self, operation_id: str) -> bool:
         operation = DEFAULT_INTEGRATION_REGISTRY.get(operation_id)
         if operation is None:
             return False
-        if operation.provider_id != "notion":
-            return self.provider_connected(operation.provider_id)
-        connection = self._connection("notion")
-        if (
-            connection is None
-            or connection.status != "connected"
-            or self.secret_store is None
-            or self.secret_store.implementation_id != connection.secret_store_id
-        ):
+        providers = DEFAULT_INTEGRATION_REGISTRY.operation_provider_set(operation_id)
+        if not providers:
             return False
-        if operation_id.startswith("notion.report."):
-            return bool(connection.configured_report_resource_id)
-        return bool(connection.configured_resource_id)
+        if operation_id.startswith("notion."):
+            connection = self._connection("notion")
+            if (
+                connection is None
+                or connection.status != "connected"
+                or self.secret_store is None
+                or self.secret_store.implementation_id != connection.secret_store_id
+            ):
+                return False
+            if operation_id.startswith("notion.report."):
+                return bool(connection.configured_report_resource_id)
+            return bool(connection.configured_resource_id)
+        return any(self.provider_connected(provider) for provider in providers)
 
     def _authorization_for_fingerprint(
         self,

@@ -12,6 +12,7 @@ from app.routers import integrations
 from app.schemas.integration import (
     GitHubCredentialWrite,
     GoogleOAuthClientWrite,
+    MicrosoftOAuthClientWrite,
     NotionCredentialWrite,
     NotionDataSourcesWrite,
 )
@@ -19,6 +20,7 @@ from app.services.github_provider import FakeGitHubProviderAdapter
 from app.services.gmail_provider import FakeGmailProviderAdapter
 from app.services.google_calendar_provider import FakeGoogleCalendarProviderAdapter, GoogleOAuthStateStore
 from app.services.integration_service import IntegrationService
+from app.services.outlook_provider import FakeOutlookProviderAdapter, OutlookOAuthStateStore
 from app.services.report_service import FakeReportProvider
 from app.services.secret_store import FakeSecretStore
 from app.services.todo_service import FakeTodoProvider
@@ -54,6 +56,8 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
         google_oauth_states=GoogleOAuthStateStore(),
         gmail=FakeGmailProviderAdapter(email="mail@example.com", account_id="gmail-route"),
         gmail_oauth_states=GoogleOAuthStateStore(),
+        outlook=FakeOutlookProviderAdapter(email="school@example.edu", account_id="outlook-route"),
+        outlook_oauth_states=OutlookOAuthStateStore(),
     )
     monkeypatch.setattr(integrations, "build_default_integration_service", lambda _db: service)
     app = FastAPI()
@@ -165,6 +169,27 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
     removed_google = integrations.remove_google_oauth_client(db)
     assert removed_google.configured is False
 
+    microsoft_secret = "EIDOLON_MICROSOFT_ROUTE_SECRET_5c3a"
+    microsoft_status = integrations.put_microsoft_oauth_client(
+        MicrosoftOAuthClientWrite(client_id="microsoft-client-id", client_secret=microsoft_secret),
+        db,
+    )
+    assert microsoft_status.configured is True
+    assert microsoft_secret not in microsoft_status.model_dump_json()
+    outlook_start = integrations.start_outlook_oauth(db)
+    outlook_state = parse_qs(urlparse(outlook_start.authorization_url).query)["state"][0]
+    outlook_callback = integrations.complete_outlook_oauth(outlook_state, "outlook-code", "", db)
+    assert outlook_callback.headers["location"] == (
+        "http://localhost:5174/settings/integrations?outlook=connected"
+    )
+    outlook_status = integrations.outlook_connection_status(db)
+    assert outlook_status.connected is True
+    assert outlook_status.account_email == "school@example.edu"
+    assert microsoft_secret not in outlook_status.model_dump_json()
+    assert integrations.remove_outlook_connection(db).status_code == 204
+    removed_microsoft = integrations.remove_microsoft_oauth_client(db)
+    assert removed_microsoft.configured is False
+
     paths = app.openapi()["paths"]
     assert "/settings/integrations/github" in paths
     assert "/settings/integrations/notion" in paths
@@ -179,6 +204,11 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
     assert "/settings/integrations/gmail" in paths
     assert "/settings/integrations/gmail/oauth/start" in paths
     assert "/settings/integrations/gmail/oauth/callback" not in paths
+    assert "/settings/integrations/microsoft" in paths
+    assert "/settings/integrations/microsoft/oauth-client" in paths
+    assert "/settings/integrations/outlook" in paths
+    assert "/settings/integrations/outlook/oauth/start" in paths
+    assert "/settings/integrations/outlook/oauth/callback" not in paths
     assert "/settings/integrations/telegram" in paths
     assert "/integrations/capabilities/invoke" not in paths
     assert all("github.repository." not in path for path in paths)

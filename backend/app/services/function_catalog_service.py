@@ -181,7 +181,12 @@ class FunctionCatalogService:
         # canonical spec.
         for operation in DEFAULT_INTEGRATION_REGISTRY.list():
             operation_id = str(operation.id)
-            provider_id = str(operation.provider_id)
+            supported_providers = DEFAULT_INTEGRATION_REGISTRY.operation_provider_set(operation_id)
+            provider_id = (
+                "email"
+                if operation_id.startswith("email.")
+                else str(supported_providers[0] if supported_providers else "integration")
+            )
             availability_group = (
                 "report"
                 if operation_id.startswith("notion.report.")
@@ -189,7 +194,7 @@ class FunctionCatalogService:
                 if provider_id == "notion"
                 else "provider"
             )
-            availability_key = (provider_id, availability_group)
+            availability_key = (operation_id, availability_group)
             if availability_key not in integration_availability:
                 integration_availability[availability_key] = integrations.operation_available(
                     operation_id
@@ -201,8 +206,13 @@ class FunctionCatalogService:
                 "notion": "Notion connection is not configured",
                 "google_calendar": "Google Calendar connection is not configured",
                 "gmail": "Gmail connection is not configured",
+                "outlook": "Outlook connection is not configured",
                 "telegram": "Telegram bot is not paired",
-            }.get(provider_id, f"{provider_id} connection is not configured")
+            }
+            if operation_id.startswith("email."):
+                unavailable_reason = "No supported email provider is connected (Gmail or Outlook)"
+            else:
+                unavailable_reason = unavailable_reason.get(provider_id, f"{provider_id} connection is not configured")
             reasons = [] if connected else [unavailable_reason]
             risk_level = self._risk_value(operation)
             effects = self._effect_values(operation)
@@ -228,6 +238,7 @@ class FunctionCatalogService:
                 {
                     "operation": operation_id,
                     "provider": provider_id,
+                    "supported_providers": list(supported_providers),
                     "effects": sorted(effects),
                     "risk": risk_level,
                 }
@@ -256,6 +267,7 @@ class FunctionCatalogService:
                         "output_schema": effective.output_schema,
                         "requires_invocation_approval": requires_invocation_approval,
                         "provider": provider_id,
+                        "supported_providers": list(supported_providers),
                         "invocation": {
                             **operation_context,
                             "description": effective.description,
@@ -312,10 +324,15 @@ class FunctionCatalogService:
     ) -> str:
         contract_identity = getattr(operation, "contract_identity", None)
         if callable(contract_identity):
-            identity = contract_identity()
+            identity = contract_identity(DEFAULT_INTEGRATION_REGISTRY.operation_provider_set(str(operation.id)))
         else:
             identity = {
-                "provider": str(operation.provider_id),
+                "supported_providers": list(
+                    DEFAULT_INTEGRATION_REGISTRY.operation_provider_set(str(operation.id))
+                ),
+                "provider_selection": str(
+                    getattr(getattr(operation, "provider_selection", None), "value", "single")
+                ),
                 "effects": sorted(FunctionCatalogService._effect_values(operation)),
                 "risk": FunctionCatalogService._risk_value(operation),
                 "version": int(operation.contract_version),

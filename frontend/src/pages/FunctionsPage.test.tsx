@@ -1,13 +1,28 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FunctionCatalogEntry } from "../api/client";
-import { FunctionTable } from "./FunctionsPage";
+import { FunctionCatalogEntry, api } from "../api/client";
+import FunctionsPage, { FunctionTable } from "./FunctionsPage";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+describe("FunctionsPage", () => {
+  it("rebuilds the catalog when Refresh is clicked", async () => {
+    const listFunctionCatalog = vi.spyOn(api, "listFunctionCatalog").mockResolvedValue([]);
+
+    render(<MemoryRouter><FunctionsPage /></MemoryRouter>);
+
+    const refresh = await screen.findByRole("button", { name: "Refresh" });
+    fireEvent.click(refresh);
+    await waitFor(() => expect(listFunctionCatalog).toHaveBeenCalledWith(true));
+  });
+});
 
 describe("FunctionTable", () => {
   it("shows sources, states, reasons, and user-skill links", () => {

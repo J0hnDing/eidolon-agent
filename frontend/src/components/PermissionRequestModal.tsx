@@ -184,5 +184,6 @@ function resourceScopeFromReview(review: Record<string, unknown>): string {
 function providerLabel(value: unknown): string {
   const provider = String(value || "Integration");
   if (provider.toLowerCase() === "github") return "GitHub";
+  if (provider.toLowerCase() === "huggingface") return "Hugging Face";
   return `${provider.charAt(0).toUpperCase()}${provider.slice(1)}`;
 }

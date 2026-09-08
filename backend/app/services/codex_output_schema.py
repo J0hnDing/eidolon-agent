@@ -173,6 +173,22 @@ _BUILD_BLUEPRINT_SCHEMA = _object_schema(
             _string_array_schema(unique=True),
             "Exact selected function catalog identifiers.",
         ),
+        "integration_providers": _described(
+            {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 2,
+                    "uniqueItems": True,
+                    "items": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$",
+                    },
+                },
+            },
+            "Exact provider selectors for provider-neutral operations; email operations must explicitly select Gmail, Outlook, or both.",
+        ),
         "schedule": _SCHEDULE_SCHEMA,
     },
     [
@@ -520,8 +536,13 @@ def output_schema_for_action(action: object) -> dict[str, object] | None:
     return schema
 
 
-def write_temporary_output_schema(action: object, directory: Path) -> Path | None:
-    schema = output_schema_for_action(action)
+def write_temporary_output_schema(
+    action: object,
+    directory: Path,
+    *,
+    response_schema: dict[str, object] | None = None,
+) -> Path | None:
+    schema = response_schema if response_schema is not None else output_schema_for_action(action)
     if schema is None:
         return None
     directory.mkdir(parents=True, exist_ok=True)

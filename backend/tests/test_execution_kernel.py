@@ -94,6 +94,24 @@ def test_executor_dispatches_only_by_explicit_category(db: Session) -> None:
     assert calls[0][0].target_id == "same.arbitrary.id"
 
 
+@pytest.mark.parametrize("output", [[], [{"paper_id": "2609.00001"}]])
+def test_integration_handler_accepts_array_results(db, output):
+    from app.execution.handlers.integration import IntegrationHandler
+
+    handler = IntegrationHandler(db)
+    handler.invocations = SimpleNamespace(
+        execute=lambda *_: SimpleNamespace(output=output, audit_resource=None),
+    )
+    result = handler.execute(
+        InvocationTargetRef(category="integration", target_id="huggingface.list_papers"),
+        {"period": "2026-09"},
+        InvocationContext(principal_kind="system", origin="backend"),
+    )
+    assert result.status == "succeeded"
+    assert result.output == output
+    assert result.approval_id is None
+
+
 def test_backend_core_download_runs_through_registered_handler(
     db: Session,
     monkeypatch: pytest.MonkeyPatch,

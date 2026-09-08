@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
-  "name": "github_atlas_project_scout",
-  "description": "Enrich GitHub's actual trending repositories with concise Codex analysis grounded in their READMEs and local Atlas projects.",
+  "name": "github_repo_scout",
+  "description": "Select genuinely useful or interesting repositories from GitHub Trending with optional Atlas personalization context.",
   "runtime": "function",
   "entrypoint": "skill.py",
   "instructions_path": null,
@@ -12,8 +12,8 @@
         "type": "integer",
         "minimum": 1,
         "maximum": 25,
-        "default": 10,
-        "description": "Maximum number of trending repositories to compare."
+        "default": 25,
+        "description": "Maximum number of trending repositories to retrieve."
       },
       "language": {
         "type": "string",
@@ -30,21 +30,16 @@
         "default": "weekly",
         "description": "GitHub Trending period."
       },
-      "atlas_keywords": {
+      "excluded_repo": {
         "type": "array",
         "items": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "^[^\\s/]+/[^\\s/]+$"
         },
-        "maxItems": 20,
+        "maxItems": 1000,
         "default": [],
-        "description": "Optional keywords used to narrow Atlas projects."
-      },
-      "analysis_focus": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 2000,
-        "description": "Optional guidance for the comparison and recommendations."
+        "description": "Previously recommended repository full names to exclude before personalization."
       }
     },
     "additionalProperties": false
@@ -80,7 +75,8 @@
             "analysis": {
               "type": "string",
               "minLength": 1,
-              "description": "Concise Codex analysis of the project's principle, notable ideas, and realistic relevance or lessons."
+              "maxLength": 2000,
+              "description": "Concise Codex analysis explaining why the selected repository is worth checking out."
             }
           },
           "required": [
@@ -91,23 +87,29 @@
             "analysis"
           ],
           "additionalProperties": false
-        }
+        },
+        "maxItems": 6
+      },
+      "seen_repo": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\s/]+/[^\\s/]+$",
+          "description": "GitHub repository full name considered after exclusions and cleanup."
+        },
+        "maxItems": 15,
+        "description": "The first 15 unique repositories remaining after excluded_repo is removed, in deterministic Trending order."
       }
     },
     "required": [
-      "repositories"
+      "repositories",
+      "seen_repo"
     ],
     "additionalProperties": false
   },
   "function_requirements": [],
   "integration_requirements": [
-    {
-      "provider": "atlas",
-      "operations": [
-        "atlas.project.list"
-      ],
-      "resource_scope": {}
-    },
     {
       "provider": "github",
       "operations": [
@@ -116,6 +118,15 @@
       "resource_scope": {
         "repositories": []
       }
+    },
+    {
+      "provider": "atlas",
+      "operations": [
+        "atlas.goal.list",
+        "atlas.project.list",
+        "atlas.interest.list"
+      ],
+      "resource_scope": {}
     }
   ],
   "dependencies": [],

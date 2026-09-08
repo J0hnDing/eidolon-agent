@@ -16,9 +16,12 @@ from app.schemas.integration import (
     GoogleOAuthStartResponse,
     IntegrationInvocationRequest,
     IntegrationInvocationResponse,
+    MicrosoftOAuthClientStatus,
+    MicrosoftOAuthClientWrite,
     NotionConnectionStatus,
     NotionCredentialWrite,
     NotionDataSourcesWrite,
+    OutlookConnectionStatus,
     QuercusConnectionStatus,
     QuercusCourseRead,
     QuercusCourseSelectionWrite,
@@ -29,6 +32,9 @@ from app.schemas.integration import (
     TelegramConnectionStatus,
     TelegramPairingResponse,
     TelegramPairingStart,
+    WeComConnectionStatus,
+    WeComConnectionWrite,
+    WeComPairingResponse,
 )
 from app.services.function_catalog_service import FunctionCatalogService
 from app.services.function_registry_service import FunctionRegistryError
@@ -38,6 +44,7 @@ from app.services.integration_service import (
     IntegrationError,
     build_default_integration_service,
 )
+from app.services.outlook_provider import OUTLOOK_OAUTH_RETURN_URL
 from app.services.quercus_processing_service import (
     PROCESSING_MARKER,
     QuercusProcessingService,
@@ -50,6 +57,7 @@ from app.services.telegram_service import (
     TelegramService,
     TelegramServiceError,
 )
+from app.services.wecom_service import WeComService, WeComServiceError
 
 router = APIRouter(tags=["integrations"])
 
@@ -426,6 +434,86 @@ def remove_gmail_connection(db: Session = Depends(get_db)) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.get("/settings/integrations/microsoft", response_model=MicrosoftOAuthClientStatus)
+def microsoft_oauth_client_status(db: Session = Depends(get_db)) -> MicrosoftOAuthClientStatus:
+    return build_default_integration_service(db).microsoft_oauth_client_status()
+
+
+@router.put("/settings/integrations/microsoft/oauth-client", response_model=MicrosoftOAuthClientStatus)
+def put_microsoft_oauth_client(
+    payload: MicrosoftOAuthClientWrite,
+    db: Session = Depends(get_db),
+) -> MicrosoftOAuthClientStatus:
+    try:
+        return build_default_integration_service(db).configure_microsoft_oauth_client(
+            payload.client_id,
+            payload.client_secret.get_secret_value(),
+        )
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+
+
+@router.delete("/settings/integrations/microsoft/oauth-client", response_model=MicrosoftOAuthClientStatus)
+def remove_microsoft_oauth_client(db: Session = Depends(get_db)) -> MicrosoftOAuthClientStatus:
+    try:
+        return build_default_integration_service(db).remove_microsoft_oauth_client()
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+
+
+@router.get("/settings/integrations/outlook", response_model=OutlookConnectionStatus)
+def outlook_connection_status(db: Session = Depends(get_db)) -> OutlookConnectionStatus:
+    return build_default_integration_service(db).outlook_connection_status()
+
+
+@router.post("/settings/integrations/outlook/oauth/start", response_model=GoogleOAuthStartResponse)
+def start_outlook_oauth(db: Session = Depends(get_db)) -> GoogleOAuthStartResponse:
+    try:
+        return GoogleOAuthStartResponse(authorization_url=build_default_integration_service(db).start_outlook_oauth())
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+
+
+@router.get(
+    "/settings/integrations/outlook/oauth/callback",
+    response_class=RedirectResponse,
+    include_in_schema=False,
+)
+def complete_outlook_oauth(
+    state_value: str = Query(default="", alias="state"),
+    code_value: str = Query(default="", alias="code"),
+    error: str = Query(default=""),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    service = build_default_integration_service(db)
+    if error:
+        try:
+            service.discard_outlook_oauth(state_value)
+        except IntegrationError:
+            result = "failed"
+        else:
+            result = "denied" if error == "access_denied" else "failed"
+        return RedirectResponse(f"{OUTLOOK_OAUTH_RETURN_URL}?outlook={result}", status_code=303)
+    try:
+        service.complete_outlook_oauth(state_value, code_value)
+        FunctionCatalogService(db).refresh()
+    except IntegrationError:
+        return RedirectResponse(f"{OUTLOOK_OAUTH_RETURN_URL}?outlook=failed", status_code=303)
+    finally:
+        code_value = ""
+    return RedirectResponse(f"{OUTLOOK_OAUTH_RETURN_URL}?outlook=connected", status_code=303)
+
+
+@router.delete("/settings/integrations/outlook", status_code=status.HTTP_204_NO_CONTENT)
+def remove_outlook_connection(db: Session = Depends(get_db)) -> Response:
+    try:
+        build_default_integration_service(db).remove_outlook_connection()
+        FunctionCatalogService(db).refresh()
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get("/settings/integrations/telegram", response_model=TelegramConnectionStatus)
 def telegram_connection_status(db: Session = Depends(get_db)) -> TelegramConnectionStatus:
     return TelegramService(db).connection_status()
@@ -572,6 +660,48 @@ def remove_telegram_assistant_agent_connection(db: Session = Depends(get_db)) ->
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.get("/settings/integrations/wecom", response_model=WeComConnectionStatus)
+def wecom_connection_status(db: Session = Depends(get_db)) -> WeComConnectionStatus:
+    return WeComService(db).connection_status()
+
+
+@router.put("/settings/integrations/wecom", response_model=WeComPairingResponse)
+def put_wecom_connection(
+    payload: WeComConnectionWrite,
+    db: Session = Depends(get_db),
+) -> WeComPairingResponse:
+    try:
+        return WeComService(db).connect(payload.bot_id, payload.secret.get_secret_value())
+    except WeComServiceError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
+
+
+@router.post("/settings/integrations/wecom/pairing/start", response_model=WeComPairingResponse)
+def start_wecom_user_pairing(db: Session = Depends(get_db)) -> WeComPairingResponse:
+    try:
+        return WeComService(db).start_user_pairing()
+    except WeComServiceError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
+
+
+@router.delete("/settings/integrations/wecom/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_wecom_user(user_id: str, db: Session = Depends(get_db)) -> Response:
+    try:
+        WeComService(db).remove_user(user_id)
+    except WeComServiceError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/settings/integrations/wecom", status_code=status.HTTP_204_NO_CONTENT)
+def remove_wecom_connection(db: Session = Depends(get_db)) -> Response:
+    try:
+        WeComService(db).remove()
+    except WeComServiceError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post(
     "/integrations/capabilities/invoke",
     response_model=IntegrationInvocationResponse,
@@ -599,7 +729,7 @@ def invoke_function_integration(
         ) from None
     except InvocationExecutionError as exc:
         raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
-    return IntegrationInvocationResponse(output=outcome.output or {})
+    return IntegrationInvocationResponse(output={} if outcome.output is None else outcome.output)
 
 
 def _bearer_token(authorization: str | None) -> str:

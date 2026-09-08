@@ -18,11 +18,11 @@ Stores the single host registration state: whether running MCP processes may inv
 
 ### act_sessions and act_turns
 
-`act_sessions` stores each durable Codex thread id, title, origin, lifecycle status, and timestamps. `act_turns` stores the user message, queued/running/terminal state, execution start/completion timestamps, live Codex turn id, concise activity, final answer or bounded failure, cancellation request, and optional Telegram delivery target/status. Only queued turns are safe to retain across restart; running rows are recovered as interrupted.
+`act_sessions` stores each durable Codex thread id, title, origin, lifecycle status, and timestamps. `act_turns` stores the user message, queued/running/terminal state, execution start/completion timestamps, live Codex turn id, concise activity, final answer or bounded failure, cancellation request, and optional transport-neutral delivery provider/target/status. Only queued turns are safe to retain across restart; running rows are recovered as interrupted.
 
 ### act_telegram_bindings
 
-Stores the Act bot connection's single selected-session pointer. Disconnect deletes the binding while preserving Act sessions and their shared workspace.
+Stores each conversational Telegram bot connection's selected canonical session pointer. A normal message repairs a null, missing, wrong-agent, or archived pointer using the newest active session for that agent, or a new session when none exists. Archiving or deleting the referenced session clears the pointer. Disconnect deletes the binding while preserving sessions and shared files.
 
 ### memory_facts
 
@@ -75,7 +75,7 @@ Links one caller skill, one target function, the user-facing approval request, a
 
 ### integration_connections
 
-Stores one sanitized connection row per provider. GitHub and Quercus store validated account identity. Notion additionally stores sanitized bot/workspace identity plus separate non-secret configured Todo and Reports data-source IDs under one credential reference. The Reports ID is nullable for compatibility with legacy Todo-only connections. Atlas may use the row for its optional owned-process passphrase lifecycle. Every secret-bearing provider stores only the operating-system secret-store implementation id and opaque reference; credential plaintext and authorization headers are never stored.
+Stores sanitized connection rows. A provider may have multiple rows, but a partial unique index permits at most one `is_default` row per provider; current Settings/OAuth flows read and replace that default without exposing a public account selector. GitHub and Quercus store validated account identity. Notion additionally stores sanitized bot/workspace identity plus separate non-secret configured Todo and Reports data-source IDs under one credential reference. The Reports ID is nullable for compatibility with legacy Todo-only connections. Atlas may use the row for its optional owned-process passphrase lifecycle. Gmail and Outlook store only OS-secret-store implementation ids and opaque refresh-token references, with Outlook's account id hashed before persistence. Existing connection ids, secret references, grants, approvals, and dependent foreign keys survive the in-place uniqueness migration; legacy rows become defaults by provider.
 
 ### quercus_courses, quercus_course_exclusions, and quercus_sync_resources
 
@@ -85,11 +85,15 @@ Stores one sanitized connection row per provider. GitHub and Quercus store valid
 
 `quercus_sync_resources` owns every remote Canvas resource identity and parent, stable collision-resolved raw and processed relative paths, remote version/update fields, normalized source/processing fingerprints, size/type, download and processing state, processor/error/completion fields, and last-seen generation. `quercus_processing_settings` is the singleton global processing-method selection and user-selected llama.cpp installation directory. This bookkeeping remains in SQLite; synchronized knowledge directories contain readable course material only, with no manifests, sidecars, frontmatter, or ID-bearing filenames.
 
-Calendar and Gmail use separate connection rows, account identities, OAuth refresh-token references, and service secret namespaces. They may authorize different Google accounts. One singleton `google_oauth_client_configs` row references their shared Google OAuth application client in the OS secret store; it contains no service grant or account identity.
+Calendar and Gmail use separate connection rows, account identities, OAuth refresh-token references, and service secret namespaces. They may authorize different Google accounts. Outlook has its own default connection and Microsoft refresh-token namespace. Singleton `google_oauth_client_configs` and `microsoft_oauth_client_configs` rows reference OAuth application configuration in the OS secret store; neither contains a service grant or account identity. Invocation approvals and integration audit rows retain the selected provider, internal connection id, and account id so approval replay and audit attribution become stale when the default connection changes.
 
 ### telegram_bot_connections
 
 Stores role/default selection for the independent notification/approval and Act bots, sanitized bot identity and status, paired private chat/user ids, persisted update offset, and hashed one-time pairing state. Bot tokens remain in the operating-system secret store.
+
+### wecom_observer_bindings, wecom_observer_user_bindings, and wecom_inbound_messages
+
+`wecom_observer_bindings` stores the singleton WeCom connection's hashed short-lived pairing code and expiry. `wecom_observer_user_bindings` stores one row per paired private user and that user's selected canonical Observer session pointer. `wecom_inbound_messages` stores per-connection message IDs for duplicate suppression. WeCom Bot ID and connection metadata use the generic `integration_connections` row; the Bot Secret remains only in the operating-system secret store. User removal deletes only one binding. Disconnect removes pairing, user-binding, and deduplication rows without deleting Observer sessions. Session archive or retention deletion clears every referencing Telegram or WeCom pointer.
 
 ### invocation_approvals
 

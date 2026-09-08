@@ -17,6 +17,7 @@ from app.models.entities import (
     McpAuditRecord,
     MemoryFact,
     Message,
+    MicrosoftOAuthClientConfig,
     QuercusCourse,
     QuercusCourseExclusion,
     QuercusProcessingSetting,
@@ -33,6 +34,9 @@ from app.models.entities import (
     WebAppAuditRecord,
     WebAppInstance,
     WebAppSession,
+    WeComInboundMessage,
+    WeComObserverBinding,
+    WeComObserverUserBinding,
 )
 
 __all__ = [
@@ -57,6 +61,7 @@ __all__ = [
     "MemoryFact",
     "McpAuditRecord",
     "Message",
+    "MicrosoftOAuthClientConfig",
     "QuercusCourse",
     "QuercusCourseExclusion",
     "QuercusProcessingSetting",
@@ -70,6 +75,9 @@ __all__ = [
     "SkillSchedule",
     "SkillVersion",
     "TelegramBotConnection",
+    "WeComInboundMessage",
+    "WeComObserverBinding",
+    "WeComObserverUserBinding",
     "WebAppAuditRecord",
     "WebAppInstance",
     "WebAppSession",

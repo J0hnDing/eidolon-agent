@@ -45,6 +45,7 @@ from app.services.quercus_service import QuercusSyncDispatcher
 from app.services.scheduler_service import SchedulerService
 from app.services.telegram_service import start_telegram_pollers, stop_telegram_pollers
 from app.services.web_app_runtime_service import WebAppRuntimeConfig, WebAppRuntimeService
+from app.services.wecom_service import start_wecom_observer_worker, stop_wecom_observer_worker
 
 GOOGLE_OAUTH_CALLBACK_PATHS = (
     "/settings/integrations/google-calendar/oauth/callback",
@@ -155,6 +156,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         agent_db.close()
     telegram_pollers = start_telegram_pollers()
+    start_wecom_observer_worker()
     for dispatcher in agent_dispatchers.values():
         dispatcher.start()
     atlas_db = SessionLocal()
@@ -196,6 +198,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             quercus_processing_dispatcher.running,
         )
         await asyncio.to_thread(quercus_processing_dispatcher.stop, 45)
+        await asyncio.to_thread(stop_wecom_observer_worker)
         await asyncio.to_thread(stop_telegram_pollers, telegram_pollers)
         for dispatcher in agent_dispatchers.values():
             await asyncio.to_thread(dispatcher.stop)

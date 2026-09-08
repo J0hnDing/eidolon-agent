@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import function_runtime_capabilities
 import integration_runtime_capabilities
 
-SCOUT_FUNCTION = "github_atlas_project_scout"
+SCOUT_FUNCTION = "github_repo_scout"
 REPORT_CREATE_OPERATION = "notion.report.create"
 REPORT_SELECT = "GitHub Projects"
 REPORT_TIMEZONE = ZoneInfo("America/Toronto")

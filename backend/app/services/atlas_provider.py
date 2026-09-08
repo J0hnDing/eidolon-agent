@@ -37,6 +37,8 @@ _TRANSPORT_OPERATIONS = {
     value.operation_id: value
     for value in (
         AtlasTransportOperation("atlas.person.get", 10, 1_000_000),
+        AtlasTransportOperation("atlas.interest.get", 10, 2_000_000),
+        AtlasTransportOperation("atlas.interest.list", 10, 2_000_000),
         AtlasTransportOperation("atlas.experience.list", 10, 2_000_000),
         AtlasTransportOperation("atlas.goal.list", 10, 3_000_000),
         AtlasTransportOperation("atlas.project.list", 10, 2_000_000),
@@ -66,6 +68,8 @@ class UrllibAtlasProviderAdapter:
 
     _record_routes = {
         "atlas.person.get": "/api/records?category=person",
+        "atlas.interest.get": "/api/records?category=interest",
+        "atlas.interest.list": "/api/records?category=interest",
         "atlas.experience.list": "/api/records?category=experience",
         "atlas.goal.list": "/api/records?category=goal",
         "atlas.project.list": "/api/records?category=project",
@@ -210,6 +214,8 @@ class UrllibAtlasProviderAdapter:
                     "notes": data.get("notes"),
                 }
             }
+        if operation_id in {"atlas.interest.get", "atlas.interest.list"}:
+            return self._interest_records(payload)
         if operation_id == "atlas.experience.list":
             records = self._record_list(payload, "experience")
             records.sort(
@@ -488,6 +494,43 @@ class UrllibAtlasProviderAdapter:
         relationships.sort(key=lambda item: item["name"].casefold())
         return relationships
 
+    @classmethod
+    def _interest_records(cls, payload: Any) -> dict[str, list[dict[str, Any]]]:
+        hobbies: list[dict[str, Any]] = []
+        preferences: list[dict[str, Any]] = []
+        for record in cls._record_list(payload, "interest"):
+            data = record["data"]
+            kind = data.get("kind")
+            if kind == "hobby":
+                hobbies.append(
+                    {
+                        "title": record["title"],
+                        "description": data.get("description"),
+                        "engagement": data.get("engagement"),
+                        "skill_level": data.get("skillLevel"),
+                        "started": data.get("started"),
+                        "notes": data.get("notes"),
+                    }
+                )
+            elif kind == "preference":
+                preferences.append(
+                    {
+                        "title": record["title"],
+                        "domain": data.get("domain"),
+                        "value": data.get("value"),
+                        "strength": data.get("strength"),
+                        "context": data.get("context"),
+                        "rationale": data.get("rationale"),
+                        "effective_from": data.get("effectiveFrom"),
+                        "effective_to": data.get("effectiveTo"),
+                    }
+                )
+            else:
+                raise IntegrationProviderError("provider_unavailable", "Atlas returned invalid Interest data")
+        hobbies.sort(key=lambda item: item["title"].casefold())
+        preferences.sort(key=lambda item: item["title"].casefold())
+        return {"hobbies": hobbies, "preferences": preferences}
+
     @staticmethod
     def _knowledge_nodes(payload: Any) -> list[dict[str, Any]]:
         value = payload.get("nodes") if isinstance(payload, dict) else None
@@ -707,6 +750,8 @@ class FakeAtlasProviderAdapter:
             return {"node": dict(self.node)}
         return {
             "atlas.person.get": {"personal_info": None},
+            "atlas.interest.get": {"hobbies": [], "preferences": []},
+            "atlas.interest.list": {"hobbies": [], "preferences": []},
             "atlas.experience.list": {"experiences": []},
             "atlas.goal.list": {"goals": [], "progressions": []},
             "atlas.project.list": {"projects": []},

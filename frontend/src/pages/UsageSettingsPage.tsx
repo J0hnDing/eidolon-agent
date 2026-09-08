@@ -15,13 +15,16 @@ import {
   GmailConnectionStatus,
   GoogleCalendarConnectionStatus,
   GoogleOAuthClientStatus,
+  MicrosoftOAuthClientStatus,
   NotionConnectionStatus,
+  OutlookConnectionStatus,
   PermissionPolicy,
   QuercusConnectionStatus,
   QuercusCourse,
   QuercusProcessingMethod,
   QuercusProcessingStatus,
   TelegramConnectionStatus,
+  WeComConnectionStatus,
   api,
 } from "../api/client";
 import { DeleteIconButton } from "../components/DeleteIconButton";
@@ -109,6 +112,11 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
   const [googleClientId, setGoogleClientId] = useState("");
   const [googleClientSecret, setGoogleClientSecret] = useState("");
   const [gmail, setGmail] = useState<GmailConnectionStatus | null>(null);
+  const [microsoftOAuth, setMicrosoftOAuth] = useState<MicrosoftOAuthClientStatus | null>(null);
+  const [outlook, setOutlook] = useState<OutlookConnectionStatus | null>(null);
+  const [microsoftClientId, setMicrosoftClientId] = useState("");
+  const [microsoftClientSecret, setMicrosoftClientSecret] = useState("");
+  const [pendingMicrosoftAction, setPendingMicrosoftAction] = useState<"connection" | "client" | null>(null);
   const [telegram, setTelegram] = useState<TelegramConnectionStatus | null>(null);
   const [telegramAgent, setTelegramAgent] = useState<TelegramConnectionStatus | null>(null);
   const [telegramAgentToken, setTelegramAgentToken] = useState("");
@@ -122,6 +130,12 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramPairingCode, setTelegramPairingCode] = useState<string | null>(null);
   const [telegramPairingExpiry, setTelegramPairingExpiry] = useState<string | null>(null);
+  const [wecom, setWeCom] = useState<WeComConnectionStatus | null>(null);
+  const [wecomBotId, setWeComBotId] = useState("");
+  const [wecomSecret, setWeComSecret] = useState("");
+  const [wecomPairingCode, setWeComPairingCode] = useState<string | null>(null);
+  const [wecomPairingExpiry, setWeComPairingExpiry] = useState<string | null>(null);
+  const [pendingWeComUserRemoval, setPendingWeComUserRemoval] = useState<string | null>(null);
   const [atlas, setAtlas] = useState<AtlasIntegrationStatus | null>(null);
   const [atlasDirectory, setAtlasDirectory] = useState("");
   const [atlasPassphrase, setAtlasPassphrase] = useState("");
@@ -154,7 +168,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setRouting(normalizeRoutingSettings(nextRouting));
         setRoutingDirty(false);
       } else if (section === "integrations") {
-        const [nextGitHub, nextAtlas, nextNotion, nextQuercus, nextQuercusProcessing, nextGoogleOAuth, nextGoogleCalendar, nextGmail, nextTelegram, nextTelegramAgent, nextTelegramObserverAgent, nextTelegramAssistantAgent, nextCodexMcp] = await Promise.all([
+        const [nextGitHub, nextAtlas, nextNotion, nextQuercus, nextQuercusProcessing, nextGoogleOAuth, nextGoogleCalendar, nextGmail, nextMicrosoftOAuth, nextOutlook, nextTelegram, nextTelegramAgent, nextTelegramObserverAgent, nextTelegramAssistantAgent, nextWeCom, nextCodexMcp] = await Promise.all([
           api.getGitHubConnection(),
           api.getAtlasStatus().catch((err) => atlasUnavailableStatus(err)),
           api.getNotionConnection().catch((err) => notionUnavailableStatus(err)),
@@ -172,10 +186,13 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           api.getGoogleOAuthClient().catch((err) => googleOAuthUnavailableStatus(err)),
           api.getGoogleCalendarConnection().catch((err) => googleCalendarUnavailableStatus(err)),
           api.getGmailConnection().catch((err) => gmailUnavailableStatus(err)),
+          api.getMicrosoftOAuthClient().catch((err) => microsoftOAuthUnavailableStatus(err)),
+          api.getOutlookConnection().catch((err) => outlookUnavailableStatus(err)),
           api.getTelegramConnection().catch((err) => telegramUnavailableStatus(err)),
           api.getTelegramAgentConnection().catch((err) => telegramUnavailableStatus(err)),
           api.getTelegramObserverAgentConnection().catch((err) => telegramUnavailableStatus(err)),
           api.getTelegramAssistantAgentConnection().catch((err) => telegramUnavailableStatus(err)),
+          api.getWeComConnection().catch((err) => wecomUnavailableStatus(err)),
           api.getCodexMcpStatus().catch((err) => codexMcpUnavailableStatus(err)),
         ]);
         setGitHub(nextGitHub);
@@ -188,7 +205,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setQuercusProcessing(nextQuercusProcessing);
         setQuercusProcessingMethod(nextQuercusProcessing.method);
         setLlamaCppDirectory(nextQuercusProcessing.llama_cpp_directory ?? "");
-        const nextQuercusCourses = nextQuercus.connected
+        const nextQuercusCourses = refresh && nextQuercus.connected
           ? await api.getQuercusCourses().catch(() => nextQuercus.courses)
           : nextQuercus.courses;
         setQuercusCourses(nextQuercusCourses);
@@ -196,10 +213,13 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setGoogleOAuth(nextGoogleOAuth);
         setGoogleCalendar(nextGoogleCalendar);
         setGmail(nextGmail);
+        setMicrosoftOAuth(nextMicrosoftOAuth);
+        setOutlook(nextOutlook);
         setTelegram(nextTelegram);
         setTelegramAgent(nextTelegramAgent);
         setTelegramObserverAgent(nextTelegramObserverAgent);
         setTelegramAssistantAgent(nextTelegramAssistantAgent);
+        setWeCom(nextWeCom);
         setCodexMcp(nextCodexMcp);
       } else if (section === "permissions") {
         setPermissionPolicy(await api.getPermissionPolicy());
@@ -230,14 +250,6 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           setLlamaCppDirectory(next.llama_cpp_directory ?? "");
         }
         setQuercusProcessingReachable(true);
-        if (quercus?.connected) {
-          try {
-            const courses = await api.getQuercusCourses();
-            if (active) setQuercusCourses(courses);
-          } catch {
-            // Processing health remains valid when a course refresh fails independently.
-          }
-        }
       } catch {
         if (active) setQuercusProcessingReachable(false);
       }
@@ -247,22 +259,27 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
       active = false;
       window.clearInterval(interval);
     };
-  }, [section, quercus?.connected, quercusProcessing?.status, quercusProcessingReachable]);
+  }, [section, quercusProcessing?.status, quercusProcessingReachable]);
 
   useEffect(() => {
     if (section !== "integrations") return;
     const url = new URL(window.location.href);
     const calendarResult = url.searchParams.get("google_calendar");
     const gmailResult = url.searchParams.get("gmail");
-    if (!calendarResult && !gmailResult) return;
+    const outlookResult = url.searchParams.get("outlook");
+    if (!calendarResult && !gmailResult && !outlookResult) return;
     if (calendarResult === "connected") setSaved("Google Calendar connected.");
     else if (calendarResult === "denied") setError("Google Calendar authorization was denied.");
     else if (calendarResult) setError("Google Calendar authorization failed or expired. Try connecting again.");
     if (gmailResult === "connected") setSaved("Gmail connected.");
     else if (gmailResult === "denied") setError("Gmail authorization was denied.");
     else if (gmailResult) setError("Gmail authorization failed or expired. Try connecting again.");
+    if (outlookResult === "connected") setSaved("Outlook connected.");
+    else if (outlookResult === "denied") setError("Outlook authorization was denied.");
+    else if (outlookResult) setError("Outlook authorization failed or expired. Try connecting again.");
     url.searchParams.delete("google_calendar");
     url.searchParams.delete("gmail");
+    url.searchParams.delete("outlook");
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   }, [section]);
 
@@ -423,9 +440,8 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     setError(null); setSaved(null); setLoading(true);
     try {
       const next = await api.putQuercusConnection(quercusToken);
-      const courses = await api.getQuercusCourses();
-      setQuercus(next); setQuercusCourses(courses);
-      setSelectedQuercusCourseIds(courses.filter((course) => course.selected).map((course) => course.course_id));
+      setQuercus(next); setQuercusCourses(next.courses);
+      setSelectedQuercusCourseIds(next.courses.filter((course) => course.selected).map((course) => course.course_id));
       setSaved("Quercus connection validated and saved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save Quercus connection");
@@ -606,6 +622,71 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     } finally { setLoading(false); }
   }
 
+  async function saveMicrosoftOAuthClient() {
+    if (!microsoftClientId.trim() || !microsoftClientSecret) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      setMicrosoftOAuth(await api.putMicrosoftOAuthClient(microsoftClientId.trim(), microsoftClientSecret));
+      setMicrosoftClientId("");
+      setMicrosoftClientSecret("");
+      setSaved("Microsoft OAuth client saved.");
+    } catch (err) {
+      setMicrosoftClientSecret("");
+      setError(err instanceof Error ? err.message : "Could not save the Microsoft OAuth client");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function confirmMicrosoftAction() {
+    const action = pendingMicrosoftAction;
+    setPendingMicrosoftAction(null);
+    if (!action) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      if (action === "connection") {
+        await api.removeOutlookConnection();
+        setOutlook(await api.getOutlookConnection());
+        setSaved("Outlook connection removed.");
+      } else {
+        setMicrosoftOAuth(await api.removeMicrosoftOAuthClient());
+        setMicrosoftClientId("");
+        setMicrosoftClientSecret("");
+        setSaved("Microsoft OAuth client removed.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove the Microsoft integration setting");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function startOutlookOAuth() {
+    if (!microsoftOAuth?.configured) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const result = await api.startOutlookOAuth();
+      window.location.assign(result.authorization_url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start Outlook authorization");
+      setLoading(false);
+    }
+  }
+
+  function removeOutlookConnection() {
+    setPendingMicrosoftAction("connection");
+  }
+
+  function removeMicrosoftOAuthClient() {
+    setPendingMicrosoftAction("client");
+  }
+
   async function startTelegramPairing() {
     if (!telegramToken) return;
     setError(null);
@@ -769,6 +850,86 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     } finally { setLoading(false); }
   }
 
+  async function connectWeCom() {
+    if (!wecomBotId.trim() || !wecomSecret) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const result = await api.connectWeCom(wecomBotId.trim(), wecomSecret);
+      setWeCom(result.connection);
+      setWeComBotId("");
+      setWeComSecret("");
+      setWeComPairingCode(result.pairing_code);
+      setWeComPairingExpiry(result.expires_at);
+      setSaved("WeCom bot saved. Send the pairing command from a private chat.");
+    } catch (err) {
+      setWeComSecret("");
+      setError(err instanceof Error ? err.message : "Could not connect WeCom");
+    } finally { setLoading(false); }
+  }
+
+  async function removeWeComConnection() {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      await api.removeWeComConnection();
+      setWeCom(await api.getWeComConnection());
+      setWeComBotId("");
+      setWeComSecret("");
+      setWeComPairingCode(null);
+      setWeComPairingExpiry(null);
+      setSaved("WeCom bot removed. Observer sessions were preserved.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove WeCom bot");
+    } finally { setLoading(false); }
+  }
+
+  async function startWeComUserPairing() {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const result = await api.startWeComUserPairing();
+      setWeCom(result.connection);
+      setWeComPairingCode(result.pairing_code);
+      setWeComPairingExpiry(result.expires_at);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start WeCom user pairing");
+    } finally { setLoading(false); }
+  }
+
+  async function refreshWeComUsers() {
+    setError(null);
+    setLoading(true);
+    try {
+      const next = await api.getWeComConnection();
+      setWeCom(next);
+      if (!next.pairing_expires_at) {
+        setWeComPairingCode(null);
+        setWeComPairingExpiry(null);
+        setSaved("WeCom user paired.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not refresh WeCom users");
+    } finally { setLoading(false); }
+  }
+
+  async function removeWeComUser(userId: string) {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      await api.removeWeComUser(userId);
+      setWeCom(await api.getWeComConnection());
+      setPendingWeComUserRemoval(null);
+      setSaved("WeCom user removed. Observer sessions were preserved.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove WeCom user");
+    } finally { setLoading(false); }
+  }
+
   async function saveAtlasDirectory() {
     if (!atlasDirectory.trim()) return;
     setError(null);
@@ -885,6 +1046,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     (googleCalendar && googleCalendar.status !== "disconnected")
     || (gmail && gmail.status !== "disconnected"),
   );
+  const microsoftServiceGrantPresent = Boolean(outlook && outlook.status !== "disconnected");
 
   return (
     <section className="page stack">
@@ -1079,6 +1241,55 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
         </section>
       )}
+      {section === "integrations" && microsoftOAuth && outlook && (
+        <section className="detail-panel stack">
+          <div>
+            <h2>Outlook</h2>
+            <p className="muted">
+              Uses Microsoft Graph with the <code>common</code> authority, PKCE, account selection, and plain-text mail scopes. Refresh tokens and the app secret stay in the operating-system secret store; only sanitized configuration and a hashed account identity are retained here.
+            </p>
+            <p className="muted">School and work tenants may still require administrator consent under their tenant policy.</p>
+          </div>
+          <dl className="detail-grid">
+            <div><dt>OAuth client</dt><dd>{microsoftOAuth.configured ? "Configured" : microsoftOAuth.status.replace(/_/g, " ")}</dd></div>
+            <div><dt>Authority</dt><dd><code>{microsoftOAuth.authority}</code></dd></div>
+            <div><dt>Outlook status</dt><dd>{outlook.connected ? "Connected" : outlook.status}</dd></div>
+            <div><dt>Account</dt><dd>{outlook.account_email ?? "None"}</dd></div>
+            <div><dt>Last validated</dt><dd>{formatDate(outlook.last_validated_at)}</dd></div>
+          </dl>
+          {microsoftOAuth.error_type && <p className="error-text">OAuth client status: {microsoftOAuth.error_type.replace(/_/g, " ")}</p>}
+          {outlook.error_type && <p className="error-text">Outlook status: {outlook.error_type.replace(/_/g, " ")}</p>}
+          <div className="settings-subsection stack">
+            <div>
+              <h3>Microsoft OAuth client</h3>
+              <p className="muted">Register this redirect URI in the app registration:</p>
+              <p><code>{microsoftOAuth.outlook_redirect_uri}</code></p>
+            </div>
+            <label>
+              {microsoftOAuth.configured ? "Replacement Microsoft client ID" : "Microsoft client ID"}
+              <input type="password" autoComplete="new-password" value={microsoftClientId} onChange={(event) => setMicrosoftClientId(event.target.value)} disabled={loading || microsoftServiceGrantPresent} />
+            </label>
+            <label>
+              {microsoftOAuth.configured ? "Replacement Microsoft client secret" : "Microsoft client secret"}
+              <input type="password" autoComplete="new-password" value={microsoftClientSecret} onChange={(event) => setMicrosoftClientSecret(event.target.value)} placeholder="Client secret is never displayed after submission" disabled={loading || microsoftServiceGrantPresent} />
+            </label>
+            <div className="button-row">
+              <button type="button" onClick={() => void saveMicrosoftOAuthClient()} disabled={loading || !microsoftClientId.trim() || !microsoftClientSecret || microsoftServiceGrantPresent}>
+                {microsoftOAuth.configured ? "Replace Microsoft OAuth client" : "Save Microsoft OAuth client"}
+              </button>
+              {microsoftOAuth.configured && !microsoftServiceGrantPresent && <button type="button" className="secondary" onClick={removeMicrosoftOAuthClient} disabled={loading}>Remove Microsoft OAuth client</button>}
+            </div>
+            {microsoftServiceGrantPresent && <p className="muted">Disconnect Outlook before replacing or removing the Microsoft OAuth client.</p>}
+          </div>
+          <div className="settings-subsection stack">
+            <div><h3>Mail account</h3><p className="muted">Connect or replace the default Outlook account. No public account selector is exposed.</p></div>
+            <div className="button-row">
+              <button type="button" onClick={() => void startOutlookOAuth()} disabled={loading || !microsoftOAuth.configured}>{outlook.connected ? "Choose another Outlook account" : "Connect Outlook"}</button>
+              {outlook.status !== "disconnected" && <button type="button" className="secondary" onClick={removeOutlookConnection} disabled={loading}>Disconnect Outlook</button>}
+            </div>
+          </div>
+        </section>
+      )}
       {section === "integrations" && telegram && telegramAgent && telegramObserverAgent && telegramAssistantAgent && (
         <section className="detail-panel stack">
           <div>
@@ -1126,6 +1337,47 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
             {!telegramAssistantAgentPairingCode && telegramAssistantAgent.status === "pairing" && <div><p>Pairing is waiting for the private <code>/start</code> message.</p><button type="button" className="secondary" onClick={() => void refreshTelegramAssistantAgentPairing()}>Check Assistant Agent pairing</button></div>}
             <label>{telegramAssistantAgent.connected ? "Replacement Assistant Agent bot token" : "Assistant Agent bot token"}<input type="password" autoComplete="new-password" value={telegramAssistantAgentToken} onChange={(event) => setTelegramAssistantAgentToken(event.target.value)} placeholder="Token is never displayed after submission" /></label>
             <div className="button-row"><button type="button" onClick={() => void startTelegramAssistantAgentPairing()} disabled={loading || !telegramAssistantAgentToken}>{telegramAssistantAgent.connected ? "Replace Assistant Agent bot" : "Pair Assistant Agent bot"}</button>{telegramAssistantAgent.connected && <button type="button" className="secondary" onClick={() => void removeTelegramAssistantAgentConnection()} disabled={loading}>Disconnect Assistant Agent bot</button>}</div>
+          </div>
+        </section>
+      )}
+      {section === "integrations" && wecom && (
+        <section className="detail-panel stack">
+          <div>
+            <h2>WeCom Observer</h2>
+            <p className="muted">Uses the WeCom Intelligent Bot WebSocket long connection for the fixed Observer agent. The secret is write-only and stays in the operating-system secret store.</p>
+          </div>
+          <dl className="detail-grid">
+            <div><dt>Status</dt><dd>{wecomStatusLabel(wecom)}</dd></div>
+            <div><dt>Bot ID</dt><dd>{wecom.bot_id ?? "None"}</dd></div>
+          </dl>
+          {wecom.error_type && <p className="error-text">Connection status: {wecom.error_type.replace(/_/g, " ")}</p>}
+          <div className="settings-subsection stack">
+            <div className="button-row">
+              <div><h3>Paired users</h3><p className="muted">Each user selects an Observer session independently from the shared canonical session pool.</p></div>
+              {wecom.bot_id && <button type="button" onClick={() => void startWeComUserPairing()} disabled={loading}>Add user</button>}
+            </div>
+            {wecom.paired_users.length === 0 && <p className="muted">No paired users.</p>}
+            {wecom.paired_users.map((user) => (
+              <div className="detail-panel" key={user.user_id}>
+                <dl className="detail-grid">
+                  <div><dt>User</dt><dd>{user.user_id}</dd></div>
+                  <div><dt>Selected Observer session</dt><dd>{user.active_session_id ? `#${user.active_session_id}` : "Automatic on next message"}</dd></div>
+                </dl>
+                <button type="button" className="secondary" onClick={() => setPendingWeComUserRemoval(user.user_id)} disabled={loading}>Remove user</button>
+              </div>
+            ))}
+          </div>
+          <label>
+            {wecom.bot_id ? "Replacement WeCom Bot ID" : "WeCom Bot ID"}
+            <input type="text" autoComplete="off" value={wecomBotId} onChange={(event) => setWeComBotId(event.target.value)} />
+          </label>
+          <label>
+            {wecom.bot_id ? "Replacement WeCom Secret" : "WeCom Secret"}
+            <input type="password" autoComplete="new-password" value={wecomSecret} onChange={(event) => setWeComSecret(event.target.value)} placeholder="Secret is never displayed after submission" />
+          </label>
+          <div className="button-row">
+            <button type="button" onClick={() => void connectWeCom()} disabled={loading || !wecomBotId.trim() || !wecomSecret}>Connect WeCom Observer</button>
+            {wecom.bot_id && <button type="button" className="secondary" onClick={() => void removeWeComConnection()} disabled={loading}>Disconnect WeCom</button>}
           </div>
         </section>
       )}
@@ -1579,6 +1831,55 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </section>
         </div>
       )}
+      {pendingMicrosoftAction && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="microsoft-remove-title">
+          <section className="modal-panel stack">
+            <div>
+              <h2 id="microsoft-remove-title">{pendingMicrosoftAction === "connection" ? "Disconnect Outlook?" : "Remove Microsoft OAuth client?"}</h2>
+              <p className="muted">
+                {pendingMicrosoftAction === "connection"
+                  ? "This removes the stored Outlook refresh token and invalidates Outlook authorizations. You can connect the account again later."
+                  : "This removes the stored Microsoft OAuth app secret. Outlook must be disconnected first, and you will need to configure the client again before reconnecting."}
+              </p>
+            </div>
+            <div className="button-row">
+              <button type="button" className="danger" onClick={() => void confirmMicrosoftAction()}>
+                {pendingMicrosoftAction === "connection" ? "Disconnect Outlook" : "Remove OAuth client"}
+              </button>
+              <button type="button" className="secondary" onClick={() => setPendingMicrosoftAction(null)}>Cancel</button>
+            </div>
+          </section>
+        </div>
+      )}
+      {wecomPairingCode && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="wecom-pairing-title">
+          <section className="modal-panel stack">
+            <div>
+              <h2 id="wecom-pairing-title">Add WeCom user</h2>
+              <p>From a private WeCom chat with the Observer bot, send <code>/pair {wecomPairingCode}</code>.</p>
+              <p className="muted">This one-time code expires {formatDate(wecomPairingExpiry)} and cannot be used from a group chat.</p>
+            </div>
+            <div className="button-row">
+              <button type="button" onClick={() => void refreshWeComUsers()} disabled={loading}>Check pairing</button>
+              <button type="button" className="secondary" onClick={() => { setWeComPairingCode(null); setWeComPairingExpiry(null); }} disabled={loading}>Close</button>
+            </div>
+          </section>
+        </div>
+      )}
+      {pendingWeComUserRemoval && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="wecom-user-remove-title">
+          <section className="modal-panel stack">
+            <div>
+              <h2 id="wecom-user-remove-title">Remove WeCom user?</h2>
+              <p className="muted">This removes only the binding for {pendingWeComUserRemoval}. Observer sessions and history are preserved.</p>
+            </div>
+            <div className="button-row">
+              <button type="button" className="danger" onClick={() => void removeWeComUser(pendingWeComUserRemoval)} disabled={loading}>Remove user</button>
+              <button type="button" className="secondary" onClick={() => setPendingWeComUserRemoval(null)} disabled={loading}>Cancel</button>
+            </div>
+          </section>
+        </div>
+      )}
     </section>
   );
 }
@@ -1683,6 +1984,34 @@ function gmailUnavailableStatus(err: unknown): GmailConnectionStatus {
   };
 }
 
+function microsoftOAuthUnavailableStatus(err: unknown): MicrosoftOAuthClientStatus {
+  return {
+    provider: "microsoft",
+    configured: false,
+    status: "unavailable",
+    authority: "https://login.microsoftonline.com/common/oauth2/v2.0",
+    outlook_redirect_uri: "http://localhost:8000/settings/integrations/outlook/oauth/callback",
+    created_at: null,
+    updated_at: null,
+    error_type: err instanceof Error ? err.message : "unavailable",
+  };
+}
+
+function outlookUnavailableStatus(err: unknown): OutlookConnectionStatus {
+  return {
+    provider: "outlook",
+    connected: false,
+    status: "unavailable",
+    account_email: null,
+    account_id: null,
+    last_validated_at: null,
+    created_at: null,
+    updated_at: null,
+    error_type: err instanceof Error ? err.message : "unavailable",
+    oauth_redirect_uri: "http://localhost:8000/settings/integrations/outlook/oauth/callback",
+  };
+}
+
 function telegramUnavailableStatus(err: unknown): TelegramConnectionStatus {
   return {
     provider: "telegram",
@@ -1703,6 +2032,29 @@ function telegramStatusLabel(connection: TelegramConnectionStatus): string {
   if (connection.connected) return "Connected";
   if (connection.error_type === "pairing_expired") return "Pairing expired";
   if (connection.status === "pairing") return "Awaiting private chat";
+  return connection.status.replace(/_/g, " ");
+}
+
+function wecomUnavailableStatus(err: unknown): WeComConnectionStatus {
+  return {
+    provider: "wecom",
+    agent_id: "observer",
+    connected: false,
+    status: "unavailable",
+    bot_id: null,
+    paired_users: [],
+    pairing_expires_at: null,
+    last_validated_at: null,
+    created_at: null,
+    updated_at: null,
+    error_type: err instanceof Error ? err.message : "unavailable",
+  };
+}
+
+function wecomStatusLabel(connection: WeComConnectionStatus): string {
+  if (connection.connected) return "Connected";
+  if (connection.error_type === "pairing_expired") return "Pairing expired";
+  if (connection.status === "pairing") return "Awaiting private user";
   return connection.status.replace(/_/g, " ");
 }
 

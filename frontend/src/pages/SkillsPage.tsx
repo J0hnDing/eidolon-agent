@@ -36,6 +36,9 @@ export default function SkillsPage() {
           <h1>Skills</h1>
           <p className="muted">Inspect, validate, and manage every capability Eidolon can run.</p>
         </div>
+        <button type="button" className="secondary" onClick={() => void loadSkills()} disabled={isLoading}>
+          Refresh
+        </button>
       </header>
 
       {error && <p className="error-text">{error}</p>}

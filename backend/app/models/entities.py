@@ -207,6 +207,7 @@ class InvocationApproval(Base):
     target_contract_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     target_description: Mapped[str] = mapped_column(Text, nullable=False)
     provider: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    connection_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     provider_account_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     caller_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
@@ -275,8 +276,9 @@ class ActTurn(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
     error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
     cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivery_provider: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     delivery_connection_id: Mapped[int | None] = mapped_column(
-        ForeignKey("telegram_bot_connections.id"), nullable=True, index=True
+        Integer, nullable=True, index=True
     )
     delivery_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     delivery_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
@@ -314,7 +316,8 @@ class IntegrationConnection(Base):
     __tablename__ = "integration_connections"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    provider: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     secret_store_id: Mapped[str] = mapped_column(String(64), nullable=False)
     secret_reference: Mapped[str] = mapped_column(String(256), nullable=False)
     credential_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="token")
@@ -323,6 +326,7 @@ class IntegrationConnection(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     account_login: Mapped[str] = mapped_column(String(128), nullable=False)
     account_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    bot_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     workspace_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     configured_resource_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     configured_report_resource_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
@@ -439,6 +443,20 @@ class GoogleOAuthClientConfig(Base):
     )
 
 
+class MicrosoftOAuthClientConfig(Base):
+    __tablename__ = "microsoft_oauth_client_configs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(1024), nullable=False)
+    secret_store_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    secret_reference: Mapped[str] = mapped_column(String(256), nullable=False)
+    authority: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
 class TelegramBotConnection(Base):
     __tablename__ = "telegram_bot_connections"
 
@@ -471,6 +489,55 @@ class ActTelegramBinding(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
 
+class WeComObserverBinding(Base):
+    __tablename__ = "wecom_observer_bindings"
+
+    connection_id: Mapped[int] = mapped_column(
+        ForeignKey("integration_connections.id", ondelete="CASCADE"), primary_key=True
+    )
+    paired_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    pairing_code_hash: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    pairing_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    active_session_id: Mapped[int | None] = mapped_column(ForeignKey("act_sessions.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
+class WeComObserverUserBinding(Base):
+    __tablename__ = "wecom_observer_user_bindings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    connection_id: Mapped[int] = mapped_column(
+        ForeignKey("integration_connections.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    paired_user_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    active_session_id: Mapped[int | None] = mapped_column(ForeignKey("act_sessions.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("connection_id", "paired_user_id", name="uq_wecom_observer_user_connection_user"),
+    )
+
+
+class WeComInboundMessage(Base):
+    __tablename__ = "wecom_inbound_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    connection_id: Mapped[int] = mapped_column(
+        ForeignKey("integration_connections.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    message_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("connection_id", "message_id", name="uq_wecom_inbound_message_connection_message"),
+    )
+
+
 class IntegrationAuthorization(Base):
     __tablename__ = "integration_authorizations"
 
@@ -498,6 +565,9 @@ class IntegrationAuditRecord(Base):
         ForeignKey("web_app_instances.id"), nullable=True, index=True
     )
     operation_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    connection_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    account_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     resource: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)

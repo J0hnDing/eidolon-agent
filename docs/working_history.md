@@ -881,3 +881,55 @@ Added durable enable/disable, Run Now, and schedule editing for backend-owned pl
 ### Limitations
 
 Assistant assessment recurrence remains backend-defined; its Edit action opens Agents > Assistant. Backend-owned platform schedules do not accept input payloads.
+
+## 2026-09-06 22:36 — Enforce Act knowledge directory as read-only
+
+- Category: bugfix
+- Area: Act sandbox
+
+### Summary
+
+Implemented backend-supplied Codex named permission profiles for managed agents. All roles receive read access to runtime/act; only Act receives write access to runtime/act/memory and runtime/act/workspace, leaving runtime/act/knowledge read-only to agents while backend synchronizers retain host write authority. Updated focused contract tests and Codex integration documentation; Ruff, 17 focused tests, 726 full backend tests, App Server profile initialization, and diff checks passed.
+
+### Limitations
+
+none
+
+## 2026-09-06 15:37 — Provider-neutral integration authorization architecture
+
+- Category: refactor
+- Area: backend/integrations
+
+### Summary
+
+Replaced the centralized provider-specific catalog execution path with a checked-in provider-neutral operation registry, canonical effects/risk/typed resources, centralized per-invocation capability policy, secret-free authorized invocation objects, a runtime/provider adapter boundary, effect-derived catalog and agent projections, risk-derived HIGH approval handling, compatible standing-authorization fingerprint migration, and architecture regression coverage for all catalog-backed providers.
+
+### Limitations
+
+Existing non-GitHub integrations retain unrestricted provider-local resource scope because their prior behavior had no narrower caller-selected resource restriction. IntegrationService remains as a compatibility facade for settings, OAuth, connection lifecycle, and legacy callers; production catalog execution no longer uses it as an authorization or provider-dispatch monolith.
+
+## 2026-09-06 02:49 — Unified catalog callable execution kernel
+
+- Category: refactor
+- Area: backend execution and authorization
+
+### Summary
+
+Introduced immutable InvocationContext, authenticated context factories, category-qualified InvocationTargetRef, InvocationExecutor, and handlers for user functions, integrations, backend-core functions, and agent-private functions. Migrated MCP, runtime, web-app, manual, internal backend, and claimed approval dispatch through the kernel; removed ambient and duplicate caller abstractions and direct production dispatch paths; preserved approval recovery, caller reauthorization, audits, schemas, and runtime permission checks. Added focused architecture tests and updated execution, MCP, and approval documentation. Validation: Ruff passed; full backend suite passed 688 tests with one existing deprecation warning; application import, compileall, production bypass searches, and git diff check passed.
+
+### Limitations
+
+none
+
+## 2026-09-04 02:32 — Stabilize Quercus Marker and llama.cpp lifecycle
+
+- Category: bugfix
+- Area: Quercus processing
+
+### Summary
+
+Moved llama.cpp ownership to a pass-scoped backend controller. One keep-alive Surya server is started through the installed Marker environment, its validated loopback URL is supplied to every Marker conversion, and its exact process tree is stopped without Windows console-control broadcasts. Sync and processing shutdown now close the owned inference server, with focused tests and documentation updated.
+
+### Limitations
+
+Live ECO101 processing was not started during implementation; the user will validate the native Windows process behavior during the next backfill.

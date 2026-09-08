@@ -37,6 +37,12 @@
               "null"
             ]
           },
+          "response_schema": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "codex_permissions": {
             "type": "object",
             "properties": {
@@ -84,8 +90,8 @@
         "additionalProperties": false
       },
       "invocation": {
-        "function_helper": "function_runtime_capabilities.call_codex(prompt, context=..., model=..., internet_access=...)",
-        "web_app_helper": "web_runtime_capabilities.call_codex(prompt=..., context=..., internet_access=...)",
+        "function_helper": "function_runtime_capabilities.call_codex(prompt, context=..., model=..., internet_access=..., response_schema=...)",
+        "web_app_helper": "web_runtime_capabilities.call_codex(prompt=..., context=..., internet_access=..., response_schema=...)",
         "test_guidance": "Mock the backend helper. Do not shell out to Codex.",
         "rules": [
           "Batch multi-item work into one bounded Codex request.",

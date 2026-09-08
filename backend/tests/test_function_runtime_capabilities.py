@@ -59,6 +59,7 @@ def test_function_helper_discovers_and_invokes_with_ephemeral_bearer(
         "Analyze this.",
         context={"item": "demo"},
         model="gpt-test",
+        response_schema={"type": "object", "properties": {"result": {"type": "string"}}},
         timeout_seconds=9,
     )
 
@@ -74,6 +75,7 @@ def test_function_helper_discovers_and_invokes_with_ephemeral_bearer(
         "prompt": "Analyze this.",
         "context": {"item": "demo"},
         "model": "gpt-test",
+        "response_schema": {"type": "object", "properties": {"result": {"type": "string"}}},
         "codex_permissions": {
             "call_response": True,
             "internet_access": False,

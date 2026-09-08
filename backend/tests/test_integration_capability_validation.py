@@ -118,6 +118,16 @@ def test_direct_google_calendar_and_oauth_secret_access_are_rejected(tmp_path: P
     assert {"direct_google_access", "direct_telegram_access", "secrets"}.issubset(capabilities)
 
 
+def test_direct_microsoft_graph_and_identity_access_are_rejected(tmp_path: Path) -> None:
+    result = scan(
+        tmp_path,
+        "import requests\n"
+        "requests.get('https://graph.microsoft.com/v1.0/me/messages')\n"
+        "requests.get('https://login.microsoftonline.com/common/oauth2/v2.0/authorize')\n",
+    )
+    assert "direct_microsoft_access" in {finding.capability for finding in result.findings}
+
+
 def test_browser_integration_invocation_is_rejected(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("app = object()\n", encoding="utf-8")
     (tmp_path / "app.js").write_text(

@@ -54,7 +54,16 @@ class McpToolSnapshot:
             title=self.title,
             description=self.description,
             inputSchema=self.input_schema,
-            outputSchema=self.output_schema,
+            outputSchema=(
+                {
+                    "type": "object",
+                    "properties": {"result": self.output_schema},
+                    "required": ["result"],
+                    "additionalProperties": False,
+                }
+                if self.output_schema.get("type") == "array"
+                else self.output_schema
+            ),
             annotations=types.ToolAnnotations(
                 title=self.title,
                 readOnlyHint=self.read_only,
@@ -66,7 +75,7 @@ class McpToolSnapshot:
 
 @dataclass
 class McpInvocationResult:
-    output: dict[str, Any]
+    output: dict[str, Any] | list[Any]
     summary: str
 
 
@@ -194,8 +203,8 @@ class McpFunctionService:
                     outcome.error_type or "function_failed",
                     outcome.error_message or f"Eidolon invocation {outcome.status}.",
                 )
-            if not isinstance(outcome.output, dict):
-                raise McpFunctionError("internal_failure", "Eidolon invocation returned no object output.")
+            if not isinstance(outcome.output, (dict, list)):
+                raise McpFunctionError("internal_failure", "Eidolon invocation returned no structured output.")
             output = outcome.output
             status = outcome.status
             audit.resource = outcome.audit_resource
@@ -326,5 +335,5 @@ class McpFunctionService:
         return f"{prefix}_{normalized}_{digest}"
 
     @staticmethod
-    def _json_size(value: dict[str, Any]) -> int:
+    def _json_size(value: dict[str, Any] | list[Any]) -> int:
         return len(json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))

@@ -1814,12 +1814,35 @@ class AgentWorkflowService:
         integration_operations = function_catalog.integration_operation_ids(selected_functions)
         integration_requirements = []
         operations_by_provider: dict[str, list[str]] = {}
+        requested_provider_map = blueprint.get("integration_providers", {})
+        if not isinstance(requested_provider_map, dict):
+            requested_provider_map = {}
         for operation_id in integration_operations:
             operation = DEFAULT_INTEGRATION_REGISTRY.get(operation_id)
             if operation is None:
                 raise AgentWorkflowError(f"Unknown integration operation: {operation_id}")
-            provider = operation.provider_id
-            operations_by_provider.setdefault(provider, []).append(operation_id)
+            requested = requested_provider_map.get(operation_id)
+            if operation_id.startswith("email.") and not isinstance(requested, list):
+                raise AgentWorkflowError(
+                    f"ProductManager must select the exact Gmail/Outlook provider set for {operation_id}"
+                )
+            providers = (
+                [str(item) for item in requested if isinstance(item, str)]
+                if isinstance(requested, list)
+                else list(DEFAULT_INTEGRATION_REGISTRY.operation_provider_set(operation_id))
+            )
+            if not providers or len(providers) != len(set(providers)):
+                raise AgentWorkflowError(f"Integration operation {operation_id} requires a non-empty unique provider set")
+            if operation.provider_selection.value == "single" and len(providers) != 1:
+                raise AgentWorkflowError(f"Integration operation {operation_id} requires exactly one provider")
+            if operation.provider_selection.value == "multi" and len(providers) > 2:
+                raise AgentWorkflowError(f"Integration operation {operation_id} supports at most two providers")
+            for provider in providers:
+                if not DEFAULT_INTEGRATION_REGISTRY.supports_provider(operation_id, provider):
+                    raise AgentWorkflowError(
+                        f"Integration operation {operation_id} is not supported by provider {provider}"
+                    )
+                operations_by_provider.setdefault(provider, []).append(operation_id)
         for provider, provider_operations in sorted(operations_by_provider.items()):
             integration_requirements.append(
                 {

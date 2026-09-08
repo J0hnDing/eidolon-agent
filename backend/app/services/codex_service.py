@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
 
+from jsonschema import Draft202012Validator, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -236,7 +237,11 @@ class RealCodexAdapter:
         )
         if self.model:
             command.extend(["--model", self.model])
-        output_schema_path = write_temporary_output_schema(plan.get("codex_task"), output_dir)
+        output_schema_path = write_temporary_output_schema(
+            plan.get("codex_task"),
+            output_dir,
+            response_schema=plan.get("response_schema") if isinstance(plan.get("response_schema"), dict) else None,
+        )
         if output_schema_path is not None:
             command.extend(["--output-schema", str(output_schema_path)])
         command.append("-")
@@ -1119,6 +1124,8 @@ class CodexService:
             },
             "requested_network_domains": ["runtime-approved-network"] if internet_access else [],
         }
+        if payload.response_schema is not None:
+            plan["response_schema"] = payload.response_schema
         prompt = (
             "You are Codex responding to an installed local skill through the backend Skill Codex Call API.\n"
             "Return exactly one JSON object matching the supplied output schema and no prose.\n"
@@ -1167,17 +1174,33 @@ class CodexService:
             )
             self.invocations.record_skill_runtime(skill.id, invocation)
             raise CodexGenerationError(detail)
+        raw_response = result.stdout.strip()
+        if payload.response_schema is not None:
+            try:
+                response_json = json.loads(raw_response)
+                Draft202012Validator(payload.response_schema).validate(response_json)
+            except (json.JSONDecodeError, ValidationError) as exc:
+                raise CodexGenerationError("Codex response did not match the requested response schema") from exc
+            response = raw_response
+        else:
+            invocation = self.invocations.from_result(
+                result,
+                plan,
+                default_adapter_name=type(self.adapter).__name__,
+            )
+            if invocation is not None:
+                self.invocations.record_skill_runtime(skill.id, invocation)
+            parsed = self._parse_product_manager_json(result, fallback={"response": raw_response, "notes": []})
+            response = parsed.get("response")
         invocation = self.invocations.from_result(
             result,
             plan,
             default_adapter_name=type(self.adapter).__name__,
         )
-        if invocation is not None:
+        if payload.response_schema is not None and invocation is not None:
             self.invocations.record_skill_runtime(skill.id, invocation)
-        parsed = self._parse_product_manager_json(result, fallback={"response": result.stdout.strip(), "notes": []})
-        response = parsed.get("response")
         return {
-            "response": response.strip() if isinstance(response, str) and response.strip() else result.stdout.strip(),
+            "response": response.strip() if isinstance(response, str) and response.strip() else raw_response,
             "model": payload.model,
             "internet_access": internet_access,
         }

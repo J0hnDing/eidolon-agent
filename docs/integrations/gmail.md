@@ -1,6 +1,6 @@
 # Gmail OAuth Integration
 
-Eidolon supports one trusted Gmail connection and five provider-neutral `email.*` functions. Gmail and Google Calendar share one Google OAuth application client, but each service has its own authorization grant, refresh token, scopes, account identity, connect/disconnect controls, and authorization records. The two services may therefore be connected to different Google accounts, and replacing one account does not change the other.
+Eidolon supports one default trusted Gmail connection and five provider-neutral `email.*` functions. Gmail and Google Calendar share one Google OAuth application client, but each service has its own authorization grant, refresh token, scopes, account identity, connect/disconnect controls, and authorization records. The two services may therefore be connected to different Google accounts, and replacing one account does not change the other. Email provider choice is made by the invocation input; Gmail is one adapter behind the shared contract rather than a separate public operation family.
 
 ## OAuth Setup and Storage
 
@@ -26,19 +26,19 @@ The callback requires the Gmail scope and a refresh token, then retrieves the ve
 
 | Function | Behavior |
 | --- | --- |
-| `email.search` | Requires at least one keyword/filter. Returns one page of at most 25 normalized conversation summaries and an opaque continuation token. |
-| `email.conversation.get` | Fetches one Gmail thread in full format and returns at most 100 normalized messages. HTML-only bodies are converted to text. Attachments expose only filename, MIME type, and size. |
-| `email.read_new` | Fetches at most 50 unread Primary Inbox messages newer than one year without changing their read state. It excludes Promotions, Social, Updates, Forums, Spam, and Trash. Every selected message must be fetched and the combined normalized result must fit 4 MiB. |
-| `email.read_and_mark_new` | Fetches the same bounded unread Primary Inbox batch, then removes the `UNREAD` label from exactly the messages successfully fetched after the combined normalized result fits 4 MiB. |
-| `email.send` | High risk. Sends one plain-text email to 1-10 direct recipients and at most 20 total recipients. Subject and body are bounded, and HTML and attachments are not accepted. Every invocation requires the separate per-call approval workflow. |
+| `email.search` | Requires unique `providers: ["gmail"|"outlook"]` and at least one keyword/filter. `page_size` is 1–25 per provider; the merged page can contain up to 50 conversations and uses a versioned composite opaque token. |
+| `email.conversation.get` | Requires `provider: "gmail"` or `"outlook"`; fetches one Gmail thread in full format and returns at most 100 normalized messages. HTML-only bodies are converted to plain text, messages are chronological, and attachments expose only filename, MIME type, and size. |
+| `email.read_new` | Requires `providers`. Fetches at most 50 unread Primary Inbox messages newer than one year without changing their read state. It excludes Promotions, Social, Updates, Forums, Spam, and Trash. Every selected message must be fetched and the per-provider normalized result must fit 4 MiB. |
+| `email.read_and_mark_new` | Requires `providers`. Fetches the same bounded unread Primary Inbox batch, then removes the `UNREAD` label only after fetch validation. It returns provider-level exact marked/failed/unknown message IDs and bounded provider errors. |
+| `email.send` | Requires one `provider` and is high risk. Sends one plain-text email to 1-10 direct recipients and at most 20 total recipients. Subject and body are bounded, and HTML and attachments are not accepted. Every invocation requires the separate per-call approval workflow. |
 
-Normalized messages contain message/conversation IDs, bounded sender and recipient headers, subject, date, snippet, text, unread state, and attachment metadata. Eidolon never returns raw MIME, attachment bytes, OAuth responses, authorization headers, or provider credentials.
+Normalized messages contain `provider`, message/conversation IDs, bounded sender and recipient headers, subject, UTC RFC 3339 `timestamp`, snippet, plain text, unread state, and attachment metadata. Conversation summaries contain `provider`, conversation id, subject, latest sender/timestamp, snippet, message count, unread, and attachment state. Search and unread results are globally newest-first; conversation messages are chronological. Eidolon never returns raw MIME, attachment bytes, OAuth responses, authorization headers, or provider credentials.
 
-`email.send` returns `{sent, message_id, conversation_id}` only after an approved execution. Calling its effective public contract first creates a pending invocation approval; it does not contact Gmail or retrieve the Gmail credential before approval.
+`email.send` returns `{provider, sent, message_id, conversation_id}` only after an approved execution. Calling its effective public contract first creates a pending invocation approval; it does not contact Gmail or retrieve the Gmail credential before approval. Changing the selected provider, default connection, account, or contract makes an approval stale.
 
 ## Trust and Privacy Boundary
 
-Generated skill code can request only exact declared `email.*` operations through Eidolon's trusted integration relay. It cannot choose provider URLs, HTTP methods, headers, credentials, Gmail query syntax, label mutations, MIME payloads, or attachment downloads. Provider responses and normalized outputs are bounded. Audit records contain only operation identifiers and bounded status/resource identifiers, never message content, recipients, OAuth data, or tokens.
+Generated skill code can request only exact declared provider-neutral `email.*` operations through Eidolon's trusted integration relay. It cannot choose provider URLs, HTTP methods, headers, credentials, Gmail query syntax, label mutations, MIME payloads, or attachment downloads. Provider responses are bounded to 4 MiB per provider and 8 MiB for a two-provider aggregate. Audit records contain operation, provider, internal connection/account attribution, and bounded status/resource identifiers, never message content, recipients, OAuth data, or tokens.
 
 For approved email sends, the user-selected Telegram approval channel intentionally receives the reason, recipients, subject, and complete bounded plain-text body. This sends that approval content to Telegram's cloud service before Gmail execution. Disconnecting Telegram after an approval was queued leaves local approval available, while changing the connected Gmail account makes the queued action stale.
 

@@ -20,7 +20,7 @@ def call(
     operation: str,
     input: dict[str, Any],  # noqa: A002 - stable generated-code API
     timeout_seconds: float = 30,
-) -> dict[str, Any]:
+) -> dict[str, Any] | list[Any]:
     """Invoke one declared and approved integration operation."""
     if not operation.strip():
         raise IntegrationRuntimeCapabilityError("invalid_input", "Integration operation cannot be empty")
@@ -65,7 +65,7 @@ def call(
             "Integration capability returned invalid JSON",
         ) from None
     output = result.get("output") if isinstance(result, dict) else None
-    if not isinstance(output, dict):
+    if not isinstance(output, (dict, list)):
         raise IntegrationRuntimeCapabilityError(
             "internal_failure",
             "Integration capability returned an invalid result",

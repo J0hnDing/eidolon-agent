@@ -84,12 +84,12 @@ describe("SchedulesPage", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "Delete" })).toBeNull());
   });
 
-  it("uses the Agents assessment controls and links Edit to Assistant", async () => {
+  it("uses the assessment controls and opens its editable schedule popup", async () => {
     vi.spyOn(api, "listSchedules").mockResolvedValue([{
       id: -2,
       schedule_kind: "platform",
       service_id: "backend.assistant.assessment",
-      read_only: true,
+      read_only: false,
       skill_enabled: null,
       is_running: false,
       skill_id: null,
@@ -117,7 +117,12 @@ describe("SchedulesPage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Enable" }));
     await waitFor(() => expect(update).toHaveBeenCalledWith(true));
-    expect(screen.getByRole("link", { name: "Edit" }).getAttribute("href")).toBe("/agents/assistant");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("dialog", { name: "Edit Service Schedule" })).toBeTruthy();
+    expect((screen.getByLabelText("Every") as HTMLInputElement).value).toBe("3");
+    expect((screen.getByLabelText("Type") as HTMLSelectElement).value).toBe("interval");
+    expect(screen.queryByRole("option", { name: "daily" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "weekly" })).toBeNull();
     expect(screen.getByRole("button", { name: "Run Now" })).not.toHaveProperty("disabled", true);
   });
 

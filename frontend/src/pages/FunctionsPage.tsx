@@ -14,6 +14,7 @@ const categorySourceLabels: Record<FunctionCatalogEntry["category"], string> = {
 
 const providerLabels: Record<string, string> = {
   github: "GitHub",
+  huggingface: "Hugging Face",
   atlas: "Atlas",
   notion: "Notion",
   google_calendar: "Google Calendar",
@@ -45,11 +46,11 @@ export default function FunctionsPage() {
 
   usePolling(() => loadFunctions({ showLoading: false }), true, 5000);
 
-  async function loadFunctions(options: { showLoading?: boolean } = {}) {
+  async function loadFunctions(options: { refresh?: boolean; showLoading?: boolean } = {}) {
     if (options.showLoading !== false) setIsLoading(true);
     setError(null);
     try {
-      setFunctions(await api.listFunctionCatalog());
+      setFunctions(await api.listFunctionCatalog(options.refresh));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load functions");
     } finally {
@@ -66,6 +67,9 @@ export default function FunctionsPage() {
             Backend, user, and integration functions available to application skills.
           </p>
         </div>
+        <button type="button" className="secondary" onClick={() => void loadFunctions({ refresh: true })} disabled={isLoading}>
+          Refresh
+        </button>
       </header>
 
       {error && <p className="error-text">{error}</p>}

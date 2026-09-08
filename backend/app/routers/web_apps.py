@@ -244,7 +244,7 @@ def web_app_integration_capability(
             status_code=status.HTTP_409_CONFLICT,
             detail={"type": exc.error_type, "message": str(exc)},
         ) from None
-    return IntegrationInvocationResponse(output=outcome.output or {})
+    return IntegrationInvocationResponse(output={} if outcome.output is None else outcome.output)
 
 
 @gateway_router.api_route(

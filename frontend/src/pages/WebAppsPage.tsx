@@ -37,11 +37,11 @@ export default function WebAppsPage() {
       <header className="page-header">
         <div>
           <h1>Applications</h1>
-          <p className="muted">
-            Application content runs on an isolated origin while Eidolon keeps lifecycle, version,
-            permission, and sandbox controls outside the frame.
-          </p>
+          <p className="muted">Manage sandboxed web applications,</p>
         </div>
+        <button type="button" className="secondary" onClick={() => void loadApps()} disabled={isLoading}>
+          Refresh
+        </button>
       </header>
       {error && <p className="error-text">{error}</p>}
       {isLoading ? (

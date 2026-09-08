@@ -57,6 +57,8 @@ def test_registry_is_authoritative_and_context_is_selected_only() -> None:
         "atlas.person.get",
         "atlas.experience.list",
         "atlas.goal.list",
+        "atlas.interest.get",
+        "atlas.interest.list",
         "atlas.project.list",
         "atlas.relationship.list",
         "atlas.knowledge.frontier.list",
@@ -232,7 +234,7 @@ def test_email_read_operations_keep_distinct_read_contracts() -> None:
     assert read.read_only is True
     assert read.effects == frozenset({IntegrationEffect.READ})
     assert read.risk == "low"
-    assert read.contract_version == 2
+    assert read.contract_version == 3
     assert read_and_mark.title == "Read and mark new email"
     assert read_and_mark.read_only is False
     assert read_and_mark.effects == frozenset(

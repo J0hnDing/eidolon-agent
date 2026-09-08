@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator, SchemaError
 
@@ -11,6 +11,7 @@ from app.integrations.types import (
     IntegrationEffect,
     IntegrationOperationSpec,
     OperationPresentation,
+    ProviderSelectionMode,
     ProviderSpec,
     ResourceSpec,
     RiskLevel,
@@ -122,7 +123,6 @@ _PULL_REQUEST_OUTPUT = _object_schema(
 _GITHUB_OPERATIONS = (
     IntegrationOperationSpec(
         id="github.repository.get",
-        provider_id="github",
         title="Get repository",
         description="Read normalized metadata for one approved GitHub repository.",
         input_schema=_object_schema(dict(REPOSITORY_PROPERTIES), ["owner", "repository"]),
@@ -138,7 +138,6 @@ _GITHUB_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="github.repository.tree.list",
-        provider_id="github",
         title="List repository tree",
         description="List a bounded, depth-limited repository tree and report truncation.",
         input_schema=_object_schema(
@@ -190,7 +189,6 @@ _GITHUB_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="github.repository.file.read",
-        provider_id="github",
         title="Read repository file",
         description="Read one bounded UTF-8 text file from an approved repository.",
         input_schema=_object_schema(
@@ -231,7 +229,6 @@ _GITHUB_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="github.issue.list",
-        provider_id="github",
         title="List issues",
         description="List a bounded set of normalized issues from one approved repository.",
         input_schema=_object_schema(
@@ -264,7 +261,6 @@ _GITHUB_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="github.pull_request.list",
-        provider_id="github",
         title="List pull requests",
         description="List a bounded set of normalized pull requests from one approved repository.",
         input_schema=_object_schema(
@@ -297,7 +293,6 @@ _GITHUB_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="github.repository.trending.list",
-        provider_id="github",
         title="List trending repositories",
         description="Read GitHub's actual daily, weekly, or monthly Trending repository order and enrich each selected repository with a bounded README.",
         input_schema=_object_schema(
@@ -337,6 +332,153 @@ _GITHUB_OPERATIONS = (
         ),
     ),
 )
+_HUGGINGFACE_ERRORS = (
+    "connection_unavailable",
+    "operation_undeclared",
+    "authorization_missing_or_stale",
+    "invalid_input",
+    "not_found",
+    "provider_forbidden",
+    "rate_limited",
+    "provider_timeout",
+    "response_too_large",
+    "unsupported_file_type",
+    "provider_unavailable",
+    "internal_failure",
+)
+_PAPER_SUMMARY_OUTPUT = _object_schema(
+    {
+        "paper_id": {"type": "string", "pattern": r"^\d{4}\.\d{4,5}$"},
+        "title": {"type": "string", "minLength": 1},
+        "authors": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {"type": "string", "minLength": 1},
+        },
+        "abstract": {"type": "string", "maxLength": 50_000},
+        "url": {"type": "string", "maxLength": 500},
+        "pdf_url": {"type": "string", "maxLength": 500},
+        "published_at": {"type": ["string", "null"]},
+        "upvotes": {"type": "integer", "minimum": 0},
+    },
+    [
+        "paper_id",
+        "title",
+        "authors",
+        "abstract",
+        "url",
+        "pdf_url",
+        "published_at",
+        "upvotes",
+    ],
+)
+_PAPER_OUTPUT = _object_schema(
+    {
+        **_PAPER_SUMMARY_OUTPUT["properties"],
+        "content": {"type": ["string", "null"], "maxLength": 500_000},
+        "content_source": {
+            "type": ["string", "null"],
+            "enum": ["arxiv_html", "arxiv_pdf", None],
+        },
+        "content_truncated": {"type": "boolean"},
+    },
+    [
+        *_PAPER_SUMMARY_OUTPUT["required"],
+        "content",
+        "content_source",
+        "content_truncated",
+    ],
+)
+_PAPER_LIST_OUTPUT = {
+    "type": "array",
+    "maxItems": 120,
+    "items": _PAPER_SUMMARY_OUTPUT,
+}
+_HUGGINGFACE_OPERATIONS = (
+    IntegrationOperationSpec(
+        id="huggingface.list_papers",
+        title="List Hugging Face papers",
+        description="List a bounded Hugging Face Daily Papers ranking for one ISO month, week, or date.",
+        input_schema=_object_schema(
+            {
+                "period": {
+                    "type": "string",
+                    "anyOf": [
+                        {"pattern": r"^\d{4}-\d{2}$"},
+                        {"pattern": r"^\d{4}-W\d{2}$"},
+                        {"pattern": r"^\d{4}-\d{2}-\d{2}$"},
+                    ],
+                },
+                "sort": {"enum": ["trending", "publishedAt"], "default": "trending"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 15},
+            },
+            ["period"],
+        ),
+        output_schema={**_PAPER_LIST_OUTPUT, "maxItems": 100},
+        effects=frozenset({IntegrationEffect.READ}),
+        resource=ResourceSpec("huggingface.paper_catalog", ()),
+        risk=RiskLevel.LOW,
+        presentation=OperationPresentation(
+            usage_example={
+                "operation": "huggingface.list_papers",
+                "input": {"period": "2026-09", "sort": "trending", "limit": 15},
+            },
+            normalized_errors=_HUGGINGFACE_ERRORS,
+            open_world=True,
+        ),
+    ),
+    IntegrationOperationSpec(
+        id="huggingface.search_papers",
+        title="Search Hugging Face papers",
+        description="Search Hugging Face papers by title, authors, abstract, and indexed content.",
+        input_schema=_object_schema(
+            {
+                "query": {"type": "string", "minLength": 1, "maxLength": 250},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 120, "default": 15},
+            },
+            ["query"],
+        ),
+        output_schema=_PAPER_LIST_OUTPUT,
+        effects=frozenset({IntegrationEffect.READ}),
+        resource=ResourceSpec("huggingface.paper_catalog", ()),
+        risk=RiskLevel.LOW,
+        presentation=OperationPresentation(
+            usage_example={
+                "operation": "huggingface.search_papers",
+                "input": {"query": "world models", "limit": 15},
+            },
+            normalized_errors=_HUGGINGFACE_ERRORS,
+            open_world=True,
+        ),
+    ),
+    IntegrationOperationSpec(
+        id="huggingface.get_paper",
+        title="Get Hugging Face paper",
+        description="Read normalized paper metadata and optionally bounded full-paper text from arXiv HTML or PDF.",
+        input_schema=_object_schema(
+            {
+                "paper_id": {
+                    "type": "string",
+                    "pattern": r"^\d{4}\.\d{4,5}(?:v\d+)?$",
+                },
+                "include_content": {"type": "boolean", "default": False},
+            },
+            ["paper_id"],
+        ),
+        output_schema=_PAPER_OUTPUT,
+        effects=frozenset({IntegrationEffect.READ}),
+        resource=ResourceSpec("huggingface.paper", ("paper_id",)),
+        risk=RiskLevel.LOW,
+        presentation=OperationPresentation(
+            usage_example={
+                "operation": "huggingface.get_paper",
+                "input": {"paper_id": "2602.08025", "include_content": False},
+            },
+            normalized_errors=_HUGGINGFACE_ERRORS,
+            open_world=True,
+        ),
+    ),
+)
 _ATLAS_ERRORS = (
     "connection_unavailable",
     "atlas_locked",
@@ -356,6 +498,30 @@ _ATLAS_ERRORS = (
 _LIMIT = {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}
 _KEYWORDS = {"type": "string", "minLength": 1, "maxLength": 200}
 _NULLABLE_TEXT = {"type": ["string", "null"]}
+_ATLAS_HOBBY_OUTPUT = _object_schema(
+    {
+        "title": {"type": "string"},
+        "description": _NULLABLE_TEXT,
+        "engagement": _NULLABLE_TEXT,
+        "skill_level": _NULLABLE_TEXT,
+        "started": _NULLABLE_TEXT,
+        "notes": _NULLABLE_TEXT,
+    },
+    ["title", "description", "engagement", "skill_level", "started", "notes"],
+)
+_ATLAS_PREFERENCE_OUTPUT = _object_schema(
+    {
+        "title": {"type": "string"},
+        "domain": _NULLABLE_TEXT,
+        "value": {},
+        "strength": _NULLABLE_TEXT,
+        "context": _NULLABLE_TEXT,
+        "rationale": _NULLABLE_TEXT,
+        "effective_from": _NULLABLE_TEXT,
+        "effective_to": _NULLABLE_TEXT,
+    },
+    ["title", "domain", "value", "strength", "context", "rationale", "effective_from", "effective_to"],
+)
 _KNOWLEDGE_STATUS = {"enum": ["unassessed", "unknown", "known"]}
 _KNOWLEDGE_BRANCH = {"enum": ["subjects", "ideologies"]}
 _KNOWLEDGE_SUMMARY = _object_schema(
@@ -370,7 +536,6 @@ _KNOWLEDGE_SUMMARY = _object_schema(
 _ATLAS_OPERATIONS = (
     IntegrationOperationSpec(
         id="atlas.person.get",
-        provider_id="atlas",
         title="Get Atlas person",
         description="Read the non-sensitive built-in Person profile from the unlocked local Atlas.",
         input_schema=_object_schema({}, []),
@@ -386,8 +551,51 @@ _ATLAS_OPERATIONS = (
         ),
     ),
     IntegrationOperationSpec(
+        id="atlas.interest.get",
+        title="Get Atlas interests",
+        description="Read the user's hobbies and preferences from the unlocked local Atlas without record metadata.",
+        input_schema=_object_schema({}, []),
+        output_schema=_object_schema(
+            {
+                "hobbies": {"type": "array", "items": _ATLAS_HOBBY_OUTPUT},
+                "preferences": {"type": "array", "items": _ATLAS_PREFERENCE_OUTPUT},
+            },
+            ["hobbies", "preferences"],
+        ),
+        effects=frozenset({IntegrationEffect.READ}),
+        resource=ResourceSpec("atlas.interest", ()),
+        risk=RiskLevel.LOW,
+        contract_version=1,
+        presentation=OperationPresentation(
+            usage_example={"operation": "atlas.interest.get", "input": {}},
+            normalized_errors=_ATLAS_ERRORS,
+            open_world=False,
+        ),
+    ),
+    IntegrationOperationSpec(
+        id="atlas.interest.list",
+        title="List Atlas interests",
+        description="List the user's hobbies and preferences from the unlocked local Atlas without record metadata.",
+        input_schema=_object_schema({}, []),
+        output_schema=_object_schema(
+            {
+                "hobbies": {"type": "array", "items": _ATLAS_HOBBY_OUTPUT},
+                "preferences": {"type": "array", "items": _ATLAS_PREFERENCE_OUTPUT},
+            },
+            ["hobbies", "preferences"],
+        ),
+        effects=frozenset({IntegrationEffect.READ}),
+        resource=ResourceSpec("atlas.interest", ()),
+        risk=RiskLevel.LOW,
+        contract_version=1,
+        presentation=OperationPresentation(
+            usage_example={"operation": "atlas.interest.list", "input": {}},
+            normalized_errors=_ATLAS_ERRORS,
+            open_world=False,
+        ),
+    ),
+    IntegrationOperationSpec(
         id="atlas.experience.list",
-        provider_id="atlas",
         title="List Atlas experiences",
         description="List recent experiences, optionally filtered by keywords and ongoing state.",
         input_schema=_object_schema({"keywords": _KEYWORDS, "ongoing": {"type": "boolean"}, "limit": _LIMIT}, []),
@@ -406,7 +614,6 @@ _ATLAS_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="atlas.goal.list",
-        provider_id="atlas",
         title="List Atlas goals",
         description="List matching top-level goals while retaining each complete subgoal tree and progression edges.",
         input_schema=_object_schema(
@@ -436,7 +643,6 @@ _ATLAS_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="atlas.project.list",
-        provider_id="atlas",
         title="List Atlas projects",
         description="List projects with title, description, status, and GitHub link using minimal optional filters.",
         input_schema=_object_schema(
@@ -463,7 +669,6 @@ _ATLAS_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="atlas.relationship.list",
-        provider_id="atlas",
         title="List Atlas relationships",
         description="List important built-in relationship fields using optional keyword, type, status, and importance filters.",
         input_schema=_object_schema(
@@ -490,7 +695,6 @@ _ATLAS_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="atlas.knowledge.frontier.list",
-        provider_id="atlas",
         title="Get Knowledge frontier",
         description="List bounded Subject nodes ready for assessment: unknown or unassessed nodes with a known immediate parent.",
         input_schema=_object_schema(
@@ -519,7 +723,6 @@ _ATLAS_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="atlas.knowledge.search",
-        provider_id="atlas",
         title="Search Knowledge nodes",
         description="Search Knowledge names, then known explanations and terms, and return compact ranked candidates.",
         input_schema=_object_schema(
@@ -545,7 +748,6 @@ _ATLAS_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="atlas.knowledge.node.get",
-        provider_id="atlas",
         title="Get Knowledge node",
         description="Inspect one Knowledge node with only its path, parent, immediate children, explanation, terms, status, and revision.",
         input_schema=_object_schema({"node_id": {"type": "integer", "minimum": 1}}, ["node_id"]),
@@ -561,7 +763,6 @@ _ATLAS_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="atlas.knowledge.node.know",
-        provider_id="atlas",
         title="Know Knowledge node",
         description="Use one internet-enabled Codex call, then primitive Atlas writes, to mark the selected node known and optionally create immediate name-only unassessed children. It cannot rename, move, delete, merge, or recursively expand nodes.",
         input_schema=_object_schema(
@@ -669,7 +870,6 @@ _NOTION_BLOCKS = {"type": "array", "maxItems": 100, "items": {"type": "object"}}
 _NOTION_OPERATIONS = (
     IntegrationOperationSpec(
         id="notion.todo.list",
-        provider_id="notion",
         title="List Notion todos",
         description="List one bounded page of todos from the configured Notion data source, newest-created first.",
         input_schema=_object_schema(
@@ -699,7 +899,6 @@ _NOTION_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="notion.todo.create",
-        provider_id="notion",
         title="Create Notion todo",
         description="Create one todo in the configured Notion data source; only title is required.",
         input_schema=_object_schema(dict(_TODO_MUTABLE_PROPERTIES), ["title"]),
@@ -716,7 +915,6 @@ _NOTION_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="notion.todo.update",
-        provider_id="notion",
         title="Update Notion todo",
         description="Partially update one contained Notion todo; explicit null clears an optional property.",
         input_schema=_TODO_UPDATE_INPUT,
@@ -733,7 +931,6 @@ _NOTION_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="notion.todo.delete",
-        provider_id="notion",
         title="Delete Notion todo",
         description="Move one contained Notion todo page to trash; Notion does not support permanent API deletion.",
         input_schema=_object_schema({"id": {"type": "string", "minLength": 1, "maxLength": 128}}, ["id"]),
@@ -752,7 +949,6 @@ _NOTION_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="notion.report.list",
-        provider_id="notion",
         title="List Notion reports",
         description="List one bounded page of reports from the configured Notion Reports data source, newest-created first.",
         input_schema=_object_schema(dict(_REPORT_PAGE_INPUT_PROPERTIES), []),
@@ -775,7 +971,6 @@ _NOTION_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="notion.report.get",
-        provider_id="notion",
         title="Get Notion report",
         description="Get one contained Notion report and one raw paginated page of its top-level blocks.",
         input_schema=_object_schema(
@@ -801,7 +996,6 @@ _NOTION_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="notion.report.create",
-        provider_id="notion",
         title="Create Notion report",
         description="Create one report with raw Notion children in the configured Notion Reports data source.",
         input_schema=_object_schema(
@@ -827,7 +1021,6 @@ _NOTION_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="notion.report.delete",
-        provider_id="notion",
         title="Delete Notion report",
         description="Move one contained Notion report page to trash; Notion does not support permanent API deletion.",
         input_schema=_object_schema({"id": {"type": "string", "minLength": 1, "maxLength": 128}}, ["id"]),
@@ -931,7 +1124,6 @@ _GOOGLE_UPDATE_INPUT["minProperties"] = 2
 _GOOGLE_CALENDAR_OPERATIONS = (
     IntegrationOperationSpec(
         id="google_calendar.event.create",
-        provider_id="google_calendar",
         title="Create Google Calendar event",
         description="Create one timed, all-day, or recurring event on the authenticated user's primary calendar.",
         input_schema=_object_schema(dict(_GOOGLE_CREATE_PROPERTIES), ["title", "start", "end"]),
@@ -954,7 +1146,6 @@ _GOOGLE_CALENDAR_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="google_calendar.event.list",
-        provider_id="google_calendar",
         title="List Google Calendar events",
         description="List one bounded page of upcoming primary-calendar event instances in start-time order.",
         input_schema=_object_schema(
@@ -988,7 +1179,6 @@ _GOOGLE_CALENDAR_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="google_calendar.event.get",
-        provider_id="google_calendar",
         title="Get Google Calendar event",
         description="Get one exact event or recurring-series master from the primary calendar.",
         input_schema=_object_schema({"id": _GOOGLE_EVENT_ID}, ["id"]),
@@ -1004,7 +1194,6 @@ _GOOGLE_CALENDAR_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="google_calendar.event.update",
-        provider_id="google_calendar",
         title="Update Google Calendar event",
         description="Partially update exactly one primary-calendar event instance or recurring-series master.",
         input_schema=_GOOGLE_UPDATE_INPUT,
@@ -1023,7 +1212,6 @@ _GOOGLE_CALENDAR_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="google_calendar.event.delete",
-        provider_id="google_calendar",
         title="Delete Google Calendar event",
         description="Delete exactly one primary-calendar event instance or recurring-series master.",
         input_schema=_object_schema({"id": _GOOGLE_EVENT_ID}, ["id"]),
@@ -1042,6 +1230,7 @@ _GOOGLE_CALENDAR_OPERATIONS = (
 )
 _EMAIL_ADDRESS = {"type": "string", "minLength": 3, "maxLength": 320, "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"}
 _EMAIL_ADDRESS_LIST = {"type": "array", "maxItems": 10, "uniqueItems": True, "items": _EMAIL_ADDRESS}
+_EMAIL_PROVIDER = {"type": "string", "enum": ["gmail", "outlook"]}
 _EMAIL_ATTACHMENT = _object_schema(
     {
         "filename": {"type": "string", "maxLength": 1024},
@@ -1052,6 +1241,7 @@ _EMAIL_ATTACHMENT = _object_schema(
 )
 _EMAIL_MESSAGE = _object_schema(
     {
+        "provider": _EMAIL_PROVIDER,
         "message_id": {"type": "string", "minLength": 1, "maxLength": 1024},
         "conversation_id": {"type": "string", "minLength": 1, "maxLength": 1024},
         "from": {"type": "string", "maxLength": 2000},
@@ -1059,13 +1249,14 @@ _EMAIL_MESSAGE = _object_schema(
         "cc": {"type": "array", "maxItems": 100, "items": {"type": "string", "maxLength": 2000}},
         "bcc": {"type": "array", "maxItems": 100, "items": {"type": "string", "maxLength": 2000}},
         "subject": {"type": "string", "maxLength": 2000},
-        "date": {"type": "string", "maxLength": 128},
+        "timestamp": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$"},
         "snippet": {"type": "string", "maxLength": 2000},
         "text": {"type": "string", "maxLength": 4000000},
         "unread": {"type": "boolean"},
         "attachments": {"type": "array", "maxItems": 100, "items": _EMAIL_ATTACHMENT},
     },
     [
+        "provider",
         "message_id",
         "conversation_id",
         "from",
@@ -1073,7 +1264,7 @@ _EMAIL_MESSAGE = _object_schema(
         "cc",
         "bcc",
         "subject",
-        "date",
+        "timestamp",
         "snippet",
         "text",
         "unread",
@@ -1082,20 +1273,22 @@ _EMAIL_MESSAGE = _object_schema(
 )
 _EMAIL_CONVERSATION_SUMMARY = _object_schema(
     {
+        "provider": _EMAIL_PROVIDER,
         "conversation_id": {"type": "string", "minLength": 1, "maxLength": 1024},
         "subject": {"type": "string", "maxLength": 2000},
         "latest_sender": {"type": "string", "maxLength": 2000},
-        "latest_date": {"type": "string", "maxLength": 128},
+        "latest_timestamp": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$"},
         "snippet": {"type": "string", "maxLength": 2000},
-        "message_count": {"type": "integer", "minimum": 1, "maximum": 100},
+        "message_count": {"type": "integer", "minimum": 1},
         "unread": {"type": "boolean"},
         "has_attachment": {"type": "boolean"},
     },
     [
+        "provider",
         "conversation_id",
         "subject",
         "latest_sender",
-        "latest_date",
+        "latest_timestamp",
         "snippet",
         "message_count",
         "unread",
@@ -1104,6 +1297,7 @@ _EMAIL_CONVERSATION_SUMMARY = _object_schema(
 )
 _EMAIL_SEARCH_INPUT = _object_schema(
     {
+        "providers": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": True, "items": _EMAIL_PROVIDER},
         "keywords": {"type": "string", "minLength": 1, "maxLength": 500},
         "from": _EMAIL_ADDRESS,
         "to": _EMAIL_ADDRESS,
@@ -1121,7 +1315,8 @@ _EMAIL_SEARCH_INPUT["anyOf"] = [
     {"required": [field]}
     for field in ("keywords", "from", "to", "subject", "after", "before", "unread", "has_attachment")
 ]
-_GMAIL_ERRORS = (
+_EMAIL_SEARCH_INPUT["required"] = ["providers"]
+_EMAIL_ERRORS = (
     "connection_unavailable",
     "invalid_credential",
     "operation_undeclared",
@@ -1131,137 +1326,177 @@ _GMAIL_ERRORS = (
     "provider_forbidden",
     "rate_limited",
     "provider_timeout",
+    "partial_mutation",
     "response_too_large",
     "provider_unavailable",
     "internal_failure",
 )
-_GMAIL_OPERATIONS = (
+_EMAIL_PROVIDER_ERROR = _object_schema(
+    {
+        "provider": _EMAIL_PROVIDER,
+        "error_type": {"type": "string", "minLength": 1, "maxLength": 64},
+        "message": {"type": "string", "minLength": 1, "maxLength": 500},
+        "retry_after_seconds": {"type": "integer", "minimum": 0, "maximum": 3600},
+    },
+    ["provider", "error_type", "message"],
+)
+_EMAIL_MARK_OUTCOME = _object_schema(
+    {
+        "provider": _EMAIL_PROVIDER,
+        "marked_message_ids": {"type": "array", "maxItems": 50, "items": {"type": "string", "maxLength": 1024}},
+        "marked_count": {"type": "integer", "minimum": 0, "maximum": 50},
+        "failed_message_ids": {"type": "array", "maxItems": 50, "items": {"type": "string", "maxLength": 1024}},
+        "failed_count": {"type": "integer", "minimum": 0, "maximum": 50},
+        "unknown_message_ids": {"type": "array", "maxItems": 50, "items": {"type": "string", "maxLength": 1024}},
+        "unknown_count": {"type": "integer", "minimum": 0, "maximum": 50},
+    },
+    [
+        "provider",
+        "marked_message_ids",
+        "marked_count",
+        "failed_message_ids",
+        "failed_count",
+        "unknown_message_ids",
+        "unknown_count",
+    ],
+)
+_EMAIL_OPERATIONS = (
     IntegrationOperationSpec(
         id="email.search",
-        provider_id="gmail",
         title="Search email",
-        description="Search Gmail with provider-neutral keywords and filters and return bounded conversation summaries.",
+        description="Search Gmail or Outlook with shared filters and return globally ordered normalized conversation summaries. The providers array selects one or both connected providers.",
         input_schema=_EMAIL_SEARCH_INPUT,
         output_schema=_object_schema(
             {
-                "conversations": {"type": "array", "maxItems": 25, "items": _EMAIL_CONVERSATION_SUMMARY},
+                "conversations": {"type": "array", "maxItems": 50, "items": _EMAIL_CONVERSATION_SUMMARY},
                 "has_more": {"type": "boolean"},
                 "next_page_token": {"type": ["string", "null"], "maxLength": 2048},
+                "provider_errors": {"type": "array", "items": _EMAIL_PROVIDER_ERROR},
             },
-            ["conversations", "has_more", "next_page_token"],
+            ["conversations", "has_more", "next_page_token", "provider_errors"],
         ),
         effects=frozenset({IntegrationEffect.READ}),
-        resource=ResourceSpec("gmail.conversation", ()),
+        resource=ResourceSpec("email.conversation", ()),
         risk=RiskLevel.LOW,
+        contract_version=2,
         presentation=OperationPresentation(
-            usage_example={"operation": "email.search", "input": {"keywords": "quarterly report", "page_size": 10}},
-            normalized_errors=_GMAIL_ERRORS,
+            usage_example={"operation": "email.search", "input": {"providers": ["gmail"], "keywords": "quarterly report", "page_size": 10}},
+            normalized_errors=_EMAIL_ERRORS,
             open_world=False,
         ),
+        provider_selection=ProviderSelectionMode.MULTI,
     ),
     IntegrationOperationSpec(
         id="email.conversation.get",
-        provider_id="gmail",
         title="Get email conversation",
-        description="Read one complete bounded email conversation as normalized text with attachment metadata.",
+        description="Read one complete bounded Gmail or Outlook conversation as normalized text with attachment metadata.",
         input_schema=_object_schema(
-            {"conversation_id": {"type": "string", "minLength": 1, "maxLength": 1024}}, ["conversation_id"]
+            {"provider": _EMAIL_PROVIDER, "conversation_id": {"type": "string", "minLength": 1, "maxLength": 1024}},
+            ["provider", "conversation_id"],
         ),
         output_schema=_object_schema(
             {
+                "provider": _EMAIL_PROVIDER,
                 "conversation_id": {"type": "string", "minLength": 1, "maxLength": 1024},
                 "messages": {"type": "array", "maxItems": 100, "items": _EMAIL_MESSAGE},
             },
-            ["conversation_id", "messages"],
+            ["provider", "conversation_id", "messages"],
         ),
         effects=frozenset({IntegrationEffect.READ}),
-        resource=ResourceSpec("gmail.conversation", ("conversation_id",)),
+        resource=ResourceSpec("email.conversation", ("conversation_id",)),
         risk=RiskLevel.LOW,
+        contract_version=2,
         presentation=OperationPresentation(
             usage_example={"operation": "email.conversation.get", "input": {"conversation_id": "thread-id"}},
-            normalized_errors=_GMAIL_ERRORS,
+            normalized_errors=_EMAIL_ERRORS,
             open_world=False,
         ),
     ),
     IntegrationOperationSpec(
         id="email.read_new",
-        provider_id="gmail",
         title="Read new email",
-        description="Read up to 50 unread Primary Inbox messages from the last year without changing their read state.",
-        input_schema=_object_schema({}, []),
+        description="Read up to 50 unread Gmail or Outlook Inbox messages from the last year without changing their read state.",
+        input_schema=_object_schema({"providers": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": True, "items": _EMAIL_PROVIDER}}, ["providers"]),
         output_schema=_object_schema(
             {
-                "messages": {"type": "array", "maxItems": 50, "items": _EMAIL_MESSAGE},
-                "count": {"type": "integer", "minimum": 0, "maximum": 50},
+                "messages": {"type": "array", "maxItems": 100, "items": _EMAIL_MESSAGE},
+                "count": {"type": "integer", "minimum": 0, "maximum": 100},
                 "has_more": {"type": "boolean"},
+                "provider_errors": {"type": "array", "items": _EMAIL_PROVIDER_ERROR},
             },
-            ["messages", "count", "has_more"],
+            ["messages", "count", "has_more", "provider_errors"],
         ),
         effects=frozenset({IntegrationEffect.READ}),
-        resource=ResourceSpec("gmail.message", ()),
+        resource=ResourceSpec("email.message", ()),
         risk=RiskLevel.LOW,
-        contract_version=2,
+        contract_version=3,
         presentation=OperationPresentation(
-            usage_example={"operation": "email.read_new", "input": {}},
-            normalized_errors=_GMAIL_ERRORS,
+            usage_example={"operation": "email.read_new", "input": {"providers": ["gmail"]}},
+            normalized_errors=_EMAIL_ERRORS,
             open_world=False,
         ),
+        provider_selection=ProviderSelectionMode.MULTI,
     ),
     IntegrationOperationSpec(
         id="email.read_and_mark_new",
-        provider_id="gmail",
         title="Read and mark new email",
-        description="Read up to 50 unread Primary Inbox messages from the last year, then mark exactly that fetched batch read.",
-        input_schema=_object_schema({}, []),
+        description="Read up to 50 unread Gmail or Outlook Inbox messages from the last year, then report exact provider-level mark outcomes.",
+        input_schema=_object_schema({"providers": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": True, "items": _EMAIL_PROVIDER}}, ["providers"]),
         output_schema=_object_schema(
             {
-                "messages": {"type": "array", "maxItems": 50, "items": _EMAIL_MESSAGE},
-                "count": {"type": "integer", "minimum": 0, "maximum": 50},
+                "messages": {"type": "array", "maxItems": 100, "items": _EMAIL_MESSAGE},
+                "count": {"type": "integer", "minimum": 0, "maximum": 100},
                 "has_more": {"type": "boolean"},
+                "provider_errors": {"type": "array", "items": _EMAIL_PROVIDER_ERROR},
+                "mark_outcomes": {"type": "array", "maxItems": 2, "items": _EMAIL_MARK_OUTCOME},
             },
-            ["messages", "count", "has_more"],
+            ["messages", "count", "has_more", "provider_errors", "mark_outcomes"],
         ),
         effects=frozenset({IntegrationEffect.READ, IntegrationEffect.UPDATE}),
-        resource=ResourceSpec("gmail.message", ()),
+        resource=ResourceSpec("email.message", ()),
         risk=RiskLevel.MEDIUM,
+        contract_version=3,
         presentation=OperationPresentation(
-            usage_example={"operation": "email.read_and_mark_new", "input": {}},
-            normalized_errors=_GMAIL_ERRORS,
+            usage_example={"operation": "email.read_and_mark_new", "input": {"providers": ["gmail"]}},
+            normalized_errors=_EMAIL_ERRORS,
             open_world=False,
         ),
+        provider_selection=ProviderSelectionMode.MULTI,
     ),
     IntegrationOperationSpec(
         id="email.send",
-        provider_id="gmail",
         title="Send email",
-        description="Send one bounded plain-text email from the authenticated Gmail account.",
+        description="Send one bounded plain-text email from the selected Gmail or Outlook account.",
         input_schema=_object_schema(
             {
+                "provider": _EMAIL_PROVIDER,
                 "to": {**_EMAIL_ADDRESS_LIST, "minItems": 1},
                 "cc": _EMAIL_ADDRESS_LIST,
                 "bcc": _EMAIL_ADDRESS_LIST,
                 "subject": {"type": "string", "minLength": 1, "maxLength": 500},
                 "body": {"type": "string", "minLength": 1, "maxLength": 20000},
             },
-            ["to", "subject", "body"],
+            ["provider", "to", "subject", "body"],
         ),
         output_schema=_object_schema(
             {
+                "provider": _EMAIL_PROVIDER,
                 "sent": {"type": "boolean", "const": True},
                 "message_id": {"type": "string", "minLength": 1, "maxLength": 1024},
                 "conversation_id": {"type": "string", "minLength": 1, "maxLength": 1024},
             },
-            ["sent", "message_id", "conversation_id"],
+            ["provider", "sent", "message_id", "conversation_id"],
         ),
         effects=frozenset({IntegrationEffect.SEND}),
-        resource=ResourceSpec("gmail.message", ()),
+        resource=ResourceSpec("email.message", ()),
         risk=RiskLevel.HIGH,
+        contract_version=2,
         presentation=OperationPresentation(
             usage_example={
                 "operation": "email.send",
-                "input": {"to": ["person@example.com"], "subject": "Hello", "body": "Hello from Eidolon."},
+                "input": {"provider": "gmail", "to": ["person@example.com"], "subject": "Hello", "body": "Hello from Eidolon."},
             },
-            normalized_errors=_GMAIL_ERRORS,
+            normalized_errors=_EMAIL_ERRORS,
             open_world=False,
         ),
     ),
@@ -1282,7 +1517,6 @@ _TELEGRAM_ERRORS = (
 _TELEGRAM_OPERATIONS = (
     IntegrationOperationSpec(
         id="telegram.notification.send",
-        provider_id="telegram",
         title="Send Telegram notification",
         description="Send one structured notification to the paired Eidolon Telegram chat.",
         input_schema=_object_schema(
@@ -1313,12 +1547,47 @@ _TELEGRAM_OPERATIONS = (
 )
 
 _PROVIDER_SPECS = (
-    ProviderSpec(id="github", display_name="GitHub"),
-    ProviderSpec(id="atlas", display_name="Atlas"),
-    ProviderSpec(id="notion", display_name="Notion"),
-    ProviderSpec(id="google_calendar", display_name="Google Calendar"),
-    ProviderSpec(id="gmail", display_name="Gmail"),
-    ProviderSpec(id="telegram", display_name="Telegram"),
+    ProviderSpec(
+        id="github",
+        display_name="GitHub",
+        supported_operations=frozenset(operation.id for operation in _GITHUB_OPERATIONS),
+    ),
+    ProviderSpec(
+        id="atlas",
+        display_name="Atlas",
+        supported_operations=frozenset(operation.id for operation in _ATLAS_OPERATIONS),
+    ),
+    ProviderSpec(
+        id="huggingface",
+        display_name="Hugging Face",
+        supported_operations=frozenset(operation.id for operation in _HUGGINGFACE_OPERATIONS),
+    ),
+    ProviderSpec(
+        id="notion",
+        display_name="Notion",
+        supported_operations=frozenset(operation.id for operation in _NOTION_OPERATIONS),
+    ),
+    ProviderSpec(
+        id="google_calendar",
+        display_name="Google Calendar",
+        supported_operations=frozenset(operation.id for operation in _GOOGLE_CALENDAR_OPERATIONS),
+    ),
+    ProviderSpec(
+        id="gmail",
+        display_name="Gmail",
+        supported_operations=frozenset(operation.id for operation in _EMAIL_OPERATIONS),
+    ),
+    ProviderSpec(
+        id="outlook",
+        display_name="Outlook",
+        supported_operations=frozenset(operation.id for operation in _EMAIL_OPERATIONS),
+    ),
+    ProviderSpec(
+        id="telegram",
+        display_name="Telegram",
+        supported_operations=frozenset(operation.id for operation in _TELEGRAM_OPERATIONS),
+    ),
+    ProviderSpec(id="wecom", display_name="WeCom", supported_operations=frozenset()),
 )
 _STABLE_PROVIDER_ID = re.compile(r"^[a-z][a-z0-9_]*$")
 _STABLE_OPERATION_ID = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
@@ -1330,13 +1599,39 @@ class IntegrationOperationRegistry:
     def __init__(self, providers: Iterable[ProviderSpec], operations: Iterable[IntegrationOperationSpec]) -> None:
         provider_items, operation_items = tuple(providers), tuple(operations)
         self._validate_providers(provider_items)
-        self._validate_operations(operation_items, {provider.id for provider in provider_items})
+        self._validate_operations(operation_items)
+        known_operation_ids = {operation.id for operation in operation_items}
+        for provider in provider_items:
+            unknown = sorted(set(provider.supported_operations) - known_operation_ids)
+            if unknown:
+                raise ValueError(
+                    f"Integration provider {provider.id} references unknown operations: {unknown}"
+                )
         self._providers = MappingProxyType(
             {provider.id: provider for provider in sorted(provider_items, key=lambda item: item.id)}
         )
         self._operations = MappingProxyType(
             {operation.id: operation for operation in sorted(operation_items, key=lambda item: item.id)}
         )
+        self._supported_operations = MappingProxyType(
+            {
+                provider.id: frozenset(provider.supported_operations)
+                for provider in sorted(provider_items, key=lambda item: item.id)
+            }
+        )
+        self._operation_providers = MappingProxyType(
+            {
+                operation.id: tuple(
+                    provider.id
+                    for provider in sorted(provider_items, key=lambda item: item.id)
+                    if operation.id in provider.supported_operations
+                )
+                for operation in sorted(operation_items, key=lambda item: item.id)
+            }
+        )
+        for operation in operation_items:
+            if not self._operation_providers[operation.id]:
+                raise ValueError(f"Integration operation {operation.id} has no supporting provider")
 
     @staticmethod
     def _validate_providers(providers: tuple[ProviderSpec, ...]) -> None:
@@ -1351,9 +1646,13 @@ class IntegrationOperationRegistry:
                 raise ValueError(f"Invalid integration provider ID: {provider.id}")
             if not provider.display_name.strip():
                 raise ValueError(f"Integration provider {provider.id} has no display name")
+            if not isinstance(provider.supported_operations, frozenset):
+                raise ValueError(f"Integration provider {provider.id} has invalid supported operations")
+            if any(not isinstance(operation_id, str) or not _STABLE_OPERATION_ID.fullmatch(operation_id) for operation_id in provider.supported_operations):
+                raise ValueError(f"Integration provider {provider.id} has invalid supported operations")
 
     @classmethod
-    def _validate_operations(cls, operations: tuple[IntegrationOperationSpec, ...], provider_ids: set[str]) -> None:
+    def _validate_operations(cls, operations: tuple[IntegrationOperationSpec, ...]) -> None:
         seen: set[str] = set()
         for operation in operations:
             if not isinstance(operation, IntegrationOperationSpec):
@@ -1363,14 +1662,6 @@ class IntegrationOperationRegistry:
             seen.add(operation.id)
             if not _STABLE_OPERATION_ID.fullmatch(operation.id):
                 raise ValueError(f"Invalid integration operation ID: {operation.id}")
-            if operation.provider_id not in provider_ids:
-                raise ValueError(
-                    f"Integration operation {operation.id} references missing provider {operation.provider_id}"
-                )
-            if not operation.id.startswith(f"{operation.provider_id}.") and not (
-                operation.provider_id == "gmail" and operation.id.startswith("email.")
-            ):
-                raise ValueError(f"Integration operation {operation.id} does not use its stable provider namespace")
             if not operation.title.strip() or not operation.description.strip():
                 raise ValueError(f"Integration operation {operation.id} has incomplete metadata")
             if not isinstance(operation.effects, frozenset) or not operation.effects:
@@ -1379,6 +1670,8 @@ class IntegrationOperationRegistry:
                 raise ValueError(f"Integration operation {operation.id} has an invalid effect")
             if not isinstance(operation.risk, RiskLevel):
                 raise ValueError(f"Integration operation {operation.id} has an invalid risk")
+            if not isinstance(operation.provider_selection, ProviderSelectionMode):
+                raise ValueError(f"Integration operation {operation.id} has an invalid provider selection mode")
             cls._validate_resource(operation.id, operation.resource)
             if (
                 not isinstance(operation.contract_version, int)
@@ -1431,7 +1724,41 @@ class IntegrationOperationRegistry:
         return tuple(self._operations.values())
 
     def for_provider(self, provider_id: str) -> tuple[IntegrationOperationSpec, ...]:
-        return tuple(operation for operation in self._operations.values() if operation.provider_id == provider_id)
+        supported = self._supported_operations.get(provider_id, frozenset())
+        return tuple(operation for operation in self._operations.values() if operation.id in supported)
+
+    def supports_provider(self, operation_id: str, provider_id: str) -> bool:
+        return operation_id in self._supported_operations.get(provider_id, frozenset())
+
+    def operation_provider_set(self, operation_id: str) -> tuple[str, ...]:
+        return self._operation_providers.get(operation_id, ())
+
+    def providers_for_operation(self, operation_id: str) -> tuple[ProviderSpec, ...]:
+        return tuple(self._providers[provider_id] for provider_id in self.operation_provider_set(operation_id))
+
+    def provider_for_operation(self, operation_id: str) -> tuple[str, ...]:
+        """Compatibility-friendly name for the operation's supported providers."""
+        return self.operation_provider_set(operation_id)
+
+    def provider_spec(self, provider_id: str) -> ProviderSpec | None:
+        return self._providers.get(provider_id)
+
+    def resolve_adapter(self, provider_id: str, adapters: Mapping[str, Any]) -> Any | None:
+        """Resolve a runtime adapter only for a registered provider identity."""
+
+        if self.provider_spec(provider_id) is None:
+            return None
+        return adapters.get(provider_id)
+
+    # Keep the intent discoverable for callers that name the operation in the
+    # method rather than the implementation detail of the adapter map.
+    adapter_for_provider = resolve_adapter
+
+    def contract_identity(self, operation_id: str) -> dict[str, Any]:
+        operation = self.get(operation_id)
+        if operation is None:
+            raise KeyError(operation_id)
+        return operation.contract_identity(self.operation_provider_set(operation_id))
 
     def providers(self) -> tuple[ProviderSpec, ...]:
         return tuple(self._providers.values())
@@ -1445,10 +1772,11 @@ DEFAULT_INTEGRATION_REGISTRY = IntegrationOperationRegistry(
     _PROVIDER_SPECS,
     (
         *_GITHUB_OPERATIONS,
+        *_HUGGINGFACE_OPERATIONS,
         *_ATLAS_OPERATIONS,
         *_NOTION_OPERATIONS,
         *_GOOGLE_CALENDAR_OPERATIONS,
-        *_GMAIL_OPERATIONS,
+        *_EMAIL_OPERATIONS,
         *_TELEGRAM_OPERATIONS,
     ),
 )
@@ -1456,6 +1784,6 @@ DEFAULT_INTEGRATION_REGISTRY = IntegrationOperationRegistry(
 
 def registry_contract_identity(operation_ids: list[str]) -> dict[str, dict[str, Any]]:
     return {
-        operation_id: DEFAULT_INTEGRATION_REGISTRY.get(operation_id).contract_identity()
+        operation_id: DEFAULT_INTEGRATION_REGISTRY.contract_identity(operation_id)
         for operation_id in sorted(operation_ids)
     }

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -24,8 +24,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 @router.get("/catalog", response_model=list[FunctionCatalogEntryRead])
-def list_function_catalog(db: Session = Depends(get_db)) -> list[dict]:
-    return FunctionCatalogService(db).list_entries(include_runtime_state=True)
+def list_function_catalog(
+    refresh: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    return FunctionCatalogService(db).list_entries(
+        refresh=refresh,
+        include_runtime_state=True,
+    )
 
 
 @router.get("", response_model=list[FunctionContractRead])

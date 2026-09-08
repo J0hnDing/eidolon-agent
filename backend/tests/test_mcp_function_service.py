@@ -104,6 +104,36 @@ def test_catalog_snapshot_preserves_contracts_annotations_and_future_entries(
     assert restarted.tool_count == 4
 
 
+@pytest.mark.parametrize("output", [[], [{"paper_id": "2609.00001"}]])
+def test_array_integration_preserves_native_result_and_projects_mcp_schema(db, monkeypatch, output):
+    catalog_entry = entry("huggingface.list_papers", "integration", read_only=True)
+    catalog_entry["output_schema"] = {
+        "type": "array",
+        "items": {"type": "object", "properties": {"paper_id": {"type": "string"}}},
+    }
+    monkeypatch.setattr(
+        "app.services.mcp_function_service.FunctionCatalogService.list_entries",
+        lambda _self: [catalog_entry],
+    )
+    db.add(CodexMcpSettings(id=1, enabled=True, config_fingerprint="owned"))
+    db.commit()
+
+    class Executor:
+        def execute(self, target_ref, input_json, context):
+            return InvocationOutcome(status="succeeded", output=output)
+
+    service = McpFunctionService(db, executor=Executor())
+    tool = service.list_tools()[0]
+    assert tool.outputSchema == {
+        "type": "object",
+        "properties": {"result": catalog_entry["output_schema"]},
+        "required": ["result"],
+        "additionalProperties": False,
+    }
+    assert service.invoke(tool.name, {"value": "month"}).output == output
+    assert db.scalar(select(McpAuditRecord)).status == "succeeded"
+
+
 class FakeRunner:
     def __init__(self, db: Session) -> None:
         self.db = db

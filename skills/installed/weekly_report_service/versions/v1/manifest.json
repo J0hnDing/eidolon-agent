@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "name": "weekly_report_service",
-  "description": "Create a deterministic weekly Notion report from the installed GitHub Atlas Project Scout output.",
+  "description": "Create a deterministic weekly Notion report from the installed GitHub Repository Scout output.",
   "runtime": "service",
   "entrypoint": "skill.py",
   "instructions_path": null,
@@ -29,7 +29,7 @@
     "required": ["report", "repository_count"],
     "additionalProperties": false
   },
-  "function_requirements": ["github_atlas_project_scout"],
+  "function_requirements": ["github_repo_scout"],
   "integration_requirements": [
     {
       "provider": "notion",

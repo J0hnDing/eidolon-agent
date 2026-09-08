@@ -11,9 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models import (
-    ActSession,
     ActTelegramBinding,
-    ActTurn,
     AgentProposal,
     InvocationApproval,
     TelegramBotConnection,
@@ -594,33 +592,36 @@ class TelegramService:
                 self.db.commit()
                 reply = f"Using {agent_label} session #{session.id}: {session.title}"
             else:
-                if binding is not None and binding.active_session_id is None:
-                    reply = (
-                        f"No {agent_label} session is selected. "
-                        "Use /new or /use <session id>."
-                    )
-                    self._send_agent_reply(row, reply)
-                    return
+                session = service.resolve_transport_session(
+                    binding.active_session_id if binding is not None else None,
+                    origin="telegram",
+                )
                 if binding is None:
-                    session = service.create_session(origin="telegram")
                     binding = ActTelegramBinding(
                         connection_id=connection_id,
                         active_session_id=session.id,
                     )
                     self.db.add(binding)
-                    self.db.commit()
+                else:
+                    binding.active_session_id = session.id
+                self.db.commit()
                 turn = service.enqueue_turn(
-                    binding.active_session_id,
+                    session.id,
                     text,
+                    delivery_provider="telegram",
                     delivery_connection_id=row.id,
                     delivery_chat_id=row.paired_chat_id,
                 )
-                reply = f"Queued {agent_label} turn #{turn.id} in session #{binding.active_session_id}."
+                reply = f"Queued {agent_label} turn #{turn.id} in session #{session.id}."
             self._send_agent_reply(row, reply)
         except ActSessionError as exc:
             self._send_agent_reply(row, str(exc))
 
     def _send_act_reply(self, row: TelegramBotConnection, reply: str) -> None:
+        self._send_agent_reply(row, reply)
+
+    def send_agent_turn_result(self, row: TelegramBotConnection, reply: str) -> None:
+        """Deliver a completed agent turn through this Telegram connection."""
         self._send_agent_reply(row, reply)
 
     def _send_agent_reply(self, row: TelegramBotConnection, reply: str) -> None:
@@ -711,48 +712,11 @@ def stop_telegram_pollers(pollers: TelegramPollers) -> None:
 
 
 def deliver_act_turn_result(turn_id: int) -> None:
-    db = SessionLocal()
-    try:
-        turn = db.get(ActTurn, turn_id)
-        if (
-            turn is None
-            or turn.delivery_status != "pending"
-            or turn.delivery_connection_id is None
-            or turn.delivery_chat_id is None
-            or turn.status in {"queued", "running"}
-        ):
-            return
-        connection = db.get(TelegramBotConnection, turn.delivery_connection_id)
-        session = db.get(ActSession, turn.session_id) if turn is not None else None
-        if (
-            connection is None
-            or session is None
-            or TELEGRAM_AGENT_IDS.get(connection.role) != session.agent_id
-            or connection.status != "connected"
-            or connection.paired_chat_id != turn.delivery_chat_id
-        ):
-            turn.delivery_status = "failed"
-            db.commit()
-            return
-        service = TelegramService(db, role=connection.role)
-        agent_label = TELEGRAM_AGENT_LABELS[connection.role]
-        if turn.status == "succeeded":
-            reply = turn.assistant_message or f"{agent_label} completed without a text response."
-        elif turn.status == "cancelled":
-            reply = f"{agent_label} turn #{turn.id} was cancelled."
-        else:
-            reply = f"{agent_label} turn #{turn.id} failed: {turn.error_message or turn.status}"
-        service._send_agent_reply(connection, reply)
-        turn.delivery_status = "delivered"
-        db.commit()
-    except Exception:
-        db.rollback()
-        turn = db.get(ActTurn, turn_id)
-        if turn is not None and turn.delivery_status == "pending":
-            turn.delivery_status = "failed"
-            db.commit()
-    finally:
-        db.close()
+    # Compatibility import for callers that still use the former Telegram
+    # function name. The dispatcher now calls the transport-neutral path.
+    from app.services.agent_turn_delivery import deliver_agent_turn_result
+
+    deliver_agent_turn_result(turn_id)
 
 
 def _proposal_references(value: object) -> list[str]:

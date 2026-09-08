@@ -37,6 +37,7 @@ class ProductManagerContractService:
             "permission_plan",
             "functions",
             "integration_scopes",
+            "integration_providers",
         }
         blueprint = {key: fallback[key] for key in allowed_fields if key in fallback}
         blueprint.update({key: value[key] for key in allowed_fields if key in value})
@@ -124,6 +125,21 @@ class ProductManagerContractService:
         if isinstance(raw_scopes, dict) and isinstance(raw_scopes.get("notion"), dict):
             scopes["notion"] = {}
         blueprint["integration_scopes"] = scopes
+        raw_provider_map = blueprint.get("integration_providers")
+        if not isinstance(raw_provider_map, dict):
+            raw_provider_map = fallback.get("integration_providers", {})
+        provider_map: dict[str, list[str]] = {}
+        if isinstance(raw_provider_map, dict):
+            for operation_id, providers in raw_provider_map.items():
+                if not isinstance(operation_id, str) or not isinstance(providers, list):
+                    continue
+                values = []
+                for provider in providers:
+                    if isinstance(provider, str) and provider not in values:
+                        values.append(provider)
+                if values:
+                    provider_map[operation_id] = values
+        blueprint["integration_providers"] = provider_map
         blueprint["permission_plan"] = self.sanitize_permission_plan(blueprint.get("permission_plan"), fallback)
         return blueprint
 
@@ -353,6 +369,7 @@ class ProductManagerContractService:
             "output_schema": blueprint["output_schema"],
             "expected_behavior": self._unique_strings(blueprint["expected_behavior"]),
             "functions": self._unique_strings(blueprint["functions"]),
+            "integration_providers": blueprint.get("integration_providers", {}),
             "schedule": blueprint["schedule"],
         }
 

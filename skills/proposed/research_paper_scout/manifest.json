@@ -1,0 +1,132 @@
+{
+  "manifest_version": 1,
+  "name": "research_paper_scout",
+  "description": "Select, rank, and explain genuinely valuable recent research papers using Hugging Face rankings and Atlas personalization context.",
+  "runtime": "function",
+  "entrypoint": "skill.py",
+  "instructions_path": null,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "seen_papers": {
+        "type": "array",
+        "maxItems": 5000,
+        "default": [],
+        "items": {
+          "type": "string",
+          "pattern": "^[0-9]{4}\\.[0-9]{4,5}(?:v[1-9][0-9]*)?$"
+        },
+        "description": "Stable paper IDs already evaluated by the calling service and excluded before Codex selection."
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "selected_papers": {
+        "type": "array",
+        "maxItems": 5,
+        "items": {
+          "type": "object",
+          "properties": {
+            "rank": {"type": "integer", "minimum": 1, "maximum": 5},
+            "paper_id": {"type": "string", "pattern": "^[0-9]{4}\\.[0-9]{4,5}$"},
+            "title": {"type": "string", "minLength": 1, "maxLength": 2000},
+            "authors": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {"type": "string", "minLength": 1, "maxLength": 500}
+            },
+            "abstract": {"type": "string", "maxLength": 50000},
+            "url": {"type": "string", "minLength": 9, "maxLength": 4000},
+            "pdf_url": {"type": "string", "minLength": 9, "maxLength": 4000},
+            "published_at": {"type": ["string", "null"], "maxLength": 64},
+            "upvotes": {"type": "integer", "minimum": 0},
+            "analysis": {"type": "string", "minLength": 1, "maxLength": 8000},
+            "content_source": {"enum": ["arxiv_html", "arxiv_pdf"]},
+            "source_content_truncated": {"type": "boolean"},
+            "analysis_content_truncated": {"type": "boolean"}
+          },
+          "required": [
+            "rank", "paper_id", "title", "authors", "abstract", "url", "pdf_url", "published_at",
+            "upvotes", "analysis", "content_source", "source_content_truncated", "analysis_content_truncated"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "paper_of_the_week": {
+        "oneOf": [
+          {"type": "null"},
+          {
+            "type": "object",
+            "properties": {
+              "paper_id": {"type": "string", "pattern": "^[0-9]{4}\\.[0-9]{4,5}$"},
+              "title": {"type": "string", "minLength": 1, "maxLength": 2000},
+              "reading_guide": {
+                "type": "object",
+                "properties": {
+                  "problem": {"type": "string", "minLength": 1, "maxLength": 8000},
+                  "core_idea": {"type": "string", "minLength": 1, "maxLength": 8000},
+                  "method": {"type": "string", "minLength": 1, "maxLength": 8000},
+                  "novelty": {"type": "string", "minLength": 1, "maxLength": 8000},
+                  "important_results": {"type": "string", "minLength": 1, "maxLength": 8000},
+                  "limitations": {"type": "string", "minLength": 1, "maxLength": 8000},
+                  "prerequisites": {"$ref": "#/$defs/guide_list"},
+                  "recommended_reading_order": {"$ref": "#/$defs/guide_list"},
+                  "sections_to_skip_initially": {"$ref": "#/$defs/guide_list"},
+                  "key_questions": {"$ref": "#/$defs/guide_list"},
+                  "expected_takeaways": {"$ref": "#/$defs/guide_list"}
+                },
+                "required": [
+                  "problem", "core_idea", "method", "novelty", "important_results", "limitations", "prerequisites",
+                  "recommended_reading_order", "sections_to_skip_initially", "key_questions", "expected_takeaways"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": ["paper_id", "title", "reading_guide"],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "seen_papers": {
+        "type": "array",
+        "maxItems": 30,
+        "items": {"type": "string", "pattern": "^[0-9]{4}\\.[0-9]{4,5}$"},
+        "description": "Unique current and previous month candidates newly evaluated after input exclusions, in source order."
+      }
+    },
+    "required": ["selected_papers", "paper_of_the_week", "seen_papers"],
+    "additionalProperties": false,
+    "$defs": {
+      "guide_list": {
+        "type": "array",
+        "maxItems": 50,
+        "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+      }
+    }
+  },
+  "requires_invocation_approval": false,
+  "function_requirements": [],
+  "integration_requirements": [
+    {
+      "provider": "huggingface",
+      "operations": ["huggingface.list_papers", "huggingface.get_paper"],
+      "resource_scope": {}
+    },
+    {
+      "provider": "atlas",
+      "operations": ["atlas.goal.list", "atlas.interest.list"],
+      "resource_scope": {}
+    }
+  ],
+  "dependencies": [],
+  "permissions": {
+    "codex": {
+      "call_response": true,
+      "internet_access": false
+    }
+  },
+  "schedule": null
+}

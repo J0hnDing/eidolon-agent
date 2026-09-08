@@ -45,11 +45,15 @@ The product and repository are named **Eidolon**. Existing environment variables
 ## Integrations, Roadmap, and History
 
 - [GitHub integration capability](integrations/github.md)
+- [Hugging Face papers integration](integrations/huggingface.md)
+- [Research paper scout](skills/research_paper_scout.md)
 - [Eidolon-Atlas integration](integrations/atlas.md)
 - [Notion Todo and Reports integration](integrations/notion.md)
 - [Google Calendar OAuth integration](integrations/google_calendar.md)
 - [Gmail OAuth integration](integrations/gmail.md)
+- [Outlook OAuth and Microsoft Graph integration](integrations/outlook.md)
 - [Telegram Notification and Approval bot](integrations/telegram.md)
+- [WeCom Observer transport](integrations/wecom.md)
 - [Quercus knowledge synchronization](integrations/quercus.md)
 - [Codex CLI integration](integrations/codex_cli.md)
 - [Codex MCP tools](integrations/codex_mcp.md)

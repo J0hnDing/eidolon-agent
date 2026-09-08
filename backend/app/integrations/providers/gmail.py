@@ -5,6 +5,7 @@ from typing import Any
 
 from app.integrations.authorization import AuthorizedIntegrationInvocation
 from app.integrations.runtime import ProviderExecutionResult
+from app.services.email_contracts import normalize_provider_output
 from app.services.github_provider import IntegrationProviderError
 
 from ._compat import credential, mark_invalid_credential
@@ -26,7 +27,10 @@ class GmailProviderAdapter:
             raise
         finally:
             secret = ""
-        return ProviderExecutionResult(output=output, audit_resource=_audit_resource(invocation))
+        return ProviderExecutionResult(
+            output=normalize_provider_output(output, provider=self.provider_id),
+            audit_resource=_audit_resource(invocation),
+        )
 
 
 def _audit_resource(invocation: AuthorizedIntegrationInvocation) -> str | None:
@@ -38,4 +42,3 @@ def _audit_resource(invocation: AuthorizedIntegrationInvocation) -> str | None:
     if conversation_id:
         return f"gmail-conversation:{conversation_id}"
     return f"gmail-message:{message_id}" if message_id else None
-

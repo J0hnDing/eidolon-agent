@@ -100,7 +100,7 @@ single-Codex workflow uses one larger limit for its combined planning, implement
 | Tester task, final E2E authoring, and update testing | 300 seconds |
 | Single-Codex combined build | 900 seconds |
 
-Installed-skill Codex calls have no action-specific override and use the general 300-second fallback. Unknown legacy actions use the same 300-second compatibility fallback. Progress-aware idle timeouts,
+Installed-skill Codex calls have no action-specific override and use the general 300-second fallback. Unknown legacy actions use the same 300-second compatibility fallback. Skill runtime callers may provide an optional `response_schema` to `call_codex`; Eidolon writes that schema to the bounded Codex invocation, validates the returned JSON against it, and returns the matching JSON text to the skill. Progress-aware idle timeouts,
 whole-workflow budgets, and partial recovery are not part of these hard limits and remain tracked in `TODO-012`.
 
 ## Sandbox Modes
