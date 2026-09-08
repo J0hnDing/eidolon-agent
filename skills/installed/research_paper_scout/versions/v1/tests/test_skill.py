@@ -223,10 +223,49 @@ def test_zero_selection_returns_new_history_without_full_fetch_or_second_codex(m
     assert skill.run({}, now=datetime(2026, 9, 7, tzinfo=ZoneInfo("America/Toronto"))) == {
         "selected_papers": [],
         "paper_of_the_week": None,
-        "seen_papers": ["2609.00001"],
+        "seen_papers": [],
     }
     assert len(codex_calls) == 1
     assert skill.GET_PAPER_OPERATION not in integration_calls
+
+
+def test_seen_history_contains_selected_papers_only(monkeypatch):
+    paper_ids = [f"2609.{index:05d}" for index in range(1, 4)]
+    list_calls = 0
+
+    def integration_call(*, operation, input, timeout_seconds=30):  # noqa: A002
+        nonlocal list_calls
+        if operation == skill.LIST_PAPERS_OPERATION:
+            list_calls += 1
+            return [_summary(paper_id) for paper_id in paper_ids] if list_calls == 1 else []
+        if operation == skill.ATLAS_GOAL_OPERATION:
+            return {"goals": [], "progressions": []}
+        if operation == skill.ATLAS_INTEREST_OPERATION:
+            return {"hobbies": [], "preferences": []}
+        if operation == skill.GET_PAPER_OPERATION:
+            return _paper(input["paper_id"])
+        raise AssertionError(operation)
+
+    monkeypatch.setattr(skill.integration_runtime_capabilities, "call", integration_call)
+    codex_calls = []
+
+    def codex_call(**kwargs):
+        codex_calls.append(kwargs)
+        if len(codex_calls) == 1:
+            return _codex_response({"paper_ids": [paper_ids[1]]})
+        return _codex_response(
+            {
+                "papers": [{"paper_id": paper_ids[1], "rank": 1, "analysis": "Worth reading."}],
+                "paper_of_the_week": {"paper_id": paper_ids[1], "reading_guide": _guide()},
+            }
+        )
+
+    monkeypatch.setattr(skill.function_runtime_capabilities, "call_codex", codex_call)
+
+    result = skill.run({}, now=datetime(2026, 9, 7, tzinfo=ZoneInfo("America/Toronto")))
+
+    assert [paper["paper_id"] for paper in result["selected_papers"]] == [paper_ids[1]]
+    assert result["seen_papers"] == [paper_ids[1]]
 
 
 def test_full_content_is_bounded_and_both_truncation_signals_are_retained(monkeypatch):

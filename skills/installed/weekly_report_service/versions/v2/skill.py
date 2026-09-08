@@ -76,7 +76,7 @@ READING_GUIDE_LABELS = {
 MAX_REPOSITORIES = 6
 MAX_SEEN_REPOSITORIES = 15
 MAX_SELECTED_PAPERS = 5
-MAX_SEEN_PAPERS = 30
+MAX_SEEN_PAPERS = 5
 MAX_AUTHORS = 100
 MAX_GUIDE_ITEMS = 50
 MAX_NOTION_TEXT = 2_000
@@ -270,15 +270,14 @@ def _validated_paper_scout_output(
     if not isinstance(selected, list) or len(selected) > MAX_SELECTED_PAPERS:
         raise ValueError("Research Paper Scout returned an invalid selected paper list")
     selected_ids: set[str] = set()
-    seen_keys = {paper_id.casefold() for paper_id in newly_seen}
     validated: list[dict[str, Any]] = []
     for expected_rank, paper in enumerate(selected, start=1):
         if not isinstance(paper, dict) or set(paper) != PAPER_FIELDS:
             raise ValueError("Research Paper Scout returned an invalid selected paper")
         paper_id = paper["paper_id"]
         paper_key = paper_id.casefold() if _is_paper_id(paper_id) else ""
-        if not paper_key or paper_key in selected_ids or paper_key not in seen_keys:
-            raise ValueError("Research Paper Scout selected a duplicate or unevaluated paper")
+        if not paper_key or paper_key in selected_ids:
+            raise ValueError("Research Paper Scout selected a duplicate paper")
         selected_ids.add(paper_key)
         rank = paper["rank"]
         if not isinstance(rank, int) or isinstance(rank, bool) or rank != expected_rank:
@@ -316,9 +315,15 @@ def _validated_paper_scout_output(
 
     paper_of_the_week = output["paper_of_the_week"]
     if not validated:
+        if newly_seen:
+            raise ValueError("Research Paper Scout returned seen papers without selections")
         if paper_of_the_week is not None:
             raise ValueError("Research Paper Scout returned paper_of_the_week without a selection")
         return validated, None, newly_seen
+    selected_keys = {_paper_id_key(paper["paper_id"]) for paper in validated}
+    returned_seen_keys = {_paper_id_key(paper_id) for paper_id in newly_seen}
+    if returned_seen_keys != selected_keys:
+        raise ValueError("Research Paper Scout seen_papers must contain exactly the selected paper IDs")
     if not isinstance(paper_of_the_week, dict) or set(paper_of_the_week) != PAPER_OF_THE_WEEK_FIELDS:
         raise ValueError("Research Paper Scout returned an invalid paper_of_the_week")
     paper_id = paper_of_the_week["paper_id"]

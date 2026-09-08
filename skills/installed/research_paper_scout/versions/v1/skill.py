@@ -127,7 +127,7 @@ ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
 
 
 def run(payload: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
-    """Return grounded paper recommendations and newly evaluated paper IDs."""
+    """Return grounded paper recommendations and IDs selected for history."""
     seen_papers = _seen_papers(payload)
     current_period, previous_period = _monthly_periods(now)
     current = integration_runtime_capabilities.call(
@@ -139,7 +139,6 @@ def run(payload: dict[str, Any], *, now: datetime | None = None) -> dict[str, An
         input={"period": previous_period, "sort": "trending", "limit": MONTHLY_LIMIT},
     )
     candidates = _candidate_papers(current, previous, seen_papers)
-    newly_seen = [paper["paper_id"] for paper in candidates]
     if not candidates:
         return {"selected_papers": [], "paper_of_the_week": None, "seen_papers": []}
 
@@ -173,7 +172,7 @@ def run(payload: dict[str, Any], *, now: datetime | None = None) -> dict[str, An
         candidates,
     )
     if not selected_ids:
-        return {"selected_papers": [], "paper_of_the_week": None, "seen_papers": newly_seen}
+        return {"selected_papers": [], "paper_of_the_week": None, "seen_papers": []}
 
     by_id = {paper["paper_id"]: paper for paper in candidates}
     full_papers = [
@@ -230,7 +229,8 @@ def run(payload: dict[str, Any], *, now: datetime | None = None) -> dict[str, An
             "title": by_id[winner_id]["title"],
             "reading_guide": paper_of_the_week["reading_guide"],
         },
-        "seen_papers": newly_seen,
+        # Only selected papers enter history; declined candidates remain eligible.
+        "seen_papers": [paper["paper_id"] for paper in selected_papers],
     }
 
 

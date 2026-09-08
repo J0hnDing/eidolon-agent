@@ -14,9 +14,9 @@ When no candidates remain, no Atlas or Codex calls are necessary. When Codex sel
 
 ## Output and history
 
-The function returns `selected_papers`, `paper_of_the_week`, and `seen_papers`. The latter contains all newly evaluated candidate IDs, including candidates Codex did not recommend. It does not echo the previous history. Failed analysis does not return a successful history update.
+The function returns `selected_papers`, `paper_of_the_week`, and `seen_papers`. The latter contains only the 0–5 paper IDs selected by Codex, in ranked order. Candidates Codex declines remain eligible on a later run, and the function does not echo the previous history. Failed analysis does not return a successful history update.
 
-The weekly service loads a separate `seen_papers.json` in its own cache, passes those IDs to the scout, validates the structured result, and builds native Notion report blocks deterministically. It creates an `AI Research` report containing the ranked papers and the complete reading guide. Only after that report succeeds does it append the returned IDs to `seen_papers.json`. GitHub history remains in `seen_repositories.json`; each history advances after its own corresponding report succeeds.
+The weekly service loads a separate `seen_papers.json` in its own cache, passes those IDs to the scout, validates that returned `seen_papers` exactly matches the selected papers, and builds native Notion report blocks deterministically. It creates an `AI Research` report containing the ranked papers and the complete reading guide. Only after that report succeeds does it append the selected IDs to `seen_papers.json`. GitHub history remains in `seen_repositories.json`; each history advances after its own corresponding report succeeds.
 
 The service sends its existing completion notification after both reports succeed. A failure preserves any earlier successfully delivered report and its history, fails the service run, and uses the existing failure notification. External report creation and local history persistence are not one transaction: a crash between them can cause a duplicate report on a later manual run.
 

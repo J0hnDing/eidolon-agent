@@ -81,7 +81,7 @@ def test_scout_output_flows_into_weekly_report_without_schema_drift(tmp_path, mo
     output = scout.run({}, now=datetime(2026, 9, 7, 12, tzinfo=UTC))
     Draft202012Validator(scout_manifest["output_schema"]).validate(output)
     assert responses == []
-    assert output["seen_papers"] == [paper["paper_id"]]
+    assert output["seen_papers"] == ([paper["paper_id"]] if selected else [])
     reports = []
 
     def create_report(*, operation, input):
@@ -106,4 +106,7 @@ def test_scout_output_flows_into_weekly_report_without_schema_drift(tmp_path, mo
     assert result["paper_count"] == int(selected)
     assert [report["select"] for report in reports] == ["GitHub Projects", "AI Research"]
     assert len(reports[1]["children"]) <= 100
-    assert json.loads((tmp_path / "seen_papers.json").read_text()) == [paper["paper_id"]]
+    seen_path = tmp_path / "seen_papers.json"
+    assert (json.loads(seen_path.read_text()) if seen_path.exists() else []) == (
+        [paper["paper_id"]] if selected else []
+    )

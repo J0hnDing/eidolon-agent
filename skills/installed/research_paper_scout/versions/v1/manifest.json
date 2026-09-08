@@ -92,9 +92,9 @@
       },
       "seen_papers": {
         "type": "array",
-        "maxItems": 30,
+        "maxItems": 5,
         "items": {"type": "string", "pattern": "^[0-9]{4}\\.[0-9]{4,5}$"},
-        "description": "Unique current and previous month candidates newly evaluated after input exclusions, in source order."
+        "description": "Selected paper IDs to add to the caller's history. Candidates that Codex declines remain eligible on a later run."
       }
     },
     "required": ["selected_papers", "paper_of_the_week", "seen_papers"],

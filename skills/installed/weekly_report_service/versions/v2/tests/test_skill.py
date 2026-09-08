@@ -130,7 +130,7 @@ def test_run_creates_both_reports_advances_separate_histories_and_notifies(cache
                 "repositories": [_repository()],
                 "seen_repo": ["example/project", "example/other"],
             }
-        return _paper_output(seen=["2608.12345", "2608.54321"])
+        return _paper_output(seen=["2608.12345"])
 
     integration_calls = []
     monkeypatch.setattr(skill.function_runtime_capabilities, "call_function", call_function)
@@ -186,7 +186,6 @@ def test_run_creates_both_reports_advances_separate_histories_and_notifies(cache
     assert json.loads((cache_dir / skill.SEEN_PAPERS_FILENAME).read_text(encoding="utf-8")) == [
         "2501.00001v2",
         "2608.12345",
-        "2608.54321",
     ]
 
 
