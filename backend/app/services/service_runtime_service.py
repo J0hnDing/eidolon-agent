@@ -9,6 +9,7 @@ from typing import Any, Callable
 from jsonschema import Draft202012Validator, ValidationError
 from sqlalchemy.orm import Session
 
+from app.execution.skill_context import skill_execution_context
 from app.models import Skill, SkillRun
 from app.services.manifest_validator import validate_manifest_file
 from app.services.proposed_skill_service import ProposedSkillService
@@ -87,21 +88,22 @@ class ServiceRuntimeService:
                 reason=f"Scheduled service run {schedule_id}",
             ):
                 runner = self.runner_factory(self.db)
-                try:
-                    run = runner.run(
-                        skill_id=skill.id,
-                        skill_dir=self.proposed_service.skill_dir_for_record(skill),
-                        input_json=input_json,
-                        context=context,
-                    )
-                except TypeError as exc:
-                    if "context" not in str(exc):
-                        raise
-                    run = runner.run(
-                        skill_id=skill.id,
-                        skill_dir=self.proposed_service.skill_dir_for_record(skill),
-                        input_json=input_json,
-                    )
+                with skill_execution_context(skill.id):
+                    try:
+                        run = runner.run(
+                            skill_id=skill.id,
+                            skill_dir=self.proposed_service.skill_dir_for_record(skill),
+                            input_json=input_json,
+                            context=context,
+                        )
+                    except TypeError as exc:
+                        if "context" not in str(exc):
+                            raise
+                        run = runner.run(
+                            skill_id=skill.id,
+                            skill_dir=self.proposed_service.skill_dir_for_record(skill),
+                            input_json=input_json,
+                        )
         except SkillOperationConflict as exc:
             return self._blocked_run(
                 skill,

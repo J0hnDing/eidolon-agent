@@ -34,8 +34,10 @@ class CodexInvocationRecorder:
             "requested_model": getattr(result, "codex_requested_model", None) or plan.get("model"),
             "effective_model": getattr(result, "codex_model", None) or plan.get("model"),
             "model": getattr(result, "codex_model", None) or plan.get("model"),
-            "requested_reasoning_effort": getattr(result, "codex_requested_reasoning_effort", None),
-            "effective_reasoning_effort": getattr(result, "codex_reasoning_effort", None),
+            "requested_reasoning_effort": getattr(result, "codex_requested_reasoning_effort", None)
+            or plan.get("reasoning_effort"),
+            "effective_reasoning_effort": getattr(result, "codex_reasoning_effort", None)
+            or plan.get("reasoning_effort"),
             "route_source": getattr(result, "codex_route_source", None),
             "role": getattr(result, "codex_role", None),
             "difficulty": getattr(result, "codex_difficulty", None),
@@ -133,8 +135,9 @@ class CodexInvocationRecorder:
             "requested_model": plan.get("model"),
             "effective_model": getattr(adapter, "model", None) or plan.get("model"),
             "model": getattr(adapter, "model", None) or plan.get("model"),
-            "requested_reasoning_effort": None,
-            "effective_reasoning_effort": getattr(adapter, "reasoning_effort", None),
+            "requested_reasoning_effort": plan.get("reasoning_effort"),
+            "effective_reasoning_effort": getattr(adapter, "reasoning_effort", None)
+            or plan.get("reasoning_effort"),
             "route_source": "legacy_default",
             "role": None,
             "difficulty": None,

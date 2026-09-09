@@ -16,6 +16,7 @@ class SkillCodexRequest(BaseModel):
     prompt: str = Field(min_length=1)
     context: dict[str, Any] = Field(default_factory=dict)
     model: str | None = Field(default=None, min_length=1, max_length=128)
+    reasoning_effort: str | None = Field(default=None, min_length=1, max_length=32)
     response_schema: dict[str, Any] | None = None
     codex_permissions: SkillCodexPermissionsRequest = Field(default_factory=SkillCodexPermissionsRequest)
 

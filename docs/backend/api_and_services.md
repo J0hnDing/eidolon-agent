@@ -85,6 +85,10 @@ Discovers Codex Desktop and PATH executables, probes their semantic versions, ho
 
 Persists and validates unified invocation choices against the live App Server model catalog. Resolution precedence is invocation override, action or Builder workflow/difficulty setting, role default, legacy environment default, then the catalog default. Act, Observer, and Assistant assessment each have an independent agent route; the dispatcher selects the route matching the agent, with Assistant assessment turns using the `assessment` route. The single-Codex build action has its own Builder route; Task-DAG Builder calls continue to route by backend-validated node difficulty. The service returns requested and effective values plus the route source. The current provider is `codex_cli`; the contract keeps provider identity explicit so a future adapter can participate without being implemented here.
 
+### SkillModelCatalogService
+
+Persists the optional, non-versioned skill-to-Codex-model-and-reasoning-effort mapping in `skill_model_catalog`, validates selected values against the live Codex model catalog, and resolves the override from the execution-local current skill context. `GET|PUT /skills/{skill_id}/model` serves Skill Detail; clearing the values removes the mapping. A missing context or mapping preserves the existing request/global/default model and effort behavior.
+
 ### PermissionService
 
 Deterministically reviews permissions, dependencies, integrations, and the transitive function graph. It creates approval requests, refreshes stale pending requests, approves/denies requests, detects permission expansion, checks install/run eligibility, and syncs waiting agent steps. Runtime review includes the union of all child-function permissions and effective risk no lower than any descendant or integration operation. Build-time and runtime reviews show every declared target's risk and availability, which low-risk relationships need no extra approval, and which medium/high-risk relationships have separate caller-target requests. The permission router resumes a linked generation run after a build-time approval regardless of whether the decision came from Chat or the global Approval Requests page. Runtime `permissions.codex.call_response` requires explicit approval and defaults to disabled when omitted or false. Runtime `permissions.codex.internet_access` is supported only when the skill also has approved runtime `network` entries. Other Codex permission fields are blocked in this milestone.
@@ -92,6 +96,8 @@ Deterministically reviews permissions, dependencies, integrations, and the trans
 ### FunctionRegistryService
 
 Owns dynamic function discovery, caller requirement review, caller-target and transitive-graph fingerprints, ephemeral run-capability resolution, JSON Schema input/output validation, availability checks, and invocation attribution. Manual function runs, function callers, scheduled service callers, backend callers, and web applications use this service to invoke declared function targets. Services never appear as targets. It trusts neither caller-supplied ids nor target paths/commands/permissions/risk. The public registry contract omits internal paths, commands, credentials, and container details. Nested function calls follow the validated acyclic graph, recheck every edge, and record the parent run id on each child run.
+
+Function and scheduled-service execution set the target skill id in an async-safe `ContextVar` for the duration of the backend invocation and reset it in `finally`; nested invocations replace and then restore the parent value. The backend-owned `backend.codex.call` function uses that context for model lookup rather than stack inspection or permission-derived caller inference.
 
 ### Provider-neutral Integration Subsystem
 
@@ -139,6 +145,7 @@ Request body:
   "prompt": "string",
   "context": {},
   "model": "gpt-5",
+  "reasoning_effort": "high",
   "codex_permissions": {
     "call_response": true,
     "internet_access": false

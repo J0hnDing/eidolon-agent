@@ -74,6 +74,12 @@ export interface Skill {
   updated_at: string;
 }
 
+export interface SkillModelSetting {
+  skill_id: number;
+  model: string | null;
+  reasoning_effort: string | null;
+}
+
 export interface FunctionCatalogEntry {
   id: string;
   category: FunctionCategory;
@@ -1322,6 +1328,12 @@ export const api = {
   listProposedSkills: () => request<Skill[]>("/skills/proposed"),
   getRunnerStatus: () => request<RunnerStatus>("/skills/runner-status"),
   getSkill: (id: number) => request<Skill>(`/skills/${id}`),
+  getSkillModel: (id: number) => request<SkillModelSetting>(`/skills/${id}/model`),
+  updateSkillModel: (id: number, model: string | null, reasoning_effort: string | null) =>
+    request<SkillModelSetting>(`/skills/${id}/model`, {
+      method: "PUT",
+      body: JSON.stringify({ model, reasoning_effort }),
+    }),
   listSkillVersions: (id: number) => request<SkillVersion[]>(`/skills/${id}/versions`),
   suggestSkillUpdate: (id: number, suggestion: string) =>
     request<SkillUpdateResponse>(`/skills/${id}/versions/update-suggestion`, {

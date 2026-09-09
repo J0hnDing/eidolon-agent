@@ -34,6 +34,7 @@ from app.services.product_manager_contract_service import (
     ProductManagerContractService,
 )
 from app.services.proposed_skill_service import ProposedSkillError, ProposedSkillService
+from app.services.skill_model_catalog_service import SkillModelCatalogService
 from app.services.skill_package_files import snapshot_skill_files
 from app.workflows.common.prompts import build_product_manager_prompt as build_common_product_manager_prompt
 from app.workflows.single_codex.prompts import build_prompt as build_single_codex_prompt
@@ -1111,12 +1112,17 @@ class CodexService:
         *,
         internet_access: bool,
     ) -> dict[str, object]:
+        effective_model, effective_reasoning_effort = SkillModelCatalogService(self.db).resolve_current_settings(
+            payload.model,
+            payload.reasoning_effort,
+        )
         workspace = self.project_root / "runtime" / "skill_codex" / f"skill_{skill.id}"
         plan = {
             "codex_task": "skill_runtime_codex",
             "skill_id": skill.id,
             "skill_name": skill.name,
-            "model": payload.model,
+            "model": effective_model,
+            "reasoning_effort": effective_reasoning_effort,
             "permission_plan": {
                 "build_time": {
                     "internet_research": internet_access,
@@ -1131,20 +1137,22 @@ class CodexService:
             "Return exactly one JSON object matching the supplied output schema and no prose.\n"
             "Do not perform shell actions, filesystem changes, browser automation, purchases, posting, or secrets access.\n\n"
             f"Skill: {skill.name}\n"
-            f"Requested model: {payload.model or 'default'}\n"
+            f"Requested model: {effective_model or 'default'}\n"
+            f"Requested reasoning effort: {effective_reasoning_effort or 'default'}\n"
             f"Internet access allowed: {internet_access}\n\n"
             f"Skill context:\n{json.dumps(payload.context, indent=2)}\n\n"
             f"Prompt:\n{payload.prompt}"
         )
         adapter = self.adapter
-        if isinstance(adapter, RealCodexAdapter) and payload.model:
+        if isinstance(adapter, RealCodexAdapter) and (effective_model or effective_reasoning_effort):
             adapter = RealCodexAdapter(
                 command=adapter.command,
                 timeout_seconds=adapter.timeout_seconds,
                 sandbox_mode=os.getenv("PERSONAL_AGENT_CODEX_SKILL_SANDBOX", "read-only"),
                 approval_policy=adapter.approval_policy,
                 enable_search="true" if internet_access else "false",
-                model=payload.model,
+                model=effective_model,
+                reasoning_effort=effective_reasoning_effort or adapter.reasoning_effort,
             )
         try:
             result = adapter.generate(prompt, workspace, plan)
@@ -1201,7 +1209,7 @@ class CodexService:
             self.invocations.record_skill_runtime(skill.id, invocation)
         return {
             "response": response.strip() if isinstance(response, str) and response.strip() else raw_response,
-            "model": payload.model,
+            "model": effective_model,
             "internet_access": internet_access,
         }
 

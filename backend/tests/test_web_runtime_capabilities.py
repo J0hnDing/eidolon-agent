@@ -49,6 +49,7 @@ def test_trusted_capability_helper_uses_instance_bearer_without_returning_it(
     result = capabilities.call_codex(
         "Summarize",
         context={"item": "demo"},
+        reasoning_effort="medium",
         response_schema={"type": "object", "properties": {"result": {"type": "string"}}},
         timeout_seconds=9,
     )
@@ -61,6 +62,7 @@ def test_trusted_capability_helper_uses_instance_bearer_without_returning_it(
         "type": "object",
         "properties": {"result": {"type": "string"}},
     }
+    assert json.loads(request.data)["reasoning_effort"] == "medium"
     assert request.headers["Authorization"] == "Bearer instance-secret"
     assert "instance-secret" not in request.data.decode("utf-8")
 

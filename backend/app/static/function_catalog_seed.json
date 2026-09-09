@@ -37,6 +37,12 @@
               "null"
             ]
           },
+          "reasoning_effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "response_schema": {
             "type": [
               "object",
@@ -90,8 +96,8 @@
         "additionalProperties": false
       },
       "invocation": {
-        "function_helper": "function_runtime_capabilities.call_codex(prompt, context=..., model=..., internet_access=..., response_schema=...)",
-        "web_app_helper": "web_runtime_capabilities.call_codex(prompt=..., context=..., internet_access=..., response_schema=...)",
+        "function_helper": "function_runtime_capabilities.call_codex(prompt, context=..., model=..., reasoning_effort=..., internet_access=..., response_schema=...)",
+        "web_app_helper": "web_runtime_capabilities.call_codex(prompt=..., context=..., model=..., reasoning_effort=..., internet_access=..., response_schema=...)",
         "test_guidance": "Mock the backend helper. Do not shell out to Codex.",
         "rules": [
           "Batch multi-item work into one bounded Codex request.",

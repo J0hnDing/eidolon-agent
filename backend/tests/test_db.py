@@ -33,6 +33,12 @@ def test_local_schema_migrates_legacy_statuses_task_columns_and_retired_skill_fi
         )
         connection.execute(
             text(
+                "CREATE TABLE skill_model_catalog ("
+                "skill_id INTEGER PRIMARY KEY, model VARCHAR(128) NOT NULL, updated_at DATETIME NOT NULL)"
+            )
+        )
+        connection.execute(
+            text(
                 "CREATE TABLE skill_generation_requests ("
                 "id INTEGER PRIMARY KEY, proposed_skill_type VARCHAR(16), plan_json JSON)"
             )
@@ -109,6 +115,9 @@ def test_local_schema_migrates_legacy_statuses_task_columns_and_retired_skill_fi
     assert "tool_ui_schema_json" not in skill_columns
     assert "runtime" in skill_columns
     assert "function_requirements_json" in skill_columns
+    assert "reasoning_effort" in {
+        column["name"] for column in inspector.get_columns("skill_model_catalog")
+    }
     assert "availability_migrated" in {
         column["name"] for column in inspector.get_columns("skill_schedules")
     }

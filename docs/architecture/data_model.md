@@ -12,6 +12,10 @@ Compatibility storage for chat messages with role, content, optional conversatio
 
 Stores the single-user Codex invocation routing document. It contains independent Act, Observer, and Assistant assessment settings, ProductManager action settings, Builder default/difficulty/repair/update settings, and Tester task/final/update settings. Model ids and reasoning efforts are user-owned settings; ProductManager task DAG output does not contain them. Legacy stored `chat` routing values are ignored.
 
+### skill_model_catalog
+
+Stores an optional Codex model and reasoning-effort override per `skill_id`. The mapping is backend-owned, independent of skill versions, and removed when its skill is deleted. A missing row means the skill uses its existing request/global/default model and effort resolution.
+
 ### codex_mcp_settings
 
 Stores the single host registration state: whether running MCP processes may invoke tools, the fingerprint of the exact Eidolon-owned `mcp_servers.eidolon` table, bounded last-error metadata, and update time. Removal commits `enabled = false` before editing Codex configuration so already-running MCP processes are revoked immediately.

@@ -28,6 +28,7 @@ import { usePolling } from "../lib/usePolling";
 import {
   AgentRun,
   ApprovalRequest,
+  CodexModelCatalog,
   PendingApprovalReceipt,
   ProposedSkillValidation,
   RunnerStatus,
@@ -35,6 +36,7 @@ import {
   SkillFile,
   SkillRun,
   SkillSchedule,
+  SkillModelSetting,
   SkillUpdateResponse,
   SkillVersion,
   SkillVersionComparison,
@@ -54,6 +56,12 @@ export default function SkillDetailPage() {
   const [validation, setValidation] = useState<ProposedSkillValidation | null>(null);
   const [runtimePermission, setRuntimePermission] = useState<ApprovalRequest | null>(null);
   const [runnerStatus, setRunnerStatus] = useState<RunnerStatus | null>(null);
+  const [skillModel, setSkillModel] = useState<SkillModelSetting | null>(null);
+  const [modelCatalog, setModelCatalog] = useState<CodexModelCatalog | null>(null);
+  const [selectedModel, setSelectedModel] = useState("");
+  const [savedModel, setSavedModel] = useState("");
+  const [selectedReasoningEffort, setSelectedReasoningEffort] = useState("");
+  const [savedReasoningEffort, setSavedReasoningEffort] = useState("");
   const [schedules, setSchedules] = useState<SkillSchedule[]>([]);
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [versions, setVersions] = useState<SkillVersion[]>([]);
@@ -91,8 +99,10 @@ export default function SkillDetailPage() {
     setError(null);
     try {
       const id = Number(skillId);
-      const [loadedSkill, loadedRuns, loadedFiles, permissionRequests, loadedRunnerStatus, loadedSchedules, loadedAgentRuns, loadedVersions] = await Promise.all([
+      const [loadedSkill, loadedSkillModel, loadedModelCatalog, loadedRuns, loadedFiles, permissionRequests, loadedRunnerStatus, loadedSchedules, loadedAgentRuns, loadedVersions] = await Promise.all([
         api.getSkill(id),
+        api.getSkillModel(id),
+        api.getCodexModels().catch(() => null),
         api.listSkillRuns(id),
         api.listSkillFiles(id),
         api.listPermissionRequests({ skill_id: id, request_scope: "runtime" }),
@@ -102,6 +112,12 @@ export default function SkillDetailPage() {
         api.listSkillVersions(id).catch(() => []),
       ]);
       setSkill(loadedSkill);
+      setSkillModel(loadedSkillModel);
+      setSelectedModel(loadedSkillModel.model ?? "");
+      setSavedModel(loadedSkillModel.model ?? "");
+      setSelectedReasoningEffort(loadedSkillModel.reasoning_effort ?? "");
+      setSavedReasoningEffort(loadedSkillModel.reasoning_effort ?? "");
+      setModelCatalog(loadedModelCatalog);
       setRuns(loadedRuns);
       setFiles(loadedFiles);
       applyRuntimePermissionRequests(permissionRequests);
@@ -118,6 +134,29 @@ export default function SkillDetailPage() {
 
   function applyRuntimePermissionRequests(requests: ApprovalRequest[]) {
     setRuntimePermission(runtimePermissionRequest(requests));
+  }
+
+  async function handleSaveModel(event: FormEvent) {
+    event.preventDefault();
+    if (!skill || !skillModel) return;
+    setIsWorking(true);
+    setError(null);
+    try {
+      const saved = await api.updateSkillModel(
+        skill.id,
+        selectedModel || null,
+        selectedReasoningEffort || null,
+      );
+      setSkillModel(saved);
+      setSelectedModel(saved.model ?? "");
+      setSavedModel(saved.model ?? "");
+      setSelectedReasoningEffort(saved.reasoning_effort ?? "");
+      setSavedReasoningEffort(saved.reasoning_effort ?? "");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save skill model");
+    } finally {
+      setIsWorking(false);
+    }
   }
 
   async function handleRun() {
@@ -504,6 +543,17 @@ export default function SkillDetailPage() {
   const canRun = isFunction && isInstalled && skill.enabled && runtimeApproved;
   const isProposed = skill.status === "proposed";
   const displayName = formatDisplayName(skill.name);
+  const modelOptions = modelCatalog?.models ?? [];
+  const selectedModelOption = modelOptions.find(
+    (option) => option.model === selectedModel || option.id === selectedModel,
+  ) ?? (selectedModel === "" ? modelOptions.find((option) => option.is_default) ?? modelOptions[0] : undefined);
+  const effortOptions = selectedModelOption?.supported_reasoning_efforts ?? [];
+  const savedModelIsListed = Boolean(
+    savedModel && modelOptions.some((option) => option.model === savedModel || option.id === savedModel),
+  );
+  const selectedEffortIsListed = Boolean(
+    selectedReasoningEffort && effortOptions.includes(selectedReasoningEffort),
+  );
 
   return (
     <section className="page stack skill-detail-page">
@@ -602,6 +652,70 @@ export default function SkillDetailPage() {
             </button>
           </div>
         )}
+      </section>
+
+      <section className="detail-panel stack">
+        <header className="page-header">
+          <div>
+            <h2>Codex Model</h2>
+            <p className="muted">
+              Choose the model and reasoning effort used by this skill&apos;s backend Codex calls. Leaving these at their defaults uses the existing global/request defaults.
+            </p>
+          </div>
+          {(selectedModel !== savedModel || selectedReasoningEffort !== savedReasoningEffort) && <span className="badge">unsaved</span>}
+        </header>
+        <form onSubmit={handleSaveModel}>
+          <label>
+            Model
+            <select
+              aria-label="Codex model"
+              value={selectedModel}
+              onChange={(event) => {
+                setSelectedModel(event.target.value);
+                setSelectedReasoningEffort("");
+              }}
+              disabled={isWorking || !skillModel}
+            >
+              <option value="">Use global default</option>
+              {savedModel && !savedModelIsListed && <option value={savedModel}>{savedModel} (unavailable)</option>}
+              {modelOptions.map((option) => (
+                <option key={option.id || option.model} value={option.model}>
+                  {option.display_name || option.model}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Reasoning effort
+            <select
+              aria-label="Codex reasoning effort"
+              value={selectedReasoningEffort}
+              onChange={(event) => setSelectedReasoningEffort(event.target.value)}
+              disabled={isWorking || !skillModel || !selectedModel}
+            >
+              <option value="">Use model/global default</option>
+              {selectedReasoningEffort && !selectedEffortIsListed && (
+                <option value={selectedReasoningEffort}>{selectedReasoningEffort} (unavailable)</option>
+              )}
+              {effortOptions.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+            </select>
+          </label>
+          <div className="button-row">
+            <button
+              type="submit"
+              disabled={
+                isWorking
+                || !skillModel
+                || (selectedModel === savedModel && selectedReasoningEffort === savedReasoningEffort)
+              }
+            >
+              {isWorking ? "Saving..." : "Save model"}
+            </button>
+            {modelCatalog && !modelCatalog.available && (
+              <span className="muted">Model choices are unavailable until Codex is connected.</span>
+            )}
+          </div>
+        </form>
       </section>
 
       <section className="detail-panel">

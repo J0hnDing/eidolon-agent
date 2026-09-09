@@ -7,6 +7,7 @@ from jsonschema import Draft202012Validator, SchemaError
 from sqlalchemy.orm import Session
 
 from app.execution.context import InvocationContext
+from app.execution.skill_context import skill_execution_context
 from app.models import Skill, WebAppInstance
 from app.schemas.skill_codex import SkillCodexRequest
 from app.services.codex_service import CodexService
@@ -111,11 +112,12 @@ class SkillCodexRuntimeService:
         if internet_requested and not manifest.permissions.codex.internet_access:
             raise SkillCodexUnavailable("Skill manifest does not allow Codex internet access")
 
-        return CodexService(
-            self.db,
-            project_root=self.project_root,
-        ).skill_runtime_codex_call(
-            skill,
-            payload,
-            internet_access=bool(internet_requested and internet_allowed),
-        )
+        with skill_execution_context(context.caller_skill_id):
+            return CodexService(
+                self.db,
+                project_root=self.project_root,
+            ).skill_runtime_codex_call(
+                skill,
+                payload,
+                internet_access=bool(internet_requested and internet_allowed),
+            )

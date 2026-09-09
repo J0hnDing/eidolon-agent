@@ -89,6 +89,7 @@ The top-level Schedules page is the schedule management surface for generated an
 Shows:
 
 - skill metadata and status;
+- the optional per-skill Codex model selector and Save model action;
 - files;
 - validation;
 - runtime permissions;
@@ -102,6 +103,8 @@ Shows:
 Installed function skills show a bounded JSON run-input panel and may be run manually only when backend checks pass. The returned result appears in a separate Output panel. Run History has no separate latest-run view: every stored run keeps its number, timestamp, and status visible while its output, error summary, token breakdown, and Codex call count start collapsed behind an independently rotating chevron. Service detail keeps the ordinary files, validation, permission, version, update, agent-run, run-history, and enable/disable controls, and shows a concise required-schedule summary linking to Schedules. Web application details replace bounded-run input, output, history, and schedule controls with an Open Application action. Skill Detail presents one complete runtime approval containing the effective transitive function permissions, dependencies, and every current provider integration operation. One approve or deny action applies to all pending components of that displayed contract. Installation and execution require the complete current runtime contract to be approved.
 
 `SkillDetailPage` retains route loading, polling, and mutation orchestration. Cohesive update-chat, version, comparison, validation, and run-detail presentation lives under `features/skill-detail/SkillDetailPanels.tsx`; service schedule editing belongs only to `SchedulesPage`. Feature tests cover conversation state transitions, chat workspace interactions, service/platform schedule visibility, version empty state, and run-input validation; `npm test` is the frontend regression command and `npm run build` remains the production type/build check.
+
+The Codex Model panel is available on every Skill Detail page. It loads the live model catalog and the skill's non-versioned model and reasoning-effort override, offers **Use global default** and model-specific effort choices, and persists changes with **Save model**; unavailable catalog state does not hide the existing default choice.
 
 Skill Detail uses a compact title bar with a square back control on the left and the **Delete Skill** action on the right. Versions lead with the version list, show validation and test outcomes as labelled status dots, and place the improvement/repair controls beneath the list. An approved runtime contract uses the success status color and exposes no redundant review action. Skill file names remain visible while each file's content is collapsed by default behind its own native disclosure and smoothly rotating chevron. Navigation actions within Skill Detail use buttons instead of standalone blue text links.
 

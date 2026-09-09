@@ -211,6 +211,12 @@ def ensure_local_schema() -> None:
                 connection.execute(text("ALTER TABLE skills DROP COLUMN interface_type"))
             if "tool_ui_schema_json" in columns:
                 connection.execute(text("ALTER TABLE skills DROP COLUMN tool_ui_schema_json"))
+        if "skill_model_catalog" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("skill_model_catalog")}
+            if "reasoning_effort" not in columns:
+                connection.execute(
+                    text("ALTER TABLE skill_model_catalog ADD COLUMN reasoning_effort VARCHAR(32)")
+                )
         if "skill_generation_requests" in table_names:
             columns = {column["name"] for column in inspector.get_columns("skill_generation_requests")}
             if "product_manager_thread_id" not in columns:

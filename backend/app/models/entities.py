@@ -34,6 +34,23 @@ class CodexRoutingSettings(Base):
     )
 
 
+class SkillModelCatalog(Base):
+    __tablename__ = "skill_model_catalog"
+
+    skill_id: Mapped[int] = mapped_column(
+        ForeignKey("skills.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    reasoning_effort: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+
 class CodexMcpSettings(Base):
     __tablename__ = "codex_mcp_settings"
 

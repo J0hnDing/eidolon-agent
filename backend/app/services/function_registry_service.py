@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.execution.context import InvocationContext
+from app.execution.skill_context import skill_execution_context
 from app.models import (
     ApprovalRequest,
     FunctionAccessApproval,
@@ -373,21 +374,22 @@ class FunctionRegistryService:
                 reason=context.initiating_action or source,
             ):
                 runner = self.runner_factory(self.db)
-                try:
-                    run = runner.run(
-                        skill_id=target.id,
-                        skill_dir=self.proposed_service.skill_dir_for_record(target),
-                        input_json=input_json,
-                        context=run_context,
-                    )
-                except TypeError as exc:
-                    if "context" not in str(exc):
-                        raise
-                    run = runner.run(
-                        skill_id=target.id,
-                        skill_dir=self.proposed_service.skill_dir_for_record(target),
-                        input_json=input_json,
-                    )
+                with skill_execution_context(target.id):
+                    try:
+                        run = runner.run(
+                            skill_id=target.id,
+                            skill_dir=self.proposed_service.skill_dir_for_record(target),
+                            input_json=input_json,
+                            context=run_context,
+                        )
+                    except TypeError as exc:
+                        if "context" not in str(exc):
+                            raise
+                        run = runner.run(
+                            skill_id=target.id,
+                            skill_dir=self.proposed_service.skill_dir_for_record(target),
+                            input_json=input_json,
+                        )
         except SkillOperationConflict as exc:
             return self.blocked_run_for_context(
                 target,

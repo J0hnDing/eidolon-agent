@@ -15,6 +15,7 @@ from app.db import Base
 from app.execution.context import InvocationContext
 from app.execution.context_factory import InvocationContextFactory
 from app.execution.executor import InvocationExecutor
+from app.execution.skill_context import get_current_skill_id
 from app.execution.types import InvocationOutcome
 from app.models import (
     ApprovalRequest,
@@ -53,8 +54,10 @@ class FakeRunner:
         self.db = db
         self.output = output or {"result": "ok"}
         self.calls: list[dict[str, Any]] = []
+        self.observed_skill_ids: list[int | None] = []
 
     def run(self, skill_id: int, skill_dir: Path, input_json: dict[str, Any], context=None) -> SkillRun:
+        self.observed_skill_ids.append(get_current_skill_id())
         self.calls.append({"skill_id": skill_id, "skill_dir": skill_dir, "input": input_json, "context": context})
         run = SkillRun(
             skill_id=skill_id,
@@ -445,6 +448,8 @@ def test_declared_low_risk_function_invokes_without_caller_approval(
     assert run.caller_version_id == caller.active_version_id
     assert run.version_id == target.active_version_id
     assert runner.calls
+    assert runner.observed_skill_ids == [target.id]
+    assert get_current_skill_id() is None
     assert (
         db_session.scalar(
             select(ApprovalRequest)

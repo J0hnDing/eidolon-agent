@@ -20,6 +20,7 @@ from app.schemas.proposed_skill import (
 from app.schemas.runner import RunnerStatusRead
 from app.schemas.skill import SkillRead, SkillUpdate
 from app.schemas.skill_codex import SkillCodexRequest, SkillCodexResponse
+from app.schemas.skill_model import SkillModelRead, SkillModelUpdate
 from app.schemas.skill_run import SkillRunRead, SkillRunRequest
 from app.schemas.skill_version import (
     SkillUpdateResponse,
@@ -34,6 +35,7 @@ from app.services.proposed_skill_service import ProposedSkillError, ProposedSkil
 from app.services.runtime_state_service import RuntimeStateService
 from app.services.scheduler_service import ScheduleError, SchedulerService
 from app.services.skill_graph_service import SkillGraphService
+from app.services.skill_model_catalog_service import SkillModelCatalogError, SkillModelCatalogService
 from app.services.skill_operation_guard import SkillOperationConflict, SkillOperationGuard
 from app.services.skill_runner import get_runner_status
 from app.services.skill_version_service import SkillVersionError, SkillVersionService
@@ -88,6 +90,33 @@ def get_skill(skill_id: int, db: Session = Depends(get_db)) -> SkillRead:
             }
         )
     return SkillRead.model_validate(skill).model_copy(update=updates)
+
+
+@router.get("/{skill_id}/model", response_model=SkillModelRead)
+def get_skill_model(skill_id: int, db: Session = Depends(get_db)) -> SkillModelRead:
+    skill = db.get(Skill, skill_id)
+    if skill is None or skill.status == "deleted":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+    return SkillModelCatalogService(db).read(skill_id)
+
+
+@router.put("/{skill_id}/model", response_model=SkillModelRead)
+def update_skill_model(
+    skill_id: int,
+    payload: SkillModelUpdate,
+    db: Session = Depends(get_db),
+) -> SkillModelRead:
+    skill = db.get(Skill, skill_id)
+    if skill is None or skill.status == "deleted":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+    try:
+        return SkillModelCatalogService(db).update(
+            skill_id,
+            payload.model,
+            payload.reasoning_effort,
+        )
+    except SkillModelCatalogError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.post("/{skill_id}/run", response_model=SkillRunRead | PendingApprovalReceipt)
