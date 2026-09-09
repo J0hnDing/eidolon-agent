@@ -41,8 +41,8 @@ The source.kind discriminator reserves future bounded Gmail and Drive sources; t
 
 ## Telegram Agent
 
-The separate act_agent Telegram connection accepts only its paired private chat. It stores one active-session pointer: /new creates and selects a session, /sessions lists active sessions, and /use <id> changes the pointer. Ordinary messages enqueue a turn and immediately receive its id. The dispatcher later sends the complete result in Telegram-safe chunks. Notification/approval and Act bots use independent long-poll workers, offsets, database sessions, and retry backoff, so a long Act turn or a failure in one bot cannot starve the other.
+The separate act_agent Telegram connection accepts only its paired private chat. Telegram private-chat Threaded mode is required: each `(chat_id, message_thread_id)` topic maps to one Act session, and topic-less General messages never create a hidden session. Ordinary topic messages enqueue a turn and immediately receive its id; the dispatcher later sends the complete result in Telegram-safe chunks to the originating `message_thread_id`. Notification/approval and Act bots use independent long-poll workers, offsets, database sessions, and retry backoff, so a long Act turn or a failure in one bot cannot starve the other.
 
 ## WeCom Observer
 
-The WeCom Intelligent Bot connection is a separate backend-owned transport fixed to Observer. It uses one selected Observer session with `/new`, `/sessions`, and `/use <id>`, and sends completed results through the same turn dispatcher as web sessions.
+The WeCom Intelligent Bot connection is a separate backend-owned transport fixed to Observer. Each paired WeCom user owns one canonical current Observer session; the first message creates it, later messages reuse it, and `clear conversation` atomically retires it and starts a fresh one. WeCom does not expose session history or switching, and completed results use the same turn dispatcher as web sessions.

@@ -219,6 +219,8 @@ class TelegramConnectionStatus(BaseModel):
         "webhook_conflict",
     ]
     bot_username: str | None = None
+    topics_enabled: bool | None = None
+    allows_users_to_create_topics: bool | None = None
     paired_chat_id: str | None = None
     paired_user_id: str | None = None
     pairing_expires_at: datetime | None = None
@@ -243,7 +245,6 @@ class WeComConnectionWrite(BaseModel):
 
 class WeComPairedUser(BaseModel):
     user_id: str
-    active_session_id: int | None = None
     paired_at: datetime
 
 

@@ -11,10 +11,8 @@ from app.db import Base
 from app.execution.context import InvocationContext
 from app.models import (
     ActSession,
-    ActTelegramBinding,
     ActTurn,
     AgentProposal,
-    TelegramBotConnection,
 )
 from app.services.act_session_service import (
     ActSessionError,
@@ -116,30 +114,6 @@ def test_assistant_rejects_sixth_session_when_oldest_is_busy(db: Session) -> Non
 
     assert db.scalar(select(func.count()).select_from(ActSession).where(ActSession.agent_id == "assistant")) == 5
     assert db.get(ActSession, sessions[0].id) is not None
-
-
-def test_pruning_oldest_assistant_session_clears_telegram_selection(db: Session) -> None:
-    service = ActSessionService(db, app_server=FakeAppServer(), agent_id="assistant")  # type: ignore[arg-type]
-    sessions = [service.create_session(origin="telegram") for _ in range(5)]
-    connection = TelegramBotConnection(
-        role="assistant_agent",
-        secret_store_id="test",
-        secret_reference="test/assistant",
-        bot_id="assistant-bot",
-        status="paired",
-        paired_chat_id="100",
-        paired_user_id="200",
-    )
-    db.add(connection)
-    db.flush()
-    db.add(ActTelegramBinding(connection_id=connection.id, active_session_id=sessions[0].id))
-    db.commit()
-
-    service.create_session(origin="web")
-
-    db.expire_all()
-    assert db.get(ActTelegramBinding, connection.id).active_session_id is None
-    assert db.get(ActSession, sessions[0].id) is None
 
 
 def test_proposal_history_survives_source_session_retention(db: Session) -> None:

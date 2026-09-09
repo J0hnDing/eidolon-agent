@@ -78,6 +78,28 @@ def test_notification_alert_uses_red_exclamation_marker() -> None:
         send_notification(api, 42, title="Invalid", description="Invalid", alert="yes")
 
 
+def test_private_topic_api_operations_and_threaded_delivery_are_preserved() -> None:
+    api = FakeTelegramBotApi()
+
+    topic = api.create_forum_topic(42, "Research")
+    api.send_message(42, "reply", message_thread_id=topic["message_thread_id"])
+    api.send_chat_action(42, "typing", message_thread_id=topic["message_thread_id"])
+    api.send_message_draft(42, 1, "draft", message_thread_id=topic["message_thread_id"])
+    api.edit_forum_topic(42, topic["message_thread_id"], name="Renamed")
+    api.delete_forum_topic(42, topic["message_thread_id"])
+
+    assert api.sent_messages[0]["message_thread_id"] == topic["message_thread_id"]
+    assert [name for name, _payload in api.calls] == [
+        "createForumTopic",
+        "sendMessage",
+        "sendChatAction",
+        "sendMessageDraft",
+        "editForumTopic",
+        "deleteForumTopic",
+    ]
+    assert topic["message_thread_id"] not in api.topics
+
+
 def test_pairing_parser_requires_private_start_and_code_is_one_time() -> None:
     pairing = create_pairing_code(now=100.0)
     assert parse_start_command(f"/start@eidolon_bot {pairing.code}") == pairing.code

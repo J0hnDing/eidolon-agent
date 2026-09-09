@@ -1310,7 +1310,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
 
           <div className="settings-subsection stack">
-            <div><h3>Act Agent bot</h3><p className="muted">Connects to Act and keeps one selected Act session. Use <code>/new</code>, <code>/sessions</code>, and <code>/use &lt;id&gt;</code>.</p></div>
+            <div><h3>Act Agent bot</h3><p className="muted">Each private Telegram topic is one independent Act session. Enable Threaded mode for this bot in BotFather, then create topics in the paired private chat.</p></div>
             <dl className="detail-grid"><div><dt>Status</dt><dd>{telegramStatusLabel(telegramAgent)}</dd></div><div><dt>Bot</dt><dd>{telegramAgent.bot_username ? `@${telegramAgent.bot_username}` : "None"}</dd></div><div><dt>Private chat</dt><dd>{telegramAgent.paired_chat_id ?? "Not paired"}</dd></div><div><dt>User</dt><dd>{telegramAgent.paired_user_id ?? "Not paired"}</dd></div></dl>
             {telegramAgent.error_type && <p className="error-text">Connection status: {telegramAgent.error_type.replace(/_/g, " ")}</p>}
             {telegramAgentPairingCode && <div><h4>Finish pairing</h4><p>Open the Act Agent bot in Telegram and send <code>/start {telegramAgentPairingCode}</code>.</p><button type="button" className="secondary" onClick={() => void refreshTelegramAgentPairing()}>Check Act Agent pairing</button></div>}
@@ -1320,7 +1320,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
 
           <div className="settings-subsection stack">
-            <div><h3>Observer Agent bot</h3><p className="muted">Connects to read-only Observer conversations and keeps one selected Observer session.</p></div>
+            <div><h3>Observer Agent bot</h3><p className="muted">Each private Telegram topic is one independent read-only Observer session. Enable Threaded mode for this bot in BotFather, then create topics in the paired private chat.</p></div>
             <dl className="detail-grid"><div><dt>Status</dt><dd>{telegramStatusLabel(telegramObserverAgent)}</dd></div><div><dt>Bot</dt><dd>{telegramObserverAgent.bot_username ? `@${telegramObserverAgent.bot_username}` : "None"}</dd></div><div><dt>Private chat</dt><dd>{telegramObserverAgent.paired_chat_id ?? "Not paired"}</dd></div><div><dt>User</dt><dd>{telegramObserverAgent.paired_user_id ?? "Not paired"}</dd></div></dl>
             {telegramObserverAgent.error_type && <p className="error-text">Connection status: {telegramObserverAgent.error_type.replace(/_/g, " ")}</p>}
             {telegramObserverAgentPairingCode && <div><h4>Finish pairing</h4><p>Open the Observer Agent bot in Telegram and send <code>/start {telegramObserverAgentPairingCode}</code>.</p><button type="button" className="secondary" onClick={() => void refreshTelegramObserverAgentPairing()}>Check Observer Agent pairing</button></div>}
@@ -1330,7 +1330,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
 
           <div className="settings-subsection stack">
-            <div><h3>Assistant Agent bot</h3><p className="muted">Connects to Assistant conversations and keeps one selected Assistant session. Assistant retains at most five sessions across Telegram, the UI, and scheduled assessments.</p></div>
+            <div><h3>Assistant Agent bot</h3><p className="muted">Each private Telegram topic is one independent Assistant session. Enable Threaded mode for this bot in BotFather, then create topics in the paired private chat. Assistant retains at most five sessions across Telegram, the UI, and scheduled assessments.</p></div>
             <dl className="detail-grid"><div><dt>Status</dt><dd>{telegramStatusLabel(telegramAssistantAgent)}</dd></div><div><dt>Bot</dt><dd>{telegramAssistantAgent.bot_username ? `@${telegramAssistantAgent.bot_username}` : "None"}</dd></div><div><dt>Private chat</dt><dd>{telegramAssistantAgent.paired_chat_id ?? "Not paired"}</dd></div><div><dt>User</dt><dd>{telegramAssistantAgent.paired_user_id ?? "Not paired"}</dd></div></dl>
             {telegramAssistantAgent.error_type && <p className="error-text">Connection status: {telegramAssistantAgent.error_type.replace(/_/g, " ")}</p>}
             {telegramAssistantAgentPairingCode && <div><h4>Finish pairing</h4><p>Open the Assistant Agent bot in Telegram and send <code>/start {telegramAssistantAgentPairingCode}</code>.</p><button type="button" className="secondary" onClick={() => void refreshTelegramAssistantAgentPairing()}>Check Assistant Agent pairing</button></div>}
@@ -1353,7 +1353,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           {wecom.error_type && <p className="error-text">Connection status: {wecom.error_type.replace(/_/g, " ")}</p>}
           <div className="settings-subsection stack">
             <div className="button-row">
-              <div><h3>Paired users</h3><p className="muted">Each user selects an Observer session independently from the shared canonical session pool.</p></div>
+              <div><h3>Paired users</h3><p className="muted">Each user has one private Observer conversation. Send <code>clear conversation</code> in WeCom to retire it and start fresh; session history is not exposed in WeCom.</p></div>
               {wecom.bot_id && <button type="button" onClick={() => void startWeComUserPairing()} disabled={loading}>Add user</button>}
             </div>
             {wecom.paired_users.length === 0 && <p className="muted">No paired users.</p>}
@@ -1361,7 +1361,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
               <div className="detail-panel" key={user.user_id}>
                 <dl className="detail-grid">
                   <div><dt>User</dt><dd>{user.user_id}</dd></div>
-                  <div><dt>Selected Observer session</dt><dd>{user.active_session_id ? `#${user.active_session_id}` : "Automatic on next message"}</dd></div>
+                  <div><dt>Conversation</dt><dd>One current Observer session</dd></div>
                 </dl>
                 <button type="button" className="secondary" onClick={() => setPendingWeComUserRemoval(user.user_id)} disabled={loading}>Remove user</button>
               </div>
@@ -2018,6 +2018,8 @@ function telegramUnavailableStatus(err: unknown): TelegramConnectionStatus {
     connected: false,
     status: "unavailable",
     bot_username: null,
+    topics_enabled: null,
+    allows_users_to_create_topics: null,
     paired_chat_id: null,
     paired_user_id: null,
     pairing_expires_at: null,

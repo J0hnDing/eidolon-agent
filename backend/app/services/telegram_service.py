@@ -2,19 +2,24 @@ from __future__ import annotations
 
 import secrets
 import threading
+from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Callable
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models import (
-    ActTelegramBinding,
+    ActSession,
     AgentProposal,
     InvocationApproval,
     TelegramBotConnection,
+    TelegramDeletedTopic,
+    TelegramTopicSession,
 )
 from app.schemas.integration import TelegramConnectionStatus, TelegramPairingResponse
 from app.services.act_session_service import ActSessionError, ActSessionService
@@ -63,6 +68,17 @@ TELEGRAM_AGENT_LABELS = {
     TELEGRAM_OBSERVER_ROLE: "Observer",
     TELEGRAM_ASSISTANT_ROLE: "Assistant",
 }
+TELEGRAM_TOPIC_REQUIRED_MESSAGE = (
+    "This bot uses one Eidolon session per Telegram topic. "
+    "Create a topic in this private chat and send your message there."
+)
+TELEGRAM_TOPIC_HELP_MESSAGE = (
+    "Each Telegram topic is one independent Eidolon session. "
+    "Create, rename, and delete topics in Telegram; there is no session switcher."
+)
+
+_telegram_topic_locks: defaultdict[tuple[int, str, int], threading.Lock] = defaultdict(threading.Lock)
+_telegram_session_topic_locks: defaultdict[tuple[int, int], threading.Lock] = defaultdict(threading.Lock)
 
 
 class TelegramServiceError(RuntimeError):
@@ -133,6 +149,8 @@ class TelegramService:
             connected=available and status == "connected" and bool(row.paired_chat_id and row.paired_user_id),
             status=status,
             bot_username=row.bot_username,
+            topics_enabled=row.topics_enabled,
+            allows_users_to_create_topics=row.allows_users_to_create_topics,
             paired_chat_id=row.paired_chat_id,
             paired_user_id=row.paired_user_id,
             pairing_expires_at=pairing_expiry,
@@ -176,6 +194,8 @@ class TelegramService:
                     secret_reference=reference,
                     bot_id=str(identity["id"]),
                     bot_username=identity.get("username"),
+                    topics_enabled=identity.get("has_topics_enabled"),
+                    allows_users_to_create_topics=identity.get("allows_users_to_create_topics"),
                     status="pairing",
                     pairing_code_hash=pairing.code_hash,
                     pairing_expires_at=expiry,
@@ -185,10 +205,22 @@ class TelegramService:
                 self.db.add(row)
             else:
                 row = previous
+                # Pairing a replacement bot or private chat invalidates every
+                # old topic identity for this connection.  The Eidolon
+                # sessions remain historical, but none may be routed through
+                # the new pairing.
+                self.db.query(TelegramTopicSession).filter(
+                    TelegramTopicSession.connection_id == row.id
+                ).delete(synchronize_session=False)
+                self.db.query(TelegramDeletedTopic).filter(
+                    TelegramDeletedTopic.connection_id == row.id
+                ).delete(synchronize_session=False)
                 row.secret_store_id = self.secret_store.implementation_id
                 row.secret_reference = reference
                 row.bot_id = str(identity["id"])
                 row.bot_username = identity.get("username")
+                row.topics_enabled = identity.get("has_topics_enabled")
+                row.allows_users_to_create_topics = identity.get("allows_users_to_create_topics")
                 row.status = "pairing"
                 row.paired_chat_id = None
                 row.paired_user_id = None
@@ -224,9 +256,12 @@ class TelegramService:
             raise TelegramServiceError("connection_unavailable", "Operating-system secret storage is unavailable")
         try:
             self.secret_store.delete(row.secret_reference, namespace=TELEGRAM_SECRET_NAMESPACE)
-            binding = self.db.get(ActTelegramBinding, row.id)
-            if binding is not None:
-                self.db.delete(binding)
+            self.db.query(TelegramTopicSession).filter(
+                TelegramTopicSession.connection_id == row.id
+            ).delete(synchronize_session=False)
+            self.db.query(TelegramDeletedTopic).filter(
+                TelegramDeletedTopic.connection_id == row.id
+            ).delete(synchronize_session=False)
             self.db.delete(row)
             self.db.commit()
         except SecretStoreError:
@@ -298,10 +333,16 @@ class TelegramService:
                 "Assistant proposals can only use the Assistant bot",
             )
         row, token = self._connected_api_credential()
+        mapping = self._topic_mapping_for_session(row.id, proposal.source_session_id)
+        if mapping is None:
+            token = ""
+            mapping = self.create_topic_for_session(proposal.source_session_id, title=proposal.title)
+            row, token = self._connected_api_credential()
         try:
             delivery = send_agent_proposal_request(
                 self.api_factory(token),
                 row.paired_chat_id or "",
+                message_thread_id=mapping.message_thread_id,
                 proposal_id=proposal.id,
                 title=proposal.title,
                 rationale=proposal.rationale,
@@ -544,6 +585,273 @@ class TelegramService:
             .order_by(TelegramBotConnection.id.desc())
         )
 
+    def resolve_session(
+        self,
+        incoming_message: Mapping[str, Any],
+        *,
+        commit: bool = True,
+    ) -> ActSession:
+        """Resolve a Telegram message using its immutable topic identity."""
+
+        connection_id = incoming_message.get("connection_id")
+        if isinstance(connection_id, bool) or not isinstance(connection_id, int):
+            connection = self._connection()
+            connection_id = connection.id if connection is not None else None
+        if connection_id is None:
+            raise TelegramServiceError("connection_unavailable", "Telegram bot connection is unavailable")
+        chat_id = incoming_message.get("chat_id")
+        if isinstance(chat_id, bool) or not isinstance(chat_id, (int, str)) or not str(chat_id):
+            raise TelegramServiceError("invalid_input", "Telegram chat id is invalid")
+        message_thread_id = self._message_thread_id(incoming_message.get("message_thread_id"))
+        topic_name = self._created_topic_name(incoming_message)
+        if message_thread_id is None or (
+            incoming_message.get("is_topic_message") is False and topic_name is None
+        ):
+            raise TelegramServiceError("topic_required", TELEGRAM_TOPIC_REQUIRED_MESSAGE)
+        chat_key = str(chat_id)
+        lock = _telegram_topic_locks[(connection_id, chat_key, message_thread_id)]
+        with lock:
+            mapping = self._topic_mapping(connection_id, chat_key, message_thread_id)
+            if mapping is not None:
+                session = self.db.get(ActSession, mapping.session_id)
+                if session is None or session.agent_id != TELEGRAM_AGENT_IDS.get(self.role):
+                    raise TelegramServiceError("session_unavailable", "This Telegram topic has no valid Eidolon session")
+                if session.status != "active":
+                    raise TelegramServiceError("session_archived", "This Telegram topic's Eidolon session is archived")
+                if topic_name:
+                    self._synchronize_topic_name(mapping, session, topic_name)
+                    if commit:
+                        self.db.commit()
+                return session
+            if self._topic_deleted(connection_id, chat_key, message_thread_id):
+                raise TelegramServiceError(
+                    "topic_deleted",
+                    "This Telegram topic was deleted and cannot be used again",
+                )
+
+            agent_id = TELEGRAM_AGENT_IDS.get(self.role)
+            if agent_id is None:
+                raise TelegramServiceError("authorization_missing_or_stale", "This Telegram bot has no chat session")
+            session_service = ActSessionService(self.db, agent_id=agent_id)
+            session = session_service.create_session(origin="telegram", commit=False)
+            if topic_name:
+                self._synchronize_topic_name(None, session, topic_name)
+            mapping = TelegramTopicSession(
+                connection_id=connection_id,
+                telegram_chat_id=chat_key,
+                message_thread_id=message_thread_id,
+                session_id=session.id,
+                topic_name=topic_name,
+            )
+            try:
+                with self.db.begin_nested():
+                    self.db.add(mapping)
+                    self.db.flush()
+            except IntegrityError:
+                # A second process may have won the unique topic claim. The
+                # losing pending session must never become an unbound session.
+                self.db.delete(session)
+                self.db.flush()
+                mapping = self._topic_mapping(connection_id, chat_key, message_thread_id)
+                if mapping is None:
+                    raise TelegramServiceError(
+                        "internal_failure",
+                        "Telegram topic session could not be claimed safely",
+                    ) from None
+                resolved = self.db.get(ActSession, mapping.session_id)
+                if resolved is None or resolved.status != "active":
+                    raise TelegramServiceError(
+                        "session_unavailable",
+                        "This Telegram topic has no active Eidolon session",
+                    )
+                if commit:
+                    self.db.commit()
+                return resolved
+            if commit:
+                self.db.commit()
+                self.db.refresh(session)
+            return session
+
+    def create_topic_for_session(
+        self,
+        session_id: int,
+        *,
+        title: str | None = None,
+    ) -> TelegramTopicSession:
+        """Create and persist a Telegram topic for a known Eidolon session."""
+
+        connection, token = self._connected_api_credential()
+        agent_id = TELEGRAM_AGENT_IDS.get(self.role)
+        if agent_id is None:
+            token = ""
+            raise TelegramServiceError("authorization_missing_or_stale", "This Telegram bot does not own sessions")
+        session = ActSessionService(self.db, agent_id=agent_id).read_session(session_id)
+        if session.status != "active":
+            token = ""
+            raise TelegramServiceError("session_archived", "The Eidolon session is archived")
+        chat_id = str(connection.paired_chat_id or "")
+        existing = self.db.scalar(
+            select(TelegramTopicSession).where(TelegramTopicSession.session_id == session.id)
+        )
+        if existing is not None:
+            if existing.connection_id == connection.id and existing.telegram_chat_id == chat_id:
+                token = ""
+                return existing
+            token = ""
+            raise TelegramServiceError("session_unavailable", "The Eidolon session is already bound to another Telegram topic")
+
+        lock = _telegram_session_topic_locks[(connection.id, session.id)]
+        with lock:
+            existing = self.db.scalar(
+                select(TelegramTopicSession).where(TelegramTopicSession.session_id == session.id)
+            )
+            if existing is not None:
+                if existing.connection_id == connection.id and existing.telegram_chat_id == chat_id:
+                    token = ""
+                    return existing
+                token = ""
+                raise TelegramServiceError(
+                    "session_unavailable",
+                    "The Eidolon session is already bound to another Telegram topic",
+                )
+            topic_title = " ".join((title or session.title or f"New {agent_id}").split())[:128]
+            if not topic_title:
+                topic_title = f"New {agent_id}"
+            api = self.api_factory(token)
+            try:
+                result = api.create_forum_topic(int(chat_id), topic_title)
+                thread_id = result["message_thread_id"]
+                returned_name = result.get("name") or topic_title
+                mapping = TelegramTopicSession(
+                    connection_id=connection.id,
+                    telegram_chat_id=chat_id,
+                    message_thread_id=thread_id,
+                    session_id=session.id,
+                    topic_name=returned_name,
+                )
+                try:
+                    with self.db.begin_nested():
+                        self.db.add(mapping)
+                        self.db.flush()
+                except IntegrityError:
+                    existing = self.db.scalar(
+                        select(TelegramTopicSession).where(TelegramTopicSession.session_id == session.id)
+                    )
+                    if existing is None:
+                        try:
+                            api.delete_forum_topic(int(chat_id), thread_id)
+                        except Exception:
+                            pass
+                        raise TelegramServiceError(
+                            "internal_failure",
+                            "Telegram topic session could not be saved safely",
+                        ) from None
+                    try:
+                        api.delete_forum_topic(int(chat_id), thread_id)
+                    except Exception:
+                        pass
+                    return existing
+                self._synchronize_topic_name(mapping, session, returned_name)
+                try:
+                    self.db.commit()
+                    self.db.refresh(mapping)
+                except Exception:
+                    self.db.rollback()
+                    try:
+                        api.delete_forum_topic(int(chat_id), thread_id)
+                    except Exception:
+                        pass
+                    raise TelegramServiceError(
+                        "internal_failure",
+                        "Telegram topic session could not be saved safely",
+                    ) from None
+                return mapping
+            finally:
+                token = ""
+
+    def edit_topic_session(self, chat_id: int | str, message_thread_id: int, name: str) -> None:
+        """Rename a Telegram topic and synchronize its Eidolon session title."""
+
+        row, token = self._connected_api_credential()
+        try:
+            self.api_factory(token).edit_forum_topic(
+                chat_id,
+                message_thread_id,
+                name=name,
+            )
+        finally:
+            token = ""
+        self._synchronize_topic_name_for_identity(row.id, str(chat_id), message_thread_id, name)
+        self.db.commit()
+
+    def delete_topic_session(
+        self,
+        chat_id: int | str,
+        message_thread_id: int,
+        *,
+        remote: bool = True,
+    ) -> None:
+        """Remove a topic mapping and retire its session, idempotently."""
+
+        row = self._connection()
+        if row is None:
+            return
+        mapping = self._topic_mapping(row.id, str(chat_id), message_thread_id)
+        if mapping is None:
+            return
+        lock = _telegram_topic_locks[(row.id, str(chat_id), message_thread_id)]
+        with lock:
+            mapping = self._topic_mapping(row.id, str(chat_id), message_thread_id)
+            if mapping is None:
+                return
+            if remote:
+                _row, token = self._connected_api_credential()
+                try:
+                    try:
+                        self.api_factory(token).delete_forum_topic(chat_id, message_thread_id)
+                    except TelegramProviderError as exc:
+                        # A retry after Telegram already removed the topic is
+                        # safe to reconcile locally. Other provider failures
+                        # must leave the active mapping intact for retry.
+                        if exc.error_type != "invalid_input":
+                            raise
+                finally:
+                    token = ""
+            session = self.db.get(ActSession, mapping.session_id)
+            try:
+                if session is not None and session.status == "active":
+                    ActSessionService(self.db, agent_id=TELEGRAM_AGENT_IDS[self.role]).archive(
+                        session.id,
+                        commit=False,
+                    )
+                self.db.delete(mapping)
+                self.db.add(
+                    TelegramDeletedTopic(
+                        connection_id=row.id,
+                        telegram_chat_id=str(chat_id),
+                        message_thread_id=message_thread_id,
+                    )
+                )
+                self.db.commit()
+            except ActSessionError:
+                self.db.rollback()
+                # A busy session cannot be archived under the existing
+                # lifecycle contract, but the deleted topic must still stop
+                # being routable.
+                stale_mapping = self._topic_mapping(row.id, str(chat_id), message_thread_id)
+                if stale_mapping is not None:
+                    self.db.delete(stale_mapping)
+                    if not self._topic_deleted(row.id, str(chat_id), message_thread_id):
+                        self.db.add(
+                            TelegramDeletedTopic(
+                                connection_id=row.id,
+                                telegram_chat_id=str(chat_id),
+                                message_thread_id=message_thread_id,
+                            )
+                        )
+                    self.db.commit()
+                raise
+
     def _handle_message(self, connection_id: int, bot_id: str, message: dict[str, Any]) -> None:
         if self.role not in TELEGRAM_AGENT_ROLES:
             return
@@ -552,84 +860,227 @@ class TelegramService:
             return
         if str(message.get("chat_id")) != row.paired_chat_id or str(message.get("user_id")) != row.paired_user_id:
             return
-        text = str(message.get("text") or "").strip()
-        if not text or text.startswith("/start"):
-            return
-        agent_id = TELEGRAM_AGENT_IDS[self.role]
-        agent_label = TELEGRAM_AGENT_LABELS[self.role]
-        service = ActSessionService(self.db, agent_id=agent_id)
-        binding = self.db.get(ActTelegramBinding, connection_id)
+        message = {**message, "connection_id": connection_id}
+        message_thread_id: int | None = None
         try:
-            if text == "/new":
-                session = service.create_session(origin="telegram")
-                if binding is None:
-                    binding = ActTelegramBinding(connection_id=connection_id, active_session_id=session.id)
-                    self.db.add(binding)
-                else:
-                    binding.active_session_id = session.id
-                self.db.commit()
-                reply = f"Started {agent_label} session #{session.id}."
-            elif text == "/sessions":
-                sessions = service.list_sessions()
-                reply = (
-                    "\n".join(f"#{item.id} {item.title}" for item in sessions)
-                    or f"No active {agent_label} sessions."
+            message_thread_id = self._message_thread_id(message.get("message_thread_id"))
+            if message.get("forum_topic_deleted") is not None:
+                self.delete_topic_session(
+                    str(message.get("chat_id")),
+                    message_thread_id or 0,
+                    remote=False,
                 )
-            elif text.startswith("/use"):
-                selected = text[4:].strip()
-                if not selected.isdigit():
-                    reply = "Usage: /use <session id>"
-                    self._send_act_reply(row, reply)
-                    return
-                session = service.read_session(int(selected))
-                if session.status != "active":
-                    raise ActSessionError(f"That {agent_label} session is archived")
-                if binding is None:
-                    binding = ActTelegramBinding(connection_id=connection_id, active_session_id=session.id)
-                    self.db.add(binding)
-                else:
-                    binding.active_session_id = session.id
-                self.db.commit()
-                reply = f"Using {agent_label} session #{session.id}: {session.title}"
-            else:
-                session = service.resolve_transport_session(
-                    binding.active_session_id if binding is not None else None,
-                    origin="telegram",
-                )
-                if binding is None:
-                    binding = ActTelegramBinding(
-                        connection_id=connection_id,
-                        active_session_id=session.id,
+                return
+            if message.get("forum_topic_edited") is not None:
+                edited = message.get("forum_topic_edited")
+                name = edited.get("name") if isinstance(edited, Mapping) else None
+                if message_thread_id is not None and isinstance(name, str) and name:
+                    self._synchronize_topic_name_for_identity(
+                        connection_id,
+                        str(message.get("chat_id")),
+                        message_thread_id,
+                        name,
                     )
-                    self.db.add(binding)
+                    self.db.commit()
+                return
+            if message.get("forum_topic_created") is not None:
+                if message_thread_id is None:
+                    return
+                try:
+                    self.resolve_session(message, commit=False)
+                    self.db.commit()
+                except Exception:
+                    self.db.rollback()
+                    self._delete_remote_topic_quietly(
+                        str(message.get("chat_id")),
+                        message_thread_id,
+                    )
+                return
+            text = str(message.get("text") or "").strip()
+            if not text or text.startswith("/start"):
+                return
+            agent_id = TELEGRAM_AGENT_IDS[self.role]
+            agent_label = TELEGRAM_AGENT_LABELS[self.role]
+            service = ActSessionService(self.db, agent_id=agent_id)
+            obsolete_command = text.casefold() in {"/new", "/switch", "/sessions", "/delete"}
+            if message_thread_id is None:
+                reply = TELEGRAM_TOPIC_HELP_MESSAGE if text.casefold() in {"/help", "help"} else TELEGRAM_TOPIC_REQUIRED_MESSAGE
+            else:
+                session = self.resolve_session(message, commit=False)
+                if text.casefold() in {"/help", "help"} or obsolete_command:
+                    reply = TELEGRAM_TOPIC_HELP_MESSAGE
+                elif text.casefold() == "/status":
+                    reply = f"{agent_label} topic session #{session.id}: {session.title}"
                 else:
-                    binding.active_session_id = session.id
-                self.db.commit()
-                turn = service.enqueue_turn(
-                    session.id,
-                    text,
-                    delivery_provider="telegram",
-                    delivery_connection_id=row.id,
-                    delivery_chat_id=row.paired_chat_id,
-                )
-                reply = f"Queued {agent_label} turn #{turn.id} in session #{session.id}."
-            self._send_agent_reply(row, reply)
-        except ActSessionError as exc:
-            self._send_agent_reply(row, str(exc))
+                    turn = service.enqueue_turn(
+                        session.id,
+                        text,
+                        delivery_provider="telegram",
+                        delivery_connection_id=row.id,
+                        delivery_chat_id=row.paired_chat_id,
+                        delivery_message_thread_id=message_thread_id,
+                    )
+                    reply = f"Queued {agent_label} turn #{turn.id} in topic session #{session.id}."
+            self.db.commit()
+            self._send_agent_reply(row, reply, message_thread_id=message_thread_id)
+        except (ActSessionError, TelegramServiceError) as exc:
+            self.db.rollback()
+            self._send_agent_reply(
+                row,
+                str(exc),
+                message_thread_id=message_thread_id,
+            )
 
-    def _send_act_reply(self, row: TelegramBotConnection, reply: str) -> None:
-        self._send_agent_reply(row, reply)
+    @staticmethod
+    def _message_thread_id(value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise TelegramServiceError("invalid_input", "Telegram message thread id is invalid")
+        return value
 
-    def send_agent_turn_result(self, row: TelegramBotConnection, reply: str) -> None:
-        """Deliver a completed agent turn through this Telegram connection."""
-        self._send_agent_reply(row, reply)
+    @staticmethod
+    def _created_topic_name(message: Mapping[str, Any]) -> str | None:
+        created = message.get("forum_topic_created")
+        name = created.get("name") if isinstance(created, Mapping) else None
+        if not isinstance(name, str):
+            return None
+        name = name.strip()
+        return name[:128] or None
 
-    def _send_agent_reply(self, row: TelegramBotConnection, reply: str) -> None:
+    def _topic_mapping(
+        self,
+        connection_id: int,
+        chat_id: str,
+        message_thread_id: int,
+    ) -> TelegramTopicSession | None:
+        return self.db.scalar(
+            select(TelegramTopicSession).where(
+                TelegramTopicSession.connection_id == connection_id,
+                TelegramTopicSession.telegram_chat_id == chat_id,
+                TelegramTopicSession.message_thread_id == message_thread_id,
+            )
+        )
+
+    def _topic_mapping_for_session(self, connection_id: int, session_id: int) -> TelegramTopicSession | None:
+        return self.db.scalar(
+            select(TelegramTopicSession).where(
+                TelegramTopicSession.connection_id == connection_id,
+                TelegramTopicSession.session_id == session_id,
+            )
+        )
+
+    def _topic_deleted(self, connection_id: int, chat_id: str, message_thread_id: int) -> bool:
+        return self.db.scalar(
+            select(TelegramDeletedTopic.id).where(
+                TelegramDeletedTopic.connection_id == connection_id,
+                TelegramDeletedTopic.telegram_chat_id == chat_id,
+                TelegramDeletedTopic.message_thread_id == message_thread_id,
+            )
+        ) is not None
+
+    def _delete_remote_topic_quietly(self, chat_id: str, message_thread_id: int) -> None:
+        try:
+            _row, token = self._connected_api_credential()
+            try:
+                self.api_factory(token).delete_forum_topic(chat_id, message_thread_id)
+            finally:
+                token = ""
+        except Exception:
+            pass
+
+    @staticmethod
+    def _synchronize_topic_name(
+        mapping: TelegramTopicSession | None,
+        session: ActSession,
+        name: str,
+    ) -> None:
+        normalized = " ".join(name.split())[:128]
+        if not normalized:
+            return
+        if mapping is not None:
+            mapping.topic_name = normalized
+        session.title = normalized[:160]
+
+    def _synchronize_topic_name_for_identity(
+        self,
+        connection_id: int,
+        chat_id: str,
+        message_thread_id: int,
+        name: str,
+    ) -> None:
+        mapping = self._topic_mapping(connection_id, chat_id, message_thread_id)
+        if mapping is None:
+            return
+        session = self.db.get(ActSession, mapping.session_id)
+        if session is not None and session.status == "active":
+            self._synchronize_topic_name(mapping, session, name)
+
+    def _send_act_reply(
+        self,
+        row: TelegramBotConnection,
+        reply: str,
+        *,
+        message_thread_id: int | None = None,
+    ) -> None:
+        self._send_agent_reply(row, reply, message_thread_id=message_thread_id)
+
+    def send_agent_turn_result(
+        self,
+        row: TelegramBotConnection,
+        reply: str,
+        *,
+        message_thread_id: int,
+    ) -> None:
+        """Deliver a completed agent turn to its originating Telegram topic."""
+        self._send_agent_reply(row, reply, message_thread_id=message_thread_id)
+
+    def send_agent_typing(self, row: TelegramBotConnection, *, message_thread_id: int) -> None:
+        _row, token = self._connected_api_credential()
+        try:
+            self.api_factory(token).send_chat_action(
+                int(row.paired_chat_id or "0"),
+                "typing",
+                message_thread_id=message_thread_id,
+            )
+        finally:
+            token = ""
+
+    def send_agent_draft(
+        self,
+        row: TelegramBotConnection,
+        draft_id: int,
+        text: str,
+        *,
+        message_thread_id: int,
+    ) -> None:
+        _row, token = self._connected_api_credential()
+        try:
+            self.api_factory(token).send_message_draft(
+                int(row.paired_chat_id or "0"),
+                draft_id,
+                text,
+                message_thread_id=message_thread_id,
+            )
+        finally:
+            token = ""
+
+    def _send_agent_reply(
+        self,
+        row: TelegramBotConnection,
+        reply: str,
+        *,
+        message_thread_id: int | None = None,
+    ) -> None:
         _row, token = self._connected_api_credential()
         try:
             api = self.api_factory(token)
             for chunk in chunk_text_for_telegram(reply):
-                api.send_message(int(row.paired_chat_id or "0"), chunk)
+                api.send_message(
+                    int(row.paired_chat_id or "0"),
+                    chunk,
+                    message_thread_id=message_thread_id,
+                )
         finally:
             token = ""
 

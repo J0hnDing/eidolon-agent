@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 from sqlalchemy import create_engine, select
@@ -9,21 +10,22 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base
 from app.models import (
     ActSession,
-    ActTelegramBinding,
     ActTurn,
     IntegrationConnection,
-    TelegramBotConnection,
     WeComInboundMessage,
     WeComObserverBinding,
     WeComObserverUserBinding,
 )
-from app.services.act_session_service import ActSessionService
 from app.services.secret_store import FakeSecretStore
 from app.services.wecom_provider import (
     WECOM_CALLBACK_COMMAND,
     parse_inbound_message,
 )
-from app.services.wecom_service import WeComObserverWorker, WeComService
+from app.services.wecom_service import (
+    WeComObserverSessionAdapter,
+    WeComObserverWorker,
+    WeComService,
+)
 
 
 class FakeSocket:
@@ -153,7 +155,7 @@ def test_wecom_disconnect_preserves_observer_sessions() -> None:
         binding = WeComObserverUserBinding(
             connection_id=connection.id,
             paired_user_id="user-1",
-            active_session_id=observer_session.id,
+            current_session_id=observer_session.id,
         )
         db.add(binding)
         db.commit()
@@ -170,7 +172,7 @@ def test_wecom_disconnect_preserves_observer_sessions() -> None:
         Base.metadata.drop_all(engine)
 
 
-def test_wecom_supports_multiple_users_with_independent_session_pointers() -> None:
+def test_wecom_users_have_one_current_session_and_can_clear_it() -> None:
     engine, factory = session_factory()
     secret_store = FakeSecretStore()
     worker_stub = FakeWorker()
@@ -190,10 +192,6 @@ def test_wecom_supports_multiple_users_with_independent_session_pointers() -> No
         assert second_pairing.pairing_code not in secret_store.values.values()
         worker._handle_inbound(socket, config, _callback("pair-2", "user-2", f"/pair {second_pairing.pairing_code}"))
 
-        older = ActSession(agent_id="observer", codex_thread_id="pending:older", title="Older")
-        newest = ActSession(agent_id="observer", codex_thread_id="pending:newest", title="Newest")
-        db.add_all([older, newest])
-        db.commit()
         user_one = db.scalar(
             select(WeComObserverUserBinding).where(WeComObserverUserBinding.paired_user_id == "user-1")
         )
@@ -201,24 +199,51 @@ def test_wecom_supports_multiple_users_with_independent_session_pointers() -> No
             select(WeComObserverUserBinding).where(WeComObserverUserBinding.paired_user_id == "user-2")
         )
         assert user_one is not None and user_two is not None
-        older.status = "archived"
-        user_one.active_session_id = older.id
-        db.commit()
 
         worker._handle_inbound(socket, config, _callback("normal-1", "user-1", "hello"))
         db.refresh(user_one)
-        assert user_one is not None and user_one.active_session_id == newest.id
-        assert user_two.active_session_id is None
+        first_session_id = user_one.current_session_id
+        assert first_session_id is not None
 
-        worker._handle_inbound(socket, config, _callback("new-2", "user-2", "/new"))
+        for turn in db.scalars(select(ActTurn)).all():
+            turn.status = "succeeded"
+        db.commit()
+        worker._handle_inbound(socket, config, _callback("normal-2", "user-1", "again"))
         db.refresh(user_two)
-        assert user_two.active_session_id not in {None, newest.id}
-        assert user_one.active_session_id == newest.id
+        db.refresh(user_one)
+        assert user_one.current_session_id == first_session_id
+
+        worker._handle_inbound(socket, config, _callback("normal-3", "user-2", "hello"))
+        db.refresh(user_two)
+        second_session_id = user_two.current_session_id
+        assert second_session_id is not None
+        assert second_session_id != first_session_id
+
+        for turn in db.scalars(select(ActTurn)).all():
+            turn.status = "succeeded"
+        db.commit()
+        worker._handle_inbound(socket, config, _callback("clear-1", "user-1", "clear conversation"))
+        db.refresh(user_one)
+        assert user_one.current_session_id not in {None, first_session_id}
+        fresh_session_id = user_one.current_session_id
+        assert fresh_session_id is not None
+        assert db.get(ActSession, first_session_id).status == "archived"
+        assert db.get(ActSession, fresh_session_id).status == "active"
+
+        for turn in db.scalars(select(ActTurn)).all():
+            turn.status = "succeeded"
+        db.commit()
+        worker._handle_inbound(socket, config, _callback("normal-4", "user-1", "after clear"))
+        latest_turn = db.scalar(select(ActTurn).order_by(ActTurn.id.desc()))
+        assert latest_turn is not None and latest_turn.session_id == fresh_session_id
+
+        worker._handle_inbound(socket, config, _callback("old-command", "user-1", "/sessions"))
+        assert "history is not exposed" in socket.sent[-1]
 
         status = service.connection_status()
         assert {user.user_id for user in status.paired_users} == {"user-1", "user-2"}
         service.remove_user("user-1")
-        assert db.get(ActSession, newest.id) is not None
+        assert db.get(ActSession, fresh_session_id) is not None
         assert db.scalar(
             select(WeComObserverUserBinding).where(WeComObserverUserBinding.paired_user_id == "user-1")
         ) is None
@@ -251,19 +276,15 @@ def test_wecom_rejects_group_pairing() -> None:
         Base.metadata.drop_all(engine)
 
 
-def test_archiving_session_clears_telegram_and_wecom_pointers() -> None:
-    engine, factory = session_factory()
+def test_concurrent_first_wecom_messages_claim_one_current_session(tmp_path) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'wecom-concurrent.db'}",
+        connect_args={"check_same_thread": False, "timeout": 10},
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     db: Session = factory()
     try:
-        session = ActSession(agent_id="observer", codex_thread_id="pending:observer", title="Observer")
-        telegram = TelegramBotConnection(
-            role="observer_agent",
-            is_default=True,
-            secret_store_id="test",
-            secret_reference="telegram/test",
-            bot_id="1",
-            status="connected",
-        )
         wecom = IntegrationConnection(
             provider="wecom",
             is_default=True,
@@ -276,29 +297,33 @@ def test_archiving_session_clears_telegram_and_wecom_pointers() -> None:
             bot_id="bot",
             last_validated_at=datetime.now(UTC),
         )
-        db.add_all([session, telegram, wecom])
+        db.add(wecom)
         db.flush()
-        db.add_all(
-            [
-                ActTelegramBinding(connection_id=telegram.id, active_session_id=session.id),
-                WeComObserverUserBinding(
-                    connection_id=wecom.id,
-                    paired_user_id="user-1",
-                    active_session_id=session.id,
-                ),
-            ]
+        binding = WeComObserverUserBinding(
+            connection_id=wecom.id,
+            paired_user_id="user-1",
         )
+        db.add(binding)
         db.commit()
+        binding_id = binding.id
+        bind = db.get(WeComObserverUserBinding, binding_id)
+        assert bind is not None
+        concurrent_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
-        ActSessionService(
-            db,
-            app_server=FakeAppServer(),  # type: ignore[arg-type]
-            agent_id="observer",
-        ).archive(session.id)
+        def resolve() -> int:
+            with concurrent_factory() as other:
+                current_binding = other.get(WeComObserverUserBinding, binding_id)
+                assert current_binding is not None
+                return WeComObserverSessionAdapter(other, current_binding).resolve_session().id
 
-        assert db.get(ActTelegramBinding, telegram.id).active_session_id is None
-        wecom_binding = db.scalar(select(WeComObserverUserBinding))
-        assert wecom_binding is not None and wecom_binding.active_session_id is None
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            resolved = list(pool.map(lambda _item: resolve(), range(2)))
+
+        assert resolved[0] == resolved[1]
+        db.expire_all()
+        current = db.get(WeComObserverUserBinding, binding_id)
+        assert current is not None and current.current_session_id == resolved[0]
+        assert db.scalar(select(ActSession).where(ActSession.agent_id == "observer")).id == resolved[0]
     finally:
         db.close()
         Base.metadata.drop_all(engine)

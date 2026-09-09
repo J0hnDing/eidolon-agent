@@ -25,6 +25,7 @@ class ActTurnRead(BaseModel):
     error_message: str | None
     cancel_requested_at: datetime | None
     delivery_provider: str | None
+    delivery_message_thread_id: int | None
     delivery_status: str | None
     created_at: datetime
     started_at: datetime | None

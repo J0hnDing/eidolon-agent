@@ -93,11 +93,15 @@ Calendar and Gmail use separate connection rows, account identities, OAuth refre
 
 ### telegram_bot_connections
 
-Stores role/default selection for the independent notification/approval and Act bots, sanitized bot identity and status, paired private chat/user ids, persisted update offset, and hashed one-time pairing state. Bot tokens remain in the operating-system secret store.
+Stores role/default selection for the independent notification/approval and conversational bots, sanitized bot identity and status, private-topic capability flags, paired private chat/user ids, persisted update offset, and hashed one-time pairing state. Bot tokens remain in the operating-system secret store.
+
+### telegram_topic_sessions and telegram_deleted_topics
+
+`telegram_topic_sessions` stores the unique `(connection_id, telegram_chat_id, message_thread_id) -> session_id` binding and synchronized topic name. Each active Telegram topic has one session. `telegram_deleted_topics` is a tombstone for deleted topic identities, preventing late or duplicate updates from creating a new routable session for a deleted topic. Re-pairing or disconnecting a bot removes its mappings and tombstones while retaining session history.
 
 ### wecom_observer_bindings, wecom_observer_user_bindings, and wecom_inbound_messages
 
-`wecom_observer_bindings` stores the singleton WeCom connection's hashed short-lived pairing code and expiry. `wecom_observer_user_bindings` stores one row per paired private user and that user's selected canonical Observer session pointer. `wecom_inbound_messages` stores per-connection message IDs for duplicate suppression. WeCom Bot ID and connection metadata use the generic `integration_connections` row; the Bot Secret remains only in the operating-system secret store. User removal deletes only one binding. Disconnect removes pairing, user-binding, and deduplication rows without deleting Observer sessions. Session archive or retention deletion clears every referencing Telegram or WeCom pointer.
+`wecom_observer_bindings` stores the singleton WeCom connection's hashed short-lived pairing code and expiry. `wecom_observer_user_bindings` stores one row per paired private user and that user's canonical `current_session_id`; no session history is exposed through the transport. `wecom_inbound_messages` stores per-connection message IDs for duplicate suppression. WeCom Bot ID and connection metadata use the generic `integration_connections` row; the Bot Secret remains only in the operating-system secret store. User removal deletes only one binding. Disconnect removes pairing, user-binding, and deduplication rows without deleting Observer sessions. Clear conversation archives the current session and atomically swaps in a new one. Session archive or retention deletion leaves no routable channel pointer.
 
 ### invocation_approvals
 

@@ -11,7 +11,6 @@ from app.execution.context_factory import InvocationContextFactory
 from app.execution.executor import InvocationExecutor
 from app.execution.types import InvocationExecutionError, InvocationTargetRef
 from app.models import (
-    ActTelegramBinding,
     ActTurn,
     AgentProposal,
     AssistantAssessmentState,
@@ -56,25 +55,30 @@ class AssistantAssessmentService:
     def notify_completed(self, turn: ActTurn) -> None:
         import logging
 
-        from app.services.telegram_service import TelegramService
+        from app.services.telegram_service import TELEGRAM_ASSISTANT_ROLE, TelegramService
 
         proposals = list(self.db.scalars(select(AgentProposal).where(
             AgentProposal.source_session_id == turn.session_id
         )))
         connection = self.db.scalar(select(TelegramBotConnection).where(
-            TelegramBotConnection.role == "assistant_agent", TelegramBotConnection.status == "connected"
+            TelegramBotConnection.role == "assistant_agent",
+            TelegramBotConnection.is_default.is_(True),
+            TelegramBotConnection.status == "connected",
         ))
         if connection is not None and connection.paired_chat_id:
-            binding = self.db.get(ActTelegramBinding, connection.id)
-            if binding is None:
-                self.db.add(ActTelegramBinding(connection_id=connection.id, active_session_id=turn.session_id))
-            else:
-                binding.active_session_id = turn.session_id
-            turn.delivery_provider = "telegram"
-            turn.delivery_connection_id = connection.id
-            turn.delivery_chat_id = connection.paired_chat_id
-            turn.delivery_status = "pending"
-            self.db.commit()
+            try:
+                topic = TelegramService(self.db, role=TELEGRAM_ASSISTANT_ROLE).create_topic_for_session(
+                    turn.session_id,
+                    title="Assistant assessment",
+                )
+                turn.delivery_provider = "telegram"
+                turn.delivery_connection_id = topic.connection_id
+                turn.delivery_chat_id = topic.telegram_chat_id
+                turn.delivery_message_thread_id = topic.message_thread_id
+                turn.delivery_status = "pending"
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
         try:
             TelegramService(self.db).execute_notification({
                 "title": "Assessment Success" if turn.status == "succeeded" else "Assessment Fail",

@@ -1,7 +1,6 @@
 from app.models.agents import AgentCredential, AgentPolicy, AgentProposal, AssistantAssessmentState
 from app.models.entities import (
     ActSession,
-    ActTelegramBinding,
     ActTurn,
     AgentRun,
     AgentRunStep,
@@ -32,6 +31,8 @@ from app.models.entities import (
     SkillSchedule,
     SkillVersion,
     TelegramBotConnection,
+    TelegramDeletedTopic,
+    TelegramTopicSession,
     WebAppAuditRecord,
     WebAppInstance,
     WebAppSession,
@@ -46,7 +47,6 @@ __all__ = [
     "AgentProposal",
     "AssistantAssessmentState",
     "ActSession",
-    "ActTelegramBinding",
     "ActTurn",
     "ApprovalRequest",
     "AgentRun",
@@ -77,6 +77,8 @@ __all__ = [
     "SkillSchedule",
     "SkillVersion",
     "TelegramBotConnection",
+    "TelegramDeletedTopic",
+    "TelegramTopicSession",
     "WeComInboundMessage",
     "WeComObserverBinding",
     "WeComObserverUserBinding",

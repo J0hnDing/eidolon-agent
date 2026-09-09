@@ -60,6 +60,16 @@ def ensure_local_schema() -> None:
                         "UPDATE act_sessions SET proposal_count = (SELECT COUNT(*) FROM agent_proposals "
                         "WHERE source_session_id = act_sessions.id AND replaces_proposal_id IS NULL)"
                     ))
+        if "telegram_bot_connections" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("telegram_bot_connections")}
+            for column, definition in {
+                "topics_enabled": "BOOLEAN",
+                "allows_users_to_create_topics": "BOOLEAN",
+            }.items():
+                if column not in columns:
+                    connection.execute(
+                        text(f"ALTER TABLE telegram_bot_connections ADD COLUMN {column} {definition}")
+                    )
         if "mcp_audit_records" in table_names:
             columns = {column["name"] for column in inspector.get_columns("mcp_audit_records")}
             for column, definition in {"agent_id": "VARCHAR(32)", "agent_session_id": "INTEGER", "agent_turn_id": "INTEGER"}.items():
@@ -482,6 +492,7 @@ def ensure_local_schema() -> None:
                 "delivery_provider": "VARCHAR(32)",
                 "delivery_connection_id": "INTEGER",
                 "delivery_chat_id": "VARCHAR(64)",
+                "delivery_message_thread_id": "INTEGER",
                 "delivery_status": "VARCHAR(32)",
                 "started_at": "DATETIME",
             }
@@ -497,21 +508,58 @@ def ensure_local_schema() -> None:
             connection.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_act_turns_delivery_status ON act_turns (delivery_status)")
             )
-        if "wecom_observer_bindings" in table_names and "wecom_observer_user_bindings" in table_names:
-            connection.execute(
-                text(
-                    "INSERT OR IGNORE INTO wecom_observer_user_bindings "
-                    "(connection_id, paired_user_id, active_session_id, created_at, updated_at) "
-                    "SELECT connection_id, paired_user_id, active_session_id, updated_at, updated_at "
-                    "FROM wecom_observer_bindings WHERE paired_user_id IS NOT NULL"
-                )
-            )
-            connection.execute(
-                text(
-                    "UPDATE wecom_observer_bindings SET paired_user_id = NULL, active_session_id = NULL "
-                    "WHERE paired_user_id IS NOT NULL OR active_session_id IS NOT NULL"
-                )
-            )
+        if "wecom_observer_user_bindings" in table_names:
+            user_columns = {
+                column["name"] for column in inspector.get_columns("wecom_observer_user_bindings")
+            }
+            if "current_session_id" not in user_columns:
+                if "active_session_id" in user_columns:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE wecom_observer_user_bindings "
+                            "RENAME COLUMN active_session_id TO current_session_id"
+                        )
+                    )
+                else:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE wecom_observer_user_bindings "
+                            "ADD COLUMN current_session_id INTEGER"
+                        )
+                    )
+                user_columns.add("current_session_id")
+            if "wecom_observer_bindings" in table_names:
+                binding_columns = {
+                    column["name"] for column in inspector.get_columns("wecom_observer_bindings")
+                }
+                if {"paired_user_id", "active_session_id"} <= binding_columns:
+                    connection.execute(
+                        text(
+                            "INSERT OR IGNORE INTO wecom_observer_user_bindings "
+                            "(connection_id, paired_user_id, current_session_id, created_at, updated_at) "
+                            "SELECT connection_id, paired_user_id, active_session_id, updated_at, updated_at "
+                            "FROM wecom_observer_bindings WHERE paired_user_id IS NOT NULL"
+                        )
+                    )
+                if "paired_user_id" in binding_columns:
+                    connection.execute(
+                        text(
+                            "UPDATE wecom_observer_bindings SET paired_user_id = NULL "
+                            "WHERE paired_user_id IS NOT NULL"
+                        )
+                    )
+                if "active_session_id" in binding_columns:
+                    connection.execute(
+                        text(
+                            "UPDATE wecom_observer_bindings SET active_session_id = NULL "
+                            "WHERE active_session_id IS NOT NULL"
+                        )
+                    )
+        if "act_telegram_bindings" in table_names:
+            # The old table held one mutable session pointer per bot.  Its
+            # session rows remain historical, but the pointer itself cannot
+            # be converted into a topic identity safely.
+            connection.execute(text("DROP TABLE act_telegram_bindings"))
         _remove_retired_product_manager_routing(connection, table_names)
         _remove_retired_skill_contract_json(connection, table_names)
         _remove_retired_manifest_display_name(connection, table_names)

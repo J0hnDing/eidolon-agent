@@ -356,12 +356,12 @@ def test_completed_assessment_notifies_even_without_proposals(db_session, monkey
 
 
 def test_assessment_selects_assistant_thread_for_reply(db_session, monkeypatch):
-    from app.models import ActSession, ActTelegramBinding, ActTurn, TelegramBotConnection
+    from app.models import ActSession, ActTurn, TelegramBotConnection, TelegramTopicSession
     from app.services.telegram_service import TelegramService
 
     session = ActSession(agent_id="assistant", origin="assessment", codex_thread_id="assessment-thread")
     connection = TelegramBotConnection(
-        role="assistant_agent", status="connected", secret_store_id="fake", secret_reference="fake",
+        role="assistant_agent", is_default=True, status="connected", secret_store_id="fake", secret_reference="fake",
         bot_id="42", paired_chat_id="100", paired_user_id="200",
     )
     db_session.add_all([session, connection])
@@ -370,11 +370,22 @@ def test_assessment_selects_assistant_thread_for_reply(db_session, monkeypatch):
     db_session.add(turn)
     db_session.commit()
     monkeypatch.setattr(TelegramService, "execute_notification", lambda *args: None)
+    monkeypatch.setattr(
+        TelegramService,
+        "create_topic_for_session",
+        lambda self, session_id, *, title=None: TelegramTopicSession(
+            connection_id=connection.id,
+            telegram_chat_id="100",
+            message_thread_id=77,
+            session_id=session_id,
+            topic_name=title,
+        ),
+    )
     AssistantAssessmentService(db_session).notify_completed(turn)
     assert turn.delivery_status == "pending"
     assert turn.delivery_connection_id == connection.id
     assert turn.delivery_chat_id == "100"
-    assert db_session.get(ActTelegramBinding, connection.id).active_session_id == session.id
+    assert turn.delivery_message_thread_id == 77
 
 
 @pytest.mark.parametrize("unavailable", [False, True])

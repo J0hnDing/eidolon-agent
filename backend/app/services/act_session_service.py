@@ -3,16 +3,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from app.models import (
     ActSession,
-    ActTelegramBinding,
     ActTurn,
     AgentPolicy,
-    WeComObserverUserBinding,
 )
 from app.services.act_app_server_service import (
     ActAppServerService,
@@ -77,25 +75,6 @@ class ActSessionService:
             self.db.refresh(session)
         return session
 
-    def resolve_transport_session(
-        self,
-        active_session_id: int | None,
-        *,
-        origin: str,
-    ) -> ActSession:
-        """Resolve a remote user's selected canonical session, repairing stale pointers."""
-        if active_session_id is not None:
-            session = self.db.get(ActSession, active_session_id)
-            if session is not None and session.agent_id == self.agent_id and session.status == "active":
-                return session
-        session = self.db.scalar(
-            select(ActSession)
-            .where(ActSession.agent_id == self.agent_id, ActSession.status == "active")
-            .order_by(ActSession.updated_at.desc(), ActSession.id.desc())
-            .limit(1)
-        )
-        return session or self.create_session(origin=origin, commit=False)
-
     def prune_assistant_sessions(self, *, limit: int = 5) -> None:
         # A SQLite write claim serializes retention + creation across API/MCP
         # processes, not just Python threads. Preserve any existing policy.
@@ -113,12 +92,6 @@ class ActSessionService:
                     if not is_missing_rollout_error(exc):
                         self.db.rollback()
                         raise ActSessionError("Could not archive the oldest Assistant thread") from None
-            self.db.execute(update(ActTelegramBinding).where(ActTelegramBinding.active_session_id == old.id).values(active_session_id=None))
-            self.db.execute(
-                update(WeComObserverUserBinding)
-                .where(WeComObserverUserBinding.active_session_id == old.id)
-                .values(active_session_id=None)
-            )
             AgentPolicyService(self.db).revoke(old.id)
             self.db.delete(old)
         self.db.flush()
@@ -131,6 +104,7 @@ class ActSessionService:
         delivery_provider: str | None = None,
         delivery_connection_id: int | None = None,
         delivery_chat_id: str | None = None,
+        delivery_message_thread_id: int | None = None,
         commit: bool = True,
     ) -> ActTurn:
         session = self.read_session(session_id)
@@ -154,6 +128,7 @@ class ActSessionService:
             delivery_provider=delivery_provider or ("telegram" if delivery_connection_id is not None else None),
             delivery_connection_id=delivery_connection_id,
             delivery_chat_id=delivery_chat_id,
+            delivery_message_thread_id=delivery_message_thread_id,
             delivery_status="pending" if delivery_connection_id is not None else None,
         )
         if session.title == f"New {self.agent_id}":
@@ -192,7 +167,7 @@ class ActSessionService:
         self.db.refresh(turn)
         return turn
 
-    def archive(self, session_id: int) -> None:
+    def archive(self, session_id: int, *, commit: bool = True) -> None:
         session = self.read_session(session_id)
         if self.db.scalar(
             select(ActTurn).where(
@@ -208,16 +183,7 @@ class ActSessionService:
             if not is_missing_rollout_error(exc):
                 raise ActSessionError(f"Could not archive the Codex thread: {exc}") from None
         AgentPolicyService(self.db).revoke(session.id)
-        self.db.execute(
-            update(ActTelegramBinding)
-            .where(ActTelegramBinding.active_session_id == session.id)
-            .values(active_session_id=None)
-        )
-        self.db.execute(
-            update(WeComObserverUserBinding)
-            .where(WeComObserverUserBinding.active_session_id == session.id)
-            .values(active_session_id=None)
-        )
         session.status = "archived"
         session.updated_at = datetime.now(UTC)
-        self.db.commit()
+        if commit:
+            self.db.commit()

@@ -2,13 +2,13 @@
 
 ### Backend
 ```powershell
-cd C:\Users\John\Projects\Eidolon\backend
+cd C:\Users\dingj\eidolon\backend
 ..\.venv\Scripts\python.exe -m uvicorn app.main:app
 ```
 
 ### Frontend
 ```powershell
-cd C:\Users\John\Projects\Eidolon\frontend
+cd C:\Users\dingj\eidolon\frontend
 npm run dev
 ```
 

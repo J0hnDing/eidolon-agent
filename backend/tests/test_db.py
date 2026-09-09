@@ -167,3 +167,75 @@ def test_local_schema_migrates_legacy_statuses_task_columns_and_retired_skill_fi
             text("SELECT manifest_json FROM skill_versions WHERE id = 1")
         ).scalar_one()
         assert json.loads(manifest_json) == {"name": "legacy_skill"}
+
+
+def test_local_schema_migrates_channel_session_bindings(tmp_path, monkeypatch) -> None:
+    legacy_engine = create_engine(f"sqlite:///{tmp_path / 'channel-legacy.db'}")
+    with legacy_engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE act_sessions ("
+                "id INTEGER PRIMARY KEY, agent_id VARCHAR(32), proposal_count INTEGER)"
+            )
+        )
+        connection.execute(text("INSERT INTO act_sessions (id, agent_id, proposal_count) VALUES (7, 'observer', 0)"))
+        connection.execute(
+            text(
+                "CREATE TABLE telegram_bot_connections ("
+                "id INTEGER PRIMARY KEY, role VARCHAR(64))"
+            )
+        )
+        connection.execute(text("INSERT INTO telegram_bot_connections (id, role) VALUES (3, 'observer_agent')"))
+        connection.execute(
+            text(
+                "CREATE TABLE act_telegram_bindings ("
+                "connection_id INTEGER PRIMARY KEY, active_session_id INTEGER)"
+            )
+        )
+        connection.execute(text("INSERT INTO act_telegram_bindings VALUES (3, 7)"))
+        connection.execute(
+            text(
+                "CREATE TABLE wecom_observer_user_bindings ("
+                "id INTEGER PRIMARY KEY, connection_id INTEGER, paired_user_id VARCHAR(128), "
+                "active_session_id INTEGER, created_at DATETIME, updated_at DATETIME)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE wecom_observer_bindings ("
+                "connection_id INTEGER PRIMARY KEY, paired_user_id VARCHAR(128), "
+                "active_session_id INTEGER, pairing_code_hash VARCHAR(128), "
+                "pairing_expires_at DATETIME, updated_at DATETIME)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO wecom_observer_bindings "
+                "(connection_id, paired_user_id, active_session_id, updated_at) "
+                "VALUES (9, 'legacy-user', 7, CURRENT_TIMESTAMP)"
+            )
+        )
+
+    monkeypatch.setattr(db_module, "engine", legacy_engine)
+    db_module.ensure_local_schema()
+
+    inspector = inspect(legacy_engine)
+    assert "act_telegram_bindings" not in inspector.get_table_names()
+    assert {"topics_enabled", "allows_users_to_create_topics"} <= {
+        column["name"] for column in inspector.get_columns("telegram_bot_connections")
+    }
+    user_columns = {column["name"] for column in inspector.get_columns("wecom_observer_user_bindings")}
+    assert "current_session_id" in user_columns
+    with legacy_engine.connect() as connection:
+        assert connection.execute(
+            text(
+                "SELECT connection_id, paired_user_id, current_session_id "
+                "FROM wecom_observer_user_bindings"
+            )
+        ).all() == [(9, "legacy-user", 7)]
+        assert connection.execute(
+            text(
+                "SELECT paired_user_id, active_session_id "
+                "FROM wecom_observer_bindings WHERE connection_id = 9"
+            )
+        ).one() == (None, None)

@@ -298,6 +298,7 @@ class ActTurn(Base):
         Integer, nullable=True, index=True
     )
     delivery_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    delivery_message_thread_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     delivery_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -484,6 +485,8 @@ class TelegramBotConnection(Base):
     secret_reference: Mapped[str] = mapped_column(String(256), nullable=False)
     bot_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     bot_username: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    topics_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    allows_users_to_create_topics: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     paired_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     paired_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
@@ -496,14 +499,53 @@ class TelegramBotConnection(Base):
     )
 
 
-class ActTelegramBinding(Base):
-    __tablename__ = "act_telegram_bindings"
+class TelegramTopicSession(Base):
+    __tablename__ = "telegram_topic_sessions"
 
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     connection_id: Mapped[int] = mapped_column(
-        ForeignKey("telegram_bot_connections.id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("telegram_bot_connections.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    active_session_id: Mapped[int | None] = mapped_column(ForeignKey("act_sessions.id"), nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    telegram_chat_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    message_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("act_sessions.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    topic_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "connection_id",
+            "telegram_chat_id",
+            "message_thread_id",
+            name="uq_telegram_topic_session_identity",
+        ),
+    )
+
+
+class TelegramDeletedTopic(Base):
+    __tablename__ = "telegram_deleted_topics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    connection_id: Mapped[int] = mapped_column(
+        ForeignKey("telegram_bot_connections.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    telegram_chat_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    message_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "connection_id",
+            "telegram_chat_id",
+            "message_thread_id",
+            name="uq_telegram_deleted_topic_identity",
+        ),
+    )
 
 
 class WeComObserverBinding(Base):
@@ -512,10 +554,8 @@ class WeComObserverBinding(Base):
     connection_id: Mapped[int] = mapped_column(
         ForeignKey("integration_connections.id", ondelete="CASCADE"), primary_key=True
     )
-    paired_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     pairing_code_hash: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     pairing_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    active_session_id: Mapped[int | None] = mapped_column(ForeignKey("act_sessions.id"), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )
@@ -529,7 +569,9 @@ class WeComObserverUserBinding(Base):
         ForeignKey("integration_connections.id", ondelete="CASCADE"), nullable=False, index=True
     )
     paired_user_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    active_session_id: Mapped[int | None] = mapped_column(ForeignKey("act_sessions.id"), nullable=True)
+    current_session_id: Mapped[int | None] = mapped_column(
+        ForeignKey("act_sessions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False

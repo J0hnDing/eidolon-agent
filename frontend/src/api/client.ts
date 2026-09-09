@@ -390,6 +390,7 @@ export interface ActTurn {
   status: string;
   error_message: string | null;
   cancel_requested_at: string | null;
+  delivery_message_thread_id: number | null;
   delivery_status: string | null;
   created_at: string;
   started_at: string | null;
@@ -658,6 +659,8 @@ export interface TelegramConnectionStatus {
   connected: boolean;
   status: "connected" | "disconnected" | "pairing" | "unavailable" | "invalid" | "webhook_conflict";
   bot_username: string | null;
+  topics_enabled: boolean | null;
+  allows_users_to_create_topics: boolean | null;
   paired_chat_id: string | null;
   paired_user_id: string | null;
   pairing_expires_at: string | null;
@@ -681,7 +684,6 @@ export interface WeComConnectionStatus {
   bot_id: string | null;
   paired_users: Array<{
     user_id: string;
-    active_session_id: number | null;
     paired_at: string;
   }>;
   pairing_expires_at: string | null;

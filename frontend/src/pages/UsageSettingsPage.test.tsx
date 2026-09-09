@@ -96,7 +96,7 @@ describe("WeCom Observer users", () => {
       status: "connected" as const,
       bot_id: "observer-bot",
       paired_users: [
-        { user_id: "alice", active_session_id: 42, paired_at: "2026-09-07T12:00:00Z" },
+        { user_id: "alice", paired_at: "2026-09-07T12:00:00Z" },
       ],
       pairing_expires_at: null,
       last_validated_at: "2026-09-07T12:00:00Z",
@@ -115,7 +115,7 @@ describe("WeCom Observer users", () => {
     renderSettings("integrations");
 
     expect(await screen.findByText("alice")).toBeTruthy();
-    expect(screen.getByText("#42")).toBeTruthy();
+    expect(screen.getByText("One current Observer session")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Add user" }));
     const pairingDialog = await screen.findByRole("dialog", { name: "Add WeCom user" });
     expect(pairingDialog.textContent).toContain("/pair PAIR1234");
@@ -724,6 +724,8 @@ describe("Google Calendar OAuth connection", () => {
       connected: true,
       status: "connected",
       bot_username: "eidolon_bot",
+      topics_enabled: true,
+      allows_users_to_create_topics: true,
       paired_chat_id: "11",
       paired_user_id: "22",
       pairing_expires_at: null,
@@ -737,6 +739,8 @@ describe("Google Calendar OAuth connection", () => {
       connected: false,
       status: "disconnected",
       bot_username: null,
+      topics_enabled: null,
+      allows_users_to_create_topics: null,
       paired_chat_id: null,
       paired_user_id: null,
       pairing_expires_at: null,

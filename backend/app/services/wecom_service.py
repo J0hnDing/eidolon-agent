@@ -6,17 +6,19 @@ import json
 import queue
 import threading
 import time
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models import (
+    ActSession,
     IntegrationConnection,
     WeComInboundMessage,
     WeComObserverBinding,
@@ -51,12 +53,119 @@ from app.services.wecom_provider import (
 
 WECOM_PROVIDER = "wecom"
 WECOM_DELIVERY_WAIT_SECONDS = 15.0
+WECOM_CLEAR_COMMANDS = frozenset({"/clear", "clear conversation"})
+WECOM_SESSION_HELP_MESSAGE = (
+    "This chat has one Observer conversation. "
+    "Use 'clear conversation' to start fresh; session history is not exposed here."
+)
+
+_wecom_session_locks: defaultdict[tuple[int, str], threading.Lock] = defaultdict(threading.Lock)
 
 
 class WeComServiceError(RuntimeError):
     def __init__(self, error_type: str, message: str) -> None:
         super().__init__(message)
         self.error_type = error_type
+
+
+class WeComObserverSessionAdapter:
+    """Resolve the one canonical Observer session owned by a WeCom user."""
+
+    def __init__(self, db: Session, binding: WeComObserverUserBinding) -> None:
+        self.db = db
+        self.binding = binding
+        self._lock = _wecom_session_locks[(binding.connection_id, binding.paired_user_id)]
+        self._sessions = ActSessionService(db, agent_id=WECOM_AGENT_ID)
+
+    def resolve_session(self, *, commit: bool = True) -> ActSession:
+        """Return the current session, creating it exactly once when needed."""
+
+        with self._lock:
+            self.db.refresh(self.binding)
+            current = self._current_session()
+            if current is not None:
+                return current
+            return self._replace_current(
+                self.binding.current_session_id,
+                commit=commit,
+            )
+
+    def clear_conversation(self) -> ActSession:
+        """Retire the current session and atomically point the user to a fresh one."""
+
+        with self._lock:
+            for _attempt in range(3):
+                self.db.refresh(self.binding)
+                previous_id = self.binding.current_session_id
+                previous = self.db.get(ActSession, previous_id) if previous_id is not None else None
+                fresh = self._sessions.create_session(origin=WECOM_PROVIDER, commit=False)
+                if not self._claim_current(previous_id, fresh.id):
+                    self.db.delete(fresh)
+                    self.db.flush()
+                    self.db.expire(self.binding)
+                    self.db.refresh(self.binding)
+                    continue
+                if previous is not None and previous.status == "active":
+                    # archive(commit=False) participates in the same DB transaction
+                    # as the current-session pointer swap.
+                    self._sessions.archive(previous.id, commit=False)
+                self.db.commit()
+                self.db.refresh(fresh)
+                return fresh
+        raise WeComServiceError(
+            "internal_failure",
+            "WeCom current conversation could not be replaced safely",
+        )
+
+    def _current_session(self) -> ActSession | None:
+        session_id = self.binding.current_session_id
+        if session_id is None:
+            return None
+        session = self.db.get(ActSession, session_id)
+        if session is None or session.agent_id != WECOM_AGENT_ID or session.status != "active":
+            return None
+        return session
+
+    def _replace_current(self, previous_id: int | None, *, commit: bool) -> ActSession:
+        for _attempt in range(3):
+            fresh = self._sessions.create_session(origin=WECOM_PROVIDER, commit=False)
+            if self._claim_current(previous_id, fresh.id):
+                if commit:
+                    self.db.commit()
+                    self.db.refresh(fresh)
+                return fresh
+            self.db.delete(fresh)
+            self.db.flush()
+            self.db.expire(self.binding)
+            self.db.refresh(self.binding)
+            current = self._current_session()
+            if current is not None:
+                return current
+            previous_id = self.binding.current_session_id
+        raise WeComServiceError(
+            "internal_failure",
+            "WeCom current conversation could not be claimed safely",
+        )
+
+    def _claim_current(self, expected_id: int | None, new_id: int) -> bool:
+        statement = (
+            update(WeComObserverUserBinding)
+            .where(WeComObserverUserBinding.id == self.binding.id)
+        )
+        if expected_id is None:
+            statement = statement.where(WeComObserverUserBinding.current_session_id.is_(None))
+        else:
+            statement = statement.where(WeComObserverUserBinding.current_session_id == expected_id)
+        result = self.db.execute(
+            statement.values(
+                current_session_id=new_id,
+                updated_at=datetime.now(UTC),
+            )
+        )
+        if result.rowcount == 1:
+            self.binding.current_session_id = new_id
+            return True
+        return False
 
 
 @dataclass
@@ -389,34 +498,20 @@ class WeComObserverWorker:
         message: Any,
         socket: WeComSocket,
     ) -> None:
+        adapter = WeComObserverSessionAdapter(db, binding)
         service = ActSessionService(db, agent_id=WECOM_AGENT_ID)
+        normalized_text = message.text.strip().casefold()
         try:
-            if message.text == "/new":
-                session = service.create_session(origin=WECOM_PROVIDER)
-                binding.active_session_id = session.id
-                db.commit()
-                reply = f"Started Observer session #{session.id}."
-            elif message.text == "/sessions":
-                sessions = service.list_sessions()
-                reply = "\n".join(f"#{item.id} {item.title}" for item in sessions) or "No active Observer sessions."
-            elif message.text.startswith("/use"):
-                selected = message.text[4:].strip()
-                if not selected.isdigit():
-                    reply = "Usage: /use <session id>"
-                else:
-                    session = service.read_session(int(selected))
-                    if session.status != "active":
-                        raise ActSessionError("That Observer session is archived")
-                    binding.active_session_id = session.id
-                    db.commit()
-                    reply = f"Using Observer session #{session.id}: {session.title}"
+            if normalized_text in WECOM_CLEAR_COMMANDS:
+                adapter.clear_conversation()
+                reply = "Conversation cleared. A fresh Observer conversation is ready."
+            elif (
+                normalized_text in {"/help", "help", "/new", "/sessions", "/delete"}
+                or normalized_text.startswith("/use")
+            ):
+                reply = WECOM_SESSION_HELP_MESSAGE
             else:
-                session = service.resolve_transport_session(
-                    binding.active_session_id,
-                    origin=WECOM_PROVIDER,
-                )
-                binding.active_session_id = session.id
-                db.commit()
+                session = adapter.resolve_session(commit=False)
                 turn = service.enqueue_turn(
                     session.id,
                     message.text,
@@ -424,9 +519,10 @@ class WeComObserverWorker:
                     delivery_connection_id=connection.id,
                     delivery_chat_id=message.user_id,
                 )
+                db.commit()
                 reply = f"Queued Observer turn #{turn.id} in session #{session.id}."
             self._send_callback_reply(socket, message.request_id, reply)
-        except ActSessionError as exc:
+        except (ActSessionError, WeComServiceError) as exc:
             db.rollback()
             self._send_callback_reply(socket, message.request_id, str(exc))
 
@@ -612,7 +708,6 @@ class WeComService:
             paired_users=[
                 WeComPairedUser(
                     user_id=user.paired_user_id,
-                    active_session_id=user.active_session_id,
                     paired_at=user.created_at,
                 )
                 for user in users

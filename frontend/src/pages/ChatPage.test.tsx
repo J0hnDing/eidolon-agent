@@ -23,7 +23,7 @@ it.each(["observer", "assistant"] as const)("loads and continues the shared %s s
     const turn = {
       id: 1, session_id: 42, agent_id: agentId, codex_turn_id: null, user_message: "Hello",
       assistant_message: "Shared reply", activity_json: [], status: "completed", error_message: null,
-      cancel_requested_at: null, delivery_status: null, created_at: session.created_at,
+      cancel_requested_at: null, delivery_message_thread_id: null, delivery_status: null, created_at: session.created_at,
       started_at: session.created_at, completed_at: session.updated_at,
     };
     session.turns = [turn];

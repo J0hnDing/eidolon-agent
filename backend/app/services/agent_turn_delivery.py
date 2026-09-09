@@ -10,6 +10,7 @@ from app.models import (
     ActTurn,
     IntegrationConnection,
     TelegramBotConnection,
+    TelegramTopicSession,
     WeComObserverUserBinding,
 )
 from app.services.telegram_service import (
@@ -60,13 +61,26 @@ def _deliver_telegram(db, turn: ActTurn, session: ActSession | None) -> None:
         or TELEGRAM_AGENT_IDS.get(connection.role) != session.agent_id
         or connection.status != "connected"
         or connection.paired_chat_id != turn.delivery_chat_id
+        or turn.delivery_message_thread_id is None
     ):
+        _mark_failed(db, turn)
+        return
+    topic = db.scalar(
+        select(TelegramTopicSession).where(
+            TelegramTopicSession.connection_id == connection.id,
+            TelegramTopicSession.telegram_chat_id == turn.delivery_chat_id,
+            TelegramTopicSession.message_thread_id == turn.delivery_message_thread_id,
+            TelegramTopicSession.session_id == turn.session_id,
+        )
+    )
+    if topic is None or session.status != "active":
         _mark_failed(db, turn)
         return
     agent_label = TELEGRAM_AGENT_LABELS.get(connection.role, _agent_label(session))
     TelegramService(db, role=connection.role).send_agent_turn_result(
         connection,
         _result_message(turn, agent_label),
+        message_thread_id=turn.delivery_message_thread_id,
     )
     turn.delivery_status = "delivered"
     db.commit()
@@ -87,6 +101,8 @@ def _deliver_wecom(db, turn: ActTurn, session: ActSession | None) -> None:
         or session.agent_id != WECOM_AGENT_ID
         or binding is None
         or connection.status != "connected"
+        or binding.current_session_id != turn.session_id
+        or session.status != "active"
     ):
         _mark_failed(db, turn)
         return

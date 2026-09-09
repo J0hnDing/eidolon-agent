@@ -74,9 +74,48 @@ class TelegramBotApi(Protocol):
         chat_id: int | str,
         text: str,
         *,
+        message_thread_id: int | None = None,
         parse_mode: str | None = None,
         reply_markup: dict[str, Any] | None = None,
     ) -> dict[str, Any]: ...
+
+    def send_chat_action(
+        self,
+        chat_id: int | str,
+        action: str,
+        *,
+        message_thread_id: int | None = None,
+    ) -> dict[str, Any]: ...
+
+    def send_message_draft(
+        self,
+        chat_id: int | str,
+        draft_id: int,
+        text: str,
+        *,
+        message_thread_id: int | None = None,
+        parse_mode: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    def create_forum_topic(
+        self,
+        chat_id: int | str,
+        name: str,
+        *,
+        icon_color: int | None = None,
+        icon_custom_emoji_id: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    def edit_forum_topic(
+        self,
+        chat_id: int | str,
+        message_thread_id: int,
+        *,
+        name: str | None = None,
+        icon_custom_emoji_id: str | None = None,
+    ) -> Any: ...
+
+    def delete_forum_topic(self, chat_id: int | str, message_thread_id: int) -> Any: ...
 
     def edit_message_text(
         self,
@@ -113,6 +152,19 @@ def _require_chat_id(value: Any) -> int | str:
         raise TelegramProviderError("invalid_input", "Telegram chat id is invalid")
     if isinstance(value, str) and not value:
         raise TelegramProviderError("invalid_input", "Telegram chat id is invalid")
+    return value
+
+
+def _require_thread_id(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise TelegramProviderError("invalid_input", "Telegram message thread id is invalid")
+    return value
+
+
+def _validate_topic_name(value: Any, *, allow_empty: bool = False) -> str:
+    minimum = 0 if allow_empty else 1
+    if not isinstance(value, str) or not minimum <= len(value) <= 128:
+        raise TelegramProviderError("invalid_input", "Telegram topic name is invalid")
     return value
 
 
@@ -175,7 +227,19 @@ class UrllibTelegramBotApi:
             raise TelegramProviderError("provider_unavailable", "Telegram returned an invalid bot identity")
         if not isinstance(first_name, str) or not first_name or len(first_name) > 256:
             raise TelegramProviderError("provider_unavailable", "Telegram returned an invalid bot identity")
-        return {"id": result["id"], "username": username, "first_name": first_name}
+        topics_enabled = result.get("has_topics_enabled")
+        allows_users_to_create_topics = result.get("allows_users_to_create_topics")
+        if topics_enabled is not None and not isinstance(topics_enabled, bool):
+            raise TelegramProviderError("provider_unavailable", "Telegram returned an invalid bot identity")
+        if allows_users_to_create_topics is not None and not isinstance(allows_users_to_create_topics, bool):
+            raise TelegramProviderError("provider_unavailable", "Telegram returned an invalid bot identity")
+        return {
+            "id": result["id"],
+            "username": username,
+            "first_name": first_name,
+            "has_topics_enabled": topics_enabled,
+            "allows_users_to_create_topics": allows_users_to_create_topics,
+        }
 
     def get_webhook_info(self) -> dict[str, Any]:
         payload = self._request_json("getWebhookInfo", {}, timeout=15)
@@ -217,12 +281,15 @@ class UrllibTelegramBotApi:
         chat_id: int | str,
         text: str,
         *,
+        message_thread_id: int | None = None,
         parse_mode: str | None = None,
         reply_markup: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         _require_chat_id(chat_id)
         _validate_message_text(text)
         request: dict[str, Any] = {"chat_id": chat_id, "text": text}
+        if message_thread_id is not None:
+            request["message_thread_id"] = _require_thread_id(message_thread_id)
         if parse_mode is not None:
             _validate_parse_mode(parse_mode)
             request["parse_mode"] = parse_mode
@@ -230,6 +297,100 @@ class UrllibTelegramBotApi:
             _validate_reply_markup(reply_markup)
             request["reply_markup"] = reply_markup
         return self._request_json("sendMessage", request, timeout=15).get("result", {})
+
+    def send_chat_action(
+        self,
+        chat_id: int | str,
+        action: str,
+        *,
+        message_thread_id: int | None = None,
+    ) -> dict[str, Any]:
+        _require_chat_id(chat_id)
+        _require_text(action, "Telegram chat action", maximum=32)
+        request: dict[str, Any] = {"chat_id": chat_id, "action": action}
+        if message_thread_id is not None:
+            request["message_thread_id"] = _require_thread_id(message_thread_id)
+        return self._request_json("sendChatAction", request, timeout=10).get("result", {})
+
+    def send_message_draft(
+        self,
+        chat_id: int | str,
+        draft_id: int,
+        text: str,
+        *,
+        message_thread_id: int | None = None,
+        parse_mode: str | None = None,
+    ) -> dict[str, Any]:
+        _require_chat_id(chat_id)
+        if isinstance(draft_id, bool) or not isinstance(draft_id, int) or draft_id == 0:
+            raise TelegramProviderError("invalid_input", "Telegram draft id is invalid")
+        if not isinstance(text, str) or len(text) > TELEGRAM_MAX_MESSAGE_CHARS:
+            raise TelegramProviderError("invalid_input", "Telegram draft text is invalid")
+        request: dict[str, Any] = {"chat_id": chat_id, "draft_id": draft_id, "text": text}
+        if message_thread_id is not None:
+            request["message_thread_id"] = _require_thread_id(message_thread_id)
+        if parse_mode is not None:
+            _validate_parse_mode(parse_mode)
+            request["parse_mode"] = parse_mode
+        return self._request_json("sendMessageDraft", request, timeout=15).get("result", {})
+
+    def create_forum_topic(
+        self,
+        chat_id: int | str,
+        name: str,
+        *,
+        icon_color: int | None = None,
+        icon_custom_emoji_id: str | None = None,
+    ) -> dict[str, Any]:
+        _require_chat_id(chat_id)
+        _validate_topic_name(name)
+        request: dict[str, Any] = {"chat_id": chat_id, "name": name}
+        if icon_color is not None:
+            if isinstance(icon_color, bool) or not isinstance(icon_color, int):
+                raise TelegramProviderError("invalid_input", "Telegram topic icon color is invalid")
+            request["icon_color"] = icon_color
+        if icon_custom_emoji_id is not None:
+            _require_text(icon_custom_emoji_id, "Telegram topic icon", maximum=256)
+            request["icon_custom_emoji_id"] = icon_custom_emoji_id
+        result = self._request_json("createForumTopic", request, timeout=15).get("result")
+        if not isinstance(result, dict):
+            raise TelegramProviderError("provider_unavailable", "Telegram returned an invalid forum topic")
+        thread_id = result.get("message_thread_id")
+        result_name = result.get("name")
+        if isinstance(thread_id, bool) or not isinstance(thread_id, int) or thread_id < 1:
+            raise TelegramProviderError("provider_unavailable", "Telegram returned an invalid forum topic")
+        if not isinstance(result_name, str) or not 1 <= len(result_name) <= 128:
+            raise TelegramProviderError("provider_unavailable", "Telegram returned an invalid forum topic")
+        return result
+
+    def edit_forum_topic(
+        self,
+        chat_id: int | str,
+        message_thread_id: int,
+        *,
+        name: str | None = None,
+        icon_custom_emoji_id: str | None = None,
+    ) -> Any:
+        _require_chat_id(chat_id)
+        _require_thread_id(message_thread_id)
+        request: dict[str, Any] = {"chat_id": chat_id, "message_thread_id": message_thread_id}
+        if name is not None:
+            _validate_topic_name(name, allow_empty=True)
+            request["name"] = name
+        if icon_custom_emoji_id is not None:
+            if not isinstance(icon_custom_emoji_id, str) or len(icon_custom_emoji_id) > 256:
+                raise TelegramProviderError("invalid_input", "Telegram topic icon is invalid")
+            request["icon_custom_emoji_id"] = icon_custom_emoji_id
+        return self._request_json("editForumTopic", request, timeout=15).get("result")
+
+    def delete_forum_topic(self, chat_id: int | str, message_thread_id: int) -> Any:
+        _require_chat_id(chat_id)
+        _require_thread_id(message_thread_id)
+        return self._request_json(
+            "deleteForumTopic",
+            {"chat_id": chat_id, "message_thread_id": message_thread_id},
+            timeout=15,
+        ).get("result")
 
     def edit_message_text(
         self,
@@ -689,6 +850,7 @@ def send_approval_request(
     presentation: ApprovalPresentation,
     *,
     nonce: str | None = None,
+    message_thread_id: int | None = None,
 ) -> ApprovalDelivery:
     """Send a bounded approval preview with controls on its status message."""
 
@@ -704,6 +866,7 @@ def send_approval_request(
         result = api.send_message(
             chat_id,
             text,
+            message_thread_id=message_thread_id,
             parse_mode="HTML",
             reply_markup=markup if index == 0 else None,
         )
@@ -771,6 +934,7 @@ def send_agent_proposal_request(
     actions: str,
     references: list[str],
     nonce: str | None = None,
+    message_thread_id: int | None = None,
 ) -> ApprovalDelivery:
     """Send an Assistant proposal with complete Act instructions and opaque controls."""
 
@@ -800,6 +964,7 @@ def send_agent_proposal_request(
         result = api.send_message(
             chat_id,
             text,
+            message_thread_id=message_thread_id,
             parse_mode="HTML",
             reply_markup=markup if index == 0 else None,
         )
@@ -960,6 +1125,7 @@ def send_notification(
     description: Any,
     link: Any = None,
     alert: Any = False,
+    message_thread_id: int | None = None,
 ) -> dict[str, Any]:
     """Send a bounded HTML-escaped notification or alert with an optional URL button."""
 
@@ -976,7 +1142,13 @@ def send_notification(
     markup = None
     if normalized_link is not None:
         markup = {"inline_keyboard": [[{"text": "Open link", "url": normalized_link}]]}
-    result = api.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+    result = api.send_message(
+        chat_id,
+        text,
+        message_thread_id=message_thread_id,
+        parse_mode="HTML",
+        reply_markup=markup,
+    )
     message_id = result.get("message_id") if isinstance(result, Mapping) else None
     if isinstance(message_id, bool) or not isinstance(message_id, int) or message_id < 1:
         raise TelegramProviderError("provider_unavailable", "Telegram returned an invalid message id")
@@ -1067,7 +1239,7 @@ ErrorHandler = Callable[[Exception], Any]
 
 
 class TelegramLongPollWorker:
-    """Lifespan-owned worker that handles only pairing and approval callbacks."""
+    """Lifespan-owned worker for pairing, callbacks, and topic messages."""
 
     def __init__(
         self,
@@ -1135,11 +1307,29 @@ class TelegramLongPollWorker:
                 self.on_pairing(pairing)
             return
         message = update.get("message")
-        if isinstance(message, Mapping) and isinstance(message.get("text"), str) and self.on_message is not None:
+        if isinstance(message, Mapping) and self.on_message is not None:
             chat = message.get("chat")
             sender = message.get("from")
             if isinstance(chat, Mapping) and isinstance(sender, Mapping):
-                self.on_message({"chat_id": chat.get("id"), "user_id": sender.get("id"), "text": message["text"]})
+                self.on_message(
+                    {
+                        "chat_id": chat.get("id"),
+                        "user_id": sender.get("id"),
+                        "text": message.get("text", ""),
+                        "message_thread_id": message.get("message_thread_id"),
+                        "is_topic_message": message.get("is_topic_message", False),
+                        "message_id": message.get("message_id"),
+                        "forum_topic_created": message.get("forum_topic_created"),
+                        "forum_topic_edited": message.get("forum_topic_edited"),
+                        "forum_topic_closed": message.get("forum_topic_closed"),
+                        "forum_topic_reopened": message.get("forum_topic_reopened"),
+                        # Bot API currently communicates user deletion through
+                        # message deletion updates rather than a dedicated
+                        # Message service field. Keep this hook for transports
+                        # that expose the event directly.
+                        "forum_topic_deleted": message.get("forum_topic_deleted"),
+                    }
+                )
             return
         callback = parse_callback_update(update)
         if callback is None:
@@ -1205,6 +1395,8 @@ class FakeTelegramBotApi:
         self.answered_callbacks: list[dict[str, Any]] = []
         self.next_message_id = 1
         self.errors: list[Exception] = []
+        self.next_thread_id = 100
+        self.topics: dict[int, dict[str, Any]] = {}
 
     def get_me(self) -> dict[str, Any]:
         self.calls.append(("getMe", {}))
@@ -1233,6 +1425,7 @@ class FakeTelegramBotApi:
         chat_id: int | str,
         text: str,
         *,
+        message_thread_id: int | None = None,
         parse_mode: str | None = None,
         reply_markup: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -1249,11 +1442,121 @@ class FakeTelegramBotApi:
             "text": text,
             "parse_mode": parse_mode,
             "reply_markup": reply_markup,
+            "message_thread_id": message_thread_id,
         }
         self.next_message_id += 1
         self.sent_messages.append(message)
         self.calls.append(("sendMessage", dict(message)))
         return dict(message)
+
+    def send_chat_action(
+        self,
+        chat_id: int | str,
+        action: str,
+        *,
+        message_thread_id: int | None = None,
+    ) -> dict[str, Any]:
+        self._maybe_error()
+        _require_chat_id(chat_id)
+        _require_text(action, "Telegram chat action", maximum=32)
+        result = {"chat_id": chat_id, "action": action, "message_thread_id": message_thread_id}
+        if message_thread_id is not None:
+            _require_thread_id(message_thread_id)
+        self.calls.append(("sendChatAction", dict(result)))
+        return {"ok": True}
+
+    def send_message_draft(
+        self,
+        chat_id: int | str,
+        draft_id: int,
+        text: str,
+        *,
+        message_thread_id: int | None = None,
+        parse_mode: str | None = None,
+    ) -> dict[str, Any]:
+        self._maybe_error()
+        _require_chat_id(chat_id)
+        if isinstance(draft_id, bool) or not isinstance(draft_id, int) or draft_id == 0:
+            raise TelegramProviderError("invalid_input", "Telegram draft id is invalid")
+        if not isinstance(text, str) or len(text) > TELEGRAM_MAX_MESSAGE_CHARS:
+            raise TelegramProviderError("invalid_input", "Telegram draft text is invalid")
+        if message_thread_id is not None:
+            _require_thread_id(message_thread_id)
+        if parse_mode is not None:
+            _validate_parse_mode(parse_mode)
+        result = {
+            "chat_id": chat_id,
+            "draft_id": draft_id,
+            "text": text,
+            "message_thread_id": message_thread_id,
+            "parse_mode": parse_mode,
+        }
+        self.calls.append(("sendMessageDraft", dict(result)))
+        return {"ok": True}
+
+    def create_forum_topic(
+        self,
+        chat_id: int | str,
+        name: str,
+        *,
+        icon_color: int | None = None,
+        icon_custom_emoji_id: str | None = None,
+    ) -> dict[str, Any]:
+        self._maybe_error()
+        _require_chat_id(chat_id)
+        _validate_topic_name(name)
+        thread_id = self.next_thread_id
+        self.next_thread_id += 1
+        topic = {
+            "message_thread_id": thread_id,
+            "name": name,
+            "icon_color": icon_color,
+            "icon_custom_emoji_id": icon_custom_emoji_id,
+        }
+        self.topics[thread_id] = dict(topic)
+        self.calls.append(
+            (
+                "createForumTopic",
+                {"chat_id": chat_id, "name": name, "icon_color": icon_color, "icon_custom_emoji_id": icon_custom_emoji_id},
+            )
+        )
+        return dict(topic)
+
+    def edit_forum_topic(
+        self,
+        chat_id: int | str,
+        message_thread_id: int,
+        *,
+        name: str | None = None,
+        icon_custom_emoji_id: str | None = None,
+    ) -> Any:
+        self._maybe_error()
+        _require_chat_id(chat_id)
+        _require_thread_id(message_thread_id)
+        if name is not None:
+            _validate_topic_name(name, allow_empty=True)
+        topic = self.topics.get(message_thread_id)
+        if topic is None:
+            raise TelegramProviderError("invalid_input", "Telegram topic was not found")
+        if name:
+            topic["name"] = name
+        if icon_custom_emoji_id is not None:
+            topic["icon_custom_emoji_id"] = icon_custom_emoji_id
+        self.calls.append(
+            (
+                "editForumTopic",
+                {"chat_id": chat_id, "message_thread_id": message_thread_id, "name": name, "icon_custom_emoji_id": icon_custom_emoji_id},
+            )
+        )
+        return True
+
+    def delete_forum_topic(self, chat_id: int | str, message_thread_id: int) -> Any:
+        self._maybe_error()
+        _require_chat_id(chat_id)
+        _require_thread_id(message_thread_id)
+        self.topics.pop(message_thread_id, None)
+        self.calls.append(("deleteForumTopic", {"chat_id": chat_id, "message_thread_id": message_thread_id}))
+        return True
 
     def edit_message_text(
         self,
