@@ -23,6 +23,8 @@ MAX_METADATA_RESPONSE_BYTES = 5_000_000
 MAX_HTML_RESPONSE_BYTES = 8_000_000
 MAX_PDF_RESPONSE_BYTES = 20_000_000
 MAX_CONTENT_CHARS = 500_000
+MONTHLY_PAGE_SIZE = 100
+MAX_MONTHLY_PAGES = 10
 _PAPER_ID = re.compile(r"^(?P<base>\d{4}\.\d{4,5})(?:v\d+)?$")
 _MONTH = re.compile(r"^(?P<year>\d{4})-(?P<month>\d{2})$")
 _WEEK = re.compile(r"^(?P<year>\d{4})-W(?P<week>\d{2})$")
@@ -162,12 +164,60 @@ class UrllibHuggingFaceProviderAdapter:
     ) -> list[dict[str, Any]]:
         period_key, period = _period_query(str(value["period"]))
         limit = min(int(value.get("limit", 15)), operation.max_results)
-        query = {period_key: period, "sort": value.get("sort", "trending"), "limit": limit, "p": 0}
+        sort = value.get("sort", "trending")
+        excluded_ids = _excluded_paper_ids(value.get("excluded_paper_ids", []))
+        if sort == "upvotes":
+            if period_key != "month":
+                raise IntegrationProviderError("invalid_input", "upvotes sorting requires an ISO month period")
+            return self._monthly_top_voted(operation, period, limit, excluded_ids)
+        if excluded_ids:
+            raise IntegrationProviderError("invalid_input", "paper exclusions require upvotes sorting")
+        query = {period_key: period, "sort": sort, "limit": limit, "p": 0}
         payload = self._request_json(
             f"{HUGGINGFACE_BASE}/api/daily_papers?{urlencode(query)}",
             timeout=operation.timeout_seconds,
         )
         return _normalize_paper_list(payload, limit)
+
+    def _monthly_top_voted(
+        self,
+        operation: HuggingFaceTransportOperation,
+        period: str,
+        limit: int,
+        excluded_ids: set[str],
+    ) -> list[dict[str, Any]]:
+        papers_by_id: dict[str, dict[str, Any]] = {}
+        for page in range(MAX_MONTHLY_PAGES):
+            query = {
+                "month": period,
+                "sort": "publishedAt",
+                "limit": MONTHLY_PAGE_SIZE,
+                "p": page,
+            }
+            payload = self._request_json(
+                f"{HUGGINGFACE_BASE}/api/daily_papers?{urlencode(query)}",
+                timeout=operation.timeout_seconds,
+            )
+            if not isinstance(payload, list):
+                raise IntegrationProviderError("provider_unavailable", "Hugging Face returned an invalid paper list")
+
+            previous_count = len(papers_by_id)
+            for item in payload:
+                paper = _normalize_monthly_paper(item, period)
+                papers_by_id.setdefault(paper["paper_id"], paper)
+
+            if len(payload) < MONTHLY_PAGE_SIZE:
+                break
+            if len(papers_by_id) == previous_count:
+                raise IntegrationProviderError("provider_unavailable", "Hugging Face paper pagination did not advance")
+        else:
+            raise IntegrationProviderError("response_too_large", "Hugging Face returned too many monthly papers")
+
+        ranked = sorted(
+            (paper for paper in papers_by_id.values() if paper["paper_id"] not in excluded_ids),
+            key=lambda paper: (-paper["upvotes"], paper["paper_id"]),
+        )
+        return ranked[:limit]
 
     def _search_papers(
         self,
@@ -360,6 +410,7 @@ class FakeHuggingFaceProviderAdapter:
             "url": "https://huggingface.co/papers/2601.00001",
             "pdf_url": "https://arxiv.org/pdf/2601.00001",
             "published_at": "2026-01-01T00:00:00.000Z",
+            "organization": "Example Research",
             "upvotes": 42,
         }
         if transport.operation_id in {
@@ -410,10 +461,48 @@ def _period_query(period: str) -> tuple[str, str]:
     return "date", period
 
 
+def _excluded_paper_ids(value: object) -> set[str]:
+    if not isinstance(value, list) or len(value) > 5000:
+        raise IntegrationProviderError("invalid_input", "excluded_paper_ids must be an array of paper IDs")
+    excluded: set[str] = set()
+    for paper_id in value:
+        match = _PAPER_ID.fullmatch(paper_id) if isinstance(paper_id, str) else None
+        if match is None:
+            raise IntegrationProviderError("invalid_input", "excluded_paper_ids contains an invalid paper ID")
+        excluded.add(match.group("base"))
+    return excluded
+
+
 def _normalize_paper_list(payload: Any, limit: int) -> list[dict[str, Any]]:
     if not isinstance(payload, list):
         raise IntegrationProviderError("provider_unavailable", "Hugging Face returned an invalid paper list")
     return [_normalize_paper(item) for item in payload[:limit]]
+
+
+def _normalize_monthly_paper(payload: Any, period: str) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise IntegrationProviderError("provider_unavailable", "Hugging Face returned an invalid paper")
+    nested = payload.get("paper")
+    paper = nested if isinstance(nested, dict) else payload
+    submitted_at = paper.get("submittedOnDailyAt") or payload.get("submittedOnDailyAt")
+    if not isinstance(submitted_at, str):
+        raise IntegrationProviderError(
+            "provider_unavailable", "Hugging Face returned a monthly paper without a submission date"
+        )
+    try:
+        submitted_date = date.fromisoformat(submitted_at[:10])
+    except ValueError:
+        raise IntegrationProviderError(
+            "provider_unavailable", "Hugging Face returned an invalid paper submission date"
+        ) from None
+    if submitted_date.strftime("%Y-%m") != period:
+        raise IntegrationProviderError(
+            "provider_unavailable", "Hugging Face returned a paper outside the requested month"
+        )
+    upvotes = paper.get("upvotes")
+    if not isinstance(upvotes, int) or isinstance(upvotes, bool) or upvotes < 0:
+        raise IntegrationProviderError("provider_unavailable", "Hugging Face returned an invalid paper upvote count")
+    return _normalize_paper(payload)
 
 
 def _normalize_paper(payload: Any) -> dict[str, Any]:
@@ -432,11 +521,21 @@ def _normalize_paper(payload: Any) -> dict[str, Any]:
     if isinstance(authors_payload, list):
         authors = [
             str(author["name"]).strip()
-            for author in authors_payload
+            for author in authors_payload[:100]
             if isinstance(author, dict) and isinstance(author.get("name"), str) and str(author["name"]).strip()
         ]
     base_id = _PAPER_ID.fullmatch(paper_id).group("base")
     published_at = paper.get("publishedAt") or payload.get("publishedAt")
+    organization_payload = paper.get("organization") or payload.get("organization")
+    organization = None
+    if isinstance(organization_payload, dict):
+        candidate = organization_payload.get("fullname") or organization_payload.get("name")
+        if isinstance(candidate, str) and candidate.strip():
+            organization = candidate.strip()
+    elif isinstance(organization_payload, str) and organization_payload.strip():
+        organization = organization_payload.strip()
+    if organization is not None and len(organization) > 500:
+        organization = None
     upvotes = paper.get("upvotes")
     return {
         "paper_id": base_id,
@@ -446,6 +545,7 @@ def _normalize_paper(payload: Any) -> dict[str, Any]:
         "url": f"{HUGGINGFACE_BASE}/papers/{base_id}",
         "pdf_url": f"{ARXIV_BASE}/pdf/{base_id}",
         "published_at": published_at if isinstance(published_at, str) else None,
+        "organization": organization,
         "upvotes": upvotes if isinstance(upvotes, int) and not isinstance(upvotes, bool) else 0,
     }
 

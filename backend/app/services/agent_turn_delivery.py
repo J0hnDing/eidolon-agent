@@ -13,6 +13,7 @@ from app.models import (
     TelegramTopicSession,
     WeComObserverUserBinding,
 )
+from app.services.act_session_service import ActSessionError, ActSessionService
 from app.services.telegram_service import (
     TELEGRAM_AGENT_IDS,
     TELEGRAM_AGENT_LABELS,
@@ -81,6 +82,7 @@ def _deliver_telegram(db, turn: ActTurn, session: ActSession | None) -> None:
         connection,
         _result_message(turn, agent_label),
         message_thread_id=turn.delivery_message_thread_id,
+        draft_id=turn.id,
     )
     turn.delivery_status = "delivered"
     db.commit()
@@ -101,10 +103,18 @@ def _deliver_wecom(db, turn: ActTurn, session: ActSession | None) -> None:
         or session.agent_id != WECOM_AGENT_ID
         or binding is None
         or connection.status != "connected"
-        or binding.current_session_id != turn.session_id
         or session.status != "active"
     ):
         _mark_failed(db, turn)
+        return
+    if binding.current_session_id != turn.session_id:
+        try:
+            ActSessionService(db, agent_id=WECOM_AGENT_ID).archive(session.id)
+        except ActSessionError:
+            db.rollback()
+        turn = db.get(ActTurn, turn.id)
+        if turn is not None:
+            _mark_failed(db, turn)
         return
     try:
         wecom_observer_worker.send_agent_turn_result(

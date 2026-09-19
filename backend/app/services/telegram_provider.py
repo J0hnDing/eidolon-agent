@@ -42,6 +42,9 @@ TELEGRAM_MAX_DESCRIPTION_CHARS = 800
 TELEGRAM_MAX_LINK_CHARS = 2048
 TELEGRAM_PAIRING_TTL_SECONDS = 600
 TELEGRAM_MAX_RESPONSE_BYTES = 2_000_000
+NATIVE_DRAFT_UNSUPPORTED_ERROR_TYPES = frozenset(
+    {"native_thinking_unsupported", "method_not_found", "not_supported"}
+)
 
 PairingDecision = Literal["approve", "deny"]
 
@@ -95,6 +98,15 @@ class TelegramBotApi(Protocol):
         *,
         message_thread_id: int | None = None,
         parse_mode: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    def send_rich_message_draft(
+        self,
+        chat_id: int | str,
+        draft_id: int,
+        rich_message: dict[str, Any],
+        *,
+        message_thread_id: int | None = None,
     ) -> dict[str, Any]: ...
 
     def create_forum_topic(
@@ -161,6 +173,52 @@ def _require_thread_id(value: Any) -> int:
     return value
 
 
+def _require_draft_id(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value == 0:
+        raise TelegramProviderError("invalid_input", "Telegram draft id is invalid")
+    return value
+
+
+def _validate_draft_text(value: Any) -> str:
+    if not isinstance(value, str) or len(value) > TELEGRAM_MAX_MESSAGE_CHARS:
+        raise TelegramProviderError("invalid_input", "Telegram draft text is invalid")
+    return value
+
+
+def _validate_rich_message(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise TelegramProviderError("invalid_input", "Telegram rich message is invalid")
+    formats = [key for key in ("html", "markdown", "blocks") if key in value]
+    if len(formats) != 1:
+        raise TelegramProviderError("invalid_input", "Telegram rich message format is invalid")
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    except (TypeError, ValueError):
+        raise TelegramProviderError("invalid_input", "Telegram rich message is invalid") from None
+    if len(encoded) > TELEGRAM_MAX_MESSAGE_CHARS * 8:
+        raise TelegramProviderError("invalid_input", "Telegram rich message is too large")
+    return value
+
+
+def build_agent_thinking_rich_message(agent_label: str) -> dict[str, str]:
+    label = _require_text(agent_label, "Telegram agent label", maximum=64)
+    return {"html": f"<tg-thinking>{html.escape(label)} is thinking…</tg-thinking>"}
+
+
+def is_native_draft_unsupported(error: BaseException) -> bool:
+    if isinstance(error, (AttributeError, NotImplementedError, TypeError)):
+        return True
+    if not isinstance(error, TelegramProviderError):
+        return False
+    if error.error_type in NATIVE_DRAFT_UNSUPPORTED_ERROR_TYPES:
+        return True
+    normalized = " ".join(str(error).casefold().split())
+    return error.error_type == "invalid_input" and any(
+        marker in normalized
+        for marker in ("method not found", "unknown method", "not supported", "unsupported", "not available")
+    )
+
+
 def _validate_topic_name(value: Any, *, allow_empty: bool = False) -> str:
     minimum = 0 if allow_empty else 1
     if not isinstance(value, str) or not minimum <= len(value) <= 128:
@@ -183,7 +241,36 @@ def _validate_link_url(value: Any) -> str:
     return value
 
 
-def _error_from_http(code: int) -> TelegramProviderError:
+def _error_from_http(
+    code: int,
+    description: str | None = None,
+    *,
+    method: str | None = None,
+) -> TelegramProviderError:
+    normalized = " ".join((description or "").casefold().split())
+    if method in {"sendMessageDraft", "sendRichMessageDraft"} and (
+        code in {404, 501}
+        or any(
+            marker in normalized
+            for marker in ("method not found", "unknown method", "not supported", "unsupported", "not available")
+        )
+    ):
+        return TelegramProviderError(
+            "native_thinking_unsupported",
+            "Telegram live drafts are not supported by this Bot API",
+        )
+    if code == 400 and any(
+        marker in normalized
+        for marker in (
+            "message thread not found",
+            "message thread is not found",
+            "message_thread_not_found",
+            "topic not found",
+            "topic was deleted",
+            "topic_deleted",
+        )
+    ):
+        return TelegramProviderError("topic_not_found", "Telegram topic no longer exists")
     if code == 401:
         return TelegramProviderError("invalid_credential", "Telegram bot token is invalid")
     if code == 409:
@@ -322,10 +409,8 @@ class UrllibTelegramBotApi:
         parse_mode: str | None = None,
     ) -> dict[str, Any]:
         _require_chat_id(chat_id)
-        if isinstance(draft_id, bool) or not isinstance(draft_id, int) or draft_id == 0:
-            raise TelegramProviderError("invalid_input", "Telegram draft id is invalid")
-        if not isinstance(text, str) or len(text) > TELEGRAM_MAX_MESSAGE_CHARS:
-            raise TelegramProviderError("invalid_input", "Telegram draft text is invalid")
+        _require_draft_id(draft_id)
+        _validate_draft_text(text)
         request: dict[str, Any] = {"chat_id": chat_id, "draft_id": draft_id, "text": text}
         if message_thread_id is not None:
             request["message_thread_id"] = _require_thread_id(message_thread_id)
@@ -333,6 +418,26 @@ class UrllibTelegramBotApi:
             _validate_parse_mode(parse_mode)
             request["parse_mode"] = parse_mode
         return self._request_json("sendMessageDraft", request, timeout=15).get("result", {})
+
+    def send_rich_message_draft(
+        self,
+        chat_id: int | str,
+        draft_id: int,
+        rich_message: dict[str, Any],
+        *,
+        message_thread_id: int | None = None,
+    ) -> dict[str, Any]:
+        _require_chat_id(chat_id)
+        _require_draft_id(draft_id)
+        _validate_rich_message(rich_message)
+        request: dict[str, Any] = {
+            "chat_id": chat_id,
+            "draft_id": draft_id,
+            "rich_message": rich_message,
+        }
+        if message_thread_id is not None:
+            request["message_thread_id"] = _require_thread_id(message_thread_id)
+        return self._request_json("sendRichMessageDraft", request, timeout=15).get("result", {})
 
     def create_forum_topic(
         self,
@@ -445,7 +550,12 @@ class UrllibTelegramBotApi:
             with self._opener.open(request, timeout=timeout) as response:
                 raw = response.read(TELEGRAM_MAX_RESPONSE_BYTES + 1)
         except HTTPError as exc:
-            raise _error_from_http(exc.code) from None
+            try:
+                raw_error = exc.read(TELEGRAM_MAX_RESPONSE_BYTES + 1)
+            except (AttributeError, OSError):
+                raw_error = b""
+            description = _telegram_error_description(raw_error)
+            raise _error_from_http(exc.code, description, method=method) from None
         except (TimeoutError, URLError, OSError):
             raise TelegramProviderError("provider_timeout", "Telegram did not respond before the timeout") from None
         if len(raw) > TELEGRAM_MAX_RESPONSE_BYTES:
@@ -456,10 +566,26 @@ class UrllibTelegramBotApi:
             raise TelegramProviderError("provider_unavailable", "Telegram returned an invalid response") from None
         if not isinstance(value, dict) or value.get("ok") is not True:
             error_code = value.get("error_code") if isinstance(value, dict) else None
+            description = value.get("description") if isinstance(value, dict) else None
             if isinstance(error_code, int):
-                raise _error_from_http(error_code)
+                raise _error_from_http(
+                    error_code,
+                    description if isinstance(description, str) else None,
+                    method=method,
+                )
             raise TelegramProviderError("provider_unavailable", "Telegram returned an unsuccessful response")
         return value
+
+
+def _telegram_error_description(raw: bytes) -> str | None:
+    if len(raw) > TELEGRAM_MAX_RESPONSE_BYTES:
+        return None
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    description = value.get("description") if isinstance(value, dict) else None
+    return description if isinstance(description, str) else None
 
 
 def _validate_parse_mode(value: Any) -> None:
@@ -1323,11 +1449,6 @@ class TelegramLongPollWorker:
                         "forum_topic_edited": message.get("forum_topic_edited"),
                         "forum_topic_closed": message.get("forum_topic_closed"),
                         "forum_topic_reopened": message.get("forum_topic_reopened"),
-                        # Bot API currently communicates user deletion through
-                        # message deletion updates rather than a dedicated
-                        # Message service field. Keep this hook for transports
-                        # that expose the event directly.
-                        "forum_topic_deleted": message.get("forum_topic_deleted"),
                     }
                 )
             return
@@ -1385,8 +1506,16 @@ class FakeTelegramBotApi:
         username: str = "eidolon_test_bot",
         first_name: str = "Eidolon",
         webhook_url: str = "",
+        has_topics_enabled: bool = True,
+        allows_users_to_create_topics: bool = True,
     ) -> None:
-        self.bot = {"id": bot_id, "username": username, "first_name": first_name}
+        self.bot = {
+            "id": bot_id,
+            "username": username,
+            "first_name": first_name,
+            "has_topics_enabled": has_topics_enabled,
+            "allows_users_to_create_topics": allows_users_to_create_topics,
+        }
         self.webhook_url = webhook_url
         self.updates: list[dict[str, Any]] = []
         self.calls: list[tuple[str, dict[str, Any]]] = []
@@ -1476,10 +1605,8 @@ class FakeTelegramBotApi:
     ) -> dict[str, Any]:
         self._maybe_error()
         _require_chat_id(chat_id)
-        if isinstance(draft_id, bool) or not isinstance(draft_id, int) or draft_id == 0:
-            raise TelegramProviderError("invalid_input", "Telegram draft id is invalid")
-        if not isinstance(text, str) or len(text) > TELEGRAM_MAX_MESSAGE_CHARS:
-            raise TelegramProviderError("invalid_input", "Telegram draft text is invalid")
+        _require_draft_id(draft_id)
+        _validate_draft_text(text)
         if message_thread_id is not None:
             _require_thread_id(message_thread_id)
         if parse_mode is not None:
@@ -1492,6 +1619,29 @@ class FakeTelegramBotApi:
             "parse_mode": parse_mode,
         }
         self.calls.append(("sendMessageDraft", dict(result)))
+        return {"ok": True}
+
+    def send_rich_message_draft(
+        self,
+        chat_id: int | str,
+        draft_id: int,
+        rich_message: dict[str, Any],
+        *,
+        message_thread_id: int | None = None,
+    ) -> dict[str, Any]:
+        self._maybe_error()
+        _require_chat_id(chat_id)
+        _require_draft_id(draft_id)
+        _validate_rich_message(rich_message)
+        if message_thread_id is not None:
+            _require_thread_id(message_thread_id)
+        result = {
+            "chat_id": chat_id,
+            "draft_id": draft_id,
+            "rich_message": rich_message,
+            "message_thread_id": message_thread_id,
+        }
+        self.calls.append(("sendRichMessageDraft", dict(result)))
         return {"ok": True}
 
     def create_forum_topic(

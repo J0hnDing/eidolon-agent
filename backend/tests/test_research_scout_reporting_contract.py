@@ -26,7 +26,8 @@ def test_scout_output_flows_into_weekly_report_without_schema_drift(tmp_path, mo
         scout_folder = ROOT / "skills/installed/research_paper_scout/versions/v1"
     scout, scout_manifest = _package("research_contract_scout", scout_folder)
     service, service_manifest = _package(
-        "research_contract_service", ROOT / "skills/installed/weekly_report_service/versions/v2",
+        "research_contract_service",
+        ROOT / "skills/installed/weekly_report_service/versions/v2",
     )
     monkeypatch.setenv("PERSONAL_AGENT_SKILL_CACHE_DIR", str(tmp_path))
     paper = {
@@ -37,38 +38,21 @@ def test_scout_output_flows_into_weekly_report_without_schema_drift(tmp_path, mo
         "url": "https://huggingface.co/papers/2609.00001",
         "pdf_url": "https://arxiv.org/pdf/2609.00001",
         "published_at": None,
+        "organization": "Example Research",
         "upvotes": 10,
     }
-    guide = {
-        "problem": "Problem " * 500,
-        "core_idea": "Core idea",
-        "method": "Method",
-        "novelty": "Novelty",
-        "important_results": "Results",
-        "limitations": "Limitations",
-        "prerequisites": [],
-        "recommended_reading_order": ["Introduction", "Method"],
-        "sections_to_skip_initially": [],
-        "key_questions": ["What evidence supports the claims?"],
-        "expected_takeaways": ["Understand the method."],
-    }
-    responses = [{"paper_ids": [paper["paper_id"]] if selected else []}]
-    if selected:
-        responses.append({
-            "papers": [{"paper_id": paper["paper_id"], "rank": 1, "analysis": "A useful analysis."}],
-            "paper_of_the_week": {"paper_id": paper["paper_id"], "reading_guide": guide},
-        })
+    responses = [{"papers": [{"paper_id": paper["paper_id"], "analysis": "A useful analysis."}]}] if selected else []
 
     def integration(*, operation, input, **kwargs):
         if operation == "huggingface.list_papers":
-            return [paper]
-        if operation == "atlas.goal.list":
-            return {"goals": []}
-        if operation == "atlas.interest.list":
-            return {"interests": []}
+            return [paper] if selected else []
         if operation == "huggingface.get_paper":
-            return {**paper, "content": "Full original paper text. " * 100,
-                    "content_source": "arxiv_html", "content_truncated": False}
+            return {
+                **paper,
+                "content": "Full original paper text. " * 100,
+                "content_source": "arxiv_html",
+                "content_truncated": False,
+            }
         raise AssertionError(operation)
 
     def codex(**kwargs):
@@ -89,8 +73,12 @@ def test_scout_output_flows_into_weekly_report_without_schema_drift(tmp_path, mo
             return {"sent": True, "message_id": 1}
         assert operation == "notion.report.create"
         reports.append(input)
-        return {"id": str(len(reports)), "name": input["name"], "select": input["select"],
-                "created_time": "2026-09-07T12:00:00Z"}
+        return {
+            "id": str(len(reports)),
+            "name": input["name"],
+            "select": input["select"],
+            "created_time": "2026-09-07T12:00:00Z",
+        }
 
     def child(name, payload):
         if name == "github_repo_scout":

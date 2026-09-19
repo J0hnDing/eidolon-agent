@@ -36,7 +36,7 @@
         "required": ["id", "name", "created_time", "select"],
         "additionalProperties": false
       },
-      "paper_count": {"type": "integer", "minimum": 0, "maximum": 5}
+      "paper_count": {"type": "integer", "minimum": 0, "maximum": 6}
     },
     "required": ["report", "repository_count", "research_report", "paper_count"],
     "additionalProperties": false

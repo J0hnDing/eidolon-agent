@@ -1934,7 +1934,13 @@ tbody tr:last-child td {
   padding: 10px 16px;
 }
 
-.chat-mode-bar .muted {
+.chat-session-metadata {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
   margin: 0;
   font-size: 11px;
 }

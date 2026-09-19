@@ -66,6 +66,9 @@ export default function ChatPage() {
       chat.updateConversation(conversationId, (conversation) => ({
         ...conversation,
         title: session.title,
+        origin: session.origin,
+        wecomUserId: session.wecom_user_id ?? undefined,
+        createdAt: session.created_at,
         messages: actSessionMessages(session, agentId),
         updatedAt: session.updated_at,
       }));
@@ -120,6 +123,9 @@ export default function ChatPage() {
         ...conversation,
         actSessionId: session.id,
         title: session.title,
+        origin: session.origin,
+        wecomUserId: session.wecom_user_id ?? undefined,
+        createdAt: session.created_at,
         updatedAt: session.updated_at,
       }));
     } catch (reason) {
@@ -139,6 +145,14 @@ export default function ChatPage() {
         if (conversation.mode === "act") await api.archiveActSession(conversation.actSessionId);
         else await api.archiveAgentSession(conversation.mode, conversation.actSessionId);
         chat.deleteConversation(conversationId);
+        if (conversation.mode !== "act" && conversation.wecomUserId) {
+          const sessions = await api.listAgentSessions(conversation.mode);
+          chat.importAgentSessions(conversation.mode, sessions);
+          const replacement = sessions.find(
+            (session) => session.wecom_user_id === conversation.wecomUserId,
+          );
+          if (replacement) chat.selectConversation(`${conversation.mode}-${replacement.id}`);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not archive conversation");
       }

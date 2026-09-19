@@ -9,12 +9,14 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base
 from app.models import (
     ActSession,
+    ActTurn,
     AgentProposal,
     InvocationApproval,
     TelegramBotConnection,
     TelegramDeletedTopic,
     TelegramTopicSession,
 )
+from app.services.act_session_service import ActSessionService
 from app.services.secret_store import FakeSecretStore
 from app.services.telegram_provider import FakeTelegramBotApi, PairingMessage, TelegramProviderError
 from app.services.telegram_service import (
@@ -24,7 +26,17 @@ from app.services.telegram_service import (
     TelegramService,
     TelegramServiceError,
     run_telegram_long_polling,
+    synchronize_session_to_telegram,
 )
+
+
+class _PlainDraftTelegramApi(FakeTelegramBotApi):
+    send_rich_message_draft = None
+
+
+class _TypingOnlyTelegramApi(FakeTelegramBotApi):
+    send_rich_message_draft = None
+    send_message_draft = None
 
 
 def test_expired_pairing_is_not_reported_as_in_progress() -> None:
@@ -52,6 +64,69 @@ def test_expired_pairing_is_not_reported_as_in_progress() -> None:
         assert status.error_type == "pairing_expired"
         assert status.paired_chat_id is None
         assert status.paired_user_id is None
+
+
+@pytest.mark.parametrize(
+    ("has_topics_enabled", "allows_users_to_create_topics"),
+    [(False, True), (True, False)],
+)
+def test_conversational_pairing_requires_user_creatable_topics(
+    has_topics_enabled: bool,
+    allows_users_to_create_topics: bool,
+) -> None:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        api = FakeTelegramBotApi(
+            has_topics_enabled=has_topics_enabled,
+            allows_users_to_create_topics=allows_users_to_create_topics,
+        )
+        service = TelegramService(
+            db,
+            secret_store=FakeSecretStore(),
+            api_factory=lambda _token: api,
+            role=TELEGRAM_ACT_ROLE,
+        )
+
+        with pytest.raises(TelegramServiceError) as exc_info:
+            service.start_pairing("123:telegram-token")
+
+        assert exc_info.value.error_type == "threaded_mode_required"
+        assert db.query(TelegramBotConnection).count() == 0
+
+
+def test_conversational_pairing_revalidates_topic_settings_before_connecting() -> None:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        api = FakeTelegramBotApi()
+        service = TelegramService(
+            db,
+            secret_store=FakeSecretStore(),
+            api_factory=lambda _token: api,
+            role=TELEGRAM_ACT_ROLE,
+        )
+        pairing = service.start_pairing("123:telegram-token")
+        connection = db.query(TelegramBotConnection).one()
+        api.bot["has_topics_enabled"] = False
+
+        service._handle_pairing(
+            connection.id,
+            connection.bot_id,
+            PairingMessage(update_id=1, code=pairing.pairing_code, chat_id=11, user_id=22),
+        )
+
+        assert service.connection_status().status == "invalid"
+        assert service.connection_status().error_type == "threaded_mode_required"
+        assert connection.paired_chat_id is None
+        api.bot["has_topics_enabled"] = True
+        assert service.refresh_connection_status().status == "pairing"
+        service._handle_pairing(
+            connection.id,
+            connection.bot_id,
+            PairingMessage(update_id=2, code=pairing.pairing_code, chat_id=11, user_id=22),
+        )
+        assert service.connection_status().connected is True
 
 
 def test_in_flight_poller_refreshes_replaced_pairing_state() -> None:
@@ -295,6 +370,141 @@ def test_act_bot_routes_by_topic_and_rejects_topicless_messages() -> None:
         assert db.query(TelegramBotConnection).count() == 0
 
 
+def test_agent_turn_uses_one_native_draft_for_thinking_and_final_delivery() -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        store = FakeSecretStore()
+        api = FakeTelegramBotApi()
+        service = TelegramService(
+            db,
+            secret_store=store,
+            api_factory=lambda _token: api,
+            role=TELEGRAM_ACT_ROLE,
+        )
+        pairing = service.start_pairing("123:telegram-token")
+        connection = db.query(TelegramBotConnection).one()
+        service._handle_pairing(
+            connection.id,
+            connection.bot_id,
+            PairingMessage(update_id=1, code=pairing.pairing_code, chat_id=11, user_id=22),
+        )
+        service._handle_message(
+            connection.id,
+            connection.bot_id,
+            {
+                "chat_id": 11,
+                "user_id": 22,
+                "text": "hello",
+                "message_thread_id": 10,
+                "is_topic_message": True,
+            },
+        )
+
+        turn = db.query(ActTurn).one()
+        draft_calls = [call for call in api.calls if call[0] == "sendRichMessageDraft"]
+        assert [call[1]["draft_id"] for call in draft_calls] == [turn.id]
+        assert draft_calls[0][1]["rich_message"] == {
+            "html": "<tg-thinking>Act is thinking…</tg-thinking>"
+        }
+        assert not api.sent_messages
+
+        service.send_agent_turn_result(
+            connection,
+            "Done",
+            message_thread_id=10,
+            draft_id=turn.id,
+        )
+
+        draft_calls = [call for call in api.calls if call[0] == "sendRichMessageDraft"]
+        assert [call[1]["draft_id"] for call in draft_calls] == [turn.id, turn.id]
+        assert draft_calls[-1][1]["rich_message"] == {"html": "Done"}
+        assert api.sent_messages[-1]["text"] == "Done"
+        assert "Queued" not in " ".join(message["text"] for message in api.sent_messages)
+
+
+@pytest.mark.parametrize(
+    ("api_type", "expected_call"),
+    [(_PlainDraftTelegramApi, "sendMessageDraft"), (_TypingOnlyTelegramApi, "sendChatAction")],
+)
+def test_agent_thinking_falls_back_only_when_native_drafts_are_unavailable(
+    api_type: type[FakeTelegramBotApi],
+    expected_call: str,
+) -> None:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        store = FakeSecretStore()
+        api = api_type()
+        service = TelegramService(
+            db,
+            secret_store=store,
+            api_factory=lambda _token: api,
+            role=TELEGRAM_OBSERVER_ROLE,
+        )
+        pairing = service.start_pairing("123:telegram-token")
+        connection = db.query(TelegramBotConnection).one()
+        service._handle_pairing(
+            connection.id,
+            connection.bot_id,
+            PairingMessage(update_id=1, code=pairing.pairing_code, chat_id=11, user_id=22),
+        )
+
+        service.send_agent_thinking(connection, 1, "Observer", message_thread_id=10)
+
+        assert [name for name, _payload in api.calls if name in {"sendRichMessageDraft", "sendMessageDraft", "sendChatAction"}] == [
+            expected_call
+        ]
+        if expected_call == "sendMessageDraft":
+            assert api.calls[-1][1]["text"] == "Observer is thinking…"
+
+
+def test_connected_bot_projects_existing_and_new_non_wecom_sessions_to_topics() -> None:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        store = FakeSecretStore()
+        api = FakeTelegramBotApi()
+
+        def sync(current_db, session):
+            synchronize_session_to_telegram(
+                current_db,
+                session,
+                secret_store=store,
+                api_factory=lambda _token: api,
+            )
+
+        sessions = ActSessionService(db, telegram_sync=sync)
+        existing = sessions.create_session(origin="web")
+        telegram = TelegramService(
+            db,
+            secret_store=store,
+            api_factory=lambda _token: api,
+            role=TELEGRAM_ACT_ROLE,
+        )
+        pairing = telegram.start_pairing("123:telegram-token")
+        connection = db.query(TelegramBotConnection).one()
+        telegram._handle_pairing(
+            connection.id,
+            connection.bot_id,
+            PairingMessage(update_id=1, code=pairing.pairing_code, chat_id=11, user_id=22),
+        )
+        created = sessions.create_session(origin="web")
+        wecom = sessions.create_session(origin="wecom")
+
+        mapped_session_ids = set(db.scalars(select(TelegramTopicSession.session_id)))
+        assert mapped_session_ids == {existing.id, created.id}
+        assert wecom.id not in mapped_session_ids
+        assert len(api.topics) == 2
+
+        sessions.synchronize_telegram(created)
+        assert len(api.topics) == 2
+
+
 def test_observer_and_assistant_bots_keep_topic_sessions_independent() -> None:
     engine = create_engine(
         "sqlite://",
@@ -392,7 +602,7 @@ def test_observer_and_assistant_bots_keep_topic_sessions_independent() -> None:
         assert observer_connection.id != assistant_connection.id
 
 
-def test_telegram_topic_rename_delete_and_duplicate_updates_are_idempotent() -> None:
+def test_telegram_topic_rename_and_missing_topic_delivery_reconcile_mapping() -> None:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -447,7 +657,9 @@ def test_telegram_topic_rename_delete_and_duplicate_updates_are_idempotent() -> 
         assert session.title == "Renamed notes"
         assert mapping.topic_name == "Renamed notes"
 
-        service.delete_topic_session(11, 31, remote=False)
+        api.errors.append(TelegramProviderError("topic_not_found", "Telegram topic no longer exists"))
+        with pytest.raises(TelegramProviderError):
+            service.send_agent_turn_result(connection, "done", message_thread_id=31)
         assert db.query(TelegramTopicSession).count() == 0
         tombstone = db.query(TelegramDeletedTopic).one()
         assert tombstone.message_thread_id == 31
@@ -464,17 +676,6 @@ def test_telegram_topic_rename_delete_and_duplicate_updates_are_idempotent() -> 
                 }
             )
         assert exc_info.value.error_type == "topic_deleted"
-        service._handle_message(
-            connection.id,
-            connection.bot_id,
-            {
-                "chat_id": 11,
-                "user_id": 22,
-                "message_thread_id": 31,
-                "is_topic_message": True,
-                "forum_topic_deleted": {},
-            },
-        )
         assert db.query(TelegramDeletedTopic).count() == 1
 
 

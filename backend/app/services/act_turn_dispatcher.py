@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from datetime import UTC, datetime
 from typing import Any
@@ -12,6 +13,9 @@ from app.models import ActSession, ActTurn, AgentCredential
 from app.services.act_app_server_service import act_app_server_service, agent_app_servers, is_missing_rollout_error
 from app.services.agent_policy_service import AgentPolicyService
 from app.services.codex_routing_service import CodexRoutingService
+from app.services.title_sync_service import TitleSyncService
+
+logger = logging.getLogger(__name__)
 
 ACT_RESPONSE_SCHEMA = {
     "type": "object",
@@ -251,6 +255,14 @@ class ActTurnDispatcher:
                 turn.completed_at = datetime.now(UTC)
                 session.updated_at = datetime.now(UTC)
                 db.commit()
+                try:
+                    TitleSyncService(db).sync_from_codex(session, self.app_server.sessions)
+                except Exception as exc:
+                    logger.warning(
+                        "Codex title synchronization failed for session %s: %s",
+                        session.id,
+                        type(exc).__name__,
+                    )
         except Exception as exc:
             db.refresh(turn)
             if turn.cancel_requested_at is not None or self._stop.is_set():

@@ -62,7 +62,7 @@ def test_session_enqueue_duplicate_cancel_and_archive(
         session = service.create_session()
         turn = service.enqueue_turn(session.id, "Write a report")
         assert turn.status == "queued"
-        assert service.read_session(session.id).title == "Write a report"
+        assert service.read_session(session.id).title == "New Chat"
         with pytest.raises(ActSessionError, match="already queued or running"):
             service.enqueue_turn(session.id, "Second request")
         cancelled = service.cancel_turn(session.id, turn.id)

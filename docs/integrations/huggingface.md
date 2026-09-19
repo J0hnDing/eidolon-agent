@@ -6,17 +6,18 @@ Eidolon exposes the public Hugging Face Papers catalog as three trusted read-onl
 
 ### `huggingface.list_papers`
 
-Lists Hugging Face Daily Papers for one period in the source ranking order.
+Lists Hugging Face Daily Papers for one period in the requested ranking order.
 
 ```json
 {
   "period": "2026-09",
-  "sort": "trending",
-  "limit": 15
+  "sort": "upvotes",
+  "limit": 6,
+  "excluded_paper_ids": ["2609.00001"]
 }
 ```
 
-`period` accepts an ISO month (`YYYY-MM`), ISO week (`YYYY-Www`), or date (`YYYY-MM-DD`). `sort` accepts `trending` or `publishedAt` and defaults to `trending`. `limit` defaults to 15 and is bounded to 100.
+`period` accepts an ISO month (`YYYY-MM`), ISO week (`YYYY-Www`), or date (`YYYY-MM-DD`). `sort` accepts `trending`, `publishedAt`, or `upvotes` and defaults to `trending`. `upvotes` is available only for month periods. It reads every bounded page of the official month feed through Hugging Face's `publishedAt` transport mode, rejects missing or out-of-month submission dates and invalid upvote counts, deduplicates stable paper IDs, and ranks the result by descending Hugging Face upvotes with the paper ID as a deterministic tie-breaker. Optional `excluded_paper_ids` applies only to month-wide `upvotes` sorting; exclusions are removed before the result limit so callers receive the next-ranked papers as replacements. `limit` defaults to 15 and is bounded to 100.
 
 ### `huggingface.search_papers`
 
@@ -40,6 +41,7 @@ Both list and search return `PaperSummary[]` directly. Each summary contains:
 - `url`: stable Hugging Face paper page
 - `pdf_url`: stable arXiv PDF URL
 - `published_at`: provider timestamp or `null`
+- `organization`: linked Hugging Face organization name or `null`; it is never inferred from authors
 - `upvotes`: Hugging Face upvotes
 
 The function and web-app integration helpers preserve the raw array. MCP requires object-shaped structured content, so Eidolon projects an array operation as `{"result": [...]}` at that boundary and publishes the correspondingly wrapped MCP output schema.

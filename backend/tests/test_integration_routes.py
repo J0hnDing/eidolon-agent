@@ -14,8 +14,10 @@ from app.schemas.integration import (
     GoogleOAuthClientWrite,
     MicrosoftOAuthClientWrite,
     NotionCredentialWrite,
+    NotionDailyFeedPageWrite,
     NotionDataSourcesWrite,
 )
+from app.services.daily_feed_page_service import FakeDailyFeedPageProvider
 from app.services.github_provider import FakeGitHubProviderAdapter
 from app.services.gmail_provider import FakeGmailProviderAdapter
 from app.services.google_calendar_provider import FakeGoogleCalendarProviderAdapter, GoogleOAuthStateStore
@@ -95,6 +97,9 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
     notion_sentinel = "EIDOLON_NOTION_ROUTE_SENTINEL_71a4"
     service.notion_provider_factory = lambda _token, _source: FakeTodoProvider()
     service.notion_report_provider_factory = lambda _token, _source: FakeReportProvider()
+    service.notion_daily_feed_provider_factory = (
+        lambda _token, _page: FakeDailyFeedPageProvider()
+    )
     notion_created = integrations.put_notion_connection(
         NotionCredentialWrite(token=notion_sentinel),
         db,
@@ -102,6 +107,7 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
     assert notion_created.connected is True
     assert notion_created.data_source_id is None
     assert notion_created.report_data_source_id is None
+    assert notion_created.daily_feed_page_id is None
     assert notion_sentinel not in notion_created.model_dump_json()
     data_sources = integrations.put_notion_data_sources(
         NotionDataSourcesWrite(
@@ -112,10 +118,18 @@ def test_trusted_settings_routes_are_sanitized_and_internal_relay_is_hidden(
     )
     assert data_sources.data_source_id == "source-id"
     assert data_sources.report_data_source_id == "report-source-id"
+    daily_feed_page = integrations.put_notion_daily_feed_page(
+        NotionDailyFeedPageWrite(page_id="daily-page-id"),
+        db,
+    )
+    assert daily_feed_page.daily_feed_page_id == "daily-page-id"
     cleared = integrations.remove_notion_data_sources(db)
     assert cleared.connected is True
     assert cleared.data_source_id is None
     assert cleared.report_data_source_id is None
+    assert cleared.daily_feed_page_id == "daily-page-id"
+    cleared_daily_feed = integrations.remove_notion_daily_feed_page(db)
+    assert cleared_daily_feed.daily_feed_page_id is None
     notion_removed = integrations.remove_notion_connection(db)
     assert notion_removed.status_code == 204
     assert integrations.notion_connection_status(db).status == "disconnected"

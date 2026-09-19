@@ -23,12 +23,14 @@ class FakeClient:
         eidolon_ready: bool = True,
         paginate_inventory: bool = False,
         fail_thread_start: bool = False,
+        include_playwright: bool = False,
     ) -> None:
         self.include_tools = include_tools
         self.inherited_tools = inherited_tools
         self.eidolon_ready = eidolon_ready
         self.paginate_inventory = paginate_inventory
         self.fail_thread_start = fail_thread_start
+        self.include_playwright = include_playwright
         self.requests: list[tuple[str, object]] = []
         self.started = 0
         self.stopped = 0
@@ -89,6 +91,16 @@ class FakeClient:
                         "name": "unsafe-plugin",
                         "serverInfo": {"name": "unsafe-plugin"},
                         "tools": {"escape": {}},
+                        "resources": [],
+                        "resourceTemplates": [],
+                    }
+                )
+            if self.include_playwright:
+                inventory.append(
+                    {
+                        "name": "playwright",
+                        "serverInfo": {"name": "Playwright MCP"},
+                        "tools": {"browser_navigate": {}, "browser_click": {}},
                         "resources": [],
                         "resourceTemplates": [],
                     }
@@ -155,8 +167,62 @@ def test_managed_agents_receive_only_their_role_specific_instructions() -> None:
     assert render_agent_instructions("observer", []) == OBSERVER_INSTRUCTIONS
     assistant = render_agent_instructions("assistant", [])
     assert "[ACT_CAPABILITY_CATALOG]" not in assistant
-    assert assistant.endswith("The following catalog describes Act capabilities, not tools you can call:\n[]\n")
-    assert ASSISTANT_INSTRUCTIONS_TEMPLATE.endswith("[ACT_CAPABILITY_CATALOG]\n")
+    assert ASSISTANT_INSTRUCTIONS_TEMPLATE.count("[ACT_CAPABILITY_CATALOG]") == 1
+    rendered = render_agent_instructions("assistant", [{"id": "example.read"}])
+    assert '[{"id": "example.read"}]' in rendered
+    assert "## 1. Advance existing work" in assistant
+    assert "## 2. Find ways to advance the user's goals" in assistant
+
+
+def test_act_thread_receives_required_playwright_config(monkeypatch, tmp_path) -> None:
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from app.db import Base
+    from app.models import ActSession
+
+    workspace = ActWorkspace(
+        root=tmp_path / "act",
+        memory=tmp_path / "act" / "memory",
+        knowledge=tmp_path / "act" / "knowledge",
+        quercus=tmp_path / "act" / "knowledge" / "quercus",
+        workspace=tmp_path / "act" / "workspace",
+        downloads=tmp_path / "act" / "workspace" / "downloads",
+    )
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        '[mcp_servers.playwright]\ncommand="npx"\n'
+        'args=["-y", "@playwright/mcp@latest"]\n'
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setattr(
+        "app.services.act_app_server_service.ensure_act_workspace", lambda: workspace
+    )
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        session = ActSession(agent_id="act", codex_thread_id="pending:test")
+        db.add(session)
+        db.commit()
+        client = FakeClient(include_playwright=True)
+
+        ActAppServerService(client, agent_id="act").start_thread(
+            db,
+            model="gpt-act",
+            reasoning_effort="high",
+            session_id=session.id,
+        )
+
+        params = next(params for method, params in client.requests if method == "thread/start")
+        assert params["config"]["mcp_servers.playwright"] == {
+            "command": "npx",
+            "args": ["-y", "@playwright/mcp@latest"],
+            "enabled": True,
+            "default_tools_approval_mode": "approve",
+            "required": True,
+        }
+        assert "@oai/sky" in params["developerInstructions"]
 
 
 def test_agent_start_fails_closed_when_inherited_plugin_tools_remain(
@@ -335,18 +401,24 @@ def test_agent_start_error_does_not_disclose_private_credential(
 def test_agent_process_config_restricts_paths_and_inherited_tools(monkeypatch, tmp_path):
     from app.services.act_app_server_service import managed_config
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
-    (tmp_path / "config.toml").write_text('[mcp_servers.untrusted]\ncommand="unsafe"\n[plugins.unsafe]\nenabled=true\n')
+    (tmp_path / "config.toml").write_text(
+        '[mcp_servers.untrusted]\ncommand="unsafe"\n'
+        '[mcp_servers.playwright]\ncommand="npx"\nargs=["-y", "@playwright/mcp@latest"]\n'
+        '[plugins.unsafe]\nenabled=true\n'
+    )
     root = tmp_path / "root"
     config = managed_config("observer", root)
     profile = config["permissions.eidolon_agent"]
     assert profile["network"]["enabled"] is False
     assert profile["filesystem"] == {":minimal": "read", str(root): "read"}
     assert config["mcp_servers"]["untrusted"]["enabled"] is False
+    assert config["mcp_servers"]["playwright"]["enabled"] is False
     assert config["plugins"]["unsafe"]["enabled"] is False
     assert config["web_search"] == "disabled"
 
     assistant = managed_config("assistant", root)["permissions.eidolon_agent"]
     assert assistant["filesystem"] == {":minimal": "read", str(root): "read"}
+    assert assistant["network"]["enabled"] is False
 
     act = managed_config("act", root)["permissions.eidolon_agent"]
     assert act["filesystem"] == {
@@ -355,7 +427,53 @@ def test_agent_process_config_restricts_paths_and_inherited_tools(monkeypatch, t
         str(root / "workspace"): "write",
         str(root / "memory"): "write",
     }
+    assert act["network"]["enabled"] is True
     assert str(root / "knowledge") not in act["filesystem"]
+
+    act_config = managed_config("act", root)
+    assert act_config["mcp_servers"]["untrusted"]["enabled"] is False
+    assert act_config["mcp_servers"]["playwright"] == {
+        "command": "npx",
+        "args": ["-y", "@playwright/mcp@latest"],
+        "enabled": True,
+        "default_tools_approval_mode": "approve",
+        "required": True,
+    }
+
+
+def test_only_act_accepts_playwright_mcp_tools() -> None:
+    service = ActAppServerService(FakeClient(), agent_id="act")
+    service._mcp_inventory = lambda **_kwargs: [  # type: ignore[method-assign]
+        {
+            "name": "playwright",
+            "serverInfo": {"name": "Playwright MCP"},
+            "tools": {"browser_navigate": {}},
+            "resources": [],
+            "resourceTemplates": [],
+        }
+    ]
+    service._verify_mcp_inventory(require_private_eidolon=False)
+
+    observer = ActAppServerService(FakeClient(), agent_id="observer")
+    observer._mcp_inventory = service._mcp_inventory  # type: ignore[method-assign]
+    with pytest.raises(ActAppServerError, match="inherited non-Eidolon"):
+        observer._verify_mcp_inventory(require_private_eidolon=False)
+
+
+def test_act_requires_ready_playwright_tools() -> None:
+    service = ActAppServerService(FakeClient(), agent_id="act")
+    service._mcp_inventory = lambda **_kwargs: [  # type: ignore[method-assign]
+        {
+            "name": "playwright",
+            "serverInfo": None,
+            "tools": {},
+            "resources": [],
+            "resourceTemplates": [],
+        }
+    ]
+
+    with pytest.raises(ActAppServerError, match="browser automation MCP server"):
+        service._verify_mcp_inventory(require_private_eidolon=False)
 
 
 def test_act_download_is_mcp_only_and_not_offered_to_project_agents(

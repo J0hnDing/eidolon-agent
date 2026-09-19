@@ -116,6 +116,9 @@ def test_run_now_creates_fresh_assistant_session_and_queues_assessment(
             assert commit is True
             return SimpleNamespace(id=73)
 
+        def synchronize_telegram(self, session):
+            calls.append(("telegram", session.id))
+
     monkeypatch.setattr(assistant_assessment_service, "ActSessionService", FakeActSessionService)
     now = datetime(2026, 9, 1, 14, 0, tzinfo=UTC)
     service = AssistantAssessmentService(db_session, now=lambda: now)
@@ -130,6 +133,7 @@ def test_run_now_creates_fresh_assistant_session_and_queues_assessment(
         ("init", "assistant"),
         ("create", "assessment"),
         ("enqueue", 41, ASSISTANT_ASSESSMENT_INSTRUCTION),
+        ("telegram", 41),
     ]
     assert service.status()["last_status"] == "queued"
 
@@ -227,6 +231,9 @@ def test_claimed_assessment_queues_once_and_advances_the_persisted_interval(
             assert message == ASSISTANT_ASSESSMENT_INSTRUCTION
             assert commit is True
             return SimpleNamespace(id=13)
+
+        def synchronize_telegram(self, session):
+            assert session.id == 8
 
     monkeypatch.setattr(assistant_assessment_service, "ActSessionService", FakeActSessionService)
     enabled_at = datetime(2026, 9, 1, 14, 0, tzinfo=UTC)

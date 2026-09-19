@@ -18,6 +18,8 @@ REPORT_SELECT_OPTIONS = {
     "AI Research",
     "Macro",
     "Personal Feed",
+    "School",
+    "Other",
 }
 
 

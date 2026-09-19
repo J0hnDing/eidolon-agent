@@ -42,6 +42,8 @@ export type ChatConversation = {
   draft: string;
   pendingGenerationRequestId?: number;
   actSessionId?: number;
+  origin?: string;
+  wecomUserId?: string;
   messages: ChatMessage[];
   createdAt: string;
   updatedAt: string;
@@ -53,16 +55,26 @@ export const CHAT_UPDATED_EVENT = "personal-agent-chat-updated";
 
 export function createConversation(
   mode: ConversationMode = "project",
-  options: { id?: string; title?: string; actSessionId?: number; createdAt?: string; updatedAt?: string } = {},
+  options: {
+    id?: string;
+    title?: string;
+    actSessionId?: number;
+    origin?: string;
+    wecomUserId?: string;
+    createdAt?: string;
+    updatedAt?: string;
+  } = {},
 ): ChatConversation {
   const now = new Date().toISOString();
   return {
     id: options.id ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    title: options.title ?? `New ${mode}`,
+    title: options.title ?? (mode === "project" ? "New project" : "New Chat"),
     mode,
     draft: "",
     pendingGenerationRequestId: undefined,
     actSessionId: options.actSessionId,
+    origin: options.origin,
+    wecomUserId: options.wecomUserId,
     messages: initialMessagesForMode(mode),
     createdAt: options.createdAt ?? now,
     updatedAt: options.updatedAt ?? now,
@@ -136,7 +148,9 @@ export function appendMessages(conversation: ChatConversation, newMessages: Chat
   const firstUserMessage = newMessages.find((message) => message.role === "user")?.content;
   return {
     ...conversation,
-    title: conversation.title.startsWith("New ") && firstUserMessage ? makeTitle(firstUserMessage) : conversation.title,
+    title: conversation.mode === "project" && conversation.title.startsWith("New ") && firstUserMessage
+      ? makeTitle(firstUserMessage)
+      : conversation.title,
     messages: [...conversation.messages, ...newMessages],
     updatedAt: new Date().toISOString(),
   };
@@ -164,6 +178,8 @@ function normalizeStoredConversation(conversation: ChatConversation): ChatConver
     pendingGenerationRequestId:
       typeof conversation.pendingGenerationRequestId === "number" ? conversation.pendingGenerationRequestId : undefined,
     actSessionId: typeof conversation.actSessionId === "number" ? conversation.actSessionId : undefined,
+    origin: typeof conversation.origin === "string" ? conversation.origin : undefined,
+    wecomUserId: typeof conversation.wecomUserId === "string" ? conversation.wecomUserId : undefined,
   };
 }
 

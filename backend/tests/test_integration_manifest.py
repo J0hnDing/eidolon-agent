@@ -67,6 +67,7 @@ def test_registry_is_authoritative_and_context_is_selected_only() -> None:
         "atlas.knowledge.node.know",
     }
     assert {operation_id for operation_id in OPERATIONS if operation_id.startswith("notion.")} == {
+        "notion.daily_feed.write",
         "notion.todo.list",
         "notion.todo.create",
         "notion.todo.update",
@@ -185,6 +186,23 @@ def test_manifest_accepts_notion_without_caller_selected_scope() -> None:
     assert OPERATIONS["notion.todo.create"].input_schema["properties"]["done"] == {"type": "boolean"}
     assert OPERATIONS["notion.todo.update"].input_schema["properties"]["done"] == {"type": "boolean"}
     assert OPERATIONS["notion.todo.list"].contract_version == 2
+    assert OPERATIONS["notion.daily_feed.write"].input_schema == {
+        "type": "object",
+        "properties": {
+            "markdown": {"type": "string", "minLength": 1, "maxLength": 20_000}
+        },
+        "required": ["markdown"],
+        "additionalProperties": False,
+    }
+    assert OPERATIONS["notion.report.create"].input_schema["properties"]["select"]["enum"] == [
+        "GitHub Projects",
+        "AI News",
+        "AI Research",
+        "Macro",
+        "Personal Feed",
+        "School",
+        "Other",
+    ]
 
 
 def test_manifest_accepts_google_calendar_with_primary_calendar_scope_only() -> None:
@@ -217,13 +235,6 @@ def test_manifest_accepts_google_calendar_with_primary_calendar_scope_only() -> 
     assert "minItems" not in OPERATIONS["google_calendar.event.update"].input_schema["properties"][
         "recurrence"
     ]
-
-
-def test_email_send_is_high_risk_and_requires_per_call_approval() -> None:
-    operation = OPERATIONS["email.send"]
-
-    assert operation.risk == "high"
-    assert operation.requires_invocation_approval is True
 
 
 def test_email_read_operations_keep_distinct_read_contracts() -> None:

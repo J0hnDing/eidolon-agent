@@ -69,7 +69,6 @@ class AssistantAssessmentService:
             try:
                 topic = TelegramService(self.db, role=TELEGRAM_ASSISTANT_ROLE).create_topic_for_session(
                     turn.session_id,
-                    title="Assistant assessment",
                 )
                 turn.delivery_provider = "telegram"
                 turn.delivery_connection_id = topic.connection_id
@@ -180,6 +179,7 @@ class AssistantAssessmentService:
                 ASSISTANT_ASSESSMENT_INSTRUCTION,
                 commit=True,
             )
+            sessions.synchronize_telegram(session)
         except AssistantSessionCapacityError as exc:
             self.db.rollback()
             message = str(exc)

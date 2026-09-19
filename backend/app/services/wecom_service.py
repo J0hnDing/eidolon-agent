@@ -91,7 +91,7 @@ class WeComObserverSessionAdapter:
             )
 
     def clear_conversation(self) -> ActSession:
-        """Retire the current session and atomically point the user to a fresh one."""
+        """Point the user to a fresh session, then retire the old one if idle."""
 
         with self._lock:
             for _attempt in range(3):
@@ -105,12 +105,13 @@ class WeComObserverSessionAdapter:
                     self.db.expire(self.binding)
                     self.db.refresh(self.binding)
                     continue
-                if previous is not None and previous.status == "active":
-                    # archive(commit=False) participates in the same DB transaction
-                    # as the current-session pointer swap.
-                    self._sessions.archive(previous.id, commit=False)
                 self.db.commit()
                 self.db.refresh(fresh)
+                if previous is not None and previous.status == "active":
+                    try:
+                        self._sessions.archive(previous.id)
+                    except ActSessionError:
+                        self.db.rollback()
                 return fresh
         raise WeComServiceError(
             "internal_failure",
@@ -462,12 +463,18 @@ class WeComObserverWorker:
                     )
                 )
                 if user_binding is None:
-                    db.add(
-                        WeComObserverUserBinding(
-                            connection_id=config.connection_id,
-                            paired_user_id=message.user_id,
-                        )
+                    session = ActSessionService(db, agent_id=WECOM_AGENT_ID).create_session(
+                        origin=WECOM_PROVIDER,
+                        commit=False,
                     )
+                    user_binding = WeComObserverUserBinding(
+                        connection_id=config.connection_id,
+                        paired_user_id=message.user_id,
+                        current_session_id=session.id,
+                    )
+                    db.add(user_binding)
+                else:
+                    WeComObserverSessionAdapter(db, user_binding).resolve_session(commit=False)
                 binding.pairing_code_hash = None
                 binding.pairing_expires_at = None
                 connection.status = "connected"
@@ -579,12 +586,16 @@ class WeComObserverWorker:
             row = db.get(IntegrationConnection, config.connection_id)
             if row is None:
                 return
-            has_users = db.scalar(
-                select(WeComObserverUserBinding.id)
-                .where(WeComObserverUserBinding.connection_id == config.connection_id)
-                .limit(1)
+            users = list(
+                db.scalars(
+                    select(WeComObserverUserBinding).where(
+                        WeComObserverUserBinding.connection_id == config.connection_id
+                    )
+                )
             )
-            row.status = "connected" if has_users is not None else "pairing"
+            for user in users:
+                WeComObserverSessionAdapter(db, user).resolve_session(commit=False)
+            row.status = "connected" if users else "pairing"
             row.error_type = None
             row.last_validated_at = datetime.now(UTC)
             row.updated_at = datetime.now(UTC)
@@ -686,6 +697,10 @@ class WeComService:
                 .order_by(WeComObserverUserBinding.created_at, WeComObserverUserBinding.id)
             )
         )
+        for user in users:
+            WeComObserverSessionAdapter(self.db, user).resolve_session(commit=False)
+        if users:
+            self.db.commit()
         status = row.status
         error_type = row.error_type
         if self.secret_store is None or self.secret_store.implementation_id != row.secret_store_id:

@@ -404,6 +404,7 @@ export interface ActSession {
   status: string;
   created_at: string;
   updated_at: string;
+  wecom_user_id: string | null;
   turns: ActTurn[];
 }
 
@@ -536,6 +537,7 @@ export interface NotionConnectionStatus {
   workspace_name: string | null;
   data_source_id: string | null;
   report_data_source_id: string | null;
+  daily_feed_page_id: string | null;
   last_validated_at: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -1167,6 +1169,15 @@ export const api = {
     }),
   removeNotionDataSources: () =>
     request<NotionConnectionStatus>("/settings/integrations/notion/data-sources", {
+      method: "DELETE",
+    }),
+  putNotionDailyFeedPage: (pageId: string) =>
+    request<NotionConnectionStatus>("/settings/integrations/notion/daily-feed-page", {
+      method: "PUT",
+      body: JSON.stringify({ page_id: pageId }),
+    }),
+  removeNotionDailyFeedPage: () =>
+    request<NotionConnectionStatus>("/settings/integrations/notion/daily-feed-page", {
       method: "DELETE",
     }),
   removeNotionConnection: () =>

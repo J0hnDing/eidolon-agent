@@ -47,8 +47,12 @@ def _paper(rank: int = 1, paper_id: str = "2608.12345", **overrides):
         "url": f"https://huggingface.co/papers/{paper_id}",
         "pdf_url": f"https://arxiv.org/pdf/{paper_id}",
         "published_at": "2026-08-20T00:00:00Z",
+        "organization": "Example Research",
         "upvotes": 42,
-        "analysis": "This paper is useful because it provides a concrete new method.",
+        "analysis": (
+            "This is a new training method for small language models.\n\n"
+            "It reuses verified examples, needs less training data, and reports better accuracy on the tested tasks."
+        ),
         "content_source": "arxiv_html",
         "source_content_truncated": False,
         "analysis_content_truncated": False,
@@ -57,41 +61,12 @@ def _paper(rank: int = 1, paper_id: str = "2608.12345", **overrides):
     return value
 
 
-def _guide(**overrides):
-    value = {
-        "problem": "The problem.",
-        "core_idea": "The core idea.",
-        "method": "The method.",
-        "novelty": "The novelty.",
-        "important_results": "The important results.",
-        "limitations": "The limitations.",
-        "prerequisites": ["Linear algebra"],
-        "recommended_reading_order": ["Abstract", "Method", "Results"],
-        "sections_to_skip_initially": ["Appendix B"],
-        "key_questions": ["Does the evidence support the main claim?"],
-        "expected_takeaways": ["Know when to use the method."],
-    }
-    value.update(overrides)
-    return value
-
-
-def _paper_output(*, papers=None, seen=None, paper_of_the_week="default"):
+def _paper_output(*, papers=None, seen=None):
     papers = [_paper()] if papers is None else papers
     if seen is None:
         seen = [paper["paper_id"] for paper in papers]
-    if paper_of_the_week == "default":
-        paper_of_the_week = (
-            {
-                "paper_id": papers[0]["paper_id"],
-                "title": papers[0]["title"],
-                "reading_guide": _guide(),
-            }
-            if papers
-            else None
-        )
     return {
         "selected_papers": papers,
-        "paper_of_the_week": paper_of_the_week,
         "seen_papers": seen,
     }
 
@@ -116,11 +91,15 @@ def _successful_integrations(calls):
     return invoke
 
 
-def test_run_creates_both_reports_advances_separate_histories_and_notifies(cache_dir, monkeypatch):
+def test_run_creates_both_reports_advances_separate_histories_and_notifies(
+    cache_dir, monkeypatch
+):
     (cache_dir / skill.SEEN_REPOSITORIES_FILENAME).write_text(
         json.dumps(["old/repository"]), encoding="utf-8"
     )
-    (cache_dir / skill.SEEN_PAPERS_FILENAME).write_text(json.dumps(["2501.00001v2"]), encoding="utf-8")
+    (cache_dir / skill.SEEN_PAPERS_FILENAME).write_text(
+        json.dumps(["2501.00001v2"]), encoding="utf-8"
+    )
     function_calls = []
 
     def call_function(name, input_json):
@@ -133,14 +112,18 @@ def test_run_creates_both_reports_advances_separate_histories_and_notifies(cache
         return _paper_output(seen=["2608.12345"])
 
     integration_calls = []
-    monkeypatch.setattr(skill.function_runtime_capabilities, "call_function", call_function)
+    monkeypatch.setattr(
+        skill.function_runtime_capabilities, "call_function", call_function
+    )
     monkeypatch.setattr(
         skill.integration_runtime_capabilities,
         "call",
         _successful_integrations(integration_calls),
     )
 
-    result = skill.run({}, now=datetime(2026, 8, 31, 8, 0, tzinfo=ZoneInfo("America/Toronto")))
+    result = skill.run(
+        {}, now=datetime(2026, 8, 31, 8, 0, tzinfo=ZoneInfo("America/Toronto"))
+    )
 
     assert function_calls == [
         (
@@ -158,61 +141,103 @@ def test_run_creates_both_reports_advances_separate_histories_and_notifies(cache
         for block in research_blocks
         if block["type"].startswith("heading_")
     ]
-    assert "#1 — Useful paper 1" in headings
-    assert "Detailed reading guide" in headings
-    assert "Expected takeaways" in headings
+    assert "Useful paper 1" in headings
+    assert "Analysis" in headings
+    linked_title = next(
+        block
+        for block in research_blocks
+        if block["type"] == "heading_2"
+        and block["heading_2"]["rich_text"][0]["text"]["content"] == "Useful paper 1"
+    )
+    assert linked_title["heading_2"]["rich_text"][0]["text"]["link"] == {
+        "url": "https://huggingface.co/papers/2608.12345"
+    }
+    rendered_text = "\n".join(
+        item["text"]["content"]
+        for block in research_blocks
+        for item in block.get(block["type"], {}).get("rich_text", [])
+    )
+    assert "#1 —" not in rendered_text
+    assert "Organization: Example Research" in rendered_text
+    assert "Upvotes: 42" in rendered_text
+    assert "Paper ID:" not in rendered_text
+    assert "Authors:" not in rendered_text
+    assert "Published:" not in rendered_text
+    assert "Analysis source:" not in rendered_text
+    assert "Abstract" not in headings
+    assert "Open PDF" not in rendered_text
+    assert all(block["type"] != "bookmark" for block in research_blocks)
     assert notification == {
         "operation": skill.NOTIFICATION_OPERATION,
         "input": {
             "title": "Your weekly reports are ready",
             "description": (
-                "• Weekly GitHub Projects Report — 2026-08-31\n"
-                "• Weekly AI Research Report — 2026-08-31"
+                "• Weekly GitHub Projects Report — 2026-08-31\n• Weekly AI Research Report — 2026-08-31"
             ),
             "alert": False,
         },
     }
     assert result == {
-        "report": _created_report("Weekly GitHub Projects Report — 2026-08-31", "GitHub Projects"),
+        "report": _created_report(
+            "Weekly GitHub Projects Report — 2026-08-31", "GitHub Projects"
+        ),
         "repository_count": 1,
-        "research_report": _created_report("Weekly AI Research Report — 2026-08-31", "AI Research"),
+        "research_report": _created_report(
+            "Weekly AI Research Report — 2026-08-31", "AI Research"
+        ),
         "paper_count": 1,
     }
-    assert json.loads((cache_dir / skill.SEEN_REPOSITORIES_FILENAME).read_text(encoding="utf-8")) == [
+    assert json.loads(
+        (cache_dir / skill.SEEN_REPOSITORIES_FILENAME).read_text(encoding="utf-8")
+    ) == [
         "old/repository",
         "example/project",
         "example/other",
     ]
-    assert json.loads((cache_dir / skill.SEEN_PAPERS_FILENAME).read_text(encoding="utf-8")) == [
+    assert json.loads(
+        (cache_dir / skill.SEEN_PAPERS_FILENAME).read_text(encoding="utf-8")
+    ) == [
         "2501.00001v2",
         "2608.12345",
     ]
 
 
-def test_empty_scout_results_create_explicit_reports_without_cache_files(cache_dir, monkeypatch):
+def test_empty_scout_results_create_explicit_reports_without_cache_files(
+    cache_dir, monkeypatch
+):
     def call_function(name, _input):
         if name == skill.SCOUT_FUNCTION:
             return {"repositories": [], "seen_repo": []}
         return _paper_output(papers=[], seen=[])
 
     integration_calls = []
-    monkeypatch.setattr(skill.function_runtime_capabilities, "call_function", call_function)
+    monkeypatch.setattr(
+        skill.function_runtime_capabilities, "call_function", call_function
+    )
     monkeypatch.setattr(
         skill.integration_runtime_capabilities,
         "call",
         _successful_integrations(integration_calls),
     )
 
-    result = skill.run({}, now=datetime(2026, 8, 31, tzinfo=ZoneInfo("America/Toronto")))
+    result = skill.run(
+        {}, now=datetime(2026, 8, 31, tzinfo=ZoneInfo("America/Toronto"))
+    )
 
     assert result["repository_count"] == 0
     assert result["paper_count"] == 0
-    assert "no repositories" in integration_calls[0]["input"]["children"][-1]["paragraph"]["rich_text"][0][
-        "text"
-    ]["content"]
-    assert "no papers valuable enough" in integration_calls[1]["input"]["children"][-1]["paragraph"][
-        "rich_text"
-    ][0]["text"]["content"]
+    assert (
+        "no repositories"
+        in integration_calls[0]["input"]["children"][-1]["paragraph"]["rich_text"][0][
+            "text"
+        ]["content"]
+    )
+    assert (
+        "no papers valuable enough"
+        in integration_calls[1]["input"]["children"][-1]["paragraph"]["rich_text"][0][
+            "text"
+        ]["content"]
+    )
     assert not (cache_dir / skill.SEEN_REPOSITORIES_FILENAME).exists()
     assert not (cache_dir / skill.SEEN_PAPERS_FILENAME).exists()
 
@@ -224,14 +249,7 @@ def test_empty_scout_results_create_explicit_reports_without_cache_files(cache_d
         _paper_output(papers=[_paper(rank=2)]),
         _paper_output(papers=[_paper()], seen=[]),
         _paper_output(papers=[_paper()], seen=["2608.12345", "2608.12345"]),
-        _paper_output(
-            papers=[_paper()],
-            paper_of_the_week={
-                "paper_id": "other",
-                "title": "Other",
-                "reading_guide": _guide(),
-            },
-        ),
+        {"selected_papers": [_paper()], "seen_papers": ["2608.12345"], "extra": True},
         _paper_output(papers=[_paper(upvotes=True)]),
         _paper_output(papers=[_paper(content_source="pdf")]),
     ],
@@ -243,7 +261,9 @@ def test_invalid_paper_output_fails_before_research_report(monkeypatch, output):
         return output
 
     integration_calls = []
-    monkeypatch.setattr(skill.function_runtime_capabilities, "call_function", call_function)
+    monkeypatch.setattr(
+        skill.function_runtime_capabilities, "call_function", call_function
+    )
     monkeypatch.setattr(
         skill.integration_runtime_capabilities,
         "call",
@@ -257,10 +277,14 @@ def test_invalid_paper_output_fails_before_research_report(monkeypatch, output):
         skill.REPORT_CREATE_OPERATION,
         skill.NOTIFICATION_OPERATION,
     ]
-    assert integration_calls[-1]["input"]["description"].startswith("paper_scout_invalid_output:")
+    assert integration_calls[-1]["input"]["description"].startswith(
+        "paper_scout_invalid_output:"
+    )
 
 
-def test_research_notion_failure_keeps_github_history_but_not_paper_history(cache_dir, monkeypatch):
+def test_research_notion_failure_keeps_github_history_but_not_paper_history(
+    cache_dir, monkeypatch
+):
     def call_function(name, _input):
         if name == skill.SCOUT_FUNCTION:
             return {"repositories": [_repository()], "seen_repo": ["example/project"]}
@@ -279,15 +303,17 @@ def test_research_notion_failure_keeps_github_history_but_not_paper_history(cach
             return _created_report(value["name"], value["select"])
         return {"sent": True, "message_id": 1}
 
-    monkeypatch.setattr(skill.function_runtime_capabilities, "call_function", call_function)
+    monkeypatch.setattr(
+        skill.function_runtime_capabilities, "call_function", call_function
+    )
     monkeypatch.setattr(skill.integration_runtime_capabilities, "call", invoke)
 
     with pytest.raises(RuntimeError, match="retry later"):
         skill.run({})
 
-    assert json.loads((cache_dir / skill.SEEN_REPOSITORIES_FILENAME).read_text(encoding="utf-8")) == [
-        "example/project"
-    ]
+    assert json.loads(
+        (cache_dir / skill.SEEN_REPOSITORIES_FILENAME).read_text(encoding="utf-8")
+    ) == ["example/project"]
     assert not (cache_dir / skill.SEEN_PAPERS_FILENAME).exists()
     assert integration_calls[-1]["input"] == {
         "title": "Weekly report failed",
@@ -296,7 +322,9 @@ def test_research_notion_failure_keeps_github_history_but_not_paper_history(cach
     }
 
 
-def test_invalid_research_report_response_does_not_advance_paper_history(cache_dir, monkeypatch):
+def test_invalid_research_report_response_does_not_advance_paper_history(
+    cache_dir, monkeypatch
+):
     def call_function(name, _input):
         if name == skill.SCOUT_FUNCTION:
             return {"repositories": [], "seen_repo": []}
@@ -310,7 +338,9 @@ def test_invalid_research_report_response_does_not_advance_paper_history(cache_d
             return _created_report(value["name"], "AI News")
         return _created_report(value["name"], value["select"])
 
-    monkeypatch.setattr(skill.function_runtime_capabilities, "call_function", call_function)
+    monkeypatch.setattr(
+        skill.function_runtime_capabilities, "call_function", call_function
+    )
     monkeypatch.setattr(skill.integration_runtime_capabilities, "call", invoke)
 
     with pytest.raises(ValueError, match="mismatched metadata"):
@@ -319,7 +349,7 @@ def test_invalid_research_report_response_does_not_advance_paper_history(cache_d
     assert not (cache_dir / skill.SEEN_PAPERS_FILENAME).exists()
 
 
-def test_research_blocks_preserve_full_guide_with_bounded_notion_shape():
+def test_research_blocks_render_only_linked_title_organization_upvotes_and_analysis():
     papers = [
         _paper(
             rank=index,
@@ -331,20 +361,7 @@ def test_research_blocks_preserve_full_guide_with_bounded_notion_shape():
         )
         for index in range(1, 6)
     ]
-    guide = _guide(
-        **{field: "g" * skill.MAX_GUIDE_TEXT for field in skill.READING_GUIDE_SCALAR_FIELDS},
-        **{
-            field: ["x" * skill.MAX_NOTION_TEXT for _ in range(skill.MAX_GUIDE_ITEMS)]
-            for field in skill.READING_GUIDE_LIST_FIELDS
-        },
-    )
-    paper_of_the_week = {
-        "paper_id": papers[0]["paper_id"],
-        "title": papers[0]["title"],
-        "reading_guide": guide,
-    }
-
-    blocks = skill._research_report_blocks(papers, paper_of_the_week, "2026-08-31")
+    blocks = skill._research_report_blocks(papers, "2026-08-31")
 
     assert len(blocks) <= skill.MAX_NOTION_BLOCKS
     contents = []
@@ -353,16 +370,16 @@ def test_research_blocks_preserve_full_guide_with_bounded_notion_shape():
         assert len(body.get("rich_text", [])) <= skill.MAX_NOTION_RICH_TEXT_ITEMS
         contents.extend(item["text"]["content"] for item in body.get("rich_text", []))
     assert all(len(content) <= skill.MAX_NOTION_TEXT for content in contents)
-    problem_heading = next(
-        index
-        for index, block in enumerate(blocks)
-        if block["type"] == "heading_3"
-        and block["heading_3"]["rich_text"][0]["text"]["content"] == "Problem"
-    )
-    rendered_problem = "".join(
-        item["text"]["content"] for item in blocks[problem_heading + 1]["paragraph"]["rich_text"]
-    )
-    assert rendered_problem == guide["problem"]
+    rendered_text = "\n".join(contents)
+    assert "Organization: Example Research" in rendered_text
+    assert "Upvotes: 42" in rendered_text
+    assert "Paper ID:" not in rendered_text
+    assert "Authors:" not in rendered_text
+    assert "Published:" not in rendered_text
+    assert "Analysis source:" not in rendered_text
+    assert "Abstract" not in rendered_text
+    assert "Open PDF" not in rendered_text
+    assert all(block["type"] != "bookmark" for block in blocks)
 
 
 def test_service_rejects_input_and_has_no_direct_codex_call_surface(monkeypatch):
@@ -386,7 +403,9 @@ def test_github_scout_failure_propagates_without_report_fallback(monkeypatch):
     monkeypatch.setattr(
         skill.integration_runtime_capabilities,
         "call",
-        lambda **kwargs: integration_calls.append(kwargs) or {"sent": True, "message_id": 1},
+        lambda **kwargs: (
+            integration_calls.append(kwargs) or {"sent": True, "message_id": 1}
+        ),
     )
 
     with pytest.raises(RuntimeError, match="scout failed"):

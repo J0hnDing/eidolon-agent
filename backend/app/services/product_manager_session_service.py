@@ -128,6 +128,31 @@ class ProductManagerSessionService:
         with self._threads_lock:
             return thread_id in self._threads
 
+    def read_thread_name(self, thread_id: str) -> str | None:
+        """Read the native user-facing name assigned to an App Server thread."""
+        response = self.client.request(
+            "thread/read",
+            {"threadId": thread_id},
+            timeout=10,
+        )
+        thread = response.get("thread")
+        if not isinstance(thread, dict):
+            raise ProductManagerSessionError("Codex returned an invalid thread/read response")
+        name = thread.get("name")
+        if name is not None and not isinstance(name, str):
+            raise ProductManagerSessionError("Codex returned an invalid thread name")
+        return name
+
+    def set_thread_name(self, thread_id: str, name: str) -> None:
+        """Set the native user-facing name for an App Server thread."""
+        if not isinstance(name, str):
+            raise ValueError("Thread name must be a string")
+        self.client.request(
+            "thread/name/set",
+            {"threadId": thread_id, "name": name},
+            timeout=10,
+        )
+
     def run_structured_turn(
         self,
         thread_id: str,

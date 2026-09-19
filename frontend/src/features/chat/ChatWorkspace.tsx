@@ -55,6 +55,7 @@ export function ChatWorkspace({
   onApproveRuntime,
   onDenyRuntime,
 }: ChatWorkspaceProps) {
+  const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
   return (
     <section className="page stack">
       <header className="page-header">
@@ -72,8 +73,7 @@ export function ChatWorkspace({
         />
         <div className="chat-panel">
           <ConversationModeBar
-            mode={mode}
-            activeConversationId={activeConversationId}
+            conversation={activeConversation}
             isBusy={isBusy}
             onDeleteConversation={onDeleteConversation}
           />
@@ -245,19 +245,30 @@ function ChatSidebar({
 }
 
 function ConversationModeBar({
-  mode,
-  activeConversationId,
+  conversation,
   isBusy,
   onDeleteConversation,
-}: Pick<ChatWorkspaceProps, "mode" | "activeConversationId" | "isBusy" | "onDeleteConversation">) {
+}: {
+  conversation: ChatConversation | undefined;
+  isBusy: boolean;
+  onDeleteConversation: (conversationId: string) => void;
+}) {
+  if (!conversation) return null;
   return (
     <div className="chat-mode-bar">
-      <ConversationModeMarker mode={mode} />
-      <span className="muted">
-        {modeDescription(mode)}
+      <ConversationModeMarker mode={conversation.mode} />
+      <span className="chat-session-metadata">
+        <span>Created {formatSessionTimestamp(conversation.createdAt)}</span>
+        {conversation.mode !== "project" && (
+          <span>
+            {conversation.origin === "wecom"
+              ? `WeCom user ${conversation.wecomUserId ?? "unknown"}`
+              : "Not a WeCom session"}
+          </span>
+        )}
       </span>
       <DeleteIconButton
-        onClick={() => onDeleteConversation(activeConversationId)}
+        onClick={() => onDeleteConversation(conversation.id)}
         disabled={isBusy}
         label="Delete conversation"
       />
@@ -369,10 +380,6 @@ function modeSymbol(mode: ConversationMode): string {
   return mode === "project" ? "◇" : mode === "act" ? "↯" : mode === "observer" ? "◉" : "✦";
 }
 
-function modeDescription(mode: ConversationMode): string {
-  return conversationModeOptions.find((option) => option.mode === mode)?.description ?? "";
-}
-
 function ConversationModeMarker({ mode, showSymbol = true }: { mode: ConversationMode; showSymbol?: boolean }) {
   return (
     <span className={`conversation-mode-marker ${mode}`}>
@@ -388,6 +395,18 @@ const conversationModeOptions: Array<{ mode: ConversationMode; label: string; de
   { mode: "observer", label: "Observer", description: "Reads local context without making changes." },
   { mode: "assistant", label: "Assistant", description: "Assesses goals and proposes work for Act." },
 ];
+
+function formatSessionTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "unknown";
+  return date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
 function MessageBody({
   message,

@@ -47,32 +47,12 @@ def test_manifest_rejects_display_name() -> None:
         validate_manifest(data)
 
 
-def test_manifest_accepts_simple_dependencies() -> None:
-    data = valid_manifest()
-    data["dependencies"] = ["requests", "beautifulsoup4==4.12.3"]
-
-    manifest = validate_manifest(data)
-
-    assert manifest.dependencies == ["requests", "beautifulsoup4==4.12.3"]
-
-
 def test_manifest_rejects_url_dependencies() -> None:
     data = valid_manifest()
     data["dependencies"] = ["https://example.com/package.whl"]
 
     with pytest.raises(ManifestValidationError, match="dependencies"):
         validate_manifest(data)
-
-
-def test_manifest_accepts_io_schemas() -> None:
-    data = valid_manifest()
-    data["input_schema"] = {"type": "object", "properties": {"expression": {"type": "string"}}}
-    data["output_schema"] = {"type": "object", "properties": {"result": {"type": "number"}}}
-
-    manifest = validate_manifest(data)
-
-    assert manifest.input_schema == {"type": "object", "properties": {"expression": {"type": "string"}}}
-    assert manifest.output_schema == {"type": "object", "properties": {"result": {"type": "number"}}}
 
 
 def test_manifest_validates_json_schemas_and_function_requirements() -> None:

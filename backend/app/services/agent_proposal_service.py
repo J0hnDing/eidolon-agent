@@ -142,6 +142,8 @@ class AgentProposalService:
             self.db.rollback()
             raise
         self.db.refresh(proposal)
+        if approve:
+            service.synchronize_telegram(session)
         self.mirror(proposal)
         self._telegram(proposal)
         if approve:

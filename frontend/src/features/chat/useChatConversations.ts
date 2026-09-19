@@ -130,13 +130,22 @@ export function useChatConversations() {
           id: `${agentId}-${session.id}`,
           title: session.title,
           actSessionId: session.id,
+          origin: session.origin,
+          wecomUserId: session.wecom_user_id ?? undefined,
           createdAt: session.created_at,
           updatedAt: session.updated_at,
         }));
       return [...imported, ...retained].map((conversation) => {
         if (conversation.mode !== agentId || conversation.actSessionId === undefined) return conversation;
         const session = sessions.find((item) => item.id === conversation.actSessionId);
-        return session ? { ...conversation, title: session.title, updatedAt: session.updated_at } : conversation;
+        return session ? {
+          ...conversation,
+          title: session.title,
+          origin: session.origin,
+          wecomUserId: session.wecom_user_id ?? undefined,
+          createdAt: session.created_at,
+          updatedAt: session.updated_at,
+        } : conversation;
       });
     });
     setConversations(nextConversations);

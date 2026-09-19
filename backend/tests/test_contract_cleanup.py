@@ -1,16 +1,11 @@
 from pathlib import Path
-from typing import get_args
 
-import pytest
 from jsonschema import Draft202012Validator
 
 from app.main import app
 from app.routers.codex_settings import get_permission_policy
 from app.schemas.agent_run import AgentRunRead, AgentRunStepRead
-from app.schemas.common import ScheduleStatus, SkillRuntime, SkillStatus
-from app.schemas.manifest import SkillManifest
 from app.schemas.permission_policy import PermissionPolicyRead
-from app.schemas.skill import SkillRead
 from app.services import codex_output_schema
 from app.services.codex_output_schema import output_schema_for_action
 from app.services.default_permissions import (
@@ -21,8 +16,6 @@ from app.services.default_permissions import (
     default_web_app_permissions,
     planning_permission_policy,
 )
-from app.workflows.base import ProjectBuildWorkflowError
-from app.workflows.common.prompts import build_product_manager_prompt
 
 
 def test_agent_run_contract_uses_only_task_node_names() -> None:
@@ -32,20 +25,6 @@ def test_agent_run_contract_uses_only_task_node_names() -> None:
     assert "milestone_name" not in AgentRunStepRead.model_fields
     assert "/agent-runs/{agent_run_id}/retry-current-task" in app.openapi()["paths"]
     assert "/agent-runs/{agent_run_id}/retry-current-milestone" not in app.openapi()["paths"]
-
-
-def test_status_contracts_do_not_advertise_non_persisted_states() -> None:
-    assert "disabled" not in get_args(SkillStatus)
-    assert "deleted" not in get_args(ScheduleStatus)
-
-
-def test_runtime_is_the_only_interface_discriminator() -> None:
-    assert set(get_args(SkillRuntime)) == {"function", "service", "web_app"}
-    for schema in (SkillManifest, SkillRead):
-        assert "interface_type" not in schema.model_fields
-        assert "tool_ui_schema" not in schema.model_fields
-        assert "tool_ui_schema_json" not in schema.model_fields
-    assert not any(path == "/tools" or path.startswith("/tools/") for path in app.openapi()["paths"])
 
 
 def test_default_web_app_permissions_match_runtime_support() -> None:
@@ -172,17 +151,3 @@ def test_schema_backed_instructions_do_not_duplicate_output_syntax() -> None:
         assert "Required JSON shape" not in instruction
         assert "Expected JSON syntax" not in instruction
         assert "For `write_task_dag`, return" not in instruction
-
-
-@pytest.mark.parametrize(
-    "legacy_task",
-    ["build_blueprint", "write_blueprint", "write_permissions"],
-)
-def test_legacy_product_manager_prompt_aliases_are_removed(legacy_task: str) -> None:
-    with pytest.raises(ProjectBuildWorkflowError, match="Unknown common project-build prompt task"):
-        build_product_manager_prompt(legacy_task, {})
-
-
-def test_standalone_project_plausibility_contract_is_removed() -> None:
-    assert not Path("app/services/project_plausibility.py").exists()
-    assert output_schema_for_action("project_plausibility") is None

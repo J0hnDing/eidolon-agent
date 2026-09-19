@@ -273,7 +273,7 @@ class ActSession(Base):
     agent_id: Mapped[str] = mapped_column(String(32), default="act", nullable=False, index=True)
     proposal_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     codex_thread_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
-    title: Mapped[str] = mapped_column(String(160), nullable=False, default="New act")
+    title: Mapped[str] = mapped_column(String(160), nullable=False, default="New Chat")
     origin: Mapped[str] = mapped_column(String(32), nullable=False, default="web")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
@@ -348,6 +348,7 @@ class IntegrationConnection(Base):
     workspace_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     configured_resource_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     configured_report_resource_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    configured_daily_feed_page_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

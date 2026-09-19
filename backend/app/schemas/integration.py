@@ -37,6 +37,12 @@ class NotionDataSourcesWrite(BaseModel):
     report_data_source_id: str = Field(min_length=1, max_length=256)
 
 
+class NotionDailyFeedPageWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    page_id: str = Field(min_length=1, max_length=256)
+
+
 class NotionConnectionStatus(BaseModel):
     provider: Literal["notion"] = "notion"
     connected: bool
@@ -46,6 +52,7 @@ class NotionConnectionStatus(BaseModel):
     workspace_name: str | None = None
     data_source_id: str | None = None
     report_data_source_id: str | None = None
+    daily_feed_page_id: str | None = None
     last_validated_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

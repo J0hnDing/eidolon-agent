@@ -31,6 +31,8 @@ def _provider_payload(paper_id: str = "2602.08025") -> dict:
             "id": paper_id,
             "authors": [{"name": "Ada Example"}, {"name": "Lin Example"}],
             "publishedAt": "2026-02-08T15:57:23.000Z",
+            "submittedOnDailyAt": "2026-02-09T00:00:00.000Z",
+            "organization": {"name": "example-org", "fullname": "Example Research"},
             "title": "  A useful paper  ",
             "summary": "A useful abstract.",
             "upvotes": 9,
@@ -70,6 +72,7 @@ def test_list_and_search_use_official_endpoints_and_return_raw_arrays(
                 "url": "https://huggingface.co/papers/2602.08025",
                 "pdf_url": "https://arxiv.org/pdf/2602.08025",
                 "published_at": "2026-02-08T15:57:23.000Z",
+                "organization": "Example Research",
                 "upvotes": 9,
             }
         ]
@@ -79,6 +82,118 @@ def test_list_and_search_use_official_endpoints_and_return_raw_arrays(
     assert "sort=trending" in calls[0]
     assert calls[1].startswith("https://huggingface.co/api/papers/search?")
     assert "q=world+models" in calls[1]
+
+
+def test_paper_normalization_bounds_authors_to_output_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = UrllibHuggingFaceProviderAdapter()
+    payload = _provider_payload()
+    payload["paper"]["authors"] = [{"name": f"Author {index}"} for index in range(101)]
+    monkeypatch.setattr(adapter, "_request_json", lambda *_args, **_kwargs: [payload])
+
+    output = adapter.execute(
+        DEFAULT_INTEGRATION_REGISTRY.get("huggingface.list_papers"),
+        {"period": "2026-02", "limit": 15},
+    )
+
+    assert output[0]["authors"] == [f"Author {index}" for index in range(100)]
+
+
+def test_paper_normalization_uses_linked_organization_without_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = UrllibHuggingFaceProviderAdapter()
+    with_organization = _provider_payload()
+    without_organization = _provider_payload("2602.08026")
+    without_organization["paper"].pop("organization")
+    monkeypatch.setattr(
+        adapter,
+        "_request_json",
+        lambda *_args, **_kwargs: [with_organization, without_organization],
+    )
+
+    output = adapter.execute(
+        DEFAULT_INTEGRATION_REGISTRY.get("huggingface.list_papers"),
+        {"period": "2026-W07", "sort": "publishedAt", "limit": 15},
+    )
+
+    assert output[0]["organization"] == "Example Research"
+    assert output[1]["organization"] is None
+
+
+def test_monthly_upvotes_paginates_ranks_and_backfills_excluded_papers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = UrllibHuggingFaceProviderAdapter()
+    calls: list[str] = []
+    first_page = []
+    for index in range(100):
+        payload = _provider_payload(f"2608.{10_000 + index}")
+        payload["paper"]["submittedOnDailyAt"] = "2026-08-15T00:00:00.000Z"
+        payload["paper"]["upvotes"] = index
+        first_page.append(payload)
+    last_page = [_provider_payload("2608.10100")]
+    last_page[0]["paper"]["submittedOnDailyAt"] = "2026-08-20T00:00:00.000Z"
+    last_page[0]["paper"]["upvotes"] = 1_000
+
+    def fake_request(url: str, **_kwargs):
+        calls.append(url)
+        return first_page if "p=0" in url else last_page
+
+    monkeypatch.setattr(adapter, "_request_json", fake_request)
+
+    output = adapter.execute(
+        DEFAULT_INTEGRATION_REGISTRY.get("huggingface.list_papers"),
+        {
+            "period": "2026-08",
+            "sort": "upvotes",
+            "limit": 15,
+            "excluded_paper_ids": ["2608.10100", "2608.10099v2"],
+        },
+    )
+
+    assert [paper["paper_id"] for paper in output[:3]] == [
+        "2608.10098",
+        "2608.10097",
+        "2608.10096",
+    ]
+    assert len(output) == 15
+    assert len(calls) == 2
+    assert all("month=2026-08" in url for url in calls)
+    assert all("sort=publishedAt" in url for url in calls)
+    assert all("limit=100" in url for url in calls)
+    assert "p=0" in calls[0]
+    assert "p=1" in calls[1]
+
+
+def test_monthly_upvotes_rejects_out_of_month_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = UrllibHuggingFaceProviderAdapter()
+    payload = _provider_payload("2608.10001")
+    payload["paper"]["submittedOnDailyAt"] = "2026-09-01T00:00:00.000Z"
+    monkeypatch.setattr(adapter, "_request_json", lambda *_args, **_kwargs: [payload])
+
+    with pytest.raises(IntegrationProviderError) as exc_info:
+        adapter.execute(
+            DEFAULT_INTEGRATION_REGISTRY.get("huggingface.list_papers"),
+            {"period": "2026-08", "sort": "upvotes", "limit": 15},
+        )
+
+    assert exc_info.value.error_type == "provider_unavailable"
+
+
+def test_upvotes_sort_requires_month_period() -> None:
+    adapter = UrllibHuggingFaceProviderAdapter()
+
+    with pytest.raises(IntegrationProviderError) as exc_info:
+        adapter.execute(
+            DEFAULT_INTEGRATION_REGISTRY.get("huggingface.list_papers"),
+            {"period": "2026-W32", "sort": "upvotes", "limit": 15},
+        )
+
+    assert exc_info.value.error_type == "invalid_input"
 
 
 @pytest.mark.parametrize("period", ["2026-13", "2026-W54", "2026-02-30", "not-a-period"])
@@ -170,16 +285,12 @@ def test_pdf_truncation_reads_past_an_exactly_full_first_page(
         adapter,
         "_request_bytes",
         lambda url, **_kwargs: (
-            (_ for _ in ()).throw(IntegrationProviderError("not_found", "No HTML"))
-            if "/html/" in url
-            else b"fake-pdf"
+            (_ for _ in ()).throw(IntegrationProviderError("not_found", "No HTML")) if "/html/" in url else b"fake-pdf"
         ),
     )
     monkeypatch.setattr(
         "app.services.huggingface_provider.PdfReader",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            pages=[Page("A" * MAX_CONTENT_CHARS), Page("second page")]
-        ),
+        lambda *_args, **_kwargs: SimpleNamespace(pages=[Page("A" * MAX_CONTENT_CHARS), Page("second page")]),
     )
 
     content, source, truncated = adapter._fetch_content("2602.08025", timeout=30)

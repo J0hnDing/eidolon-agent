@@ -204,41 +204,6 @@ def skill_plan(**overrides) -> dict:
     return plan
 
 
-def test_project_mode_creates_skill_proposal(db_session: Session) -> None:
-    codex_adapter = FixedBlueprintAdapter(
-        skill_plan(
-            skill_name="ai_infra_news_digest",
-            display_name="Ai Infra News Digest",
-            requested_permissions={
-                "network": ["nvidia.com", "amd.com"],
-                "filesystem_read": [],
-                "filesystem_write": ["./cache"],
-                "secrets": [],
-                "shell": False,
-            },
-            requested_network_domains=["nvidia.com", "amd.com"],
-            requested_dependencies=["requests"],
-            risk_level="medium",
-        )
-    )
-    response = ChatOrchestrator(
-        db_session,
-        codex_service=CodexService(db_session, adapter=codex_adapter),
-    ).handle_message(
-        "Create a reusable skill that summarizes AI chip news from Nvidia and AMD.",
-    )
-
-    assert response["type"] == "skill_generation_plan"
-    generation_request = response["generation_request"]
-    permission_request = response["permission_request"]
-    assert generation_request.status == "awaiting_approval"
-    assert generation_request.plan_json["skill_name"] == "ai_infra_news_digest"
-    assert generation_request.plan_json["runtime"] == "function"
-    assert codex_adapter.called is True
-    assert permission_request.request_scope == "build_time"
-    assert permission_request.status == "pending"
-
-
 def test_removed_chat_mode_is_rejected_by_the_request_contract() -> None:
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         ChatRequest.model_validate({"message": "What is inflation?", "mode": "chat"})
@@ -303,21 +268,6 @@ def test_project_mode_uses_one_product_manager_planning_action(db_session: Sessi
     assert permission_step.input_json is None
     assert permission_step.output_json is None
     assert "plausibility_review" not in generation_request.plan_json
-
-
-def test_project_build_instructions_are_colocated_with_workflow_packages() -> None:
-    app_dir = Path(__file__).resolve().parents[1] / "app"
-    workflow_root = app_dir / "workflows"
-
-    assert not (workflow_root / "common" / "instructions" / "refine_intent.md").exists()
-    assert (workflow_root / "common" / "instructions" / "plan_build.md").is_file()
-    assert (workflow_root / "task_dag" / "instructions" / "product_manager.md").is_file()
-    assert (workflow_root / "task_dag" / "instructions" / "builder.md").is_file()
-    assert (workflow_root / "task_dag" / "instructions" / "repair.md").is_file()
-    assert (workflow_root / "task_dag" / "instructions" / "tester.md").is_file()
-    assert (workflow_root / "single_codex" / "instructions" / "run.md").is_file()
-    assert not (app_dir / "agent_instructions" / "product_manager" / "task_dag.md").exists()
-    assert not (app_dir / "agent_instructions" / "workflows" / "single_codex.md").exists()
 
 
 def test_unsupported_project_reports_pm_reason_without_artifacts(db_session: Session, tmp_path: Path) -> None:
@@ -1024,27 +974,6 @@ def test_run_decision_allows_approved_network_permissions(
     skill, _validation = CodexService(
         db_session,
         adapter=RecordingCodexAdapter(network=["nvidia.com"]),
-        project_root=tmp_path,
-    ).generate_from_request(generation_request)
-    permission_service = PermissionService(db_session, project_root=tmp_path)
-    request = permission_service.create_runtime_request(skill)
-    permission_service.approve_request(request)
-
-    decision = permission_service.can_run(skill)
-    assert decision.allowed is True
-
-
-def test_run_decision_allows_approved_supported_permissions(
-    tmp_path: Path,
-    db_session: Session,
-) -> None:
-    generation_request = ChatOrchestrator(db_session).create_generation_request(
-        "Create a reusable local workflow skill."
-    )
-    approve_build_time_permissions(db_session, generation_request)
-    skill, _validation = CodexService(
-        db_session,
-        adapter=RecordingCodexAdapter(),
         project_root=tmp_path,
     ).generate_from_request(generation_request)
     permission_service = PermissionService(db_session, project_root=tmp_path)

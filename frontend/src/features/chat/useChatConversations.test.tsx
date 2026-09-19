@@ -11,7 +11,7 @@ describe("useChatConversations", () => {
   it("keeps agent bindings distinct and removes pruned sessions without changing a valid selection", () => {
     const { result } = renderHook(() => useChatConversations());
     const session = { id: 7, title: "Session", origin: "web", status: "active",
-      created_at: "2026-09-05T12:00:00Z", updated_at: "2026-09-05T12:00:00Z" };
+      created_at: "2026-09-05T12:00:00Z", updated_at: "2026-09-05T12:00:00Z", wecom_user_id: null };
     act(() => result.current.importAgentSessions("observer", [session]));
     act(() => result.current.importAgentSessions("assistant", [session]));
     act(() => result.current.selectConversation("assistant-7"));
@@ -54,6 +54,7 @@ describe("useChatConversations", () => {
       status: "active",
       created_at: "2026-08-30T12:00:00Z",
       updated_at: "2026-08-30T12:01:00Z",
+      wecom_user_id: null,
     }]));
     expect(result.current.conversations.find((item) => item.actSessionId === 7)?.mode).toBe("act");
     act(() => result.current.deleteConversation(result.current.activeConversationId));

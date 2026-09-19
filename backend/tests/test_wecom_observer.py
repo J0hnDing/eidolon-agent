@@ -16,6 +16,8 @@ from app.models import (
     WeComObserverBinding,
     WeComObserverUserBinding,
 )
+from app.services.act_session_service import ActSessionService
+from app.services.agent_turn_delivery import _deliver_wecom
 from app.services.secret_store import FakeSecretStore
 from app.services.wecom_provider import (
     WECOM_CALLBACK_COMMAND,
@@ -199,15 +201,15 @@ def test_wecom_users_have_one_current_session_and_can_clear_it() -> None:
             select(WeComObserverUserBinding).where(WeComObserverUserBinding.paired_user_id == "user-2")
         )
         assert user_one is not None and user_two is not None
+        assert user_one.current_session_id is not None
+        assert user_two.current_session_id is not None
 
+        paired_session_id = user_one.current_session_id
         worker._handle_inbound(socket, config, _callback("normal-1", "user-1", "hello"))
         db.refresh(user_one)
         first_session_id = user_one.current_session_id
-        assert first_session_id is not None
+        assert first_session_id == paired_session_id
 
-        for turn in db.scalars(select(ActTurn)).all():
-            turn.status = "succeeded"
-        db.commit()
         worker._handle_inbound(socket, config, _callback("normal-2", "user-1", "again"))
         db.refresh(user_two)
         db.refresh(user_one)
@@ -219,23 +221,38 @@ def test_wecom_users_have_one_current_session_and_can_clear_it() -> None:
         assert second_session_id is not None
         assert second_session_id != first_session_id
 
-        for turn in db.scalars(select(ActTurn)).all():
-            turn.status = "succeeded"
-        db.commit()
         worker._handle_inbound(socket, config, _callback("clear-1", "user-1", "clear conversation"))
         db.refresh(user_one)
         assert user_one.current_session_id not in {None, first_session_id}
         fresh_session_id = user_one.current_session_id
         assert fresh_session_id is not None
-        assert db.get(ActSession, first_session_id).status == "archived"
+        assert db.get(ActSession, first_session_id).status == "active"
         assert db.get(ActSession, fresh_session_id).status == "active"
+        assert ActSessionService(db, agent_id="observer").read_session(first_session_id).wecom_user_id == "user-1"
+
+        old_turns = list(db.scalars(select(ActTurn).where(ActTurn.session_id == first_session_id)))
+        for turn in old_turns:
+            turn.status = "succeeded"
+        db.commit()
+        for turn in old_turns:
+            _deliver_wecom(db, turn, db.get(ActSession, first_session_id))
+        assert db.get(ActSession, first_session_id).status == "archived"
+        assert all(turn.delivery_status == "failed" for turn in old_turns)
+
+        ActSessionService(db, agent_id="observer").archive(fresh_session_id)
+        db.refresh(user_one)
+        replacement_id = user_one.current_session_id
+        assert replacement_id not in {None, fresh_session_id}
+        replacement = db.get(ActSession, replacement_id)
+        assert replacement is not None and replacement.origin == "wecom"
+        assert ActSessionService(db, agent_id="observer").read_session(replacement.id).wecom_user_id == "user-1"
 
         for turn in db.scalars(select(ActTurn)).all():
             turn.status = "succeeded"
         db.commit()
         worker._handle_inbound(socket, config, _callback("normal-4", "user-1", "after clear"))
         latest_turn = db.scalar(select(ActTurn).order_by(ActTurn.id.desc()))
-        assert latest_turn is not None and latest_turn.session_id == fresh_session_id
+        assert latest_turn is not None and latest_turn.session_id == replacement_id
 
         worker._handle_inbound(socket, config, _callback("old-command", "user-1", "/sessions"))
         assert "history is not exposed" in socket.sent[-1]

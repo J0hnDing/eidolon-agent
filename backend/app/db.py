@@ -113,6 +113,13 @@ def ensure_local_schema() -> None:
                         "ADD COLUMN configured_report_resource_id VARCHAR(256)"
                     )
                 )
+            if "configured_daily_feed_page_id" not in columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE integration_connections "
+                        "ADD COLUMN configured_daily_feed_page_id VARCHAR(256)"
+                    )
+                )
             if "bot_id" not in columns:
                 connection.execute(text("ALTER TABLE integration_connections ADD COLUMN bot_id VARCHAR(128)"))
             if added_default_column:
@@ -597,6 +604,7 @@ def _migrate_integration_connection_uniqueness(inspector, table_names: set[str])
         "workspace_name",
         "configured_resource_id",
         "configured_report_resource_id",
+        "configured_daily_feed_page_id",
         "error_type",
         "created_at",
         "updated_at",
@@ -611,6 +619,7 @@ def _migrate_integration_connection_uniqueness(inspector, table_names: set[str])
         "workspace_name": "NULL",
         "configured_resource_id": "NULL",
         "configured_report_resource_id": "NULL",
+        "configured_daily_feed_page_id": "NULL",
         "error_type": "NULL",
     }
     select_columns = ", ".join(
@@ -625,7 +634,8 @@ def _migrate_integration_connection_uniqueness(inspector, table_names: set[str])
         "passphrase_secret_store_id VARCHAR(64), passphrase_secret_reference VARCHAR(256), "
         "status VARCHAR(32) NOT NULL, account_login VARCHAR(128) NOT NULL, account_id VARCHAR(128) NOT NULL, "
         "bot_id VARCHAR(128), workspace_name VARCHAR(256), configured_resource_id VARCHAR(256), "
-        "configured_report_resource_id VARCHAR(256), error_type VARCHAR(64), "
+        "configured_report_resource_id VARCHAR(256), configured_daily_feed_page_id VARCHAR(256), "
+        "error_type VARCHAR(64), "
         "created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, last_validated_at DATETIME NOT NULL)"
     )
     with engine.connect() as connection:

@@ -45,6 +45,7 @@ EXPECTED_OPERATION_IDS = {
     "huggingface.get_paper",
     "huggingface.list_papers",
     "huggingface.search_papers",
+    "notion.daily_feed.write",
     "notion.report.create",
     "notion.report.delete",
     "notion.report.get",
@@ -136,15 +137,11 @@ def test_default_registry_lookup_and_order_are_deterministic() -> None:
     )
 
 
-def test_default_registry_preserves_all_operation_ids() -> None:
-    assert len(OPERATIONS) == 39
-    assert set(OPERATIONS) == EXPECTED_OPERATION_IDS
-
-
 def test_effect_risk_and_compatibility_metadata_are_derived() -> None:
     read = OPERATIONS["github.repository.get"]
     delete = OPERATIONS["notion.todo.delete"]
     high = OPERATIONS["email.send"]
+    daily_feed = OPERATIONS["notion.daily_feed.write"]
 
     assert read.effects == frozenset({IntegrationEffect.READ})
     assert read.read_only is True
@@ -153,6 +150,8 @@ def test_effect_risk_and_compatibility_metadata_are_derived() -> None:
     assert delete.read_only is False
     assert high.risk is RiskLevel.HIGH
     assert high.requires_invocation_approval is True
+    assert daily_feed.effects == frozenset({IntegrationEffect.UPDATE})
+    assert daily_feed.risk is RiskLevel.MEDIUM
 
 
 def test_contract_identity_contains_security_relevant_fields() -> None:

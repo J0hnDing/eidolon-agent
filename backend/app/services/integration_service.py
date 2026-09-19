@@ -32,6 +32,7 @@ from app.schemas.integration import (
 )
 from app.schemas.manifest import ManifestIntegrationRequirement, SkillManifest
 from app.services.atlas_provider import AtlasProviderAdapter, UrllibAtlasProviderAdapter
+from app.services.daily_feed_page_service import DailyFeedPageProvider
 from app.services.github_provider import (
     GitHubProviderAdapter,
     IntegrationProviderError,
@@ -62,6 +63,7 @@ from app.services.huggingface_provider import (
     HuggingFaceProviderAdapter,
     UrllibHuggingFaceProviderAdapter,
 )
+from app.services.notion_daily_feed_provider import NotionDailyFeedProvider
 from app.services.notion_report_provider import NotionReportProvider
 from app.services.notion_todo_provider import NotionTodoProvider
 from app.services.outlook_provider import (
@@ -225,6 +227,7 @@ class IntegrationService:
     atlas: AtlasProviderAdapter | None = None
     notion_provider_factory: Callable[[str, str], TodoProvider] | None = None
     notion_report_provider_factory: Callable[[str, str], ReportProvider] | None = None
+    notion_daily_feed_provider_factory: Callable[[str, str], DailyFeedPageProvider] | None = None
     google_calendar: GoogleCalendarProviderAdapter | None = None
     google_oauth_states: GoogleOAuthStateStore | None = None
     gmail: GmailProviderAdapter | None = None
@@ -245,6 +248,8 @@ class IntegrationService:
             self.notion_provider_factory = NotionTodoProvider
         if self.notion_report_provider_factory is None:
             self.notion_report_provider_factory = NotionReportProvider
+        if self.notion_daily_feed_provider_factory is None:
+            self.notion_daily_feed_provider_factory = NotionDailyFeedProvider
         if self.google_calendar is None:
             self.google_calendar = UrllibGoogleCalendarProviderAdapter()
         if self.google_oauth_states is None:
@@ -954,6 +959,7 @@ class IntegrationService:
             workspace_name=connection.workspace_name,
             data_source_id=connection.configured_resource_id,
             report_data_source_id=connection.configured_report_resource_id,
+            daily_feed_page_id=connection.configured_daily_feed_page_id,
             last_validated_at=connection.last_validated_at,
             created_at=connection.created_at,
             updated_at=connection.updated_at,
@@ -967,9 +973,13 @@ class IntegrationService:
             raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
         assert self.notion_provider_factory is not None
         assert self.notion_report_provider_factory is not None
+        assert self.notion_daily_feed_provider_factory is not None
         previous = self._connection("notion")
         todo_source = previous.configured_resource_id if previous is not None else None
         report_source = previous.configured_report_resource_id if previous is not None else None
+        daily_feed_page = (
+            previous.configured_daily_feed_page_id if previous is not None else None
+        )
         todo_provider = self.notion_provider_factory(credential, todo_source or "identity-only")
         validation_target = "connection"
         try:
@@ -992,6 +1002,20 @@ class IntegrationService:
                     raise IntegrationError(
                         "provider_unavailable",
                         "Notion data sources resolved to different bot identities",
+                    )
+            if daily_feed_page:
+                validation_target = "Daily Feed page"
+                daily_feed_identity = self.notion_daily_feed_provider_factory(
+                    credential,
+                    daily_feed_page,
+                ).validate_connection()
+                daily_feed_bot_id, _daily_feed_bot_name, _daily_feed_workspace = (
+                    self._validated_notion_identity(daily_feed_identity)
+                )
+                if daily_feed_bot_id != identity.get("bot_id"):
+                    raise IntegrationError(
+                        "provider_unavailable",
+                        "Notion Daily Feed page resolved to a different bot identity",
                     )
         except IntegrationProviderError as exc:
             raise self._notion_validation_error(validation_target, exc) from None
@@ -1019,6 +1043,7 @@ class IntegrationService:
                     workspace_name=workspace_name,
                     configured_resource_id=None,
                     configured_report_resource_id=None,
+                    configured_daily_feed_page_id=None,
                     created_at=now,
                     updated_at=now,
                     last_validated_at=now,
@@ -1126,6 +1151,68 @@ class IntegrationService:
         except Exception:
             self.db.rollback()
             raise IntegrationError("internal_failure", "Notion data sources could not be removed safely") from None
+        return self.notion_connection_status()
+
+    def put_notion_daily_feed_page(self, page_id: str) -> NotionConnectionStatus:
+        normalized_page_id = page_id.strip()
+        if not normalized_page_id or len(normalized_page_id) > 256:
+            raise IntegrationError(
+                "invalid_input",
+                "Notion Daily Feed page ID must be a non-empty bounded string",
+            )
+        connection = self._connected_notion_connection()
+        assert self.secret_store is not None
+        try:
+            credential = self.secret_store.get(
+                connection.secret_reference,
+                namespace="notion",
+            )
+        except (SecretStoreError, RuntimeError):
+            raise IntegrationError(
+                "connection_unavailable", "Stored Notion credential is unavailable"
+            ) from None
+        assert self.notion_daily_feed_provider_factory is not None
+        try:
+            identity = self.notion_daily_feed_provider_factory(
+                credential,
+                normalized_page_id,
+            ).validate_connection()
+        except IntegrationProviderError as exc:
+            raise self._notion_validation_error("Daily Feed page", exc) from None
+        finally:
+            credential = ""
+        bot_id, _bot_name, _workspace_name = self._validated_notion_identity(identity)
+        if connection.account_id != bot_id:
+            raise IntegrationError(
+                "provider_unavailable",
+                "Notion Daily Feed page does not match the connected bot identity",
+            )
+        try:
+            connection.configured_daily_feed_page_id = normalized_page_id
+            connection.error_type = None
+            connection.updated_at = utc_now()
+            connection.last_validated_at = connection.updated_at
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise IntegrationError(
+                "internal_failure", "Notion Daily Feed page could not be saved safely"
+            ) from None
+        return self.notion_connection_status()
+
+    def remove_notion_daily_feed_page(self) -> NotionConnectionStatus:
+        connection = self._connection("notion")
+        if connection is None:
+            return NotionConnectionStatus(connected=False, status="disconnected")
+        try:
+            connection.configured_daily_feed_page_id = None
+            connection.updated_at = utc_now()
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise IntegrationError(
+                "internal_failure", "Notion Daily Feed page could not be removed safely"
+            ) from None
         return self.notion_connection_status()
 
     def put_notion_connection(
@@ -1566,12 +1653,22 @@ class IntegrationService:
         error: IntegrationProviderError,
     ) -> IntegrationError:
         if error.error_type == "not_found":
-            message = (
-                f"The Notion {target} was not found. Copy its data source ID from Manage data sources "
-                "and share the original database with this Notion connection."
-            )
+            if target == "Daily Feed page":
+                message = (
+                    "The Notion Daily Feed page was not found. Copy its page ID and share that page "
+                    "with this Notion connection."
+                )
+            else:
+                message = (
+                    f"The Notion {target} was not found. Copy its data source ID from Manage data "
+                    "sources and share the original database with this Notion connection."
+                )
         elif error.error_type == "schema_mismatch":
-            message = f"The Notion {target} does not match the required schema"
+            message = (
+                "Notion returned an invalid Daily Feed page response"
+                if target == "Daily Feed page"
+                else f"The Notion {target} does not match the required schema"
+            )
         elif error.error_type == "provider_forbidden":
             message = f"Notion denied access to the {target}"
         else:
@@ -1844,6 +1941,8 @@ class IntegrationService:
                 return False
             if operation_id.startswith("notion.report."):
                 return bool(connection.configured_report_resource_id)
+            if operation_id == "notion.daily_feed.write":
+                return bool(connection.configured_daily_feed_page_id)
             return bool(connection.configured_resource_id)
         return any(self.provider_connected(provider) for provider in providers)
 

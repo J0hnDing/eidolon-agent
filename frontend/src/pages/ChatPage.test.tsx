@@ -15,7 +15,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 it.each(["observer", "assistant"] as const)("loads and continues the shared %s session", async (agentId) => {
   const session: AgentSession = {
     id: 42, agent_id: agentId, title: `${agentId} session`, origin: "telegram", status: "active",
-    created_at: "2026-09-05T12:00:00Z", updated_at: "2026-09-05T12:00:00Z", turns: [],
+    created_at: "2026-09-05T12:00:00Z", updated_at: "2026-09-05T12:00:00Z", wecom_user_id: null, turns: [],
   };
   vi.spyOn(api, "listAgentSessions").mockImplementation(async (id) => id === agentId ? [session] : []);
   vi.spyOn(api, "getAgentSession").mockResolvedValue(session);
@@ -42,7 +42,7 @@ it.each(["observer", "assistant"] as const)("creates a backend %s session from N
   vi.spyOn(api, "listAgentSessions").mockResolvedValue([]);
   const session: AgentSession = {
     id: 99, agent_id: agentId, title: "Created session", origin: "web", status: "active",
-    created_at: "2026-09-05T12:00:00Z", updated_at: "2026-09-05T12:00:00Z", turns: [],
+    created_at: "2026-09-05T12:00:00Z", updated_at: "2026-09-05T12:00:00Z", wecom_user_id: null, turns: [],
   };
   vi.spyOn(api, "createAgentSession").mockResolvedValue(session);
   vi.spyOn(api, "getAgentSession").mockResolvedValue(session);
@@ -53,4 +53,35 @@ it.each(["observer", "assistant"] as const)("creates a backend %s session from N
   await screen.findByText("Created session");
   expect(api.createAgentSession).toHaveBeenCalledWith(agentId);
   await waitFor(() => expect(api.getAgentSession).toHaveBeenCalledWith(agentId, 99));
+});
+
+it("selects the same user's replacement after deleting a WeCom session", async () => {
+  const oldSession: AgentSession = {
+    id: 42, agent_id: "observer", title: "Old WeCom session", origin: "wecom", status: "active",
+    created_at: "2026-09-05T12:00:00Z", updated_at: "2026-09-05T12:00:00Z", wecom_user_id: "user-1", turns: [],
+  };
+  const replacement: AgentSession = {
+    ...oldSession,
+    id: 43,
+    title: "New observer",
+    created_at: "2026-09-05T13:00:00Z",
+    updated_at: "2026-09-05T13:00:00Z",
+  };
+  let observerSessions = [oldSession];
+  vi.spyOn(api, "listAgentSessions").mockImplementation(async (id) => id === "observer" ? observerSessions : []);
+  vi.spyOn(api, "getAgentSession").mockImplementation(async (_id, sessionId) =>
+    sessionId === oldSession.id ? oldSession : replacement,
+  );
+  const archive = vi.spyOn(api, "archiveAgentSession").mockImplementation(async () => {
+    observerSessions = [replacement];
+  });
+
+  render(<MemoryRouter><ChatPage /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole("button", { name: /Old WeCom session/ }));
+  await waitFor(() => expect(api.getAgentSession).toHaveBeenCalledWith("observer", 42));
+  fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
+
+  await waitFor(() => expect(archive).toHaveBeenCalledWith("observer", 42));
+  await screen.findByText("New observer");
+  await waitFor(() => expect(api.getAgentSession).toHaveBeenCalledWith("observer", 43));
 });

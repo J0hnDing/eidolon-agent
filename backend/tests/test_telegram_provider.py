@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import html
+import io
+from urllib.error import HTTPError
 
 import pytest
 
@@ -11,6 +13,7 @@ from app.services.telegram_provider import (
     PairingCodeStore,
     TelegramLongPollWorker,
     TelegramProviderError,
+    UrllibTelegramBotApi,
     build_callback_data,
     build_proposal_callback_data,
     create_pairing_code,
@@ -27,6 +30,14 @@ from app.services.telegram_provider import (
     validate_callback_origin,
     validate_pairing_message,
 )
+
+
+class _ErrorOpener:
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+
+    def open(self, request, timeout):  # noqa: ANN001, ANN201
+        raise HTTPError(request.full_url, 400, "Bad Request", {}, io.BytesIO(self.payload))
 
 
 def _pairing_update(code: str, *, chat_id: int = 42, user_id: int = 7, update_id: int = 1) -> dict:
@@ -98,6 +109,57 @@ def test_private_topic_api_operations_and_threaded_delivery_are_preserved() -> N
         "deleteForumTopic",
     ]
     assert topic["message_thread_id"] not in api.topics
+
+
+def test_rich_message_draft_uses_the_native_thinking_capability() -> None:
+    api = FakeTelegramBotApi()
+
+    api.send_rich_message_draft(
+        42,
+        7,
+        {"html": "<tg-thinking>Act is thinking…</tg-thinking>"},
+        message_thread_id=9,
+    )
+
+    assert api.calls[-1] == (
+        "sendRichMessageDraft",
+        {
+            "chat_id": 42,
+            "draft_id": 7,
+            "rich_message": {"html": "<tg-thinking>Act is thinking…</tg-thinking>"},
+            "message_thread_id": 9,
+        },
+    )
+
+
+def test_bot_api_marks_an_unavailable_native_draft_method_for_fallback() -> None:
+    api = UrllibTelegramBotApi(
+        "123:token",
+        opener=_ErrorOpener(b'{"ok":false,"error_code":400,"description":"Bad Request: method not found"}'),
+    )
+
+    with pytest.raises(TelegramProviderError) as exc_info:
+        api.send_rich_message_draft(42, 7, {"html": "<tg-thinking>Thinking…</tg-thinking>"})
+
+    assert exc_info.value.error_type == "native_thinking_unsupported"
+
+
+def test_bot_api_normalizes_only_definitive_missing_topic_errors() -> None:
+    missing = UrllibTelegramBotApi(
+        "123:token",
+        opener=_ErrorOpener(b'{"ok":false,"error_code":400,"description":"Bad Request: message thread not found"}'),
+    )
+    with pytest.raises(TelegramProviderError) as exc_info:
+        missing.send_message(42, "reply", message_thread_id=7)
+    assert exc_info.value.error_type == "topic_not_found"
+
+    generic = UrllibTelegramBotApi(
+        "123:token",
+        opener=_ErrorOpener(b'{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}'),
+    )
+    with pytest.raises(TelegramProviderError) as exc_info:
+        generic.send_message(42, "reply", message_thread_id=7)
+    assert exc_info.value.error_type == "invalid_input"
 
 
 def test_pairing_parser_requires_private_start_and_code_is_one_time() -> None:

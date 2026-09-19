@@ -127,6 +127,7 @@ def test_runtime_is_the_only_catalog_provider_adapter_dispatcher() -> None:
         "atlas",
         "notion_provider_factory",
         "notion_report_provider_factory",
+        "notion_daily_feed_provider_factory",
         "google_calendar",
         "gmail",
     }

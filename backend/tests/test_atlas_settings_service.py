@@ -408,4 +408,5 @@ def test_local_schema_adds_credential_kind_and_legacy_passphrase_references(tmp_
         "passphrase_secret_store_id",
         "passphrase_secret_reference",
         "configured_report_resource_id",
+        "configured_daily_feed_page_id",
     } <= columns

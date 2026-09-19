@@ -933,3 +933,16 @@ Moved llama.cpp ownership to a pass-scoped backend controller. One keep-alive Su
 ### Limitations
 
 Live ECO101 processing was not started during implementation; the user will validate the native Windows process behavior during the next backfill.
+
+## 2026-09-17 20:57 — Deterministic Notion Daily Feed service
+
+- Category: feature
+- Area: Scheduling and integrations
+
+### Summary
+
+Added the checked-in daily_feed_service with a daily 08:30 America/Toronto schedule, deterministic Open-Meteo weather and clothing guidance, Google Calendar and Notion Todo reads, and in-place replacement of a separately configured standalone Notion page. Added the bounded notion.daily_feed.write integration, settings persistence/UI/routes, schema migration, documentation, and provider/service/frontend tests.
+
+### Limitations
+
+The service is installed disabled and paused by default; the user must share and configure the standalone Notion page, approve runtime permissions and integration access, and enable the schedule before it can run.

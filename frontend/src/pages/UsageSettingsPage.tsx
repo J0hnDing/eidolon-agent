@@ -97,6 +97,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
   const [notionToken, setNotionToken] = useState("");
   const [notionDataSourceId, setNotionDataSourceId] = useState("");
   const [notionReportDataSourceId, setNotionReportDataSourceId] = useState("");
+  const [notionDailyFeedPageId, setNotionDailyFeedPageId] = useState("");
   const [quercus, setQuercus] = useState<QuercusConnectionStatus | null>(null);
   const [quercusCourses, setQuercusCourses] = useState<QuercusCourse[]>([]);
   const [pendingQuercusCourseDelete, setPendingQuercusCourseDelete] = useState<QuercusCourse | null>(null);
@@ -201,6 +202,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setNotion(nextNotion);
         setNotionDataSourceId(nextNotion.data_source_id ?? "");
         setNotionReportDataSourceId(nextNotion.report_data_source_id ?? "");
+        setNotionDailyFeedPageId(nextNotion.daily_feed_page_id ?? "");
         setQuercus(nextQuercus);
         setQuercusProcessing(nextQuercusProcessing);
         setQuercusProcessingMethod(nextQuercusProcessing.method);
@@ -368,6 +370,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
       setNotionToken("");
       setNotionDataSourceId(next.data_source_id ?? "");
       setNotionReportDataSourceId(next.report_data_source_id ?? "");
+      setNotionDailyFeedPageId(next.daily_feed_page_id ?? "");
       setSaved("Notion connection validated and saved.");
     } catch (err) {
       setNotionToken("");
@@ -416,6 +419,40 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     }
   }
 
+  async function saveNotionDailyFeedPage() {
+    if (!notion?.connected || !notionDailyFeedPageId.trim()) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const next = await api.putNotionDailyFeedPage(notionDailyFeedPageId.trim());
+      setNotion(next);
+      setNotionDailyFeedPageId(next.daily_feed_page_id ?? "");
+      setSaved("Notion Daily Feed page ID validated and saved.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save Notion Daily Feed page ID");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function removeNotionDailyFeedPage() {
+    if (!notion?.connected) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const next = await api.removeNotionDailyFeedPage();
+      setNotion(next);
+      setNotionDailyFeedPageId("");
+      setSaved("Notion Daily Feed page ID removed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove Notion Daily Feed page ID");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function removeNotionConnection() {
     setError(null);
     setSaved(null);
@@ -427,6 +464,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
       setNotionToken("");
       setNotionDataSourceId("");
       setNotionReportDataSourceId("");
+      setNotionDailyFeedPageId("");
       setSaved("Notion connection removed.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not remove Notion connection");
@@ -1310,7 +1348,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
 
           <div className="settings-subsection stack">
-            <div><h3>Act Agent bot</h3><p className="muted">Each private Telegram topic is one independent Act session. Enable Threaded mode for this bot in BotFather, then create topics in the paired private chat.</p></div>
+            <div><h3>Act Agent bot</h3><p className="muted">Each private Telegram topic is one independent Act session. Enable Threaded mode and Allow users to create topics for this bot in BotFather, then create topics in the paired private chat.</p></div>
             <dl className="detail-grid"><div><dt>Status</dt><dd>{telegramStatusLabel(telegramAgent)}</dd></div><div><dt>Bot</dt><dd>{telegramAgent.bot_username ? `@${telegramAgent.bot_username}` : "None"}</dd></div><div><dt>Private chat</dt><dd>{telegramAgent.paired_chat_id ?? "Not paired"}</dd></div><div><dt>User</dt><dd>{telegramAgent.paired_user_id ?? "Not paired"}</dd></div></dl>
             {telegramAgent.error_type && <p className="error-text">Connection status: {telegramAgent.error_type.replace(/_/g, " ")}</p>}
             {telegramAgentPairingCode && <div><h4>Finish pairing</h4><p>Open the Act Agent bot in Telegram and send <code>/start {telegramAgentPairingCode}</code>.</p><button type="button" className="secondary" onClick={() => void refreshTelegramAgentPairing()}>Check Act Agent pairing</button></div>}
@@ -1320,7 +1358,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
 
           <div className="settings-subsection stack">
-            <div><h3>Observer Agent bot</h3><p className="muted">Each private Telegram topic is one independent read-only Observer session. Enable Threaded mode for this bot in BotFather, then create topics in the paired private chat.</p></div>
+            <div><h3>Observer Agent bot</h3><p className="muted">Each private Telegram topic is one independent read-only Observer session. Enable Threaded mode and Allow users to create topics for this bot in BotFather, then create topics in the paired private chat.</p></div>
             <dl className="detail-grid"><div><dt>Status</dt><dd>{telegramStatusLabel(telegramObserverAgent)}</dd></div><div><dt>Bot</dt><dd>{telegramObserverAgent.bot_username ? `@${telegramObserverAgent.bot_username}` : "None"}</dd></div><div><dt>Private chat</dt><dd>{telegramObserverAgent.paired_chat_id ?? "Not paired"}</dd></div><div><dt>User</dt><dd>{telegramObserverAgent.paired_user_id ?? "Not paired"}</dd></div></dl>
             {telegramObserverAgent.error_type && <p className="error-text">Connection status: {telegramObserverAgent.error_type.replace(/_/g, " ")}</p>}
             {telegramObserverAgentPairingCode && <div><h4>Finish pairing</h4><p>Open the Observer Agent bot in Telegram and send <code>/start {telegramObserverAgentPairingCode}</code>.</p><button type="button" className="secondary" onClick={() => void refreshTelegramObserverAgentPairing()}>Check Observer Agent pairing</button></div>}
@@ -1330,7 +1368,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
 
           <div className="settings-subsection stack">
-            <div><h3>Assistant Agent bot</h3><p className="muted">Each private Telegram topic is one independent Assistant session. Enable Threaded mode for this bot in BotFather, then create topics in the paired private chat. Assistant retains at most five sessions across Telegram, the UI, and scheduled assessments.</p></div>
+            <div><h3>Assistant Agent bot</h3><p className="muted">Each private Telegram topic is one independent Assistant session. Enable Threaded mode and Allow users to create topics for this bot in BotFather, then create topics in the paired private chat. Assistant retains at most five sessions across Telegram, the UI, and scheduled assessments.</p></div>
             <dl className="detail-grid"><div><dt>Status</dt><dd>{telegramStatusLabel(telegramAssistantAgent)}</dd></div><div><dt>Bot</dt><dd>{telegramAssistantAgent.bot_username ? `@${telegramAssistantAgent.bot_username}` : "None"}</dd></div><div><dt>Private chat</dt><dd>{telegramAssistantAgent.paired_chat_id ?? "Not paired"}</dd></div><div><dt>User</dt><dd>{telegramAssistantAgent.paired_user_id ?? "Not paired"}</dd></div></dl>
             {telegramAssistantAgent.error_type && <p className="error-text">Connection status: {telegramAssistantAgent.error_type.replace(/_/g, " ")}</p>}
             {telegramAssistantAgentPairingCode && <div><h4>Finish pairing</h4><p>Open the Assistant Agent bot in Telegram and send <code>/start {telegramAssistantAgentPairingCode}</code>.</p><button type="button" className="secondary" onClick={() => void refreshTelegramAssistantAgentPairing()}>Check Assistant Agent pairing</button></div>}
@@ -1538,6 +1576,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
             <div><dt>Connection bot</dt><dd>{notion.bot_name ?? "None"}</dd></div>
             <div><dt>Todo data-source ID</dt><dd><code>{notion.data_source_id ?? "None"}</code></dd></div>
             <div><dt>Reports data-source ID</dt><dd><code>{notion.report_data_source_id ?? "None"}</code></dd></div>
+            <div><dt>Daily Feed page ID</dt><dd><code>{notion.daily_feed_page_id ?? "None"}</code></dd></div>
             <div><dt>Last validated</dt><dd>{formatDate(notion.last_validated_at)}</dd></div>
           </dl>
           {notion.error_type && <p className="error-text">Connection status: {notion.error_type.replace(/_/g, " ")}</p>}
@@ -1614,6 +1653,38 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
                   || !notion.connected
                   || (!notion.data_source_id && !notion.report_data_source_id)
                 }
+              />
+            </div>
+          </div>
+          <div className="settings-subsection stack">
+            <div>
+              <h3>Notion Daily Feed page</h3>
+              <p className="muted">
+                Configure a standalone page shared with the connection. Daily Feed writes replace that page&apos;s ordinary content in place.
+              </p>
+            </div>
+            <label>
+              Notion Daily Feed page ID
+              <input
+                type="text"
+                value={notionDailyFeedPageId}
+                onChange={(event) => setNotionDailyFeedPageId(event.target.value)}
+                placeholder="Copy the standalone page ID from Notion"
+                disabled={!notion.connected}
+              />
+            </label>
+            <div className="button-row">
+              <button
+                type="button"
+                onClick={() => void saveNotionDailyFeedPage()}
+                disabled={loading || !notion.connected || !notionDailyFeedPageId.trim()}
+              >
+                Save page ID
+              </button>
+              <DeleteIconButton
+                label="Delete Daily Feed page ID"
+                onClick={() => void removeNotionDailyFeedPage()}
+                disabled={loading || !notion.connected || !notion.daily_feed_page_id}
               />
             </div>
           </div>
@@ -1907,6 +1978,7 @@ function notionUnavailableStatus(err: unknown): NotionConnectionStatus {
     workspace_name: null,
     data_source_id: null,
     report_data_source_id: null,
+    daily_feed_page_id: null,
     last_validated_at: null,
     created_at: null,
     updated_at: null,

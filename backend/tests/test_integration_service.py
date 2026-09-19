@@ -22,6 +22,7 @@ from app.models import (
 )
 from app.schemas.manifest import SkillManifest, manifest_permission_requests
 from app.services.atlas_provider import FakeAtlasProviderAdapter
+from app.services.daily_feed_page_service import FakeDailyFeedPageProvider
 from app.services.github_provider import FakeGitHubProviderAdapter
 from app.services.integration_service import IntegrationError, IntegrationService
 from app.services.permission_service import PermissionService
@@ -530,6 +531,94 @@ def test_failed_separate_data_source_validation_preserves_both_existing_ids(
     status = service.notion_connection_status()
     assert status.data_source_id == "todo-source"
     assert status.report_data_source_id == "report-source"
+
+
+def test_notion_daily_feed_page_is_separate_contained_and_audited(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    requirement = integration_requirement(
+        provider="notion",
+        operations=["notion.daily_feed.write"],
+    )
+    skill, manifest = create_installed_skill(db, tmp_path, requirement=requirement)
+    store = FakeSecretStore()
+    daily_feed = FakeDailyFeedPageProvider(bot_id="shared-bot")
+    service = IntegrationService(
+        db,
+        project_root=tmp_path,
+        secret_store=store,
+        notion_provider_factory=lambda _token, _source: FakeTodoProvider(
+            bot_id="shared-bot"
+        ),
+        notion_report_provider_factory=lambda _token, _source: FakeReportProvider(
+            bot_id="shared-bot"
+        ),
+        notion_daily_feed_provider_factory=lambda _token, _page: daily_feed,
+    )
+
+    connected = service.put_notion_credential(NOTION_SENTINEL)
+    assert connected.daily_feed_page_id is None
+    assert service.operation_available("notion.daily_feed.write") is False
+
+    configured = service.put_notion_daily_feed_page("daily-page")
+    assert configured.daily_feed_page_id == "daily-page"
+    assert service.operation_available("notion.daily_feed.write") is True
+
+    authorization = authorize(service, skill, manifest)
+    assert authorization.approval_request.risk_level == "medium"
+    output = invoke(
+        service,
+        "notion.daily_feed.write",
+        {"markdown": "# Daily Feed\n\nConcise."},
+        caller_context(skill),
+    )
+    assert output == {"updated": True, "characters": 22}
+    audit = db.scalar(select(IntegrationAuditRecord))
+    assert audit is not None
+    assert audit.operation_id == "notion.daily_feed.write"
+    assert audit.resource == "notion-page:daily-page"
+
+    replaced = service.put_notion_credential("replacement-token")
+    assert replaced.daily_feed_page_id == "daily-page"
+    assert daily_feed.calls.count(("validate_connection", {})) >= 2
+
+    cleared = service.remove_notion_daily_feed_page()
+    assert cleared.daily_feed_page_id is None
+    assert service.operation_available("notion.daily_feed.write") is False
+
+
+def test_failed_notion_daily_feed_page_validation_preserves_existing_page(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    store = FakeSecretStore()
+    service = IntegrationService(
+        db,
+        project_root=tmp_path,
+        secret_store=store,
+        notion_provider_factory=lambda _token, _source: FakeTodoProvider(),
+        notion_report_provider_factory=lambda _token, _source: FakeReportProvider(),
+        notion_daily_feed_provider_factory=lambda _token, _page: FakeDailyFeedPageProvider(),
+    )
+    service.put_notion_credential(NOTION_SENTINEL)
+    service.put_notion_daily_feed_page("daily-page")
+
+    class RejectedDailyFeedProvider(FakeDailyFeedPageProvider):
+        def validate_connection(self):
+            from app.services.github_provider import IntegrationProviderError
+
+            raise IntegrationProviderError("not_found", "missing page")
+
+    service.notion_daily_feed_provider_factory = (
+        lambda _token, _page: RejectedDailyFeedProvider()
+    )
+    with pytest.raises(IntegrationError) as rejected:
+        service.put_notion_daily_feed_page("other-page")
+
+    assert rejected.value.error_type == "not_found"
+    assert "Copy its page ID" in str(rejected.value)
+    assert service.notion_connection_status().daily_feed_page_id == "daily-page"
 
 
 def test_notion_todo_operations_use_existing_authorization_audit_and_fake_provider(

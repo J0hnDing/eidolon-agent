@@ -20,6 +20,7 @@ from app.schemas.integration import (
     MicrosoftOAuthClientWrite,
     NotionConnectionStatus,
     NotionCredentialWrite,
+    NotionDailyFeedPageWrite,
     NotionDataSourcesWrite,
     OutlookConnectionStatus,
     QuercusConnectionStatus,
@@ -145,6 +146,39 @@ def put_notion_data_sources(
 def remove_notion_data_sources(db: Session = Depends(get_db)) -> NotionConnectionStatus:
     try:
         result = build_default_integration_service(db).remove_notion_data_sources()
+        FunctionCatalogService(db).refresh()
+        return result
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+
+
+@router.put(
+    "/settings/integrations/notion/daily-feed-page",
+    response_model=NotionConnectionStatus,
+)
+def put_notion_daily_feed_page(
+    payload: NotionDailyFeedPageWrite,
+    db: Session = Depends(get_db),
+) -> NotionConnectionStatus:
+    try:
+        result = build_default_integration_service(db).put_notion_daily_feed_page(
+            payload.page_id
+        )
+        FunctionCatalogService(db).refresh()
+        return result
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+
+
+@router.delete(
+    "/settings/integrations/notion/daily-feed-page",
+    response_model=NotionConnectionStatus,
+)
+def remove_notion_daily_feed_page(
+    db: Session = Depends(get_db),
+) -> NotionConnectionStatus:
+    try:
+        result = build_default_integration_service(db).remove_notion_daily_feed_page()
         FunctionCatalogService(db).refresh()
         return result
     except IntegrationError as exc:
@@ -562,7 +596,10 @@ def start_telegram_agent_pairing(payload: TelegramPairingStart, db: Session = De
 
 @router.post("/settings/integrations/telegram-agent/pairing/refresh", response_model=TelegramConnectionStatus)
 def refresh_telegram_agent_pairing(db: Session = Depends(get_db)) -> TelegramConnectionStatus:
-    return TelegramService(db, role=TELEGRAM_ACT_ROLE).connection_status()
+    try:
+        return TelegramService(db, role=TELEGRAM_ACT_ROLE).refresh_connection_status()
+    except TelegramServiceError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
 
 
 @router.delete("/settings/integrations/telegram-agent", status_code=status.HTTP_204_NO_CONTENT)
@@ -602,7 +639,10 @@ def start_telegram_observer_agent_pairing(
 def refresh_telegram_observer_agent_pairing(
     db: Session = Depends(get_db),
 ) -> TelegramConnectionStatus:
-    return TelegramService(db, role=TELEGRAM_OBSERVER_ROLE).connection_status()
+    try:
+        return TelegramService(db, role=TELEGRAM_OBSERVER_ROLE).refresh_connection_status()
+    except TelegramServiceError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
 
 
 @router.delete(
@@ -645,7 +685,10 @@ def start_telegram_assistant_agent_pairing(
 def refresh_telegram_assistant_agent_pairing(
     db: Session = Depends(get_db),
 ) -> TelegramConnectionStatus:
-    return TelegramService(db, role=TELEGRAM_ASSISTANT_ROLE).connection_status()
+    try:
+        return TelegramService(db, role=TELEGRAM_ASSISTANT_ROLE).refresh_connection_status()
+    except TelegramServiceError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
 
 
 @router.delete(

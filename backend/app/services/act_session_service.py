@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Callable
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
@@ -11,6 +12,7 @@ from app.models import (
     ActSession,
     ActTurn,
     AgentPolicy,
+    WeComObserverUserBinding,
 )
 from app.services.act_app_server_service import (
     ActAppServerService,
@@ -37,20 +39,24 @@ class ActSessionService:
         *,
         app_server: ActAppServerService | None = None,
         agent_id: str = "act",
+        telegram_sync: Callable[[Session, ActSession], None] | None = None,
     ) -> None:
         self.db = db
         AgentPolicyService.require_agent(agent_id)
         self.agent_id = agent_id
         self.app_server = app_server or agent_app_servers[agent_id]
+        self.telegram_sync = telegram_sync or _synchronize_session_to_telegram
 
     def list_sessions(self) -> list[ActSession]:
-        return list(
+        sessions = list(
             self.db.scalars(
                 select(ActSession)
                 .where(ActSession.status == "active", ActSession.agent_id == self.agent_id)
                 .order_by(ActSession.updated_at.desc(), ActSession.id.desc())
             )
         )
+        self._attach_wecom_users(sessions)
+        return sessions
 
     def read_session(self, session_id: int) -> ActSession:
         session = self.db.get(ActSession, session_id)
@@ -61,19 +67,21 @@ class ActSessionService:
                 select(ActTurn).where(ActTurn.session_id == session.id).order_by(ActTurn.id)
             )
         )
+        self._attach_wecom_users([session])
         return session
 
     def create_session(self, *, origin: str = "web", commit: bool = True) -> ActSession:
         if self.agent_id == "assistant":
             self.prune_assistant_sessions(limit=4)
-        session = ActSession(codex_thread_id="pending:" + uuid4().hex, origin=origin,
-                             agent_id=self.agent_id, title=f"New {self.agent_id}")
-        self.db.add(session)
-        self.db.flush()
+        session = self._new_session(origin=origin)
         if commit:
             self.db.commit()
             self.db.refresh(session)
+            self.synchronize_telegram(session)
         return session
+
+    def synchronize_telegram(self, session: ActSession) -> None:
+        self.telegram_sync(self.db, session)
 
     def prune_assistant_sessions(self, *, limit: int = 5) -> None:
         # A SQLite write claim serializes retention + creation across API/MCP
@@ -131,8 +139,6 @@ class ActSessionService:
             delivery_message_thread_id=delivery_message_thread_id,
             delivery_status="pending" if delivery_connection_id is not None else None,
         )
-        if session.title == f"New {self.agent_id}":
-            session.title = " ".join(message.split())[:160] or "New act"
         session.updated_at = datetime.now(UTC)
         self.db.add(turn)
         self.db.flush()
@@ -176,6 +182,31 @@ class ActSessionService:
             )
         ):
             raise ActSessionError("Cannot archive an Act session while a turn is queued or running")
+        wecom_bindings = (
+            list(
+                self.db.scalars(
+                    select(WeComObserverUserBinding).where(
+                        WeComObserverUserBinding.current_session_id == session.id
+                    )
+                )
+            )
+            if self.agent_id == "observer"
+            else []
+        )
+        for binding in wecom_bindings:
+            replacement = self._new_session(origin="wecom")
+            claimed = self.db.execute(
+                update(WeComObserverUserBinding)
+                .where(
+                    WeComObserverUserBinding.id == binding.id,
+                    WeComObserverUserBinding.current_session_id == session.id,
+                )
+                .values(current_session_id=replacement.id, updated_at=datetime.now(UTC))
+                .execution_options(synchronize_session=False)
+            )
+            if claimed.rowcount != 1:
+                self.db.delete(replacement)
+                self.db.flush()
         try:
             if not session.codex_thread_id.startswith("pending:"):
                 self.app_server.sessions.archive_thread(session.codex_thread_id)
@@ -187,3 +218,55 @@ class ActSessionService:
         session.updated_at = datetime.now(UTC)
         if commit:
             self.db.commit()
+
+    def _new_session(self, *, origin: str) -> ActSession:
+        session = ActSession(
+            codex_thread_id="pending:" + uuid4().hex,
+            origin=origin,
+            agent_id=self.agent_id,
+            title="New Chat",
+        )
+        self.db.add(session)
+        self.db.flush()
+        return session
+
+    def _attach_wecom_users(self, sessions: list[ActSession]) -> None:
+        session_ids = [session.id for session in sessions]
+        if not session_ids:
+            return
+        bindings = self.db.scalars(
+            select(WeComObserverUserBinding).where(
+                WeComObserverUserBinding.current_session_id.in_(session_ids)
+            )
+        )
+        users_by_session = {
+            binding.current_session_id: binding.paired_user_id
+            for binding in bindings
+            if binding.current_session_id is not None
+        }
+        unresolved_wecom_ids = [
+            session.id
+            for session in sessions
+            if session.origin == "wecom" and session.id not in users_by_session
+        ]
+        if unresolved_wecom_ids:
+            delivered_users = self.db.execute(
+                select(ActTurn.session_id, ActTurn.delivery_chat_id)
+                .where(
+                    ActTurn.session_id.in_(unresolved_wecom_ids),
+                    ActTurn.delivery_provider == "wecom",
+                    ActTurn.delivery_chat_id.is_not(None),
+                )
+                .order_by(ActTurn.id.desc())
+            )
+            for session_id, user_id in delivered_users:
+                if user_id is not None:
+                    users_by_session.setdefault(session_id, user_id)
+        for session in sessions:
+            session.wecom_user_id = users_by_session.get(session.id)
+
+
+def _synchronize_session_to_telegram(db: Session, session: ActSession) -> None:
+    from app.services.telegram_service import synchronize_session_to_telegram
+
+    synchronize_session_to_telegram(db, session)

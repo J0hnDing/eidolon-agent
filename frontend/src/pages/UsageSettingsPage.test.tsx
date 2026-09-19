@@ -599,6 +599,7 @@ describe("Notion Settings connection", () => {
       workspace_name: null,
       data_source_id: null,
       report_data_source_id: null,
+      daily_feed_page_id: null,
       last_validated_at: null,
       created_at: null,
       updated_at: null,
@@ -613,6 +614,7 @@ describe("Notion Settings connection", () => {
       workspace_name: "Private workspace",
       data_source_id: null,
       report_data_source_id: null,
+      daily_feed_page_id: null,
       last_validated_at: "2026-01-01T00:00:00Z",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
@@ -627,6 +629,7 @@ describe("Notion Settings connection", () => {
       workspace_name: "Private workspace",
       data_source_id: "source-id",
       report_data_source_id: "report-source-id",
+      daily_feed_page_id: null,
       last_validated_at: "2026-01-01T00:00:00Z",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
@@ -641,6 +644,37 @@ describe("Notion Settings connection", () => {
       workspace_name: "Private workspace",
       data_source_id: null,
       report_data_source_id: null,
+      daily_feed_page_id: null,
+      last_validated_at: "2026-01-01T00:00:00Z",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      error_type: null,
+    });
+    const putDailyFeedPage = vi.spyOn(api, "putNotionDailyFeedPage").mockResolvedValue({
+      provider: "notion",
+      connected: true,
+      status: "connected",
+      bot_name: "Eidolon Todo",
+      bot_id: "bot-id",
+      workspace_name: "Private workspace",
+      data_source_id: null,
+      report_data_source_id: null,
+      daily_feed_page_id: "daily-page-id",
+      last_validated_at: "2026-01-01T00:00:00Z",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      error_type: null,
+    });
+    const removeDailyFeedPage = vi.spyOn(api, "removeNotionDailyFeedPage").mockResolvedValue({
+      provider: "notion",
+      connected: true,
+      status: "connected",
+      bot_name: "Eidolon Todo",
+      bot_id: "bot-id",
+      workspace_name: "Private workspace",
+      data_source_id: null,
+      report_data_source_id: null,
+      daily_feed_page_id: null,
       last_validated_at: "2026-01-01T00:00:00Z",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
@@ -668,6 +702,13 @@ describe("Notion Settings connection", () => {
     await waitFor(() => expect(putDataSources).toHaveBeenCalledWith("source-id", "report-source-id"));
     fireEvent.click(screen.getByRole("button", { name: "Delete data-source IDs" }));
     await waitFor(() => expect(removeDataSources).toHaveBeenCalledOnce());
+    fireEvent.change(screen.getByLabelText("Notion Daily Feed page ID"), {
+      target: { value: "daily-page-id" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save page ID" }));
+    await waitFor(() => expect(putDailyFeedPage).toHaveBeenCalledWith("daily-page-id"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete Daily Feed page ID" }));
+    await waitFor(() => expect(removeDailyFeedPage).toHaveBeenCalledOnce());
     expect(document.body.textContent).not.toContain(sentinel);
     expect(screen.queryByRole("button", { name: /create todo/i })).toBeNull();
     expect(screen.getByText(/Eidolon does not keep a todo copy/)).toBeTruthy();

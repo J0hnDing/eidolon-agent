@@ -359,6 +359,7 @@ _PAPER_SUMMARY_OUTPUT = _object_schema(
         "url": {"type": "string", "maxLength": 500},
         "pdf_url": {"type": "string", "maxLength": 500},
         "published_at": {"type": ["string", "null"]},
+        "organization": {"type": ["string", "null"], "maxLength": 500},
         "upvotes": {"type": "integer", "minimum": 0},
     },
     [
@@ -369,6 +370,7 @@ _PAPER_SUMMARY_OUTPUT = _object_schema(
         "url",
         "pdf_url",
         "published_at",
+        "organization",
         "upvotes",
     ],
 )
@@ -409,8 +411,21 @@ _HUGGINGFACE_OPERATIONS = (
                         {"pattern": r"^\d{4}-\d{2}-\d{2}$"},
                     ],
                 },
-                "sort": {"enum": ["trending", "publishedAt"], "default": "trending"},
+                "sort": {
+                    "enum": ["trending", "publishedAt", "upvotes"],
+                    "default": "trending",
+                },
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 15},
+                "excluded_paper_ids": {
+                    "type": "array",
+                    "maxItems": 5000,
+                    "uniqueItems": True,
+                    "items": {
+                        "type": "string",
+                        "pattern": r"^\d{4}\.\d{4,5}(?:v[1-9]\d*)?$",
+                    },
+                    "default": [],
+                },
             },
             ["period"],
         ),
@@ -421,7 +436,12 @@ _HUGGINGFACE_OPERATIONS = (
         presentation=OperationPresentation(
             usage_example={
                 "operation": "huggingface.list_papers",
-                "input": {"period": "2026-09", "sort": "trending", "limit": 15},
+                "input": {
+                    "period": "2026-09",
+                    "sort": "upvotes",
+                    "limit": 6,
+                    "excluded_paper_ids": ["2609.00001"],
+                },
             },
             normalized_errors=_HUGGINGFACE_ERRORS,
             open_world=True,
@@ -852,7 +872,10 @@ _TODO_UPDATE_INPUT = _object_schema(
     {"id": {"type": "string", "minLength": 1, "maxLength": 128}, **_TODO_MUTABLE_PROPERTIES}, ["id"]
 )
 _TODO_UPDATE_INPUT["minProperties"] = 2
-_REPORT_SELECT = {"type": "string", "enum": ["GitHub Projects", "AI News", "AI Research", "Macro", "Personal Feed"]}
+_REPORT_SELECT = {
+    "type": "string",
+    "enum": ["GitHub Projects", "AI News", "AI Research", "Macro", "Personal Feed", "School", "Other"],
+}
 _REPORT_OUTPUT = _object_schema(
     {
         "id": {"type": "string", "minLength": 1, "maxLength": 128},
@@ -943,6 +966,36 @@ _NOTION_OPERATIONS = (
         risk=RiskLevel.MEDIUM,
         presentation=OperationPresentation(
             usage_example={"operation": "notion.todo.delete", "input": {"id": "page-id"}},
+            normalized_errors=_NOTION_ERRORS,
+            open_world=True,
+        ),
+    ),
+    IntegrationOperationSpec(
+        id="notion.daily_feed.write",
+        title="Write Notion Daily Feed page",
+        description=(
+            "Replace all ordinary content on the configured standalone Notion Daily Feed page "
+            "with bounded enhanced Markdown."
+        ),
+        input_schema=_object_schema(
+            {"markdown": {"type": "string", "minLength": 1, "maxLength": 20_000}},
+            ["markdown"],
+        ),
+        output_schema=_object_schema(
+            {
+                "updated": {"type": "boolean", "const": True},
+                "characters": {"type": "integer", "minimum": 1, "maximum": 20_000},
+            },
+            ["updated", "characters"],
+        ),
+        effects=frozenset({IntegrationEffect.UPDATE}),
+        resource=ResourceSpec("notion.daily_feed", ()),
+        risk=RiskLevel.MEDIUM,
+        presentation=OperationPresentation(
+            usage_example={
+                "operation": "notion.daily_feed.write",
+                "input": {"markdown": "# Daily Feed\n\nA concise daily summary."},
+            },
             normalized_errors=_NOTION_ERRORS,
             open_world=True,
         ),
@@ -1380,7 +1433,10 @@ _EMAIL_OPERATIONS = (
         risk=RiskLevel.LOW,
         contract_version=2,
         presentation=OperationPresentation(
-            usage_example={"operation": "email.search", "input": {"providers": ["gmail"], "keywords": "quarterly report", "page_size": 10}},
+            usage_example={
+                "operation": "email.search",
+                "input": {"providers": ["gmail"], "keywords": "quarterly report", "page_size": 10},
+            },
             normalized_errors=_EMAIL_ERRORS,
             open_world=False,
         ),
@@ -1416,7 +1472,18 @@ _EMAIL_OPERATIONS = (
         id="email.read_new",
         title="Read new email",
         description="Read up to 50 unread Gmail or Outlook Inbox messages from the last year without changing their read state.",
-        input_schema=_object_schema({"providers": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": True, "items": _EMAIL_PROVIDER}}, ["providers"]),
+        input_schema=_object_schema(
+            {
+                "providers": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 2,
+                    "uniqueItems": True,
+                    "items": _EMAIL_PROVIDER,
+                }
+            },
+            ["providers"],
+        ),
         output_schema=_object_schema(
             {
                 "messages": {"type": "array", "maxItems": 100, "items": _EMAIL_MESSAGE},
@@ -1441,7 +1508,18 @@ _EMAIL_OPERATIONS = (
         id="email.read_and_mark_new",
         title="Read and mark new email",
         description="Read up to 50 unread Gmail or Outlook Inbox messages from the last year, then report exact provider-level mark outcomes.",
-        input_schema=_object_schema({"providers": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": True, "items": _EMAIL_PROVIDER}}, ["providers"]),
+        input_schema=_object_schema(
+            {
+                "providers": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 2,
+                    "uniqueItems": True,
+                    "items": _EMAIL_PROVIDER,
+                }
+            },
+            ["providers"],
+        ),
         output_schema=_object_schema(
             {
                 "messages": {"type": "array", "maxItems": 100, "items": _EMAIL_MESSAGE},
@@ -1494,7 +1572,12 @@ _EMAIL_OPERATIONS = (
         presentation=OperationPresentation(
             usage_example={
                 "operation": "email.send",
-                "input": {"provider": "gmail", "to": ["person@example.com"], "subject": "Hello", "body": "Hello from Eidolon."},
+                "input": {
+                    "provider": "gmail",
+                    "to": ["person@example.com"],
+                    "subject": "Hello",
+                    "body": "Hello from Eidolon.",
+                },
             },
             normalized_errors=_EMAIL_ERRORS,
             open_world=False,
@@ -1604,9 +1687,7 @@ class IntegrationOperationRegistry:
         for provider in provider_items:
             unknown = sorted(set(provider.supported_operations) - known_operation_ids)
             if unknown:
-                raise ValueError(
-                    f"Integration provider {provider.id} references unknown operations: {unknown}"
-                )
+                raise ValueError(f"Integration provider {provider.id} references unknown operations: {unknown}")
         self._providers = MappingProxyType(
             {provider.id: provider for provider in sorted(provider_items, key=lambda item: item.id)}
         )
@@ -1648,7 +1729,10 @@ class IntegrationOperationRegistry:
                 raise ValueError(f"Integration provider {provider.id} has no display name")
             if not isinstance(provider.supported_operations, frozenset):
                 raise ValueError(f"Integration provider {provider.id} has invalid supported operations")
-            if any(not isinstance(operation_id, str) or not _STABLE_OPERATION_ID.fullmatch(operation_id) for operation_id in provider.supported_operations):
+            if any(
+                not isinstance(operation_id, str) or not _STABLE_OPERATION_ID.fullmatch(operation_id)
+                for operation_id in provider.supported_operations
+            ):
                 raise ValueError(f"Integration provider {provider.id} has invalid supported operations")
 
     @classmethod

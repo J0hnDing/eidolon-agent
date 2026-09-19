@@ -86,6 +86,23 @@ def test_validates_exact_report_schema_and_identity(monkeypatch: pytest.MonkeyPa
     assert mismatch.value.error_type == "schema_mismatch"
 
 
+@pytest.mark.parametrize("selected", ["School", "Other"])
+def test_accepts_new_report_select_categories(
+    monkeypatch: pytest.MonkeyPatch, selected: str
+) -> None:
+    provider = NotionReportProvider("unused", "report-source-id")
+
+    responses = iter(
+        [
+            page(selected=selected),
+            {"results": [], "has_more": False, "next_cursor": None},
+        ]
+    )
+    monkeypatch.setattr(provider, "_request", lambda *_args, **_kwargs: next(responses))
+
+    assert provider.get("report-1", page_size=25, start_cursor=None)["report"]["select"] == selected
+
+
 def test_lists_only_active_contained_reports_with_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = NotionReportProvider("unused", "report-source-id")
     captured = {}

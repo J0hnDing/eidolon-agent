@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatWorkspace } from "./ChatWorkspace";
 
@@ -16,7 +16,49 @@ const conversation = {
   updatedAt: "2026-07-14T12:00:00Z",
 };
 
+afterEach(cleanup);
+
 describe("ChatWorkspace", () => {
+  it("shows session creation and WeCom ownership metadata instead of the mode headline", () => {
+    render(
+      <MemoryRouter>
+        <ChatWorkspace
+          conversations={[{
+            ...conversation,
+            id: "observer-7",
+            mode: "observer",
+            origin: "wecom",
+            wecomUserId: "user-7",
+            actSessionId: 7,
+          }]}
+          activeConversationId="observer-7"
+          messages={conversation.messages}
+          draft=""
+          mode="observer"
+          isBusy={false}
+          isSending={false}
+          isGenerating={false}
+          error={null}
+          onNewConversation={vi.fn()}
+          onSelectConversation={vi.fn()}
+          onDeleteConversation={vi.fn()}
+          activeActTurnId={null}
+          onCancelAct={vi.fn()}
+          onDraftChange={vi.fn()}
+          onSubmit={vi.fn()}
+          onApproveBuild={vi.fn()}
+          onDenyBuild={vi.fn()}
+          onApproveRuntime={vi.fn()}
+          onDenyRuntime={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText(/^Created /)).toBeTruthy();
+    expect(screen.getByText("WeCom user user-7")).toBeTruthy();
+    expect(screen.queryByText("Reads local context without making changes.")).toBeNull();
+  });
+
   it("opens the new-chat popover at the bottom of the sidebar and creates each conversation mode", () => {
     const onDraftChange = vi.fn();
     const onNewConversation = vi.fn();

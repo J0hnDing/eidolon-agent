@@ -42,6 +42,7 @@ class ActSessionRead(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+    wecom_user_id: str | None = None
     turns: list[ActTurnRead] = Field(default_factory=list)
 
 
@@ -55,3 +56,4 @@ class ActSessionSummary(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+    wecom_user_id: str | None = None
