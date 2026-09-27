@@ -71,6 +71,20 @@ def _paper_output(*, papers=None, seen=None):
     }
 
 
+def _macro_output(*, seen=None, items=None):
+    return {
+        "report": {
+            "macro_picture": "Policy remains restrictive.",
+            "items": [] if items is None else items,
+            "upcoming_catalysts": [],
+        },
+        "seen": [] if seen is None else seen,
+        "candidate_count": 0,
+        "source_failures": [],
+        "last_fetch_at": "2026-08-31T12:00:00+00:00",
+    }
+
+
 def _created_report(name: str, select: str):
     return {
         "id": f"{select.lower().replace(' ', '-')}-report-id",
@@ -109,6 +123,8 @@ def test_run_creates_both_reports_advances_separate_histories_and_notifies(
                 "repositories": [_repository()],
                 "seen_repo": ["example/project", "example/other"],
             }
+        if name == skill.MACRO_SCOUT_FUNCTION:
+            return _macro_output(seen=["release-1"])
         return _paper_output(seen=["2608.12345"])
 
     integration_calls = []
@@ -131,10 +147,12 @@ def test_run_creates_both_reports_advances_separate_histories_and_notifies(
             {"limit": 25, "period": "weekly", "excluded_repo": ["old/repository"]},
         ),
         (skill.PAPER_SCOUT_FUNCTION, {"seen_papers": ["2501.00001v2"]}),
+        (skill.MACRO_SCOUT_FUNCTION, {"last_fetch_at": None, "seen": [], "report": None}),
     ]
-    github_create, research_create, notification = integration_calls
+    github_create, research_create, macro_create, notification = integration_calls
     assert github_create["input"]["select"] == "GitHub Projects"
     assert research_create["input"]["select"] == "AI Research"
+    assert macro_create["input"]["select"] == "Macro"
     research_blocks = research_create["input"]["children"]
     headings = [
         block[block["type"]]["rich_text"][0]["text"]["content"]
@@ -172,7 +190,7 @@ def test_run_creates_both_reports_advances_separate_histories_and_notifies(
         "input": {
             "title": "Your weekly reports are ready",
             "description": (
-                "• Weekly GitHub Projects Report — 2026-08-31\n• Weekly AI Research Report — 2026-08-31"
+                "• Weekly GitHub Projects Report — 2026-08-31\n• Weekly AI Research Report — 2026-08-31\n• Weekly Macro & Geopolitical Report — 2026-08-31"
             ),
             "alert": False,
         },
@@ -186,6 +204,10 @@ def test_run_creates_both_reports_advances_separate_histories_and_notifies(
             "Weekly AI Research Report — 2026-08-31", "AI Research"
         ),
         "paper_count": 1,
+        "macro_report": _created_report(
+            "Weekly Macro & Geopolitical Report — 2026-08-31", "Macro"
+        ),
+        "macro_item_count": 0,
     }
     assert json.loads(
         (cache_dir / skill.SEEN_REPOSITORIES_FILENAME).read_text(encoding="utf-8")
@@ -200,6 +222,9 @@ def test_run_creates_both_reports_advances_separate_histories_and_notifies(
         "2501.00001v2",
         "2608.12345",
     ]
+    assert json.loads(
+        (cache_dir / skill.MACRO_STATE_FILENAME).read_text(encoding="utf-8")
+    )["seen"] == ["release-1"]
 
 
 def test_empty_scout_results_create_explicit_reports_without_cache_files(
@@ -208,6 +233,8 @@ def test_empty_scout_results_create_explicit_reports_without_cache_files(
     def call_function(name, _input):
         if name == skill.SCOUT_FUNCTION:
             return {"repositories": [], "seen_repo": []}
+        if name == skill.MACRO_SCOUT_FUNCTION:
+            return _macro_output()
         return _paper_output(papers=[], seen=[])
 
     integration_calls = []
@@ -226,6 +253,7 @@ def test_empty_scout_results_create_explicit_reports_without_cache_files(
 
     assert result["repository_count"] == 0
     assert result["paper_count"] == 0
+    assert result["macro_item_count"] == 0
     assert (
         "no repositories"
         in integration_calls[0]["input"]["children"][-1]["paragraph"]["rich_text"][0][
@@ -240,6 +268,7 @@ def test_empty_scout_results_create_explicit_reports_without_cache_files(
     )
     assert not (cache_dir / skill.SEEN_REPOSITORIES_FILENAME).exists()
     assert not (cache_dir / skill.SEEN_PAPERS_FILENAME).exists()
+    assert (cache_dir / skill.MACRO_STATE_FILENAME).exists()
 
 
 @pytest.mark.parametrize(
@@ -258,6 +287,8 @@ def test_invalid_paper_output_fails_before_research_report(monkeypatch, output):
     def call_function(name, _input):
         if name == skill.SCOUT_FUNCTION:
             return {"repositories": [], "seen_repo": []}
+        if name == skill.MACRO_SCOUT_FUNCTION:
+            return _macro_output()
         return output
 
     integration_calls = []
@@ -288,6 +319,8 @@ def test_research_notion_failure_keeps_github_history_but_not_paper_history(
     def call_function(name, _input):
         if name == skill.SCOUT_FUNCTION:
             return {"repositories": [_repository()], "seen_repo": ["example/project"]}
+        if name == skill.MACRO_SCOUT_FUNCTION:
+            return _macro_output()
         return _paper_output()
 
     integration_calls = []
@@ -328,6 +361,8 @@ def test_invalid_research_report_response_does_not_advance_paper_history(
     def call_function(name, _input):
         if name == skill.SCOUT_FUNCTION:
             return {"repositories": [], "seen_repo": []}
+        if name == skill.MACRO_SCOUT_FUNCTION:
+            return _macro_output()
         return _paper_output()
 
     def invoke(**kwargs):
@@ -347,6 +382,75 @@ def test_invalid_research_report_response_does_not_advance_paper_history(
         skill.run({})
 
     assert not (cache_dir / skill.SEEN_PAPERS_FILENAME).exists()
+
+
+def test_macro_report_failure_keeps_prior_reports_but_not_macro_history(
+    cache_dir, monkeypatch
+):
+    def call_function(name, _input):
+        if name == skill.SCOUT_FUNCTION:
+            return {"repositories": [], "seen_repo": []}
+        if name == skill.PAPER_SCOUT_FUNCTION:
+            return _paper_output(papers=[], seen=[])
+        return _macro_output(seen=["release-1"])
+
+    calls = []
+
+    def invoke(**kwargs):
+        calls.append(kwargs)
+        if kwargs["operation"] == skill.NOTIFICATION_OPERATION:
+            return {"sent": True, "message_id": 1}
+        request = kwargs["input"]
+        if request["select"] == "Macro":
+            raise RuntimeError("Macro Notion write failed")
+        return _created_report(request["name"], request["select"])
+
+    monkeypatch.setattr(skill.function_runtime_capabilities, "call_function", call_function)
+    monkeypatch.setattr(skill.integration_runtime_capabilities, "call", invoke)
+
+    with pytest.raises(RuntimeError, match="Macro Notion write failed"):
+        skill.run({})
+
+    assert [call["input"]["select"] for call in calls[:-1]] == [
+        "GitHub Projects", "AI Research", "Macro"
+    ]
+    assert calls[-1]["input"]["description"].startswith(
+        "notion_macro_report_create_failed:"
+    )
+    assert not (cache_dir / skill.MACRO_STATE_FILENAME).exists()
+
+
+def test_macro_scout_output_is_validated_before_notion_write():
+    with pytest.raises(ValueError, match="source links"):
+        skill._validated_macro_output(
+            _macro_output(items=[{
+                "what_happened": "Change", "why_it_matters": "Material",
+                "new_since_previous": "New", "watch_next": "Decision",
+                "sources": ["http://example.com"],
+            }]),
+            previous_seen=[],
+        )
+    with pytest.raises(ValueError, match="previously seen"):
+        skill._validated_macro_output(
+            _macro_output(seen=["release-1"]), previous_seen=["release-1"]
+        )
+
+
+def test_macro_blocks_render_source_links():
+    report = _macro_output(items=[{
+        "what_happened": "Major policy decision",
+        "why_it_matters": "Financing conditions changed.",
+        "new_since_previous": "Rates moved.",
+        "watch_next": "Next meeting.",
+        "sources": ["https://www.federalreserve.gov/new-release"],
+    }])["report"]
+    blocks = skill._macro_report_blocks(report)
+    assert len(blocks) <= skill.MAX_NOTION_BLOCKS
+    assert any(
+        item["text"].get("link") == {"url": "https://www.federalreserve.gov/new-release"}
+        for block in blocks
+        for item in block.get(block["type"], {}).get("rich_text", [])
+    )
 
 
 def test_research_blocks_render_only_linked_title_organization_upvotes_and_analysis():

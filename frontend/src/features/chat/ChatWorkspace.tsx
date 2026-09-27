@@ -9,6 +9,7 @@ import {
 } from "../../api/client";
 import { DeleteIconButton } from "../../components/DeleteIconButton";
 import { ChatConversation, ChatMessage } from "../../lib/chatStore";
+import { parseBackendDateTime } from "../../lib/dateTime";
 
 type ChatWorkspaceProps = {
   conversations: ChatConversation[];
@@ -397,7 +398,7 @@ const conversationModeOptions: Array<{ mode: ConversationMode; label: string; de
 ];
 
 function formatSessionTimestamp(value: string): string {
-  const date = new Date(value);
+  const date = parseBackendDateTime(value);
   if (Number.isNaN(date.getTime())) return "unknown";
   return date.toLocaleString(undefined, {
     year: "numeric",

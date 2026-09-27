@@ -7,6 +7,7 @@ from .github import GitHubProviderAdapter
 from .gmail import GmailProviderAdapter
 from .google_calendar import GoogleCalendarProviderAdapter
 from .huggingface import HuggingFaceProviderAdapter
+from .macro import MacroProviderAdapter
 from .notion import NotionProviderAdapter
 from .outlook import OutlookProviderAdapter
 from .telegram import TelegramProviderAdapter
@@ -24,6 +25,10 @@ def build_provider_adapters(compatibility_service: Any) -> tuple[object, ...]:
         OutlookProviderAdapter(compatibility_service),
         TelegramProviderAdapter(compatibility_service),
         HuggingFaceProviderAdapter(compatibility_service),
+        MacroProviderAdapter("fred", compatibility_service),
+        MacroProviderAdapter("bls", compatibility_service),
+        MacroProviderAdapter("bea", compatibility_service),
+        MacroProviderAdapter("eia", compatibility_service),
     )
 
 
@@ -33,6 +38,7 @@ __all__ = [
     "GitHubProviderAdapter",
     "GoogleCalendarProviderAdapter",
     "HuggingFaceProviderAdapter",
+    "MacroProviderAdapter",
     "NotionProviderAdapter",
     "OutlookProviderAdapter",
     "TelegramProviderAdapter",

@@ -96,4 +96,4 @@ Provider adapters translate already-authorized calls into provider requests, loa
 
 ## Current Constraints
 
-The MVP is local and single-user. It intentionally avoids multi-user auth, cloud orchestration, autonomous background agents, unrestricted shell access, browser automation, secrets access, high-risk third-party actions, and silent package installation. Explicit memory facts are implemented, but automatic context selection, memory-aware agent workflows, outcome learning, and long-term adaptation are not.
+The MVP is local and single-user. It intentionally avoids multi-user auth, cloud orchestration, autonomous background agents, unrestricted shell access, generated-skill browser automation or secrets access, high-risk third-party actions, and silent package installation. Act alone has a backend-controlled browser runtime and may use configured browser-authentication identities without receiving their credentials. Explicit memory facts are implemented, but automatic context selection, memory-aware agent workflows, outcome learning, and long-term adaptation are not.

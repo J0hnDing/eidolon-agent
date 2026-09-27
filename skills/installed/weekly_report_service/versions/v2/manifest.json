@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "name": "weekly_report_service",
-  "description": "Create deterministic weekly GitHub Projects and AI Research Notion reports from the installed scout functions.",
+  "description": "Create deterministic weekly GitHub Projects, AI Research, and Macro Notion reports from the installed scout functions.",
   "runtime": "service",
   "entrypoint": "skill.py",
   "instructions_path": null,
@@ -36,12 +36,24 @@
         "required": ["id", "name", "created_time", "select"],
         "additionalProperties": false
       },
-      "paper_count": {"type": "integer", "minimum": 0, "maximum": 6}
+      "paper_count": {"type": "integer", "minimum": 0, "maximum": 6},
+      "macro_report": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "name": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "created_time": {"type": "string", "minLength": 1, "maxLength": 64},
+          "select": {"type": "string", "const": "Macro"}
+        },
+        "required": ["id", "name", "created_time", "select"],
+        "additionalProperties": false
+      },
+      "macro_item_count": {"type": "integer", "minimum": 0, "maximum": 8}
     },
-    "required": ["report", "repository_count", "research_report", "paper_count"],
+    "required": ["report", "repository_count", "research_report", "paper_count", "macro_report", "macro_item_count"],
     "additionalProperties": false
   },
-  "function_requirements": ["github_repo_scout", "research_paper_scout"],
+  "function_requirements": ["github_repo_scout", "research_paper_scout", "macro_geopolitical_news_scout"],
   "integration_requirements": [
     {
       "provider": "notion",

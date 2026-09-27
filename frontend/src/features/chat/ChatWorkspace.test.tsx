@@ -19,6 +19,49 @@ const conversation = {
 afterEach(cleanup);
 
 describe("ChatWorkspace", () => {
+  it("shows an offset-free UTC session timestamp on the correct local day", () => {
+    vi.stubEnv("TZ", "America/Toronto");
+    try {
+      render(
+        <MemoryRouter>
+          <ChatWorkspace
+            conversations={[{ ...conversation, createdAt: "2026-09-27T02:17:00" }]}
+            activeConversationId={conversation.id}
+            messages={conversation.messages}
+            draft=""
+            mode="project"
+            isBusy={false}
+            isSending={false}
+            isGenerating={false}
+            error={null}
+            onNewConversation={vi.fn()}
+            onSelectConversation={vi.fn()}
+            onDeleteConversation={vi.fn()}
+            activeActTurnId={null}
+            onCancelAct={vi.fn()}
+            onDraftChange={vi.fn()}
+            onSubmit={vi.fn()}
+            onApproveBuild={vi.fn()}
+            onDenyBuild={vi.fn()}
+            onApproveRuntime={vi.fn()}
+            onDenyRuntime={vi.fn()}
+          />
+        </MemoryRouter>,
+      );
+      const expected = new Date("2026-09-27T02:17:00Z").toLocaleString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: "America/Toronto",
+      });
+      expect(screen.getByText(`Created ${expected}`)).toBeTruthy();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("shows session creation and WeCom ownership metadata instead of the mode headline", () => {
     render(
       <MemoryRouter>

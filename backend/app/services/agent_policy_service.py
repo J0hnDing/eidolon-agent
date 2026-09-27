@@ -10,6 +10,11 @@ from app.integrations.registry import DEFAULT_INTEGRATION_REGISTRY
 from app.integrations.types import IntegrationEffect
 from app.models import ActSession, AgentCredential, AgentPolicy
 from app.schemas.agents import AgentPolicyUpdate
+from app.services.act_runtime_capabilities import (
+    BROWSER_AUTHENTICATE_CAPABILITY_ID,
+    TELEGRAM_SEND_FILE_CAPABILITY_ID,
+    act_runtime_capability_catalog,
+)
 from app.services.function_catalog_service import FunctionCatalogService
 
 AGENTS = {
@@ -18,6 +23,13 @@ AGENTS = {
     "assistant": ("Assistant", "Assesses goals and todos, researches useful actions, and proposes plans for approval."),
 }
 PLAN_TOOL_ID = "plan_approval_request"
+OPPORTUNITY_REPORT_TOOL_ID = "opportunity_scout_report"
+PRIVATE_TOOL_AGENTS = {
+    PLAN_TOOL_ID: "assistant",
+    OPPORTUNITY_REPORT_TOOL_ID: "assistant",
+    BROWSER_AUTHENTICATE_CAPABILITY_ID: "act",
+    TELEGRAM_SEND_FILE_CAPABILITY_ID: "act",
+}
 RISK = {"low": 0, "medium": 1, "high": 2}
 
 
@@ -44,12 +56,13 @@ class AgentPolicyService:
     def update(self, agent_id: str, policy: AgentPolicyUpdate) -> dict:
         self.require_agent(agent_id)
         known = {entry["id"] for entry in FunctionCatalogService(self.db).list_entries()}
-        known.add(PLAN_TOOL_ID)
+        known.update(PRIVATE_TOOL_AGENTS)
         for function_id in policy.allowed_functions + policy.banned_functions:
             if function_id not in known:
                 raise AgentPermissionError(f"Unknown function: {function_id}")
-        if agent_id != "assistant" and PLAN_TOOL_ID in policy.allowed_functions:
-            raise AgentPermissionError("Plan approval requests are private to Assistant")
+        for function_id, owner in PRIVATE_TOOL_AGENTS.items():
+            if agent_id != owner and function_id in policy.allowed_functions:
+                raise AgentPermissionError(f"{function_id} is private to {owner.title()}")
         row = self.db.get(AgentPolicy, agent_id)
         if row is None:
             row = AgentPolicy(id=agent_id, policy_json=policy.model_dump())
@@ -65,8 +78,9 @@ class AgentPolicyService:
         function_id = entry["id"]
         if function_id in policy.banned_functions:
             return False, "Explicitly banned"
-        if function_id == PLAN_TOOL_ID:
-            return (agent_id == "assistant", "Assistant-only plan request")
+        private_owner = PRIVATE_TOOL_AGENTS.get(function_id)
+        if private_owner is not None:
+            return (agent_id == private_owner, f"{private_owner.title()}-only private capability")
 
         # Catalog entries are a discovery projection. Integration effects and
         # risk must come from the checked-in canonical registry at decision
@@ -118,8 +132,8 @@ class AgentPolicyService:
         entry = next(
             (item for item in FunctionCatalogService(self.db).list_entries() if item["id"] == function_id), None
         )
-        if function_id == PLAN_TOOL_ID:
-            entry = {"id": PLAN_TOOL_ID}
+        if function_id in PRIVATE_TOOL_AGENTS:
+            entry = {"id": function_id}
         if entry is None:
             raise AgentPermissionError("Function unavailable")
         allowed, reason = self.decision(agent_id, entry)
@@ -143,6 +157,17 @@ class AgentPolicyService:
                     "mcp_read_only": False,
                     "allowed": PLAN_TOOL_ID not in policy.banned_functions,
                     "reason": "Assistant-only plan request",
+                }
+            )
+            functions.append(
+                {
+                    "id": OPPORTUNITY_REPORT_TOOL_ID,
+                    "title": "Write opportunity scout report",
+                    "description": "Write the mandatory assessment opportunity list to Notion Reports.",
+                    "risk_level": "medium",
+                    "mcp_read_only": False,
+                    "allowed": OPPORTUNITY_REPORT_TOOL_ID not in policy.banned_functions,
+                    "reason": "Assistant-only assessment report",
                 }
             )
         return {
@@ -191,7 +216,7 @@ class AgentPolicyService:
         self.db.execute(update(AgentCredential).where(AgentCredential.session_id == session_id).values(revoked=True))
 
     def act_catalog(self) -> list[dict]:
-        return [
+        function_entries = [
             {
                 key: entry.get(key)
                 for key in ("id", "title", "description", "risk_level", "requires_invocation_approval")
@@ -199,3 +224,4 @@ class AgentPolicyService:
             for entry in FunctionCatalogService(self.db).list_entries()
             if self.decision("act", entry)[0]
         ]
+        return [*function_entries, *act_runtime_capability_catalog()]

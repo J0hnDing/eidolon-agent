@@ -40,6 +40,8 @@ TELEGRAM_MAX_APPROVAL_INPUT_BYTES = 32 * 1024
 TELEGRAM_MAX_TITLE_CHARS = 120
 TELEGRAM_MAX_DESCRIPTION_CHARS = 800
 TELEGRAM_MAX_LINK_CHARS = 2048
+TELEGRAM_MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
+TELEGRAM_MAX_DOCUMENT_CAPTION_CHARS = 1024
 TELEGRAM_PAIRING_TTL_SECONDS = 600
 TELEGRAM_MAX_RESPONSE_BYTES = 2_000_000
 NATIVE_DRAFT_UNSUPPORTED_ERROR_TYPES = frozenset(
@@ -98,6 +100,16 @@ class TelegramBotApi(Protocol):
         *,
         message_thread_id: int | None = None,
         parse_mode: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    def send_document(
+        self,
+        chat_id: int | str,
+        filename: str,
+        content: bytes,
+        *,
+        message_thread_id: int | None = None,
+        caption: str | None = None,
     ) -> dict[str, Any]: ...
 
     def send_rich_message_draft(
@@ -171,6 +183,26 @@ def _require_thread_id(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise TelegramProviderError("invalid_input", "Telegram message thread id is invalid")
     return value
+
+
+def _validate_document(filename: Any, content: Any, caption: Any) -> tuple[str, bytes, str | None]:
+    if (
+        not isinstance(filename, str)
+        or not filename
+        or len(filename) > 255
+        or filename in {".", ".."}
+        or any(character in filename for character in "\r\n/\\\"")
+    ):
+        raise TelegramProviderError("invalid_input", "Telegram document filename is invalid")
+    if not isinstance(content, bytes) or not 1 <= len(content) <= TELEGRAM_MAX_DOCUMENT_BYTES:
+        raise TelegramProviderError("invalid_input", "Telegram document size is invalid")
+    if caption is not None:
+        caption = _require_text(
+            caption,
+            "Telegram document caption",
+            maximum=TELEGRAM_MAX_DOCUMENT_CAPTION_CHARS,
+        )
+    return filename, content, caption
 
 
 def _require_draft_id(value: Any) -> int:
@@ -385,6 +417,30 @@ class UrllibTelegramBotApi:
             request["reply_markup"] = reply_markup
         return self._request_json("sendMessage", request, timeout=15).get("result", {})
 
+    def send_document(
+        self,
+        chat_id: int | str,
+        filename: str,
+        content: bytes,
+        *,
+        message_thread_id: int | None = None,
+        caption: str | None = None,
+    ) -> dict[str, Any]:
+        _require_chat_id(chat_id)
+        filename, content, caption = _validate_document(filename, content, caption)
+        fields: dict[str, str] = {"chat_id": str(chat_id)}
+        if message_thread_id is not None:
+            fields["message_thread_id"] = str(_require_thread_id(message_thread_id))
+        if caption is not None:
+            fields["caption"] = caption
+        return self._request_multipart(
+            "sendDocument",
+            fields,
+            filename=filename,
+            content=content,
+            timeout=60,
+        ).get("result", {})
+
     def send_chat_action(
         self,
         chat_id: int | str,
@@ -545,6 +601,76 @@ class UrllibTelegramBotApi:
             data=json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"),
             method="POST",
             headers={"Content-Type": "application/json", "Accept": "application/json"},
+        )
+        try:
+            with self._opener.open(request, timeout=timeout) as response:
+                raw = response.read(TELEGRAM_MAX_RESPONSE_BYTES + 1)
+        except HTTPError as exc:
+            try:
+                raw_error = exc.read(TELEGRAM_MAX_RESPONSE_BYTES + 1)
+            except (AttributeError, OSError):
+                raw_error = b""
+            description = _telegram_error_description(raw_error)
+            raise _error_from_http(exc.code, description, method=method) from None
+        except (TimeoutError, URLError, OSError):
+            raise TelegramProviderError("provider_timeout", "Telegram did not respond before the timeout") from None
+        if len(raw) > TELEGRAM_MAX_RESPONSE_BYTES:
+            raise TelegramProviderError("response_too_large", "Telegram response exceeded the operation limit")
+        try:
+            value = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise TelegramProviderError("provider_unavailable", "Telegram returned an invalid response") from None
+        if not isinstance(value, dict) or value.get("ok") is not True:
+            error_code = value.get("error_code") if isinstance(value, dict) else None
+            description = value.get("description") if isinstance(value, dict) else None
+            if isinstance(error_code, int):
+                raise _error_from_http(
+                    error_code,
+                    description if isinstance(description, str) else None,
+                    method=method,
+                )
+            raise TelegramProviderError("provider_unavailable", "Telegram returned an unsuccessful response")
+        return value
+
+    def _request_multipart(
+        self,
+        method: str,
+        fields: dict[str, str],
+        *,
+        filename: str,
+        content: bytes,
+        timeout: float,
+    ) -> dict[str, Any]:
+        if method != "sendDocument":
+            raise TelegramProviderError("internal_failure", "Telegram method is invalid")
+        url = f"{TELEGRAM_API_BASE}/bot{self._token}/{method}"
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or parsed.netloc != TELEGRAM_API_HOST:
+            raise TelegramProviderError("internal_failure", "Telegram provider URL is outside the trusted boundary")
+        boundary = f"----Eidolon{secrets.token_hex(16)}"
+        body = bytearray()
+        for name, value in fields.items():
+            body.extend(f"--{boundary}\r\n".encode())
+            body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+            body.extend(value.encode("utf-8"))
+            body.extend(b"\r\n")
+        body.extend(f"--{boundary}\r\n".encode())
+        body.extend(
+            (
+                f'Content-Disposition: form-data; name="document"; filename="{filename}"\r\n'
+                "Content-Type: application/octet-stream\r\n\r\n"
+            ).encode("utf-8")
+        )
+        body.extend(content)
+        body.extend(f"\r\n--{boundary}--\r\n".encode())
+        request = Request(
+            url,
+            data=bytes(body),
+            method="POST",
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "Accept": "application/json",
+            },
         )
         try:
             with self._opener.open(request, timeout=timeout) as response:
@@ -1520,6 +1646,7 @@ class FakeTelegramBotApi:
         self.updates: list[dict[str, Any]] = []
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.sent_messages: list[dict[str, Any]] = []
+        self.sent_documents: list[dict[str, Any]] = []
         self.edited_messages: list[dict[str, Any]] = []
         self.answered_callbacks: list[dict[str, Any]] = []
         self.next_message_id = 1
@@ -1576,6 +1703,32 @@ class FakeTelegramBotApi:
         self.next_message_id += 1
         self.sent_messages.append(message)
         self.calls.append(("sendMessage", dict(message)))
+        return dict(message)
+
+    def send_document(
+        self,
+        chat_id: int | str,
+        filename: str,
+        content: bytes,
+        *,
+        message_thread_id: int | None = None,
+        caption: str | None = None,
+    ) -> dict[str, Any]:
+        self._maybe_error()
+        _require_chat_id(chat_id)
+        filename, content, caption = _validate_document(filename, content, caption)
+        if message_thread_id is not None:
+            _require_thread_id(message_thread_id)
+        message = {
+            "message_id": self.next_message_id,
+            "chat": {"id": chat_id},
+            "document": {"file_name": filename, "file_size": len(content)},
+            "caption": caption,
+            "message_thread_id": message_thread_id,
+        }
+        self.next_message_id += 1
+        self.sent_documents.append({**message, "content": content})
+        self.calls.append(("sendDocument", dict(message)))
         return dict(message)
 
     def send_chat_action(
@@ -1771,6 +1924,8 @@ __all__ = [
     "TELEGRAM_MAX_APPROVAL_INPUT_BYTES",
     "TELEGRAM_MAX_CALLBACK_DATA_BYTES",
     "TELEGRAM_MAX_DESCRIPTION_CHARS",
+    "TELEGRAM_MAX_DOCUMENT_BYTES",
+    "TELEGRAM_MAX_DOCUMENT_CAPTION_CHARS",
     "TELEGRAM_MAX_LINK_CHARS",
     "TELEGRAM_MAX_MESSAGE_CHARS",
     "TELEGRAM_MAX_TITLE_CHARS",

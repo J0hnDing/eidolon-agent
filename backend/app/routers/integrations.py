@@ -7,6 +7,10 @@ from app.execution.context_factory import InvocationContextFactory
 from app.execution.executor import InvocationExecutor
 from app.execution.types import InvocationExecutionError, InvocationTargetRef
 from app.schemas.integration import (
+    ApiKeyConnectionStatus,
+    ApiKeyCredentialWrite,
+    BrowserAuthenticationSecretWrite,
+    BrowserAuthenticationStatus,
     GitHubConnectionStatus,
     GitHubCredentialWrite,
     GmailConnectionStatus,
@@ -37,6 +41,10 @@ from app.schemas.integration import (
     WeComConnectionWrite,
     WeComPairingResponse,
 )
+from app.services.browser_authentication_service import (
+    BrowserAuthenticationError,
+    build_default_browser_authentication_service,
+)
 from app.services.function_catalog_service import FunctionCatalogService
 from app.services.function_registry_service import FunctionRegistryError
 from app.services.gmail_provider import GMAIL_OAUTH_RETURN_URL
@@ -61,6 +69,54 @@ from app.services.telegram_service import (
 from app.services.wecom_service import WeComService, WeComServiceError
 
 router = APIRouter(tags=["integrations"])
+
+
+@router.get(
+    "/settings/integrations/browser-authentication",
+    response_model=BrowserAuthenticationStatus,
+)
+def browser_authentication_status(db: Session = Depends(get_db)) -> BrowserAuthenticationStatus:
+    try:
+        identities = build_default_browser_authentication_service(db).list_status()
+    except BrowserAuthenticationError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
+    return BrowserAuthenticationStatus(identities=identities)
+
+
+@router.put(
+    "/settings/integrations/browser-authentication/{identity_id}",
+    response_model=BrowserAuthenticationStatus,
+)
+def put_browser_authentication_secret(
+    identity_id: str,
+    payload: BrowserAuthenticationSecretWrite,
+    db: Session = Depends(get_db),
+) -> BrowserAuthenticationStatus:
+    service = build_default_browser_authentication_service(db)
+    try:
+        service.put(
+            identity_id,
+            payload.username.get_secret_value(),
+            payload.password.get_secret_value(),
+        )
+        return BrowserAuthenticationStatus(identities=service.list_status())
+    except BrowserAuthenticationError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
+
+
+@router.delete(
+    "/settings/integrations/browser-authentication/{identity_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def remove_browser_authentication_secret(
+    identity_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    try:
+        build_default_browser_authentication_service(db).delete(identity_id)
+    except BrowserAuthenticationError as exc:
+        raise _http_error(IntegrationError(exc.error_type, str(exc))) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def _quercus_service(request: Request, db: Session) -> QuercusService:
@@ -98,6 +154,94 @@ def remove_github_connection(db: Session = Depends(get_db)) -> Response:
     except IntegrationError as exc:
         raise _http_error(exc) from None
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _api_key_status(provider: str, db: Session) -> ApiKeyConnectionStatus:
+    try:
+        return build_default_integration_service(db).api_key_connection_status(provider)
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+
+
+def _put_api_key(provider: str, payload: ApiKeyCredentialWrite, db: Session) -> ApiKeyConnectionStatus:
+    try:
+        result = build_default_integration_service(db).put_api_key_connection(
+            provider,
+            payload.api_key.get_secret_value(),
+        )
+        FunctionCatalogService(db).refresh()
+        return result
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+
+
+def _remove_api_key(provider: str, db: Session) -> Response:
+    try:
+        build_default_integration_service(db).remove_api_key_connection(provider)
+        FunctionCatalogService(db).refresh()
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/settings/integrations/fred", response_model=ApiKeyConnectionStatus)
+def fred_api_key_status(db: Session = Depends(get_db)) -> ApiKeyConnectionStatus:
+    return _api_key_status("fred", db)
+
+
+@router.put("/settings/integrations/fred", response_model=ApiKeyConnectionStatus)
+def put_fred_api_key(payload: ApiKeyCredentialWrite, db: Session = Depends(get_db)) -> ApiKeyConnectionStatus:
+    return _put_api_key("fred", payload, db)
+
+
+@router.delete("/settings/integrations/fred", status_code=status.HTTP_204_NO_CONTENT)
+def remove_fred_api_key(db: Session = Depends(get_db)) -> Response:
+    return _remove_api_key("fred", db)
+
+
+@router.get("/settings/integrations/bls", response_model=ApiKeyConnectionStatus)
+def bls_api_key_status(db: Session = Depends(get_db)) -> ApiKeyConnectionStatus:
+    return _api_key_status("bls", db)
+
+
+@router.put("/settings/integrations/bls", response_model=ApiKeyConnectionStatus)
+def put_bls_api_key(payload: ApiKeyCredentialWrite, db: Session = Depends(get_db)) -> ApiKeyConnectionStatus:
+    return _put_api_key("bls", payload, db)
+
+
+@router.delete("/settings/integrations/bls", status_code=status.HTTP_204_NO_CONTENT)
+def remove_bls_api_key(db: Session = Depends(get_db)) -> Response:
+    return _remove_api_key("bls", db)
+
+
+@router.get("/settings/integrations/bea", response_model=ApiKeyConnectionStatus)
+def bea_api_key_status(db: Session = Depends(get_db)) -> ApiKeyConnectionStatus:
+    return _api_key_status("bea", db)
+
+
+@router.put("/settings/integrations/bea", response_model=ApiKeyConnectionStatus)
+def put_bea_api_key(payload: ApiKeyCredentialWrite, db: Session = Depends(get_db)) -> ApiKeyConnectionStatus:
+    return _put_api_key("bea", payload, db)
+
+
+@router.delete("/settings/integrations/bea", status_code=status.HTTP_204_NO_CONTENT)
+def remove_bea_api_key(db: Session = Depends(get_db)) -> Response:
+    return _remove_api_key("bea", db)
+
+
+@router.get("/settings/integrations/eia", response_model=ApiKeyConnectionStatus)
+def eia_api_key_status(db: Session = Depends(get_db)) -> ApiKeyConnectionStatus:
+    return _api_key_status("eia", db)
+
+
+@router.put("/settings/integrations/eia", response_model=ApiKeyConnectionStatus)
+def put_eia_api_key(payload: ApiKeyCredentialWrite, db: Session = Depends(get_db)) -> ApiKeyConnectionStatus:
+    return _put_api_key("eia", payload, db)
+
+
+@router.delete("/settings/integrations/eia", status_code=status.HTTP_204_NO_CONTENT)
+def remove_eia_api_key(db: Session = Depends(get_db)) -> Response:
+    return _remove_api_key("eia", db)
 
 
 @router.get("/settings/integrations/notion", response_model=NotionConnectionStatus)

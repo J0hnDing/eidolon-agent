@@ -1,4 +1,4 @@
-"""Create deterministic weekly GitHub and AI research Notion reports."""
+"""Create deterministic weekly GitHub, research, and macro Notion reports."""
 
 from __future__ import annotations
 
@@ -17,14 +17,19 @@ import integration_runtime_capabilities
 
 SCOUT_FUNCTION = "github_repo_scout"
 PAPER_SCOUT_FUNCTION = "research_paper_scout"
+MACRO_SCOUT_FUNCTION = "macro_geopolitical_news_scout"
 REPORT_CREATE_OPERATION = "notion.report.create"
 NOTIFICATION_OPERATION = "telegram.notification.send"
 REPORT_SELECT = "GitHub Projects"
 RESEARCH_REPORT_SELECT = "AI Research"
+MACRO_REPORT_SELECT = "Macro"
 REPORT_TIMEZONE = ZoneInfo("America/Toronto")
 SCOUT_INPUT = {"limit": 25, "period": "weekly"}
 SEEN_REPOSITORIES_FILENAME = "seen_repositories.json"
 SEEN_PAPERS_FILENAME = "seen_papers.json"
+MACRO_STATE_FILENAME = "macro_geopolitical_news_scout.json"
+MAX_MACRO_SEEN = 5000
+MAX_MACRO_ITEMS = 8
 
 REPOSITORY_FIELDS = {"name", "url", "stars", "description", "analysis"}
 PAPER_FIELDS = {
@@ -61,7 +66,7 @@ FAILURE_TITLE = "Weekly report failed"
 
 
 def run(payload: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
-    """Create both weekly reports and notify Telegram of the terminal outcome."""
+    """Create all weekly reports and notify Telegram of the terminal outcome."""
     failure_code = "invalid_input"
     try:
         if payload:
@@ -136,16 +141,46 @@ def run(payload: dict[str, Any], *, now: datetime | None = None) -> dict[str, An
             label="paper",
         )
 
+        failure_code = "macro_state_load_failed"
+        macro_state = _load_macro_state()
+        failure_code = "macro_scout_failed"
+        macro_output = function_runtime_capabilities.call_function(
+            MACRO_SCOUT_FUNCTION, macro_state
+        )
+        failure_code = "macro_scout_invalid_output"
+        macro_report, macro_seen, last_fetch_at = _validated_macro_output(
+            macro_output, previous_seen=macro_state["seen"]
+        )
+        macro_report_name = f"Weekly Macro & Geopolitical Report — {report_date}"
+        failure_code = "macro_report_blocks_invalid"
+        macro_blocks = _macro_report_blocks(macro_report)
+        failure_code = "notion_macro_report_create_failed"
+        saved_macro_report = _create_report(
+            macro_report_name, MACRO_REPORT_SELECT, macro_blocks
+        )
+        failure_code = "notion_macro_report_invalid_response"
+        _validate_created_report(
+            saved_macro_report, macro_report_name, MACRO_REPORT_SELECT
+        )
+        failure_code = "macro_state_persist_failed"
+        _persist_macro_state({
+            "last_fetch_at": last_fetch_at,
+            "seen": list(dict.fromkeys([*macro_state["seen"], *macro_seen]))[-MAX_MACRO_SEEN:],
+            "report": macro_report,
+        })
+
         failure_code = "telegram_notification_failed"
         _send_notification(
             title=SUCCESS_TITLE,
-            description=f"• {report_name}\n• {research_report_name}",
+            description=f"• {report_name}\n• {research_report_name}\n• {macro_report_name}",
         )
         return {
             "report": report,
             "repository_count": len(repositories),
             "research_report": research_report,
             "paper_count": len(selected_papers),
+            "macro_report": saved_macro_report,
+            "macro_item_count": len(macro_report["items"]),
         }
     except Exception as exc:
         _try_send_failure_alert(exc, fallback_code=failure_code)
@@ -328,6 +363,114 @@ def _validated_paper_scout_output(
             "Research Paper Scout seen_papers must contain exactly the selected paper IDs"
         )
     return validated, newly_seen
+
+
+def _validated_macro_report(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {"macro_picture", "items", "upcoming_catalysts"}:
+        raise ValueError("Macro Scout returned an invalid report")
+    if not _is_string(value["macro_picture"], 700, allow_empty=True):
+        raise ValueError("Macro Scout returned an invalid macro picture")
+    items = value["items"]
+    if not isinstance(items, list) or len(items) > MAX_MACRO_ITEMS:
+        raise ValueError("Macro Scout returned too many developments")
+    for item in items:
+        if not isinstance(item, dict) or set(item) != {
+            "what_happened", "why_it_matters", "new_since_previous", "watch_next", "sources"
+        }:
+            raise ValueError("Macro Scout returned an invalid development")
+        for field, maximum in (
+            ("what_happened", 450), ("why_it_matters", 500),
+            ("new_since_previous", 350), ("watch_next", 350),
+        ):
+            if not _is_string(item[field], maximum):
+                raise ValueError("Macro Scout returned invalid development text")
+        sources = item["sources"]
+        if (
+            not isinstance(sources, list) or not 1 <= len(sources) <= 4
+            or any(not _is_https_url(url, maximum=1800) for url in sources)
+        ):
+            raise ValueError("Macro Scout returned invalid source links")
+    catalysts = value["upcoming_catalysts"]
+    if (
+        not isinstance(catalysts, list) or len(catalysts) > 4
+        or any(not _is_string(catalyst, 250) for catalyst in catalysts)
+    ):
+        raise ValueError("Macro Scout returned invalid catalysts")
+    return value
+
+
+def _validated_macro_output(
+    value: Any, *, previous_seen: list[str]
+) -> tuple[dict[str, Any], list[str], str]:
+    if not isinstance(value, dict) or set(value) != {
+        "report", "seen", "candidate_count", "source_failures", "last_fetch_at"
+    }:
+        raise ValueError("Macro Scout output has the wrong top-level shape")
+    report = _validated_macro_report(value["report"])
+    seen = _validated_unique_ids(
+        value["seen"], maximum=232, label="macro release",
+        validator=lambda item: _is_string(item, 4000),
+    )
+    previous_keys = {old.casefold() for old in previous_seen}
+    if any(item.casefold() in previous_keys for item in seen):
+        raise ValueError("Macro Scout returned previously seen releases")
+    count = value["candidate_count"]
+    if not isinstance(count, int) or isinstance(count, bool) or not 0 <= count <= 100:
+        raise ValueError("Macro Scout returned an invalid candidate count")
+    failures = value["source_failures"]
+    if (
+        not isinstance(failures, list) or len(failures) > 19
+        or any(not _is_string(failure, 200) for failure in failures)
+    ):
+        raise ValueError("Macro Scout returned invalid source failures")
+    fetched_at = value["last_fetch_at"]
+    if not _is_string(fetched_at, 64) or _parse_macro_date(fetched_at) is None:
+        raise ValueError("Macro Scout returned an invalid fetch time")
+    return report, seen, fetched_at
+
+
+def _parse_macro_date(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def _load_macro_state() -> dict[str, Any]:
+    path = _cache_path(MACRO_STATE_FILENAME)
+    if not path.exists():
+        return {"last_fetch_at": None, "seen": [], "report": None}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Weekly Report service macro history is invalid") from exc
+    if not isinstance(value, dict) or set(value) != {"last_fetch_at", "seen", "report"}:
+        raise ValueError("Weekly Report service macro history is invalid")
+    if (
+        not isinstance(value["seen"], list) or len(value["seen"]) > MAX_MACRO_SEEN
+        or any(not _is_string(item, 4000) for item in value["seen"])
+    ):
+        raise ValueError("Weekly Report service macro seen history is invalid")
+    if value["last_fetch_at"] is not None and (
+        not _is_string(value["last_fetch_at"], 64)
+        or _parse_macro_date(value["last_fetch_at"]) is None
+    ):
+        raise ValueError("Weekly Report service macro fetch time is invalid")
+    if value["report"] is not None:
+        _validated_macro_report(value["report"])
+    return value
+
+
+def _persist_macro_state(value: dict[str, Any]) -> None:
+    path = _cache_path(MACRO_STATE_FILENAME)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(f"{path.suffix}.tmp")
+        temporary.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(path)
+    except OSError as exc:
+        raise ValueError("Weekly Report service could not persist macro history") from exc
 
 
 def _cache_path(filename: str) -> Path:
@@ -556,6 +699,32 @@ def _research_report_blocks(
 
     if len(blocks) > MAX_NOTION_BLOCKS:
         raise ValueError("Research report exceeds Notion's 100-block create limit")
+    return blocks
+
+
+def _macro_report_blocks(report: dict[str, Any]) -> list[dict[str, Any]]:
+    blocks = [
+        _heading("heading_1", "Macro & Geopolitical News Scout"),
+        _paragraph([_text(report["macro_picture"] or "No material change to the macro picture identified.")]),
+    ]
+    if not report["items"]:
+        blocks.append(_paragraph([_text("No material new developments identified.")]))
+    for item in report["items"]:
+        blocks.extend((
+            _heading("heading_2", item["what_happened"]),
+            _paragraph([_text(f"Why it matters: {item['why_it_matters']}")]),
+            _paragraph([_text(f"New since previous report: {item['new_since_previous']}")]),
+            _paragraph([_text(f"Watch next: {item['watch_next']}")]),
+        ))
+        for url in item["sources"]:
+            parsed = urlparse(url)
+            label = f"Source: {parsed.hostname}{parsed.path[:100]}"
+            blocks.append(_paragraph([_text(label, link=url)]))
+    if report["upcoming_catalysts"]:
+        blocks.append(_heading("heading_2", "Important upcoming catalysts"))
+        blocks.extend(
+            _paragraph([_text(catalyst)]) for catalyst in report["upcoming_catalysts"]
+        )
     return blocks
 
 

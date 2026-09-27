@@ -14,6 +14,7 @@ from app.models import (
     ActTurn,
     AgentProposal,
     AssistantAssessmentState,
+    McpAuditRecord,
     ScheduleRuntimeState,
     TelegramBotConnection,
 )
@@ -24,6 +25,7 @@ from app.services.act_session_service import (
     AssistantSessionCapacityError,
 )
 from app.services.act_workspace_service import ensure_act_workspace
+from app.services.agent_policy_service import OPPORTUNITY_REPORT_TOOL_ID
 from app.services.atlas_provider import UrllibAtlasProviderAdapter
 from app.services.github_provider import IntegrationProviderError
 
@@ -51,6 +53,14 @@ class AssistantAssessmentService:
         self.db = db
         self._now = now or utc_now
         self.executor = executor or InvocationExecutor(db)
+
+    def report_written(self, turn_id: int) -> bool:
+        return self.db.scalar(select(McpAuditRecord.id).where(
+            McpAuditRecord.agent_turn_id == turn_id,
+            McpAuditRecord.function_id == OPPORTUNITY_REPORT_TOOL_ID,
+            McpAuditRecord.status == "succeeded",
+            McpAuditRecord.resource.like("notion-page:%"),
+        ).limit(1)) is not None
 
     def notify_completed(self, turn: ActTurn) -> None:
         import logging

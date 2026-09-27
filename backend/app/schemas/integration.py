@@ -24,6 +24,44 @@ class GitHubConnectionStatus(BaseModel):
     error_type: str | None = None
 
 
+class ApiKeyCredentialWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # The trusted service stores the value in the OS credential manager and
+    # never returns it in a status response.
+    api_key: SecretStr
+
+
+class ApiKeyConnectionStatus(BaseModel):
+    provider: Literal["fred", "bls", "bea", "eia"]
+    configured: bool
+    available: bool
+    status: Literal["configured", "not_configured", "unavailable", "invalid"]
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    last_validated_at: datetime | None = None
+    error_type: str | None = None
+
+
+class BrowserAuthenticationSecretWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: SecretStr
+    password: SecretStr
+
+
+class BrowserAuthenticationIdentityStatus(BaseModel):
+    id: str
+    label: str
+    configured: bool
+    login_origins: list[str]
+    updated_at: datetime | None = None
+
+
+class BrowserAuthenticationStatus(BaseModel):
+    identities: list[BrowserAuthenticationIdentityStatus]
+
+
 class NotionCredentialWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "name": "daily_feed_service",
-  "description": "Replace one Notion Daily Feed page each morning with deterministic Toronto weather, clothing guidance, today's calendar, and the next three days of todos.",
+  "description": "Replace one Notion Daily Feed page each morning with deterministic Toronto weather, clothing guidance, today's calendar, overdue todos, and todos due over the next three days.",
   "runtime": "service",
   "entrypoint": "skill.py",
   "instructions_path": null,

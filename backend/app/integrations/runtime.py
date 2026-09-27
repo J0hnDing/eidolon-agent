@@ -58,6 +58,10 @@ _PROVIDER_NAMES = {
     "outlook": "Outlook",
     "telegram": "Telegram",
     "huggingface": "Hugging Face",
+    "fred": "FRED",
+    "bls": "BLS",
+    "bea": "BEA",
+    "eia": "EIA",
 }
 
 _SPECIAL_ERROR_MESSAGES = {

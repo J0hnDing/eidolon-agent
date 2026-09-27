@@ -16,7 +16,7 @@ The function returns only `selected_papers` and `seen_papers`. `selected_papers`
 
 The weekly service loads a separate `seen_papers.json` in its own cache, passes those IDs to the scout, validates that returned `seen_papers` exactly matches the selected papers, and builds native Notion report blocks deterministically. It creates an `AI Research` report that shows only each linked title, linked Hugging Face organization when available, upvote count, and plain-language analysis. Paper IDs, authors, publication timestamps, source labels, abstracts, standalone bookmarks, PDF links, and truncation notes are not rendered. Only after that report succeeds does it append the selected IDs to `seen_papers.json`. GitHub history remains in `seen_repositories.json`; each history advances after its own corresponding report succeeds.
 
-The service sends its existing completion notification after both reports succeed. A failure preserves any earlier successfully delivered report and its history, fails the service run, and uses the existing failure notification. External report creation and local history persistence are not one transaction: a crash between them can cause a duplicate report on a later manual run.
+The service sends its completion notification after all three weekly reports succeed. A failure preserves any earlier successfully delivered report and its history, fails the service run, and uses the existing failure notification. External report creation and local history persistence are not one transaction: a crash between them can cause a duplicate report on a later manual run.
 
 ## Runtime contract
 

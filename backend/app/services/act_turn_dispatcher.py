@@ -245,6 +245,17 @@ class ActTurnDispatcher:
             if turn.cancel_requested_at is not None or self._stop.is_set():
                 self._cancelled(db, turn)
             else:
+                if (
+                    self.agent_id == "assistant"
+                    and session.origin == "assessment"
+                    and turn.id == db.scalar(
+                        select(ActTurn.id).where(ActTurn.session_id == session.id)
+                        .order_by(ActTurn.id).limit(1)
+                    )
+                ):
+                    from app.services.assistant_assessment_service import AssistantAssessmentService
+                    if not AssistantAssessmentService(db).report_written(turn.id):
+                        raise RuntimeError("Required opportunity scout report was not written to Notion")
                 turn.assistant_message = _response_text(result.output_text)
                 turn.activity_json = (
                     ([{"kind": "threadRecovery", "label": "Recovered the Act session"}]

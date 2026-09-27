@@ -30,7 +30,7 @@ Create a second Reports database/data source with exactly these properties:
 | `id` | none | Notion page ID |
 | `name` | `Name` | Title |
 | `created_time` | `Created Time` | Created time |
-| `select` | `Select` | Select with exactly `GitHub Projects`, `AI News`, `AI Research`, `Macro`, `Personal Feed`, `School`, and `Other` |
+| `select` | `Select` | Select with exactly `GitHub Projects`, `AI News`, `AI Research`, `Macro`, `Personal Feed`, `School`, `Other`, and `Opportunities` |
 
 Create a separate ordinary Notion page for Daily Feed and share that page with the same connection. This page is not the Todo or Reports database, needs no custom property schema, and may contain only its normal title such as `Daily Feed`. Copy its page ID into the separate **Notion Daily Feed page** setting.
 
@@ -61,6 +61,8 @@ The Reports contract exposes four additional operations:
 | `notion.report.delete` | medium write | Requires `id`, sets `in_trash: true`, and returns `{id, removed: true}`. |
 
 Report metadata is exactly `id`, `name`, `created_time`, and `select`. Create passes native Notion blocks through without Markdown parsing or block conversion. Get uses Notion block-children pagination and returns only the selected page of raw top-level blocks; callers must follow `next_cursor` for more. Both report reads and writes are contained to the configured Reports data source.
+
+Assistant assessments use a separate private `opportunity_scout_report` capability. It writes a report in this same configured Reports data source with `Select = Opportunities`, a date-stamped name, and only a bulleted list of opportunity names and short descriptions. This assessment write requires no per-call approval. Add the `Opportunities` Select option to an existing Reports data source before running assessments; the exact schema validator requires it.
 
 The Daily Feed contract adds one medium-risk operation:
 

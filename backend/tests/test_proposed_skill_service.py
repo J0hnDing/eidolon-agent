@@ -359,3 +359,29 @@ def test_sync_installed_from_filesystem_registers_hidden_installed_skill(
     assert skill is not None
     assert skill.status == "installed"
     assert skill.installed_path == "skills/installed/hidden_installed"
+
+
+def test_sync_retiring_service_runtime_removes_obsolete_schedule(
+    service: ProposedSkillService, db_session: Session
+) -> None:
+    installed = service.install_proposed_skill(
+        create_sample_skill(service, "retired_service")
+    )
+    installed.runtime = "service"
+    schedule = SkillSchedule(
+        skill_id=installed.id,
+        name="Old daily service",
+        status="active",
+        schedule_type="daily",
+        schedule_json={"type": "daily", "time": "09:00"},
+        input_json={},
+        timezone="America/Toronto",
+    )
+    db_session.add(schedule)
+    db_session.commit()
+    schedule_id = schedule.id
+
+    service.sync_installed_from_filesystem()
+
+    assert installed.runtime == "function"
+    assert db_session.get(SkillSchedule, schedule_id) is None

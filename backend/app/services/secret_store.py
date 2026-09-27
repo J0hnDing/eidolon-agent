@@ -55,6 +55,11 @@ class WindowsCredentialSecretStore:
         "quercus": "Eidolon/Quercus/",
         "atlas_api_key": "Eidolon/Atlas/APIKey/",
         "atlas_passphrase": "Eidolon/Atlas/Passphrase/",
+        "browser_authentication": "Eidolon/BrowserAuthentication/",
+        "fred": "Eidolon/FRED/",
+        "bls": "Eidolon/BLS/",
+        "bea": "Eidolon/BEA/",
+        "eia": "Eidolon/EIA/",
     }
 
     def __init__(self) -> None:

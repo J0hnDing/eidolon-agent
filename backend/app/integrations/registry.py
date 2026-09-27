@@ -874,7 +874,7 @@ _TODO_UPDATE_INPUT = _object_schema(
 _TODO_UPDATE_INPUT["minProperties"] = 2
 _REPORT_SELECT = {
     "type": "string",
-    "enum": ["GitHub Projects", "AI News", "AI Research", "Macro", "Personal Feed", "School", "Other"],
+    "enum": ["GitHub Projects", "AI News", "AI Research", "Macro", "Personal Feed", "School", "Other", "Opportunities"],
 }
 _REPORT_OUTPUT = _object_schema(
     {
@@ -1584,6 +1584,105 @@ _EMAIL_OPERATIONS = (
         ),
     ),
 )
+_MACRO_ERRORS = (
+    "connection_unavailable",
+    "invalid_credential",
+    "operation_undeclared",
+    "authorization_missing_or_stale",
+    "invalid_input",
+    "rate_limited",
+    "provider_timeout",
+    "response_too_large",
+    "provider_unavailable",
+    "internal_failure",
+)
+_MACRO_INPUT = _object_schema(
+    {
+        "since": {"type": "string", "minLength": 8, "maxLength": 64},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 25},
+    },
+    [],
+)
+_MACRO_ITEM = _object_schema(
+    {
+        "id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "title": {"type": "string", "minLength": 1, "maxLength": 500},
+        "url": {"type": "string", "pattern": "^https://", "maxLength": 2048},
+        "published_at": {"type": ["string", "null"], "maxLength": 64},
+        "summary": {"type": "string", "maxLength": 2000},
+        "source": {"type": "string", "minLength": 1, "maxLength": 64},
+    },
+    ["id", "title", "url", "published_at", "summary", "source"],
+)
+_MACRO_OUTPUT = _object_schema(
+    {
+        "items": {"type": "array", "maxItems": 25, "items": _MACRO_ITEM},
+    },
+    ["items"],
+)
+_MACRO_OPERATIONS = (
+    IntegrationOperationSpec(
+        id="fred.release.list",
+        title="List recent FRED releases",
+        description="Read a bounded list of recent Federal Reserve Bank of St. Louis FRED releases using the configured API key.",
+        input_schema=_MACRO_INPUT,
+        output_schema=_MACRO_OUTPUT,
+        effects=frozenset({IntegrationEffect.READ}),
+        resource=ResourceSpec("fred.release", ()),
+        risk=RiskLevel.LOW,
+        presentation=OperationPresentation(
+            usage_example={"operation": "fred.release.list", "input": {"limit": 10}},
+            normalized_errors=_MACRO_ERRORS,
+            open_world=False,
+        ),
+    ),
+    IntegrationOperationSpec(
+        id="bls.series.latest",
+        title="Read recent BLS series observations",
+        description="Read bounded recent observations from selected Bureau of Labor Statistics macroeconomic series; the public BLS endpoint works without an API key.",
+        input_schema=_MACRO_INPUT,
+        output_schema=_MACRO_OUTPUT,
+        effects=frozenset({IntegrationEffect.READ}),
+        resource=ResourceSpec("bls.series", ()),
+        risk=RiskLevel.LOW,
+        presentation=OperationPresentation(
+            usage_example={"operation": "bls.series.latest", "input": {"limit": 10}},
+            normalized_errors=_MACRO_ERRORS,
+            open_world=False,
+        ),
+    ),
+    IntegrationOperationSpec(
+        id="bea.series.latest",
+        title="Read recent BEA series observations",
+        description="Read bounded recent national accounts observations from the Bureau of Economic Analysis using the configured API key.",
+        input_schema=_MACRO_INPUT,
+        output_schema=_MACRO_OUTPUT,
+        effects=frozenset({IntegrationEffect.READ}),
+        resource=ResourceSpec("bea.series", ()),
+        risk=RiskLevel.LOW,
+        presentation=OperationPresentation(
+            usage_example={"operation": "bea.series.latest", "input": {"limit": 10}},
+            normalized_errors=_MACRO_ERRORS,
+            open_world=False,
+        ),
+    ),
+    IntegrationOperationSpec(
+        id="eia.series.latest",
+        title="Read recent EIA energy observations",
+        description="Read bounded recent energy and commodity observations from the U.S. Energy Information Administration using the configured API key.",
+        input_schema=_MACRO_INPUT,
+        output_schema=_MACRO_OUTPUT,
+        effects=frozenset({IntegrationEffect.READ}),
+        resource=ResourceSpec("eia.series", ()),
+        risk=RiskLevel.LOW,
+        presentation=OperationPresentation(
+            usage_example={"operation": "eia.series.latest", "input": {"limit": 10}},
+            normalized_errors=_MACRO_ERRORS,
+            open_world=False,
+        ),
+    ),
+)
+
 _TELEGRAM_ERRORS = (
     "connection_unavailable",
     "invalid_credential",
@@ -1669,6 +1768,26 @@ _PROVIDER_SPECS = (
         id="telegram",
         display_name="Telegram",
         supported_operations=frozenset(operation.id for operation in _TELEGRAM_OPERATIONS),
+    ),
+    ProviderSpec(
+        id="fred",
+        display_name="FRED",
+        supported_operations=frozenset({"fred.release.list"}),
+    ),
+    ProviderSpec(
+        id="bls",
+        display_name="BLS",
+        supported_operations=frozenset({"bls.series.latest"}),
+    ),
+    ProviderSpec(
+        id="bea",
+        display_name="BEA",
+        supported_operations=frozenset({"bea.series.latest"}),
+    ),
+    ProviderSpec(
+        id="eia",
+        display_name="EIA",
+        supported_operations=frozenset({"eia.series.latest"}),
     ),
     ProviderSpec(id="wecom", display_name="WeCom", supported_operations=frozenset()),
 )
@@ -1862,6 +1981,7 @@ DEFAULT_INTEGRATION_REGISTRY = IntegrationOperationRegistry(
         *_GOOGLE_CALENDAR_OPERATIONS,
         *_EMAIL_OPERATIONS,
         *_TELEGRAM_OPERATIONS,
+        *_MACRO_OPERATIONS,
     ),
 )
 

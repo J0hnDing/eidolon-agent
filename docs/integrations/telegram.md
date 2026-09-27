@@ -30,6 +30,8 @@ The Assistant bot delivers special Assistant plan approvals and handles their ca
 
 Disconnecting either bot preserves unresolved local approvals. Pairing a replacement notification bot resends normal invocation approvals; pairing the Assistant bot resends special plan approvals. Disconnecting any conversational bot removes its topic mappings and tombstones; sessions and shared workspace files remain local.
 
+Act also has one private runtime capability, `telegram.send_file`, for explicit user-requested delivery of a file already inside `runtime/act/workspace/`. It is not a Telegram integration operation or Eidolon function. The backend resolves the supplied `workspace/...` path inside the fixed workspace, reads at most 25 MiB, and sends it only through the connected `act_agent` bot to the topic mapped to the authenticated current Act session. Callers cannot select a bot, chat, user, or topic. Tool results and audits contain path metadata only, never file bytes or Telegram credentials.
+
 Approval previews intentionally send complete bounded inputs to Telegram. The backend owns their presentation and stores the selected presentation snapshot with the approval. `email.send` uses a dedicated readable recipient, subject, body, and caller-supplied reason layout; other actions use readable parsed fields rather than raw JSON. After approval or denial, the status message is edited in place, its buttons are removed, and terminal execution failures include a sanitized code and explanation. Users should treat Telegram as a cloud privacy boundary.
 
 Provider reference: [Telegram Bot API](https://core.telegram.org/bots/api).

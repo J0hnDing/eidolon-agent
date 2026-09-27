@@ -183,6 +183,41 @@ def test_plan_request_is_never_public_or_observer_tool(context):
     }
 
 
+def test_browser_authentication_is_private_to_act(context):
+    db, _entries = context
+    private = McpFunctionService.tool_name("agent_private", "browser.authenticate")
+    assert private not in {tool.name for tool in McpFunctionService(db).list_tools()}
+    assert private not in {
+        tool.name for tool in McpFunctionService(db, agent_token=credential(db, "observer")).list_tools()
+    }
+    assert private not in {
+        tool.name for tool in McpFunctionService(db, agent_token=credential(db, "assistant")).list_tools()
+    }
+    act_tools = {
+        tool.name: tool
+        for tool in McpFunctionService(db, agent_token=credential(db, "act")).list_tools()
+    }
+    assert private in act_tools
+    assert "credentials without revealing them" in act_tools[private].description
+
+
+def test_telegram_file_delivery_is_private_to_act_but_described_to_assistant(context):
+    db, _entries = context
+    private = McpFunctionService.tool_name("agent_private", "telegram.send_file")
+    assert private not in {
+        tool.name for tool in McpFunctionService(db, agent_token=credential(db, "assistant")).list_tools()
+    }
+    act_tools = {
+        tool.name: tool
+        for tool in McpFunctionService(db, agent_token=credential(db, "act")).list_tools()
+    }
+    assert private in act_tools
+    catalog = AgentPolicyService(db).act_catalog()
+    runtime_ids = {entry["id"] for entry in catalog if entry.get("kind") == "runtime_capability"}
+    assert runtime_ids == {"browser.playwright", "browser.authenticate", "telegram.send_file"}
+    assert all("input_schema" not in entry for entry in catalog if entry.get("kind") == "runtime_capability")
+
+
 def test_deferred_approval_rechecks_agent_policy(context, monkeypatch, tmp_path):
     db, _entries = context
     session = ActSession(agent_id="observer", codex_thread_id="thread-observer")

@@ -176,6 +176,88 @@ def test_agent_private_plan_request_uses_authenticated_context(
     assert seen[0][0] is context
 
 
+def test_agent_private_browser_authentication_uses_authenticated_act_context(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = ActSession(agent_id="act", codex_thread_id="act-browser-private")
+    db.add(session)
+    db.commit()
+    context = InvocationContext(
+        principal_kind="agent",
+        origin="agent_mcp",
+        agent_id="act",
+        agent_session_id=session.id,
+    )
+    seen = []
+
+    class Capability:
+        def __init__(self, supplied_db, *, bridge):  # noqa: ANN001
+            seen.append((supplied_db, bridge))
+
+        def authenticate(self, identity):  # noqa: ANN001, ANN201
+            seen.append(identity)
+            return {"identity": identity, "status": "mfa_required"}
+
+    monkeypatch.setattr(
+        "app.execution.handlers.agent_private.BrowserAuthenticationCapability",
+        Capability,
+    )
+
+    outcome = InvocationExecutor(db).execute(
+        InvocationTargetRef(category="agent_private", target_id="browser.authenticate"),
+        {"identity": "uoft"},
+        context,
+    )
+
+    assert outcome.output == {"identity": "uoft", "status": "mfa_required"}
+    assert seen[-1] == "uoft"
+
+
+def test_agent_private_telegram_file_uses_authenticated_act_context(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = ActSession(agent_id="act", codex_thread_id="act-telegram-file-private")
+    db.add(session)
+    db.commit()
+    context = InvocationContext(
+        principal_kind="agent",
+        origin="agent_mcp",
+        agent_id="act",
+        agent_session_id=session.id,
+    )
+    seen = []
+
+    class Capability:
+        def __init__(self, supplied_db):  # noqa: ANN001
+            seen.append(supplied_db)
+
+        def send(self, session_id, path, caption):  # noqa: ANN001, ANN201
+            seen.append((session_id, path, caption))
+            return {
+                "status": "sent",
+                "path": path,
+                "filename": "report.pdf",
+                "bytes": 12,
+                "message_id": 5,
+            }
+
+    monkeypatch.setattr(
+        "app.execution.handlers.agent_private.ActTelegramFileCapability",
+        Capability,
+    )
+
+    outcome = InvocationExecutor(db).execute(
+        InvocationTargetRef(category="agent_private", target_id="telegram.send_file"),
+        {"path": "workspace/report.pdf", "caption": "Report"},
+        context,
+    )
+
+    assert outcome.output["status"] == "sent"
+    assert seen[-1] == (session.id, "workspace/report.pdf", "Report")
+
+
 def test_web_app_context_factory_does_not_retain_capability(db: Session) -> None:
     token = "WEB_APP_CAPABILITY_SENTINEL"
     runtime = SimpleNamespace(

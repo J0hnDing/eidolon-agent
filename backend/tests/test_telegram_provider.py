@@ -40,6 +40,31 @@ class _ErrorOpener:
         raise HTTPError(request.full_url, 400, "Bad Request", {}, io.BytesIO(self.payload))
 
 
+class _Response:
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+
+    def __enter__(self):  # noqa: ANN204
+        return self
+
+    def __exit__(self, *_args):  # noqa: ANN002, ANN204
+        return False
+
+    def read(self, _size: int) -> bytes:
+        return self.payload
+
+
+class _CaptureOpener:
+    def __init__(self) -> None:
+        self.request = None
+        self.timeout = None
+
+    def open(self, request, timeout):  # noqa: ANN001, ANN201
+        self.request = request
+        self.timeout = timeout
+        return _Response(b'{"ok":true,"result":{"message_id":17}}')
+
+
 def _pairing_update(code: str, *, chat_id: int = 42, user_id: int = 7, update_id: int = 1) -> dict:
     return {
         "update_id": update_id,
@@ -109,6 +134,29 @@ def test_private_topic_api_operations_and_threaded_delivery_are_preserved() -> N
         "deleteForumTopic",
     ]
     assert topic["message_thread_id"] not in api.topics
+
+
+def test_document_upload_uses_bounded_multipart_request() -> None:
+    opener = _CaptureOpener()
+    api = UrllibTelegramBotApi("123:token", opener=opener)
+
+    result = api.send_document(
+        42,
+        "report.txt",
+        b"REPORT_CONTENT_SENTINEL",
+        message_thread_id=9,
+        caption="Requested report",
+    )
+
+    assert result == {"message_id": 17}
+    assert opener.timeout == 60
+    assert opener.request.full_url.endswith("/sendDocument")
+    assert opener.request.headers["Content-type"].startswith("multipart/form-data; boundary=")
+    body = opener.request.data
+    assert b'name="chat_id"' in body and b"42" in body
+    assert b'name="message_thread_id"' in body and b"9" in body
+    assert b'filename="report.txt"' in body
+    assert b"REPORT_CONTENT_SENTINEL" in body
 
 
 def test_rich_message_draft_uses_the_native_thinking_capability() -> None:

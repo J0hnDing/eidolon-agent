@@ -22,6 +22,7 @@ from app.models import (
     Skill,
 )
 from app.schemas.integration import (
+    ApiKeyConnectionStatus,
     GitHubConnectionStatus,
     GmailConnectionStatus,
     GoogleCalendarConnectionStatus,
@@ -62,6 +63,10 @@ from app.services.google_oauth import (
 from app.services.huggingface_provider import (
     HuggingFaceProviderAdapter,
     UrllibHuggingFaceProviderAdapter,
+)
+from app.services.macro_data_provider import (
+    MacroDataProviderAdapter,
+    UrllibMacroDataProviderAdapter,
 )
 from app.services.notion_daily_feed_provider import NotionDailyFeedProvider
 from app.services.notion_report_provider import NotionReportProvider
@@ -177,6 +182,17 @@ HUGGINGFACE_PROVIDER_ERROR_MESSAGES = {
     "provider_unavailable": "Hugging Face or arXiv is unavailable",
     "internal_failure": "Hugging Face integration failed safely",
 }
+MACRO_PROVIDER_ERROR_MESSAGES = {
+    "invalid_credential": "The macro data API key is invalid or revoked",
+    "rate_limited": "The macro data provider rate limited the request",
+    "provider_timeout": "The macro data provider did not respond before timeout",
+    "response_too_large": "The macro data provider response exceeded the size limit",
+    "provider_unavailable": "The macro data provider is unavailable",
+    "connection_unavailable": "The macro data provider is not configured",
+    "invalid_input": "The macro data request is invalid",
+    "operation_undeclared": "The macro data operation is not implemented",
+    "internal_failure": "Macro data integration failed safely",
+}
 PROVIDER_DISPLAY_NAMES = {
     "github": "GitHub",
     "atlas": "Atlas",
@@ -185,9 +201,15 @@ PROVIDER_DISPLAY_NAMES = {
     "gmail": "Gmail",
     "outlook": "Outlook",
     "huggingface": "Hugging Face",
+    "fred": "FRED",
+    "bls": "BLS",
+    "bea": "BEA",
+    "eia": "EIA",
 }
 GOOGLE_OAUTH_CLIENT_CONFIG_ID = 1
 MICROSOFT_OAUTH_CLIENT_CONFIG_ID = 1
+API_KEY_PROVIDERS = ("fred", "bls", "bea", "eia")
+API_KEY_REQUIRED_PROVIDERS = frozenset({"fred", "bea", "eia"})
 def provider_error_message(provider: str, error_type: str) -> str:
     if provider == "atlas":
         messages = ATLAS_PROVIDER_ERROR_MESSAGES
@@ -203,6 +225,8 @@ def provider_error_message(provider: str, error_type: str) -> str:
         messages = TELEGRAM_PROVIDER_ERROR_MESSAGES
     elif provider == "huggingface":
         messages = HUGGINGFACE_PROVIDER_ERROR_MESSAGES
+    elif provider in API_KEY_PROVIDERS:
+        messages = MACRO_PROVIDER_ERROR_MESSAGES
     else:
         messages = PROVIDER_ERROR_MESSAGES
     return messages.get(error_type, messages["internal_failure"])
@@ -235,6 +259,10 @@ class IntegrationService:
     outlook: OutlookProviderAdapter | None = None
     outlook_oauth_states: Any | None = None
     huggingface: HuggingFaceProviderAdapter | None = None
+    fred: MacroDataProviderAdapter | None = None
+    bls: MacroDataProviderAdapter | None = None
+    bea: MacroDataProviderAdapter | None = None
+    eia: MacroDataProviderAdapter | None = None
     codex_adapter: Any | None = None
 
     def __post_init__(self) -> None:
@@ -264,6 +292,14 @@ class IntegrationService:
             self.outlook_oauth_states = outlook_oauth_state_store
         if self.huggingface is None:
             self.huggingface = UrllibHuggingFaceProviderAdapter()
+        if self.fred is None:
+            self.fred = UrllibMacroDataProviderAdapter("fred")
+        if self.bls is None:
+            self.bls = UrllibMacroDataProviderAdapter("bls")
+        if self.bea is None:
+            self.bea = UrllibMacroDataProviderAdapter("bea")
+        if self.eia is None:
+            self.eia = UrllibMacroDataProviderAdapter("eia")
 
     def connection_status(self) -> GitHubConnectionStatus:
         connection = self._connection()
@@ -350,6 +386,150 @@ class IntegrationService:
                 # opaque entry is unreachable from Eidolon and contains no DB link.
                 pass
         return self.connection_status()
+
+    def api_key_connection_status(self, provider: str) -> ApiKeyConnectionStatus:
+        if provider not in API_KEY_PROVIDERS:
+            raise IntegrationError("invalid_input", "Unsupported macro data provider")
+        connection = self._connection(provider)
+        configured = connection is not None
+        store_available = (
+            configured
+            and self.secret_store is not None
+            and self.secret_store.implementation_id == connection.secret_store_id
+        )
+        if connection is None:
+            status = "not_configured"
+        elif connection.status == "invalid":
+            status = "invalid"
+        elif not store_available:
+            status = "unavailable"
+        else:
+            status = "configured"
+        # BLS supports anonymous requests. Its operation remains available
+        # even when the optional key is not configured.
+        available = provider == "bls" or bool(store_available and connection and connection.status == "connected")
+        return ApiKeyConnectionStatus(
+            provider=provider,
+            configured=configured,
+            available=available,
+            status=status,
+            created_at=connection.created_at if connection else None,
+            updated_at=connection.updated_at if connection else None,
+            last_validated_at=connection.last_validated_at if connection else None,
+            error_type=connection.error_type if connection else None,
+        )
+
+    def put_api_key_connection(self, provider: str, api_key: str) -> ApiKeyConnectionStatus:
+        if provider not in API_KEY_PROVIDERS:
+            raise IntegrationError("invalid_input", "Unsupported macro data provider")
+        if not api_key or len(api_key) > 4096:
+            raise IntegrationError("invalid_input", "API key must be a non-empty bounded string")
+        if self.secret_store is None:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        try:
+            new_reference = self.secret_store.put(api_key, namespace=provider)
+        except SecretStoreError:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable") from None
+        finally:
+            api_key = ""
+        previous = self._connection(provider)
+        previous_reference = previous.secret_reference if previous is not None else None
+        now = utc_now()
+        try:
+            if previous is None:
+                connection = IntegrationConnection(
+                    provider=provider,
+                    is_default=True,
+                    secret_store_id=self.secret_store.implementation_id,
+                    secret_reference=new_reference,
+                    credential_kind="api_key",
+                    status="connected",
+                    account_login=provider,
+                    account_id=provider,
+                    created_at=now,
+                    updated_at=now,
+                    last_validated_at=now,
+                )
+                self._make_default(provider, connection)
+                self.db.add(connection)
+            else:
+                connection = previous
+                self._make_default(provider, connection)
+                connection.secret_store_id = self.secret_store.implementation_id
+                connection.secret_reference = new_reference
+                connection.credential_kind = "api_key"
+                connection.status = "connected"
+                connection.account_login = provider
+                connection.account_id = provider
+                connection.error_type = None
+                connection.updated_at = now
+                connection.last_validated_at = now
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            try:
+                self.secret_store.delete(new_reference, namespace=provider)
+            except SecretStoreError:
+                pass
+            raise IntegrationError("internal_failure", "API key could not be saved safely") from None
+        if previous_reference and previous_reference != new_reference:
+            try:
+                self.secret_store.delete(previous_reference, namespace=provider)
+            except SecretStoreError:
+                pass
+        return self.api_key_connection_status(provider)
+
+    def remove_api_key_connection(self, provider: str) -> ApiKeyConnectionStatus:
+        if provider not in API_KEY_PROVIDERS:
+            raise IntegrationError("invalid_input", "Unsupported macro data provider")
+        connection = self._connection(provider)
+        if connection is None:
+            return self.api_key_connection_status(provider)
+        if self.secret_store is None or self.secret_store.implementation_id != connection.secret_store_id:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        try:
+            self.secret_store.delete(connection.secret_reference, namespace=provider)
+        except SecretStoreError:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable") from None
+        self.db.delete(connection)
+        self.db.commit()
+        return self.api_key_connection_status(provider)
+
+    def execute_macro(
+        self,
+        provider: str,
+        operation: Any,
+        input_json: dict[str, Any],
+    ) -> dict[str, Any]:
+        if provider not in API_KEY_PROVIDERS:
+            raise IntegrationProviderError("operation_undeclared", "Macro data provider is unsupported")
+        connection = self._connection(provider)
+        secret: str | None = None
+        if connection is not None:
+            if self.secret_store is None or self.secret_store.implementation_id != connection.secret_store_id:
+                if provider in API_KEY_REQUIRED_PROVIDERS:
+                    raise IntegrationProviderError("connection_unavailable", "Operating-system secret storage is unavailable")
+            else:
+                try:
+                    secret = self.secret_store.get(connection.secret_reference, namespace=provider)
+                except SecretStoreError:
+                    if provider in API_KEY_REQUIRED_PROVIDERS:
+                        raise IntegrationProviderError("connection_unavailable", "Stored API key is unavailable") from None
+        elif provider in API_KEY_REQUIRED_PROVIDERS:
+            raise IntegrationProviderError("connection_unavailable", f"{provider.upper()} API key is not configured")
+        adapter = getattr(self, provider, None)
+        if adapter is None:
+            raise IntegrationProviderError("provider_unavailable", "Macro data provider is unavailable")
+        try:
+            return adapter.execute(operation, dict(input_json), secret)
+        except IntegrationProviderError as exc:
+            if connection is not None and exc.error_type == "invalid_credential":
+                connection.status = "invalid"
+                connection.error_type = "invalid_credential"
+                self.db.commit()
+            raise
+        finally:
+            secret = None
 
     def google_calendar_connection_status(self) -> GoogleCalendarConnectionStatus:
         connection = self._connection("google_calendar")
@@ -1877,6 +2057,10 @@ class IntegrationService:
     def provider_connected(self, provider: str) -> bool:
         if provider == "huggingface":
             return True
+        if provider == "bls":
+            return True
+        if provider in API_KEY_REQUIRED_PROVIDERS:
+            return self.api_key_connection_status(provider).available
         if provider == "atlas":
             try:
                 from app.services.atlas_settings_service import AtlasSettingsService

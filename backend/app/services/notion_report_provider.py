@@ -20,6 +20,7 @@ REPORT_SELECT_OPTIONS = {
     "Personal Feed",
     "School",
     "Other",
+    "Opportunities",
 }
 
 

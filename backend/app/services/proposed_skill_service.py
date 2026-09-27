@@ -119,6 +119,8 @@ class ProposedSkillService:
             skill = skill or self.db.scalar(select(Skill).where(Skill.name == manifest.name))
             if skill is not None:
                 if skill.status == "installed":
+                    if manifest.runtime != "service":
+                        self._retire_obsolete_schedule(skill)
                     skill.description = manifest.description
                     skill.runtime = manifest.runtime
                     skill.risk_level = classify_permission_risk(
@@ -177,6 +179,27 @@ class ProposedSkillService:
                 project_root=self.project_root,
             ).refresh_effective_risks()
             self.db.commit()
+
+    def _retire_obsolete_schedule(self, skill: Skill) -> None:
+        schedule_ids = list(self.db.scalars(
+            select(SkillSchedule.id).where(SkillSchedule.skill_id == skill.id)
+        ).all())
+        if not schedule_ids:
+            return
+        schedule_keys = [f"skill:{schedule_id}" for schedule_id in schedule_ids]
+        self.db.query(SkillRun).filter(
+            SkillRun.source_schedule_id.in_(schedule_ids)
+        ).update({SkillRun.source_schedule_id: None}, synchronize_session=False)
+        self.db.query(ApprovalRequest).filter(
+            ApprovalRequest.schedule_id.in_(schedule_ids)
+        ).update({ApprovalRequest.schedule_id: None}, synchronize_session=False)
+        self.db.query(ScheduleRuntimeState).filter(
+            ScheduleRuntimeState.schedule_key.in_(schedule_keys)
+        ).delete(synchronize_session=False)
+        # Keep historical occurrences and their run links for the audit trail.
+        self.db.query(SkillSchedule).filter(
+            SkillSchedule.id.in_(schedule_ids)
+        ).delete(synchronize_session=False)
 
     def _ensure_synced_active_version(
         self,

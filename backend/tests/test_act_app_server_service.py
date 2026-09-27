@@ -10,6 +10,7 @@ from app.services.act_app_server_service import (
     ActAppServerService,
     render_agent_instructions,
 )
+from app.services.act_runtime_capabilities import act_runtime_capability_catalog
 from app.services.act_workspace_service import ActWorkspace
 from app.services.function_catalog_service import FunctionCatalogError, FunctionCatalogService
 
@@ -51,6 +52,7 @@ class FakeClient:
                     {
                         "plugins": [
                             {"id": "remote-tools@example", "installed": True},
+                            {"id": "codex-security@openai-curated-remote", "installed": True},
                             {"id": "available-only@example", "installed": False},
                         ]
                     }
@@ -81,6 +83,29 @@ class FakeClient:
                         else None
                     ),
                     "tools": {"eidolon__tool": {}} if self.include_tools else {},
+                    "resources": [],
+                    "resourceTemplates": [],
+                },
+                {
+                    "name": "codex-security",
+                    "serverInfo": {"name": "Codex Security"},
+                    "tools": {"security_scan": {}},
+                    "resources": [],
+                    "resourceTemplates": [],
+                },
+                {
+                    "name": "openai-api-key-local-confirmation",
+                    "serverInfo": {"name": "OpenAI Developers MCP"},
+                    "tools": {
+                        "confirm_openai_api_key_local_destination": {},
+                    },
+                    "resources": [],
+                    "resourceTemplates": [],
+                },
+                {
+                    "name": "openaiDeveloperDocs",
+                    "serverInfo": {"name": "OpenAI Developer Docs"},
+                    "tools": {"search_docs": {}, "fetch_page": {}},
                     "resources": [],
                     "resourceTemplates": [],
                 },
@@ -132,6 +157,7 @@ def test_agent_thread_has_private_mcp_credential_and_named_permissions(monkeypat
 
     from app.db import Base
     from app.models import ActSession
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     workspace = ActWorkspace(root=tmp_path, memory=tmp_path / "memory", knowledge=tmp_path / "knowledge",
                              quercus=tmp_path / "knowledge" / "quercus", workspace=tmp_path / "workspace",
                              downloads=tmp_path / "workspace" / "downloads")
@@ -153,6 +179,17 @@ def test_agent_thread_has_private_mcp_credential_and_named_permissions(monkeypat
         assert mcp["required"] is True
         assert mcp["args"][-1] == "--agent"
         assert mcp["env"]["EIDOLON_AGENT_TOKEN"]
+        assert params["config"]["mcp_servers.legacy"]["enabled"] is False
+        assert params["config"]["mcp_servers.unsafe-plugin"]["enabled"] is False
+        assert params["config"]["mcp_servers.unsafe-plugin"]["command"] == "disabled"
+        assert "mcp_servers.codex-security" not in params["config"]
+        assert "mcp_servers.openai-api-key-local-confirmation" not in params["config"]
+        assert "mcp_servers.openaiDeveloperDocs" not in params["config"]
+        assert params["config"]["plugins.remote-tools@example"]["enabled"] is False
+        assert "plugins.codex-security@openai-curated-remote" not in params["config"]
+        assert params["config"]["apps._default.enabled"] is False
+        assert params["config"]["features.apps"] is False
+        assert params["config"]["features.remote_plugin"] is False
         assert "EIDOLON_AGENT_TOKEN" not in str(client.extra_args)
         assert ("plugin/installed", {}) in client.requests
         assert any("remote-tools@example" in item for item in client.extra_args)
@@ -170,6 +207,13 @@ def test_managed_agents_receive_only_their_role_specific_instructions() -> None:
     assert ASSISTANT_INSTRUCTIONS_TEMPLATE.count("[ACT_CAPABILITY_CATALOG]") == 1
     rendered = render_agent_instructions("assistant", [{"id": "example.read"}])
     assert '[{"id": "example.read"}]' in rendered
+    runtime_rendered = render_agent_instructions(
+        "assistant",
+        act_runtime_capability_catalog(),
+    )
+    assert '"id": "browser.playwright"' in runtime_rendered
+    assert '"id": "browser.authenticate"' in runtime_rendered
+    assert '"id": "telegram.send_file"' in runtime_rendered
     assert "## 1. Advance existing work" in assistant
     assert "## 2. Find ways to advance the user's goals" in assistant
 
@@ -215,14 +259,20 @@ def test_act_thread_receives_required_playwright_config(monkeypatch, tmp_path) -
         )
 
         params = next(params for method, params in client.requests if method == "thread/start")
-        assert params["config"]["mcp_servers.playwright"] == {
-            "command": "npx",
-            "args": ["-y", "@playwright/mcp@latest"],
-            "enabled": True,
-            "default_tools_approval_mode": "approve",
-            "required": True,
-        }
+        playwright = params["config"]["mcp_servers.playwright"]
+        assert playwright["command"] == "npx"
+        assert playwright["args"][:2] == ["-y", "@playwright/mcp@latest"]
+        assert playwright["args"][-2] == "--init-page"
+        assert playwright["args"][-1].endswith("browser_authentication_init_page.mjs")
+        assert playwright["enabled"] is True
+        assert playwright["default_tools_approval_mode"] == "approve"
+        assert playwright["required"] is True
+        bridge_env = playwright["env"]
+        assert bridge_env["EIDOLON_BROWSER_AUTH_ENDPOINT"].startswith("\\\\.\\pipe\\eidolon-browser-auth-")
+        assert bridge_env["EIDOLON_BROWSER_AUTH_TOKEN"]
+        assert bridge_env["EIDOLON_BROWSER_AUTH_TOKEN"] not in params["developerInstructions"]
         assert "@oai/sky" in params["developerInstructions"]
+        assert "Browser authenticate" in params["developerInstructions"]
 
 
 def test_agent_start_fails_closed_when_inherited_plugin_tools_remain(
@@ -410,18 +460,46 @@ def test_agent_process_config_restricts_paths_and_inherited_tools(monkeypatch, t
     config = managed_config("observer", root)
     profile = config["permissions.eidolon_agent"]
     assert profile["network"]["enabled"] is False
-    assert profile["filesystem"] == {":minimal": "read", str(root): "read"}
+    assert profile["filesystem"] == {
+        ":root": "read",
+        ":minimal": "read",
+        str(root): "read",
+    }
     assert config["mcp_servers"]["untrusted"]["enabled"] is False
     assert config["mcp_servers"]["playwright"]["enabled"] is False
     assert config["plugins"]["unsafe"]["enabled"] is False
+    assert config["features.remote_plugin"] is False
+    (tmp_path / "config.toml").write_text(
+        '[plugins."codex-security@openai-curated-remote"]\nenabled=true\n'
+        '[mcp_servers.codex-security]\ncommand="security"\n'
+        '[mcp_servers.openai-api-key-local-confirmation]\ncommand="node"\n'
+        '[mcp_servers.openaiDeveloperDocs]\nurl="https://developers.openai.com/mcp"\n'
+    )
+    security_config = managed_config("observer", root)
+    assert security_config["plugins"]["codex-security@openai-curated-remote"]["enabled"] is True
+    assert security_config["mcp_servers"]["codex-security"]["enabled"] is True
+    assert security_config["mcp_servers"]["openai-api-key-local-confirmation"]["enabled"] is True
+    assert security_config["mcp_servers"]["openaiDeveloperDocs"]["enabled"] is True
+    assert security_config["mcp_servers"]["openaiDeveloperDocs"]["url"] == (
+        "https://developers.openai.com/mcp"
+    )
     assert config["web_search"] == "disabled"
 
+    for agent_id in ("assistant", "act"):
+        role_config = managed_config(agent_id, root)
+        assert role_config["mcp_servers"]["openaiDeveloperDocs"]["enabled"] is True
+
     assistant = managed_config("assistant", root)["permissions.eidolon_agent"]
-    assert assistant["filesystem"] == {":minimal": "read", str(root): "read"}
+    assert assistant["filesystem"] == {
+        ":root": "read",
+        ":minimal": "read",
+        str(root): "read",
+    }
     assert assistant["network"]["enabled"] is False
 
     act = managed_config("act", root)["permissions.eidolon_agent"]
     assert act["filesystem"] == {
+        ":root": "read",
         ":minimal": "read",
         str(root): "read",
         str(root / "workspace"): "write",
@@ -439,6 +517,19 @@ def test_agent_process_config_restricts_paths_and_inherited_tools(monkeypatch, t
         "default_tools_approval_mode": "approve",
         "required": True,
     }
+
+
+def test_managed_process_rejects_non_official_docs_mcp_endpoint(monkeypatch, tmp_path):
+    import pytest
+
+    from app.services.act_app_server_service import ActAppServerError, managed_config
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(
+        '[mcp_servers.openaiDeveloperDocs]\nurl="https://example.com/mcp"\n'
+    )
+    with pytest.raises(ActAppServerError, match="official OpenAI Developer Docs MCP"):
+        managed_config("observer", tmp_path / "root")
 
 
 def test_only_act_accepts_playwright_mcp_tools() -> None:

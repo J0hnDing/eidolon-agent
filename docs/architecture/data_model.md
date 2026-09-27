@@ -91,6 +91,10 @@ Stores sanitized connection rows. A provider may have multiple rows, but a parti
 
 Calendar and Gmail use separate connection rows, account identities, OAuth refresh-token references, and service secret namespaces. They may authorize different Google accounts. Outlook has its own default connection and Microsoft refresh-token namespace. Singleton `google_oauth_client_configs` and `microsoft_oauth_client_configs` rows reference OAuth application configuration in the OS secret store; neither contains a service grant or account identity. Invocation approvals and integration audit rows retain the selected provider, internal connection id, and account id so approval replay and audit attribution become stale when the default connection changes.
 
+### browser_authentication_secrets
+
+Stores one opaque operating-system secret-store reference per checked-in browser identity. The actual username and password never enter SQLite. Identity metadata, exact login origins, authenticated origins, and form selectors are backend configuration, not user-created rows and not integration/function catalog entries.
+
 ### telegram_bot_connections
 
 Stores role/default selection for the independent notification/approval and conversational bots, sanitized bot identity and status, private-topic capability flags, paired private chat/user ids, persisted update offset, and hashed one-time pairing state. Bot tokens remain in the operating-system secret store.

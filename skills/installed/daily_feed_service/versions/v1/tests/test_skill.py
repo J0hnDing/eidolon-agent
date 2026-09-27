@@ -178,6 +178,37 @@ def test_calendar_and_todo_pagination_are_followed_with_stable_bounds(monkeypatc
     assert result["todo_count"] == 2
 
 
+def test_overdue_todos_are_separate_and_include_their_due_date(monkeypatch):
+    calls = []
+
+    def invoke(**kwargs):
+        calls.append(kwargs)
+        if kwargs["operation"] == skill.CALENDAR_OPERATION:
+            return _calendar_page()
+        if kwargs["operation"] == skill.TODO_OPERATION:
+            return _todo_page(
+                [
+                    _todo("Old assignment", "2026-09-15", priority="high"),
+                    _todo("Morning task", "2026-09-17T07:00:00-04:00"),
+                    _todo("Today date only", "2026-09-17"),
+                    _todo("Completed old task", "2026-09-14", done=True),
+                ]
+            )
+        markdown = kwargs["input"]["markdown"]
+        return {"updated": True, "characters": len(markdown)}
+
+    monkeypatch.setattr(skill.integration_runtime_capabilities, "call", invoke)
+    result = skill.run({}, now=NOW, weather_fetcher=_weather)
+
+    markdown = calls[-1]["input"]["markdown"]
+    assert "### Overdue\n- 2026-09-15 — Old assignment [high]" in markdown
+    assert "- 2026-09-17 07:00 — Morning task" in markdown
+    assert "### Today\n- Today date only" in markdown
+    assert "Completed old task" not in markdown
+    assert markdown.index("### Overdue") < markdown.index("### Today")
+    assert result["todo_count"] == 3
+
+
 @pytest.mark.parametrize(
     ("weather", "expected"),
     [
@@ -229,7 +260,7 @@ def test_empty_schedule_and_todos_are_explicit(monkeypatch):
 
     markdown = calls[-1]["input"]["markdown"]
     assert "## Schedule\n- No events." in markdown
-    assert markdown.count("- None.") == 3
+    assert markdown.count("- None.") == 4
 
 
 def test_invalid_weather_or_write_result_fails(monkeypatch):

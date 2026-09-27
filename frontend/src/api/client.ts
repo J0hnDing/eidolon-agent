@@ -528,6 +528,31 @@ export interface GitHubConnectionStatus {
   error_type: string | null;
 }
 
+export type MacroDataProvider = "fred" | "bls" | "bea" | "eia";
+
+export interface ApiKeyConnectionStatus {
+  provider: MacroDataProvider;
+  configured: boolean;
+  available: boolean;
+  status: "configured" | "not_configured" | "unavailable" | "invalid";
+  created_at: string | null;
+  updated_at: string | null;
+  last_validated_at: string | null;
+  error_type: string | null;
+}
+
+export interface BrowserAuthenticationIdentityStatus {
+  id: string;
+  label: string;
+  configured: boolean;
+  login_origins: string[];
+  updated_at: string | null;
+}
+
+export interface BrowserAuthenticationStatus {
+  identities: BrowserAuthenticationIdentityStatus[];
+}
+
 export interface NotionConnectionStatus {
   provider: "notion";
   connected: boolean;
@@ -1153,6 +1178,26 @@ export const api = {
     }),
   removeGitHubConnection: () =>
     request<void>("/settings/integrations/github", { method: "DELETE" }),
+  getApiKeyConnection: (provider: MacroDataProvider) =>
+    request<ApiKeyConnectionStatus>(`/settings/integrations/${provider}`),
+  putApiKeyConnection: (provider: MacroDataProvider, apiKey: string) =>
+    request<ApiKeyConnectionStatus>(`/settings/integrations/${provider}`, {
+      method: "PUT",
+      body: JSON.stringify({ api_key: apiKey }),
+    }),
+  removeApiKeyConnection: (provider: MacroDataProvider) =>
+    request<void>(`/settings/integrations/${provider}`, { method: "DELETE" }),
+  getBrowserAuthentication: () =>
+    request<BrowserAuthenticationStatus>("/settings/integrations/browser-authentication"),
+  putBrowserAuthenticationSecret: (identity: string, username: string, password: string) =>
+    request<BrowserAuthenticationStatus>(`/settings/integrations/browser-authentication/${encodeURIComponent(identity)}`, {
+      method: "PUT",
+      body: JSON.stringify({ username, password }),
+    }),
+  removeBrowserAuthenticationSecret: (identity: string) =>
+    request<void>(`/settings/integrations/browser-authentication/${encodeURIComponent(identity)}`, {
+      method: "DELETE",
+    }),
   getNotionConnection: () => request<NotionConnectionStatus>("/settings/integrations/notion"),
   putNotionConnection: (token: string) =>
     request<NotionConnectionStatus>("/settings/integrations/notion", {

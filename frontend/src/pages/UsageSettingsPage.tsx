@@ -3,6 +3,8 @@ import { NavLink } from "react-router-dom";
 
 import {
   AtlasIntegrationStatus,
+  ApiKeyConnectionStatus,
+  BrowserAuthenticationStatus,
   CodexAccountUsage,
   CodexCliStatus,
   CodexInvocationChoice,
@@ -25,6 +27,7 @@ import {
   QuercusProcessingStatus,
   TelegramConnectionStatus,
   WeComConnectionStatus,
+  MacroDataProvider,
   api,
 } from "../api/client";
 import { DeleteIconButton } from "../components/DeleteIconButton";
@@ -75,6 +78,13 @@ const settingsPageCopy: Record<SettingsSection, { title: string; description: st
 
 const EMPTY_INVOCATION_CHOICE: CodexInvocationChoice = { model: null, reasoning_effort: null };
 
+const macroDataProviders: Array<{ id: MacroDataProvider; label: string; description: string }> = [
+  { id: "fred", label: "FRED", description: "Federal Reserve Bank of St. Louis release data." },
+  { id: "bls", label: "BLS", description: "Labor statistics. The public endpoint works without a key." },
+  { id: "bea", label: "BEA", description: "National accounts and macroeconomic data." },
+  { id: "eia", label: "EIA", description: "Energy and commodity data." },
+];
+
 function normalizeRoutingSettings(settings: CodexRoutingSettings): CodexRoutingSettings {
   return {
     ...settings,
@@ -93,6 +103,17 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
   const [github, setGitHub] = useState<GitHubConnectionStatus | null>(null);
   const [codexMcp, setCodexMcp] = useState<CodexMcpStatus | null>(null);
   const [githubToken, setGitHubToken] = useState("");
+  const [macroApiKeys, setMacroApiKeys] = useState<Record<MacroDataProvider, string>>({
+    fred: "",
+    bls: "",
+    bea: "",
+    eia: "",
+  });
+  const [macroStatuses, setMacroStatuses] = useState<Partial<Record<MacroDataProvider, ApiKeyConnectionStatus>>>({});
+  const [browserAuthentication, setBrowserAuthentication] = useState<BrowserAuthenticationStatus | null>(null);
+  const [browserUsername, setBrowserUsername] = useState("");
+  const [browserPassword, setBrowserPassword] = useState("");
+  const [pendingBrowserSecretDelete, setPendingBrowserSecretDelete] = useState<string | null>(null);
   const [notion, setNotion] = useState<NotionConnectionStatus | null>(null);
   const [notionToken, setNotionToken] = useState("");
   const [notionDataSourceId, setNotionDataSourceId] = useState("");
@@ -169,8 +190,9 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setRouting(normalizeRoutingSettings(nextRouting));
         setRoutingDirty(false);
       } else if (section === "integrations") {
-        const [nextGitHub, nextAtlas, nextNotion, nextQuercus, nextQuercusProcessing, nextGoogleOAuth, nextGoogleCalendar, nextGmail, nextMicrosoftOAuth, nextOutlook, nextTelegram, nextTelegramAgent, nextTelegramObserverAgent, nextTelegramAssistantAgent, nextWeCom, nextCodexMcp] = await Promise.all([
+        const [nextGitHub, nextBrowserAuthentication, nextAtlas, nextNotion, nextQuercus, nextQuercusProcessing, nextGoogleOAuth, nextGoogleCalendar, nextGmail, nextMicrosoftOAuth, nextOutlook, nextTelegram, nextTelegramAgent, nextTelegramObserverAgent, nextTelegramAssistantAgent, nextWeCom, nextCodexMcp, nextMacroApiKeys] = await Promise.all([
           api.getGitHubConnection(),
+          api.getBrowserAuthentication(),
           api.getAtlasStatus().catch((err) => atlasUnavailableStatus(err)),
           api.getNotionConnection().catch((err) => notionUnavailableStatus(err)),
           api.getQuercusConnection().catch((err) => quercusUnavailableStatus(err)),
@@ -195,8 +217,14 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           api.getTelegramAssistantAgentConnection().catch((err) => telegramUnavailableStatus(err)),
           api.getWeComConnection().catch((err) => wecomUnavailableStatus(err)),
           api.getCodexMcpStatus().catch((err) => codexMcpUnavailableStatus(err)),
+          Promise.all(
+            macroDataProviders.map(({ id }) =>
+              api.getApiKeyConnection(id).catch(() => apiKeyUnavailableStatus(id)),
+            ),
+          ),
         ]);
         setGitHub(nextGitHub);
+        setBrowserAuthentication(nextBrowserAuthentication);
         setAtlas(nextAtlas);
         setAtlasDirectory(atlasDirectoryForStatus(nextAtlas));
         setNotion(nextNotion);
@@ -223,6 +251,11 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setTelegramAssistantAgent(nextTelegramAssistantAgent);
         setWeCom(nextWeCom);
         setCodexMcp(nextCodexMcp);
+        setMacroStatuses(
+          Object.fromEntries(nextMacroApiKeys.map((status) => [status.provider, status])) as Partial<
+            Record<MacroDataProvider, ApiKeyConnectionStatus>
+          >,
+        );
       } else if (section === "permissions") {
         setPermissionPolicy(await api.getPermissionPolicy());
       }
@@ -359,6 +392,42 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     }
   }
 
+  async function saveMacroApiKey(provider: MacroDataProvider) {
+    const apiKey = macroApiKeys[provider].trim();
+    if (!apiKey) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const next = await api.putApiKeyConnection(provider, apiKey);
+      setMacroStatuses((current) => ({ ...current, [provider]: next }));
+      setMacroApiKeys((current) => ({ ...current, [provider]: "" }));
+      setSaved(`${provider.toUpperCase()} API key saved.`);
+    } catch (err) {
+      setMacroApiKeys((current) => ({ ...current, [provider]: "" }));
+      setError(err instanceof Error ? err.message : `Could not save ${provider.toUpperCase()} API key`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function removeMacroApiKey(provider: MacroDataProvider) {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      await api.removeApiKeyConnection(provider);
+      const next = await api.getApiKeyConnection(provider);
+      setMacroStatuses((current) => ({ ...current, [provider]: next }));
+      setMacroApiKeys((current) => ({ ...current, [provider]: "" }));
+      setSaved(`${provider.toUpperCase()} API key removed.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Could not remove ${provider.toUpperCase()} API key`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function saveNotionConnection() {
     if (!notionToken) return;
     setError(null);
@@ -415,6 +484,44 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not remove Notion data-source IDs");
     } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveBrowserAuthenticationSecret(identity: string) {
+    if (!browserUsername.trim() || !browserPassword) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const next = await api.putBrowserAuthenticationSecret(identity, browserUsername, browserPassword);
+      setBrowserAuthentication(next);
+      setSaved("Browser authentication secret saved.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save browser authentication secret");
+    } finally {
+      setBrowserUsername("");
+      setBrowserPassword("");
+      setLoading(false);
+    }
+  }
+
+  async function removeBrowserAuthenticationSecret() {
+    if (!pendingBrowserSecretDelete) return;
+    const identity = pendingBrowserSecretDelete;
+    setPendingBrowserSecretDelete(null);
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      await api.removeBrowserAuthenticationSecret(identity);
+      setBrowserAuthentication(await api.getBrowserAuthentication());
+      setSaved("Browser authentication secret removed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove browser authentication secret");
+    } finally {
+      setBrowserUsername("");
+      setBrowserPassword("");
       setLoading(false);
     }
   }
@@ -1206,6 +1313,117 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
         </section>
       )}
+      {section === "integrations" && browserAuthentication && (
+        <section className="detail-panel stack">
+          <div>
+            <h2>Browser authentication</h2>
+            <p className="muted">
+              Credentials are stored in Windows Credential Manager and used only by the trusted Act browser runtime on the exact listed login origins. They are never returned to Act or displayed again.
+            </p>
+          </div>
+          {browserAuthentication.identities.map((identity) => (
+            <div className="settings-subsection stack" key={identity.id}>
+              <div>
+                <h3>{identity.label}</h3>
+                <p className="muted">Allowed login origin: {identity.login_origins.join(", ")}</p>
+              </div>
+              <dl className="detail-grid">
+                <div><dt>Status</dt><dd>{identity.configured ? "Configured" : "Not configured"}</dd></div>
+                <div><dt>Updated</dt><dd>{formatDate(identity.updated_at)}</dd></div>
+              </dl>
+              <label>
+                {identity.configured ? "Replacement username" : "Username"}
+                <input
+                  type="text"
+                  autoComplete="off"
+                  value={browserUsername}
+                  onChange={(event) => setBrowserUsername(event.target.value)}
+                  placeholder="Never displayed after submission"
+                />
+              </label>
+              <label>
+                {identity.configured ? "Replacement password" : "Password"}
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={browserPassword}
+                  onChange={(event) => setBrowserPassword(event.target.value)}
+                  placeholder="Never displayed after submission"
+                />
+              </label>
+              <div className="button-row">
+                <button
+                  type="button"
+                  onClick={() => void saveBrowserAuthenticationSecret(identity.id)}
+                  disabled={loading || !browserUsername.trim() || !browserPassword}
+                >
+                  {identity.configured ? "Replace secret" : "Add secret"}
+                </button>
+                {identity.configured && (
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => setPendingBrowserSecretDelete(identity.id)}
+                    disabled={loading}
+                  >
+                    Delete secret
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+      {section === "integrations" && (
+        <section className="detail-panel stack">
+          <div>
+            <h2>Macro data API keys</h2>
+            <p className="muted">
+              Keys are stored in Windows Credential Manager and are used only by the trusted backend source adapters. They are never returned after submission. BLS can be used without a key.
+            </p>
+          </div>
+          {macroDataProviders.map((provider) => {
+            const status = macroStatuses[provider.id];
+            return (
+              <div className="settings-subsection stack" key={provider.id}>
+                <div>
+                  <h3>{provider.label}</h3>
+                  <p className="muted">{provider.description}</p>
+                </div>
+                <dl className="detail-grid">
+                  <div><dt>Status</dt><dd>{status?.available ? "Available" : status?.status.replace(/_/g, " ") ?? "Loading"}</dd></div>
+                  <div><dt>Last updated</dt><dd>{formatDate(status?.updated_at ?? null)}</dd></div>
+                </dl>
+                {status?.error_type && <p className="error-text">Key status: {status.error_type.replace(/_/g, " ")}</p>}
+                <label>
+                  {status?.configured ? `Replacement ${provider.label} API key` : `${provider.label} API key`}
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={macroApiKeys[provider.id]}
+                    onChange={(event) => setMacroApiKeys((current) => ({ ...current, [provider.id]: event.target.value }))}
+                    placeholder="Key is never displayed after submission"
+                  />
+                </label>
+                <div className="button-row">
+                  <button
+                    type="button"
+                    onClick={() => void saveMacroApiKey(provider.id)}
+                    disabled={loading || !macroApiKeys[provider.id].trim()}
+                  >
+                    {status?.configured ? "Replace key" : "Save key"}
+                  </button>
+                  {status?.configured && (
+                    <button type="button" className="secondary" onClick={() => void removeMacroApiKey(provider.id)} disabled={loading}>
+                      Remove key
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </section>
+      )}
       {section === "integrations" && googleOAuth && googleCalendar && gmail && (
         <section className="detail-panel stack">
           <div>
@@ -1902,6 +2120,26 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </section>
         </div>
       )}
+      {pendingBrowserSecretDelete && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="browser-secret-delete-title">
+          <section className="modal-panel stack">
+            <div>
+              <h2 id="browser-secret-delete-title">Delete browser authentication secret?</h2>
+              <p className="muted">
+                This permanently removes the username and password from Windows Credential Manager. Act will no longer be able to authenticate with this identity.
+              </p>
+            </div>
+            <div className="button-row">
+              <button type="button" className="danger" onClick={() => void removeBrowserAuthenticationSecret()}>
+                Delete secret
+              </button>
+              <button type="button" className="secondary" onClick={() => setPendingBrowserSecretDelete(null)}>
+                Cancel
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {pendingMicrosoftAction && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="microsoft-remove-title">
           <section className="modal-panel stack">
@@ -1953,6 +2191,19 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
       )}
     </section>
   );
+}
+
+function apiKeyUnavailableStatus(provider: MacroDataProvider): ApiKeyConnectionStatus {
+  return {
+    provider,
+    configured: false,
+    available: provider === "bls",
+    status: "unavailable",
+    created_at: null,
+    updated_at: null,
+    last_validated_at: null,
+    error_type: "unavailable",
+  };
 }
 
 function atlasUnavailableStatus(err: unknown): AtlasIntegrationStatus {

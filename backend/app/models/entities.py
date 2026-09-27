@@ -360,6 +360,21 @@ class IntegrationConnection(Base):
     last_validated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class BrowserAuthenticationSecret(Base):
+    __tablename__ = "browser_authentication_secrets"
+
+    identity_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    secret_store_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    secret_reference: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+
 class QuercusCourse(Base):
     __tablename__ = "quercus_courses"
 

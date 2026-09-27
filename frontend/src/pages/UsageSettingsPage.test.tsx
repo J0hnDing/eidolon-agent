@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -19,6 +19,17 @@ const permissionPolicy = {
 beforeEach(() => {
   const unavailable = () => Promise.reject(new Error("not configured"));
   vi.spyOn(api, "getGitHubConnection").mockImplementation(unavailable);
+  vi.spyOn(api, "getBrowserAuthentication").mockResolvedValue({
+    identities: [
+      {
+        id: "uoft",
+        label: "U of T Weblogin / Quercus",
+        configured: false,
+        login_origins: ["https://weblogin.utoronto.ca"],
+        updated_at: null,
+      },
+    ],
+  });
   vi.spyOn(api, "getAtlasStatus").mockImplementation(unavailable);
   vi.spyOn(api, "getNotionConnection").mockImplementation(unavailable);
   vi.spyOn(api, "getQuercusConnection").mockImplementation(unavailable);
@@ -73,6 +84,60 @@ describe("Settings subpages", () => {
     expect(screen.getByText("Shell, subprocess, and arbitrary command execution.")).toBeTruthy();
     expect(document.body.textContent).toContain("python_standard_library");
     expect(usageRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("Browser authentication secrets", () => {
+  it("keeps credentials write-only and confirms deletion in an Eidolon modal", async () => {
+    vi.spyOn(api, "getGitHubConnection").mockResolvedValue({
+      provider: "github",
+      connected: false,
+      status: "disconnected",
+      account_login: null,
+      account_id: null,
+      last_validated_at: null,
+      created_at: null,
+      updated_at: null,
+      error_type: null,
+    });
+    const configured = {
+      identities: [
+        {
+          id: "uoft",
+          label: "U of T Weblogin / Quercus",
+          configured: true,
+          login_origins: ["https://weblogin.utoronto.ca"],
+          updated_at: "2026-09-19T12:00:00Z",
+        },
+      ],
+    };
+    const put = vi.spyOn(api, "putBrowserAuthenticationSecret").mockResolvedValue(configured);
+    const get = vi.spyOn(api, "getBrowserAuthentication").mockResolvedValueOnce({
+      identities: [{ ...configured.identities[0], configured: false, updated_at: null }],
+    }).mockResolvedValue(configured);
+    const remove = vi.spyOn(api, "removeBrowserAuthenticationSecret").mockResolvedValue(undefined);
+
+    renderSettings("integrations");
+    expect(await screen.findByRole("heading", { name: "Browser authentication" })).toBeTruthy();
+
+    const username = "BROWSER_USERNAME_SENTINEL";
+    const password = "BROWSER_PASSWORD_SENTINEL";
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: username } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: password } });
+    fireEvent.click(screen.getByRole("button", { name: "Add secret" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("uoft", username, password));
+    expect((screen.getByLabelText("Replacement username") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Replacement password") as HTMLInputElement).value).toBe("");
+    expect(document.body.textContent).not.toContain(username);
+    expect(document.body.textContent).not.toContain(password);
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete secret" }));
+    expect(remove).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog", { name: "Delete browser authentication secret?" });
+    fireEvent.click(dialog.querySelector("button.danger") as HTMLButtonElement);
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("uoft"));
+    expect(get).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -223,6 +288,56 @@ describe("GitHub Settings connection", () => {
     await waitFor(() => expect(screen.getByText("octocat")).toBeTruthy());
     expect((input as HTMLInputElement).value).toBe("");
     expect(document.body.textContent).not.toContain(sentinel);
+  });
+});
+
+describe("Macro data API key settings", () => {
+  it("stores a selected provider key without rendering it", async () => {
+    vi.spyOn(api, "getGitHubConnection").mockResolvedValue({
+      provider: "github",
+      connected: false,
+      status: "disconnected",
+      account_login: null,
+      account_id: null,
+      last_validated_at: null,
+      created_at: null,
+      updated_at: null,
+      error_type: null,
+    });
+    const configured = {
+      provider: "fred" as const,
+      configured: true,
+      available: true,
+      status: "configured" as const,
+      created_at: "2026-09-23T00:00:00Z",
+      updated_at: "2026-09-23T00:00:00Z",
+      last_validated_at: "2026-09-23T00:00:00Z",
+      error_type: null,
+    };
+    vi.spyOn(api, "getApiKeyConnection").mockImplementation(async (provider) => ({
+      ...configured,
+      provider,
+      configured: false,
+      available: provider === "bls",
+      status: provider === "bls" ? "not_configured" : "unavailable",
+    }));
+    const put = vi.spyOn(api, "putApiKeyConnection").mockResolvedValue(configured);
+
+    renderSettings("integrations");
+    const fredPanel = screen.getByRole("heading", { name: "FRED" }).closest("div.settings-subsection");
+    expect(fredPanel).not.toBeNull();
+    const scoped = within(fredPanel as HTMLElement);
+    const sentinel = "EIDOLON_FRED_UI_SENTINEL_2c9f";
+    const input = scoped.getByLabelText("FRED API key");
+    fireEvent.change(input, { target: { value: sentinel } });
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe(sentinel));
+    await waitFor(() => expect(scoped.getByRole("button", { name: "Save key" }).hasAttribute("disabled")).toBe(false));
+    fireEvent.click(scoped.getByRole("button", { name: "Save key" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("fred", sentinel));
+    expect((input as HTMLInputElement).value).toBe("");
+    expect(document.body.textContent).not.toContain(sentinel);
+    expect(scoped.getByRole("button", { name: "Replace key" })).toBeTruthy();
   });
 });
 
@@ -1110,8 +1225,10 @@ describe("Atlas Settings", () => {
     expect(await screen.findByText("Running (Eidolon-owned)")).toBeTruthy();
     expect(screen.getByText(/Storing the passphrase shifts practical at-rest protection to your Windows account/)).toBeTruthy();
 
-    expect(screen.queryByLabelText(/API key/i)).toBeNull();
-    expect(screen.queryByRole("button", { name: /API key/i })).toBeNull();
+    const atlasSection = screen.getByRole("heading", { name: "Eidolon-Atlas" }).closest("section");
+    expect(atlasSection).not.toBeNull();
+    expect(within(atlasSection as HTMLElement).queryByLabelText(/API key/i)).toBeNull();
+    expect(within(atlasSection as HTMLElement).queryByRole("button", { name: /API key/i })).toBeNull();
 
     const passphraseInput = screen.getByLabelText("Atlas passphrase");
     fireEvent.change(passphraseInput, { target: { value: passphraseSentinel } });

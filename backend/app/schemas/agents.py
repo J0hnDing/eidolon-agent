@@ -36,3 +36,16 @@ class AgentPlanRequest(BaseModel):
         if any(not reference.strip() or len(reference) > 500 for reference in self.references):
             raise ValueError("References must contain 1-500 characters")
         return self
+
+
+class OpportunityScoutItem(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=500)
+
+
+class AgentOpportunityReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    opportunities: list[OpportunityScoutItem] = Field(max_length=100)

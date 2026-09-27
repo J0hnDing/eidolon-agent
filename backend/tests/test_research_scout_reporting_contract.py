@@ -83,6 +83,12 @@ def test_scout_output_flows_into_weekly_report_without_schema_drift(tmp_path, mo
     def child(name, payload):
         if name == "github_repo_scout":
             return {"repositories": [], "seen_repo": []}
+        if name == "macro_geopolitical_news_scout":
+            return {
+                "report": {"macro_picture": "", "items": [], "upcoming_catalysts": []},
+                "seen": [], "candidate_count": 0, "source_failures": [],
+                "last_fetch_at": "2026-09-07T12:00:00+00:00",
+            }
         assert name == "research_paper_scout"
         Draft202012Validator(scout_manifest["input_schema"]).validate(payload)
         return output
@@ -92,7 +98,7 @@ def test_scout_output_flows_into_weekly_report_without_schema_drift(tmp_path, mo
     result = service.run({}, now=datetime(2026, 9, 7, 12, tzinfo=UTC))
     Draft202012Validator(service_manifest["output_schema"]).validate(result)
     assert result["paper_count"] == int(selected)
-    assert [report["select"] for report in reports] == ["GitHub Projects", "AI Research"]
+    assert [report["select"] for report in reports] == ["GitHub Projects", "AI Research", "Macro"]
     assert len(reports[1]["children"]) <= 100
     seen_path = tmp_path / "seen_papers.json"
     assert (json.loads(seen_path.read_text()) if seen_path.exists() else []) == (

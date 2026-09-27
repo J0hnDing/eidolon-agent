@@ -26,6 +26,9 @@ EXPECTED_OPERATION_IDS = {
     "atlas.person.get",
     "atlas.project.list",
     "atlas.relationship.list",
+    "bea.series.latest",
+    "bls.series.latest",
+    "eia.series.latest",
     "email.conversation.get",
     "email.read_and_mark_new",
     "email.read_new",
@@ -37,6 +40,7 @@ EXPECTED_OPERATION_IDS = {
     "github.repository.get",
     "github.repository.tree.list",
     "github.repository.trending.list",
+    "fred.release.list",
     "google_calendar.event.create",
     "google_calendar.event.delete",
     "google_calendar.event.get",
@@ -128,6 +132,10 @@ def test_default_registry_lookup_and_order_are_deterministic() -> None:
             "outlook",
             "telegram",
             "huggingface",
+            "fred",
+            "bls",
+            "bea",
+            "eia",
             "wecom",
         }
     )

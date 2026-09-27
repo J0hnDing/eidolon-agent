@@ -36,7 +36,7 @@ A service can be enabled only after the current runtime, transitive function, an
 low, medium, high, blocked
 ```
 
-Current examples, summarized from the canonical config and deterministic enforcement:
+Current generated-skill runtime examples, summarized from the canonical config and deterministic enforcement (managed persistent Codex agents use the separate role-specific profiles described in [persistent agents](../runtime/agents.md)):
 
 - Low: no requested permissions, own `./cache` read/write, or explicitly approved backend-mediated Codex call/response without internet.
 - Medium: explicit public domains, package dependencies, web scraping, or Codex internet access.
@@ -64,7 +64,7 @@ For web applications, browser-side external traffic is not derived from `runtime
 
 The backend web-app policy supports scripts, forms, isolated same-origin routes, modals, and approved server-side network/Codex access. It blocks external browser traffic, top navigation, popups, downloads, privileged browser features, and WebSockets.
 
-Blocked:
+Blocked in generated-skill runtime:
 
 - wildcard network;
 - arbitrary filesystem reads;

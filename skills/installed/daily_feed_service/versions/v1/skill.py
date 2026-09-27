@@ -73,8 +73,8 @@ def run(
     local_now = _local_now(now)
     weather = _validated_weather((weather_fetcher or _fetch_weather)(), local_now.date())
     events = _calendar_events(local_now)
-    todos_by_date = _todos_due(local_now.date())
-    markdown = _feed_markdown(local_now, weather, events, todos_by_date)
+    overdue_todos, todos_by_date = _todos_due(local_now)
+    markdown = _feed_markdown(local_now, weather, events, overdue_todos, todos_by_date)
     if len(markdown) > MAX_MARKDOWN:
         raise ValueError("Daily Feed markdown exceeded the integration limit")
     result = integration_runtime_capabilities.call(
@@ -88,7 +88,7 @@ def run(
         "page_updated": True,
         "characters": len(markdown),
         "event_count": len(events),
-        "todo_count": sum(len(items) for items in todos_by_date.values()),
+        "todo_count": len(overdue_todos) + sum(len(items) for items in todos_by_date.values()),
     }
 
 
@@ -252,9 +252,13 @@ def _event_sort_key(event: dict[str, Any]) -> tuple[datetime, str, str]:
     return moment, kind, f"{summary or ''}\0{event_id or ''}".casefold()
 
 
-def _todos_due(start_date: date) -> dict[date, list[dict[str, Any]]]:
+def _todos_due(
+    local_now: datetime,
+) -> tuple[list[dict[str, Any]], dict[date, list[dict[str, Any]]]]:
+    start_date = local_now.date()
     target_dates = [start_date + timedelta(days=offset) for offset in range(3)]
     result = {target: [] for target in target_dates}
+    overdue: list[dict[str, Any]] = []
     cursor: str | None = None
     seen_cursors: set[str] = set()
     for _ in range(MAX_PROVIDER_PAGES):
@@ -273,12 +277,20 @@ def _todos_due(start_date: date) -> dict[date, list[dict[str, Any]]]:
             if due_at is None:
                 continue
             due_date, due_moment = _todo_due_value(due_at)
-            if due_date in result:
-                result[due_date].append({**todo, "_due_moment": due_moment})
+            normalized = {**todo, "_due_moment": due_moment}
+            if due_date < start_date or (
+                due_date == start_date
+                and due_moment is not None
+                and due_moment < local_now
+            ):
+                overdue.append(normalized)
+            elif due_date in result:
+                result[due_date].append(normalized)
         if not has_more:
+            overdue.sort(key=_todo_sort_key)
             for items in result.values():
                 items.sort(key=_todo_sort_key)
-            return result
+            return overdue, result
         if next_cursor is None or next_cursor in seen_cursors:
             raise ValueError("Notion Todo returned invalid pagination")
         seen_cursors.add(next_cursor)
@@ -343,6 +355,7 @@ def _feed_markdown(
     local_now: datetime,
     weather: dict[str, float | int],
     events: list[dict[str, Any]],
+    overdue_todos: list[dict[str, Any]],
     todos_by_date: dict[date, list[dict[str, Any]]],
 ) -> str:
     lines = [
@@ -355,7 +368,8 @@ def _feed_markdown(
         "## Schedule",
     ]
     lines.extend(_event_lines(events))
-    lines.extend(["", "## Todos"])
+    lines.extend(["", "## Todos", "", "### Overdue"])
+    lines.extend(_overdue_todo_lines(overdue_todos))
     labels = ("Today", "Tomorrow", "Day after tomorrow")
     for label, target in zip(labels, todos_by_date, strict=True):
         lines.extend(["", f"### {label}"])
@@ -443,6 +457,24 @@ def _todo_lines(todos: list[dict[str, Any]]) -> list[str]:
         lines.append(f"- {prefix}{_plain(todo['title'])}{priority}")
     if len(todos) > MAX_RENDERED_ITEMS:
         lines.append(f"- …and {len(todos) - MAX_RENDERED_ITEMS} more todos.")
+    return lines
+
+
+def _overdue_todo_lines(todos: list[dict[str, Any]]) -> list[str]:
+    if not todos:
+        return ["- None."]
+    lines = []
+    for todo in todos[:MAX_RENDERED_ITEMS]:
+        due = todo["_due_moment"]
+        due_label = (
+            due.strftime("%Y-%m-%d %H:%M")
+            if due is not None
+            else _todo_due_value(todo["due_at"])[0].isoformat()
+        )
+        priority = f" [{todo['priority']}]" if todo["priority"] is not None else ""
+        lines.append(f"- {due_label} — {_plain(todo['title'])}{priority}")
+    if len(todos) > MAX_RENDERED_ITEMS:
+        lines.append(f"- …and {len(todos) - MAX_RENDERED_ITEMS} more overdue todos.")
     return lines
 
 

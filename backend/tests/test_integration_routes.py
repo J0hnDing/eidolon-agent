@@ -10,6 +10,8 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base
 from app.routers import integrations
 from app.schemas.integration import (
+    ApiKeyCredentialWrite,
+    BrowserAuthenticationSecretWrite,
     GitHubCredentialWrite,
     GoogleOAuthClientWrite,
     MicrosoftOAuthClientWrite,
@@ -17,6 +19,7 @@ from app.schemas.integration import (
     NotionDailyFeedPageWrite,
     NotionDataSourcesWrite,
 )
+from app.services.browser_authentication_service import BrowserAuthenticationService
 from app.services.daily_feed_page_service import FakeDailyFeedPageProvider
 from app.services.github_provider import FakeGitHubProviderAdapter
 from app.services.gmail_provider import FakeGmailProviderAdapter
@@ -28,6 +31,77 @@ from app.services.secret_store import FakeSecretStore
 from app.services.todo_service import FakeTodoProvider
 
 SENTINEL = "EIDOLON_GITHUB_ROUTE_SENTINEL_d7d7"
+
+
+def test_macro_api_key_routes_store_only_opaque_references(
+    db: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sqlalchemy import select
+
+    from app.models import IntegrationConnection
+
+    store = FakeSecretStore()
+    service = IntegrationService(db, project_root=tmp_path, secret_store=store)
+    monkeypatch.setattr(integrations, "build_default_integration_service", lambda _db: service)
+    monkeypatch.setattr(integrations.FunctionCatalogService, "refresh", lambda _self: None)
+    sentinel = "EIDOLON_FRED_ROUTE_SECRET_34d8"
+
+    created = integrations.put_fred_api_key(ApiKeyCredentialWrite(api_key=sentinel), db)
+    assert created.provider == "fred"
+    assert created.configured is True
+    assert created.available is True
+    assert created.last_validated_at is not None
+    serialized = created.model_dump_json()
+    assert sentinel not in serialized
+    assert "secret_reference" not in serialized
+
+    row = db.scalar(select(IntegrationConnection).where(IntegrationConnection.provider == "fred"))
+    assert row is not None
+    assert store.get(row.secret_reference, namespace="fred") == sentinel
+    assert integrations.fred_api_key_status(db).available is True
+
+    replaced = integrations.put_fred_api_key(ApiKeyCredentialWrite(api_key="EIDOLON_FRED_ROUTE_SECRET_REPLACED"), db)
+    assert replaced.last_validated_at is not None
+
+    removed = integrations.remove_fred_api_key(db)
+    assert removed.status_code == 204
+    assert integrations.fred_api_key_status(db).status == "not_configured"
+
+
+def test_browser_authentication_settings_routes_never_return_secrets(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = FakeSecretStore()
+    service = BrowserAuthenticationService(db, secret_store=store)
+    monkeypatch.setattr(
+        integrations,
+        "build_default_browser_authentication_service",
+        lambda _db: service,
+    )
+    username = "BROWSER_ROUTE_USERNAME_SENTINEL"
+    password = "BROWSER_ROUTE_PASSWORD_SENTINEL"
+
+    created = integrations.put_browser_authentication_secret(
+        "uoft",
+        BrowserAuthenticationSecretWrite(username=username, password=password),
+        db,
+    )
+
+    serialized = created.model_dump_json()
+    assert created.identities[0].configured is True
+    assert username not in serialized
+    assert password not in serialized
+    assert "secret_reference" not in serialized
+    status = integrations.browser_authentication_status(db)
+    assert username not in status.model_dump_json()
+    assert password not in status.model_dump_json()
+
+    removed = integrations.remove_browser_authentication_secret("uoft", db)
+    assert removed.status_code == 204
+    assert integrations.browser_authentication_status(db).identities[0].configured is False
 
 
 @pytest.fixture
