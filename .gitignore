@@ -10,4 +10,3 @@ dist/
 .pytest_tmp/
 .pytest_tmp_*/
 /runtime/
-STARTUP.md
