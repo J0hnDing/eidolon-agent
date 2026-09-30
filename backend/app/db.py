@@ -49,6 +49,13 @@ def ensure_local_schema() -> None:
             columns = {column["name"] for column in inspector.get_columns("agent_proposals")}
             if "telegram_outcome_fingerprint" not in columns:
                 connection.execute(text("ALTER TABLE agent_proposals ADD COLUMN telegram_outcome_fingerprint VARCHAR(128)"))
+            for column in ("action_json", "provenance_json", "follow_up_json", "execution_state_json"):
+                if column not in columns:
+                    connection.execute(text(f"ALTER TABLE agent_proposals ADD COLUMN {column} JSON"))
+        if "assistant_follow_ups" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("assistant_follow_ups")}
+            if "sent_turn_id" not in columns:
+                connection.execute(text("ALTER TABLE assistant_follow_ups ADD COLUMN sent_turn_id INTEGER"))
         if "act_sessions" in table_names:
             columns = {column["name"] for column in inspector.get_columns("act_sessions")}
             if "agent_id" not in columns:
@@ -60,6 +67,12 @@ def ensure_local_schema() -> None:
                         "UPDATE act_sessions SET proposal_count = (SELECT COUNT(*) FROM agent_proposals "
                         "WHERE source_session_id = act_sessions.id AND replaces_proposal_id IS NULL)"
                     ))
+        if "act_turns" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("act_turns")}
+            if "backend_message_kind" not in columns:
+                connection.execute(text("ALTER TABLE act_turns ADD COLUMN backend_message_kind VARCHAR(32)"))
+            if "assessment_report_id" not in columns:
+                connection.execute(text("ALTER TABLE act_turns ADD COLUMN assessment_report_id VARCHAR(128)"))
         if "telegram_bot_connections" in table_names:
             columns = {column["name"] for column in inspector.get_columns("telegram_bot_connections")}
             for column, definition in {

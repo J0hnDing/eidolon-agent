@@ -6,22 +6,22 @@ Eidolon uses one private Notion connection with separate user-configured data so
 
 Create a private/internal Notion connection with **read content**, **insert content**, and **update content** capabilities. Manually share the Todo database with that connection. Do not use OAuth or a broad personal token.
 
-Create one database/data source with this exact property schema:
+Create one database/data source with these required properties. Eidolon ignores extra columns:
 
 | Todo field | Notion property | Type |
 | --- | --- | --- |
 | `id` | none | Notion page ID |
 | `title` | `Title` | Title |
 | `done` | `Done` | Checkbox |
+| `archived` | `Archived` | Checkbox |
 | `priority` | `Priority` | Select with exactly `Low`, `Medium`, and `High` |
-| `start_at` | `Start At` | Date |
 | `due_at` | `Due At` | Date |
 | `estimated_minutes` | `Estimated Minutes` | Number |
 | `atlas_goal_id` | `Atlas Goal ID` | Rich text |
 | `notes` | `Notes` | Rich text |
 | `created_at` | `Created At` | Created time |
 
-All editable properties except `Title` are optional. `Done` is always returned as a boolean and defaults to unchecked when omitted during creation. A title-only row therefore works naturally in Notion mobile, and `Created At` is populated automatically. Arrange database views manually in Notion; Eidolon never creates, migrates, renames, or continuously reconciles the schema.
+All editable properties except `Title` are optional. `Done` and `Archived` are always returned as booleans and default to unchecked when omitted during creation. A title-only row therefore works naturally in Notion mobile, and `Created At` is populated automatically. Arrange database views manually in Notion; Eidolon never creates, migrates, renames, or continuously reconciles the schema.
 
 Create a second Reports database/data source with exactly these properties:
 
@@ -44,12 +44,12 @@ The Todo registry contract exposes four generated-skill operations:
 
 | Operation | Risk | Input and result |
 | --- | --- | --- |
-| `notion.todo.list` | low, read-only | Optional `page_size` 1-100 and `start_cursor`; returns newest-created `todos`, `has_more`, and `next_cursor`. Trashed pages are excluded. |
-| `notion.todo.create` | medium write | Requires a non-empty `title`; all other mutable fields are optional; returns the normalized todo. |
-| `notion.todo.update` | medium write | Requires `id` and at least one mutable field. Omitted fields are unchanged and explicit `null` clears an optional field. |
+| `notion.todo.list` | low, read-only | Optional `page_size` 1-100 and `start_cursor`; returns newest-created `todos`, `has_more`, and `next_cursor`. Trashed pages are excluded; archived rows remain readable. |
+| `notion.todo.create` | medium write | Requires a non-empty `title`; all other mutable fields, including `archived`, are optional; returns the normalized todo. |
+| `notion.todo.update` | medium write | Requires `id` and at least one mutable field, including `archived`. Omitted fields are unchanged and explicit `null` clears an optional field. |
 | `notion.todo.delete` | medium write | Requires `id`, sets `in_trash: true`, and returns `{id, removed: true}`. |
 
-`id` is the Notion page ID, `done` is the `Done` checkbox state, and `created_at` is the immutable page creation timestamp. Create and update accept `done`; list returns it for every todo. `atlas_goal_id` is an opaque optional string. Atlas does not know about Notion, and every todo operation remains independent of Atlas availability.
+`id` is the Notion page ID, `done` is the `Done` checkbox state, `archived` is the `Archived` checkbox state, `created_at` is the immutable page creation timestamp, and `last_edited_at` is Notion's page-level last edited timestamp. Create and update accept `done` and `archived`; list returns both for every todo. `atlas_goal_id` is an opaque optional string. Atlas does not know about Notion, and every todo operation remains independent of Atlas availability.
 
 The Reports contract exposes four additional operations:
 
@@ -62,7 +62,7 @@ The Reports contract exposes four additional operations:
 
 Report metadata is exactly `id`, `name`, `created_time`, and `select`. Create passes native Notion blocks through without Markdown parsing or block conversion. Get uses Notion block-children pagination and returns only the selected page of raw top-level blocks; callers must follow `next_cursor` for more. Both report reads and writes are contained to the configured Reports data source.
 
-Assistant assessments use a separate private `opportunity_scout_report` capability. It writes a report in this same configured Reports data source with `Select = Opportunities`, a date-stamped name, and only a bulleted list of opportunity names and short descriptions. This assessment write requires no per-call approval. Add the `Opportunities` Select option to an existing Reports data source before running assessments; the exact schema validator requires it.
+After validating the structured first-turn Assistant assessment, the backend writes the ordered opportunity title and description pairs to this configured Reports data source with `Select = Opportunities` and a date-stamped name. An empty opportunity list is valid. The backend performs this report write without proposal or per-call approval. The Reports data source must contain the exact `Opportunities` Select option.
 
 The Daily Feed contract adds one medium-risk operation:
 
@@ -74,11 +74,11 @@ The caller cannot supply a page ID. `NotionDailyFeedProvider` fixes every reques
 
 The list request does not send `in_trash` in its query body because Notion rejects that parameter for this data-source query. The provider requires every returned page to contain a boolean `in_trash` value and excludes pages where it is `true`, so malformed or trashed rows cannot enter the normalized result. Delete uses `in_trash: true` only in the supported page-update body and requires the returned page to confirm the boolean value.
 
-Notion does not provide permanent page deletion through the API. In this contract, delete and completion both mean moving the page to trash. See [Notion trash semantics](https://developers.notion.com/reference/trash-page).
+Notion does not provide permanent page deletion through the API. In this contract, delete means moving the page to trash, while scheduled completion means setting the `Archived` checkbox and keeping the row readable. See [Notion trash semantics](https://developers.notion.com/reference/trash-page).
 
-## Scheduled Done Cleanup
+## Scheduled Done Archive
 
-The scheduler automatically registers the trusted backend-owned service `backend.notion.todo.cleanup_done` to run daily at 03:00 `America/Toronto`. It follows every `next_cursor` within a 100-page bound, moves only todos with `done: true` to trash, continues processing after an individual deletion failure, and returns bounded deleted IDs and failure details. A disconnected or invalid Notion connection fails safely and is tried again on the next daily run.
+The scheduler automatically registers the trusted backend-owned service `backend.notion.todo.cleanup_done` to run daily at 03:00 `America/Toronto`. It follows every `next_cursor` within a 100-page bound, updates only todos with `done: true` and `archived: false` to set `archived: true`, skips already archived rows, continues processing after an individual update failure, and returns bounded archived IDs and failure details. A disconnected or invalid Notion connection fails safely and is tried again on the next daily run. The separate `notion.todo.delete` operation still moves a page to Notion trash when explicitly requested.
 
 This service is absent from the ordinary function catalog and is not exposed to ProductManager, generated skills, direct API callers, or Codex MCP. Only the scheduler-owned platform-service dispatcher may invoke it. It is a platform job rather than a `Skill` or `SkillSchedule`, so it does not require skill/runtime approval records. The Schedules page includes a read-only view of the registered platform job with its next and last run state.
 

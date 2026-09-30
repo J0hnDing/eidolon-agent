@@ -192,6 +192,10 @@ def test_default_adapter_composition_is_exact_and_secret_free() -> None:
         "outlook",
         "telegram",
         "huggingface",
+        "fred",
+        "bls",
+        "bea",
+        "eia",
     )
     invocation = _invocation()
     result = ProviderExecutionResult(output=_repository_output())

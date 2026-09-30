@@ -6,8 +6,11 @@ from pathlib import Path
 import pytest
 
 PACKAGE_DIR = Path(__file__).resolve().parents[1]
-BACKEND_DIR = PACKAGE_DIR.parents[2] / "backend"
-sys.path.insert(0, str(BACKEND_DIR))
+for parent in PACKAGE_DIR.parents:
+    backend_dir = parent / "backend"
+    if (backend_dir / "web_runtime_capabilities.py").is_file():
+        sys.path.insert(0, str(backend_dir))
+        break
 sys.path.insert(0, str(PACKAGE_DIR))
 
 import web_runtime_capabilities  # noqa: E402
@@ -18,7 +21,6 @@ TODO = {
     "id": "page-1",
     "title": "Buy groceries",
     "priority": "medium",
-    "start_at": None,
     "due_at": "2026-08-30",
     "estimated_minutes": 20,
     "atlas_goal_id": None,
@@ -94,6 +96,8 @@ def test_validation_rejects_unselected_fields_and_empty_updates(fake_integration
     status, body, _ = run_request("POST", "/api/todos", {"title": "x", "credential": "nope"})
     assert status == 400 and body["error"] == "invalid_input"
     status, body, _ = run_request("PATCH", "/api/todos/page-1", {})
+    assert status == 400 and body["error"] == "invalid_input"
+    status, body, _ = run_request("PATCH", "/api/todos/page-1", {"start_at": "2026-09-30"})
     assert status == 400 and body["error"] == "invalid_input"
     assert not fake_integration.calls
 

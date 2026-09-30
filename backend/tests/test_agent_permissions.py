@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.db import Base
 from app.execution.types import InvocationExecutionError, InvocationOutcome
 from app.integrations.types import IntegrationEffect, RiskLevel
-from app.models import ActSession, InvocationApproval, McpAuditRecord
+from app.models import ActSession, AgentPolicy, InvocationApproval, McpAuditRecord
 from app.schemas.agents import AgentPolicyUpdate
 from app.services.agent_policy_service import AgentPermissionError, AgentPolicyService
 from app.services.function_catalog_service import FunctionCatalogService
@@ -178,9 +178,22 @@ def test_plan_request_is_never_public_or_observer_tool(context):
     assert private not in {
         tool.name for tool in McpFunctionService(db, agent_token=credential(db, "observer")).list_tools()
     }
-    assert private in {
+    assert private not in {
         tool.name for tool in McpFunctionService(db, agent_token=credential(db, "assistant")).list_tools()
     }
+
+
+def test_obsolete_assistant_private_ids_are_filtered_from_saved_policy(context):
+    db, _entries = context
+    db.add(AgentPolicy(id="assistant", policy_json={
+        **AgentPolicyUpdate().model_dump(),
+        "allowed_functions": ["plan_approval_request", "read"],
+        "banned_functions": ["opportunity_scout_report"],
+    }))
+    db.commit()
+    policy = AgentPolicyService(db).policy("assistant")
+    assert policy.allowed_functions == ["read"]
+    assert policy.banned_functions == []
 
 
 def test_browser_authentication_is_private_to_act(context):

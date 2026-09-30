@@ -1203,6 +1203,52 @@ def test_direct_user_notion_and_atlas_calls_reuse_configured_containment(
     assert atlas.calls == [("atlas.person.get", {})]
 
 
+def test_atlas_goal_update_requires_authorization_and_audits_goal_id(db: Session, tmp_path: Path) -> None:
+    requirement = {"provider": "atlas", "operations": ["atlas.goal.update"], "resource_scope": {}}
+    skill, manifest = create_installed_skill(db, tmp_path, requirement=requirement)
+    atlas = FakeAtlasProviderAdapter()
+    service = IntegrationService(db, project_root=tmp_path, secret_store=None, atlas=atlas)
+    service.provider_connected = lambda provider: provider == "atlas"  # type: ignore[method-assign]
+    payload = {"id": "goal-1", "expected_revision": 2, "progress": 55}
+
+    with pytest.raises(IntegrationError):
+        invoke(service, "atlas.goal.update", payload, caller_context(skill))
+    assert atlas.calls == []
+
+    authorize(service, skill, manifest)
+    assert invoke(service, "atlas.goal.update", payload, caller_context(skill)) == {
+        "goal": {
+            "id": "goal-1", "parent_goal_id": None, "revision": 3,
+            "title": "Fake Goal", "description": "", "horizon": "short", "importance": "medium",
+            "target_date": None, "progress": 55, "result": None, "following_goal_ids": [],
+        }
+    }
+    assert atlas.calls == [("atlas.goal.update", payload)]
+    audit = db.scalar(select(IntegrationAuditRecord).where(
+        IntegrationAuditRecord.operation_id == "atlas.goal.update",
+        IntegrationAuditRecord.status == "succeeded",
+    ))
+    assert audit.resource == "goal:goal-1"
+
+
+def test_atlas_goal_create_requires_authorization(db: Session, tmp_path: Path) -> None:
+    requirement = {"provider": "atlas", "operations": ["atlas.goal.create"], "resource_scope": {}}
+    skill, manifest = create_installed_skill(db, tmp_path, requirement=requirement)
+    atlas = FakeAtlasProviderAdapter()
+    service = IntegrationService(db, project_root=tmp_path, secret_store=None, atlas=atlas)
+    service.provider_connected = lambda provider: provider == "atlas"  # type: ignore[method-assign]
+
+    with pytest.raises(IntegrationError):
+        invoke(service, "atlas.goal.create", {"title": "New"}, caller_context(skill))
+    assert atlas.calls == []
+
+    authorize(service, skill, manifest)
+    output = invoke(service, "atlas.goal.create", {"title": "New"}, caller_context(skill))
+    assert output["created"] is True
+    assert output["goal"]["title"] == "New"
+    assert atlas.calls == [("atlas.goal.create", {"title": "New"})]
+
+
 def test_atlas_know_uses_bounded_codex_and_audits_only_node_id(db: Session, tmp_path: Path) -> None:
     requirement = {
         "provider": "atlas",

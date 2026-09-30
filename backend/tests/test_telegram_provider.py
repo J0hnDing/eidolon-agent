@@ -397,8 +397,8 @@ def test_agent_proposal_delivery_has_namespaced_callbacks_and_complete_instructi
     )
     rendered = html.unescape("\n".join(message["text"] for message in api.sent_messages))
     assert "Finish the report" in rendered
-    assert "Open the report workspace and complete the remaining analysis." in rendered
-    assert "todo: 12" in rendered
+    assert "Open the report workspace and complete the remaining analysis." not in rendered
+    assert "todo: 12" not in rendered
 
     edit_agent_proposal_outcome(
         api,
@@ -413,7 +413,7 @@ def test_agent_proposal_delivery_has_namespaced_callbacks_and_complete_instructi
         execution_status="queued",
     )
 
-    assert api.edited_messages[-1]["text"].startswith("✅ <b>Approved · Act queued</b>")
+    assert api.edited_messages[-1]["text"].startswith("✅ <b>Approved · Queued</b>")
     assert api.edited_messages[-1]["reply_markup"] == {"inline_keyboard": []}
 
     callback_data, _ = build_proposal_callback_data(4, "deny", "fixed_nonce_123")

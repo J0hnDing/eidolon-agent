@@ -28,9 +28,9 @@ const agents: AgentDefinition[] = [
     id: "assistant",
     name: "Assistant",
     description: "Assesses goals and proposes work for Act.",
-    policy: { max_risk: "medium", read_only: true, allowed_functions: ["plan_approval_request"], banned_functions: [], model: null, reasoning_effort: null },
+    policy: { max_risk: "medium", read_only: true, allowed_functions: [], banned_functions: [], model: null, reasoning_effort: null },
     permissions: { filesystem: "Read-only shared root", web_search: true },
-    functions: [{ id: "plan_approval_request", title: "Request plan approval", description: "Submits a plan for review.", risk_level: "medium", mcp_read_only: false, allowed: true, reason: "Private Assistant capability" }],
+    functions: [],
   },
 ];
 
@@ -55,7 +55,7 @@ describe("AgentsPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Assistant" })).toBeTruthy();
     expect(screen.getByText("Read-only shared root")).toBeTruthy();
-    expect(screen.getByText("Request plan approval")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Proposed actions" })).toBeTruthy();
     expect(screen.getByText("Review open goals")).toBeTruthy();
     expect(screen.getByText(/at most the five most recently created Assistant sessions/i)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Disable" })).toBeTruthy();
@@ -84,5 +84,37 @@ describe("AgentsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Update policy" }));
 
     await waitFor(() => expect(updatePolicy).toHaveBeenCalledWith("observer", expect.objectContaining({ max_risk: "low" })));
+  });
+
+  it("lets the user edit pending deterministic function steps", async () => {
+    vi.spyOn(api, "listAgents").mockResolvedValue(agents);
+    vi.spyOn(api, "getAgent").mockResolvedValue(agents[2]);
+    vi.spyOn(api, "listAgentSessions").mockResolvedValue([]);
+    const proposal = {
+      id: 9, title: "Create a calendar event", rationale: "", instruction: "",
+      actions: "Create a calendar event", references: [], status: "pending",
+      execution_status: null, act_session_id: null, created_at: "2026-09-28T12:00:00Z",
+      source_session_id: 3,
+      action: { type: "functions" as const, description: "Create a calendar event", steps: [
+        { function: "google_calendar.event.create", arguments: { title: "Before" } },
+      ] },
+    };
+    vi.spyOn(api, "listAssistantProposals").mockResolvedValue([proposal]);
+    vi.spyOn(api, "getAssistantAssessment").mockResolvedValue({
+      enabled: false, next_run_at: null, last_run_at: null, last_status: null,
+    });
+    const edit = vi.spyOn(api, "editAssistantFunctionProposal").mockResolvedValue(proposal);
+    render(<MemoryRouter initialEntries={["/agents/assistant"]}>
+      <Routes><Route path="/agents/:agentId" element={<AgentsPage />} /></Routes>
+    </MemoryRouter>);
+    const editor = await screen.findByText("Edit function sequence");
+    fireEvent.click(editor);
+    fireEvent.change(screen.getByLabelText("Function sequence JSON"), { target: {
+      value: '[{"function":"google_calendar.event.create","arguments":{"title":"After"}}]',
+    } });
+    fireEvent.click(screen.getByRole("button", { name: "Save sequence" }));
+    await waitFor(() => expect(edit).toHaveBeenCalledWith(9, [
+      { function: "google_calendar.event.create", arguments: { title: "After" } },
+    ]));
   });
 });

@@ -1,7 +1,11 @@
 import json
 
+import pytest
+from jsonschema import Draft202012Validator
+
 from app.services import atlas_provider as provider_module
 from app.services.atlas_provider import UrllibAtlasProviderAdapter
+from app.services.github_provider import IntegrationProviderError
 from app.services.integration_registry import OPERATIONS
 
 
@@ -144,9 +148,9 @@ def test_native_experience_and_project_normalization_preserves_ordering() -> Non
 def test_native_goals_rebuild_hierarchy_and_progression_edges() -> None:
     adapter = UrllibAtlasProviderAdapter()
     goals = [
-        record("root", "goal", "Root", {"importance": "high", "description": "Top"}, parentId=None, position=0),
-        record("second", "goal", "Second", {}, parentId="root", position=1),
-        record("first", "goal", "First", {"horizon": "short"}, parentId="root", position=0),
+        record("root", "goal", "Root", {"importance": "high", "description": "Top"}, parentId=None, position=0, progress=40, revision=1),
+        record("second", "goal", "Second", {"result": "Delivered"}, parentId="root", position=1, progress=60, revision=2),
+        record("first", "goal", "First", {"horizon": "short"}, parentId="root", position=0, progress=20, revision=3),
     ]
     calls = []
 
@@ -160,6 +164,12 @@ def test_native_goals_rebuild_hierarchy_and_progression_edges() -> None:
     result = adapter.execute(OPERATIONS["atlas.goal.list"], {})
 
     assert [item["id"] for item in result["goals"][0]["subgoals"]] == ["first", "second"]
+    assert result["goals"][0]["progress"] == 40
+    assert result["goals"][0]["revision"] == 1
+    assert [item["progress"] for item in result["goals"][0]["subgoals"]] == [20, 60]
+    assert result["goals"][0]["subgoals"][1]["result"] == "Delivered"
+    assert result["goals"][0]["subgoals"][1]["following_goal_ids"] == ["first"]
+    Draft202012Validator(OPERATIONS["atlas.goal.list"].output_schema).validate(result)
     assert result["progressions"] == [
         {
             "parent_goal_id": "root",
@@ -168,6 +178,141 @@ def test_native_goals_rebuild_hierarchy_and_progression_edges() -> None:
         }
     ]
     assert "/api/goals/root/progression" in calls
+
+
+@pytest.mark.parametrize("progress", [None, True, -1, 101, 10.5])
+def test_native_goal_list_rejects_invalid_progress(progress) -> None:
+    adapter = UrllibAtlasProviderAdapter()
+    adapter._request = (  # type: ignore[method-assign]  # noqa: SLF001
+        lambda path, *_args, **_kwargs: [record("root", "goal", "Root", {}, parentId=None, position=0, progress=progress, revision=1)]
+    )
+    with pytest.raises(IntegrationProviderError, match="invalid Goal progress"):
+        adapter.execute(OPERATIONS["atlas.goal.list"], {})
+
+
+def test_goal_create_supports_top_level_and_idempotent_subgoal() -> None:
+    adapter = UrllibAtlasProviderAdapter()
+    parent = record("parent", "goal", "Plan", {"horizon": "long"}, parentId=None, revision=1, trashed=False)
+    created = record(
+        "child", "goal", "Draft", {"horizon": "long", "importance": "medium", "description": "",
+                                   "targetDate": "", "progress": 100, "result": "Done"},
+        parentId="parent", revision=1, trashed=False,
+    )
+    calls = []
+
+    def request(path, body, *, method, **_kwargs):
+        calls.append((method, path, body))
+        if method == "GET" and path == "/api/records/parent":
+            return parent
+        if method == "POST" and path.startswith("/api/goals/"):
+            return {"record": created, "created": False}
+        if path == "/api/goals/child/progression":
+            return {"goal": {"id": "child", "progress": 100}, "nodes": [], "dependencies": []}
+        if path == "/api/goals/parent/progression":
+            return {"dependencies": [{"goalId": "child", "prerequisiteId": "first"}]}
+        raise AssertionError(path)
+
+    adapter._request = request  # type: ignore[method-assign]  # noqa: SLF001
+    result = adapter.execute(OPERATIONS["atlas.goal.create"], {
+        "title": "Draft", "parent_goal_id": "parent", "following_goal_ids": ["first"],
+        "progress": 100, "result": "Done", "request_id": "11111111-1111-4111-8111-111111111111",
+    })
+    assert result["created"] is False
+    assert result["goal"]["horizon"] == "long"
+    assert result["goal"]["following_goal_ids"] == ["first"]
+    assert result["goal"]["result"] == "Done"
+    assert calls[1] == ("POST", "/api/goals/parent/subgoals", {
+        "requestId": "11111111-1111-4111-8111-111111111111", "title": "Draft",
+        "data": created["data"], "customFieldValues": {}, "prerequisiteIds": ["first"],
+    })
+    Draft202012Validator(OPERATIONS["atlas.goal.create"].output_schema).validate(result)
+
+
+def test_goal_create_top_level_uses_native_record_api() -> None:
+    adapter = UrllibAtlasProviderAdapter()
+    calls = []
+
+    def request(path, body, *, method, **_kwargs):
+        calls.append((method, path, body))
+        if method == "POST":
+            return record("root", "goal", "Plan", body["data"], parentId=None, revision=1, trashed=False)
+        return {"goal": {"id": "root", "progress": 0}, "dependencies": []}
+
+    adapter._request = request  # type: ignore[method-assign]  # noqa: SLF001
+    result = adapter.execute(OPERATIONS["atlas.goal.create"], {"title": "Plan"})
+    assert calls[0] == ("POST", "/api/records", {
+        "category": "goal", "title": "Plan", "customFieldValues": {},
+        "data": {"horizon": "short", "importance": "medium", "targetDate": "", "description": "", "progress": 0},
+    })
+    assert result["goal"]["parent_goal_id"] is None
+    assert result["goal"]["progress"] == 0
+    assert result["created"] is True
+    Draft202012Validator(OPERATIONS["atlas.goal.create"].output_schema).validate(result)
+
+
+def test_goal_update_preserves_other_data_and_updates_result_and_following_goals() -> None:
+    adapter = UrllibAtlasProviderAdapter()
+    current = record(
+        "leaf", "goal", "Write report",
+        {"horizon": "short", "importance": "high", "description": "Keep this", "progress": 20, "result": ""},
+        parentId="parent", revision=4, trashed=False,
+    )
+    calls = []
+
+    def request(path, body, *, method, **_kwargs):
+        calls.append((method, path, body))
+        if method == "GET":
+            if path == "/api/records/leaf":
+                return current
+            if path == "/api/goals/leaf/progression":
+                return {"goal": {"id": "leaf", "progress": 100}, "nodes": []}
+            return {"dependencies": [{"goalId": "leaf", "prerequisiteId": "first"}]}
+        return {**current, "title": body["title"], "revision": 5, "data": body["data"]}
+
+    adapter._request = request  # type: ignore[method-assign]  # noqa: SLF001
+    result = adapter.execute(
+        OPERATIONS["atlas.goal.update"], {
+            "id": "leaf", "expected_revision": 4, "title": "Submit report",
+            "progress": 100, "result": "Delivered", "following_goal_ids": ["first"],
+        }
+    )
+    assert calls == [
+        ("GET", "/api/records/leaf", None),
+        ("PATCH", "/api/records/leaf", {
+            "revision": 4,
+            "title": "Submit report", "prerequisiteIds": ["first"],
+            "data": {"horizon": "short", "importance": "high", "description": "Keep this", "progress": 100, "result": "Delivered"},
+        }),
+        ("GET", "/api/goals/leaf/progression", None),
+        ("GET", "/api/goals/parent/progression", None),
+    ]
+    assert result["goal"]["title"] == "Submit report"
+    assert result["goal"]["revision"] == 5
+    assert result["goal"]["progress"] == 100
+    assert result["goal"]["result"] == "Delivered"
+    assert result["goal"]["following_goal_ids"] == ["first"]
+    Draft202012Validator(OPERATIONS["atlas.goal.update"].output_schema).validate(result)
+
+
+@pytest.mark.parametrize("reason", ["top_result", "stale", "trashed", "empty"])
+def test_goal_update_rejects_unusable_goal_without_patching(reason) -> None:
+    adapter = UrllibAtlasProviderAdapter()
+    current = record("leaf", "goal", "Goal", {"horizon": "short", "progress": 20}, revision=4, trashed=reason == "trashed")
+    methods = []
+
+    def request(path, _body, *, method, **_kwargs):
+        methods.append(method)
+        return current
+
+    adapter._request = request  # type: ignore[method-assign]  # noqa: SLF001
+    expected_revision = 3 if reason == "stale" else 4
+    extra = {} if reason == "empty" else {"result": "Done"} if reason == "top_result" else {"progress": 50}
+    with pytest.raises(IntegrationProviderError) as error:
+        adapter.execute(OPERATIONS["atlas.goal.update"], {
+            "id": "leaf", "expected_revision": expected_revision, **extra,
+        })
+    assert error.value.error_type == ("stale_revision" if reason == "stale" else "invalid_input")
+    assert "PATCH" not in methods
 
 
 def test_native_request_never_sends_authorization_header(monkeypatch) -> None:

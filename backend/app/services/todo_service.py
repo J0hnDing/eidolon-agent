@@ -91,13 +91,14 @@ class FakeTodoProvider:
             "id": f"fake-notion-page-{self._counter}",
             "title": values["title"],
             "done": values.get("done", False),
+            "archived": values.get("archived", False),
             "priority": values.get("priority"),
-            "start_at": values.get("start_at"),
             "due_at": values.get("due_at"),
             "estimated_minutes": values.get("estimated_minutes"),
             "atlas_goal_id": values.get("atlas_goal_id"),
             "notes": values.get("notes"),
             "created_at": f"2026-01-{self._counter:02d}T00:00:00Z",
+            "last_edited_at": f"2026-01-{self._counter:02d}T00:00:00Z",
         }
         self.todos[todo["id"]] = todo
         return dict(todo)

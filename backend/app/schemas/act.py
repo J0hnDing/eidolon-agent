@@ -20,6 +20,7 @@ class ActTurnRead(BaseModel):
     codex_turn_id: str | None
     user_message: str
     assistant_message: str | None
+    backend_message_kind: str | None = None
     activity_json: list[dict]
     status: str
     error_message: str | None

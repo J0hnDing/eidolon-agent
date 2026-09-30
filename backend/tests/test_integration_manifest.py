@@ -56,7 +56,9 @@ def test_registry_is_authoritative_and_context_is_selected_only() -> None:
     assert {operation_id for operation_id in OPERATIONS if operation_id.startswith("atlas.")} == {
         "atlas.person.get",
         "atlas.experience.list",
+        "atlas.goal.create",
         "atlas.goal.list",
+        "atlas.goal.update",
         "atlas.interest.get",
         "atlas.interest.list",
         "atlas.project.list",
@@ -183,9 +185,22 @@ def test_manifest_accepts_notion_without_caller_selected_scope() -> None:
     assert OPERATIONS["notion.todo.list"].output_schema["properties"]["todos"]["items"]["properties"][
         "done"
     ] == {"type": "boolean"}
+    assert OPERATIONS["notion.todo.list"].output_schema["properties"]["todos"]["items"]["properties"][
+        "archived"
+    ] == {"type": "boolean"}
+    assert OPERATIONS["notion.todo.list"].output_schema["properties"]["todos"]["items"]["properties"][
+        "last_edited_at"
+    ] == {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$",
+    }
     assert OPERATIONS["notion.todo.create"].input_schema["properties"]["done"] == {"type": "boolean"}
+    assert OPERATIONS["notion.todo.create"].input_schema["properties"]["archived"] == {"type": "boolean"}
     assert OPERATIONS["notion.todo.update"].input_schema["properties"]["done"] == {"type": "boolean"}
-    assert OPERATIONS["notion.todo.list"].contract_version == 2
+    assert OPERATIONS["notion.todo.update"].input_schema["properties"]["archived"] == {"type": "boolean"}
+    assert OPERATIONS["notion.todo.list"].contract_version == 4
     assert OPERATIONS["notion.daily_feed.write"].input_schema == {
         "type": "object",
         "properties": {
@@ -202,6 +217,7 @@ def test_manifest_accepts_notion_without_caller_selected_scope() -> None:
         "Personal Feed",
         "School",
         "Other",
+        "Opportunities",
     ]
 
 

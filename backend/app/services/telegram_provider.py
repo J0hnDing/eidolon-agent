@@ -1146,33 +1146,14 @@ def _agent_proposal_html_chunks(
     actions: str,
     references: list[str],
 ) -> list[str]:
-    fields = (
-        ("Title", title),
-        ("Why", rationale),
-        ("Proposed actions", actions),
-        ("Act instruction", instruction),
-        ("Related goals and todos", "\n".join(references) if references else "None"),
-    )
-    fragments = [heading]
-    for label, raw_value in fields:
-        prefix = f"<b>{html.escape(label, quote=False)}:</b>\n"
-        value = raw_value or "None"
-        available = max(1, TELEGRAM_MAX_MESSAGE_CHARS - len(prefix))
-        value_chunks = _split_escaped_text(value, available)
-        fragments.append(prefix + html.escape(value_chunks[0], quote=False))
-        fragments.extend(html.escape(chunk, quote=False) for chunk in value_chunks[1:])
-    chunks: list[str] = []
-    current = ""
-    for fragment in fragments:
-        candidate = fragment if not current else f"{current}\n{fragment}"
-        if current and len(candidate) > TELEGRAM_MAX_MESSAGE_CHARS:
-            chunks.append(current)
-            current = fragment
-        else:
-            current = candidate
-    if current:
-        chunks.append(current)
-    return chunks
+    # Instructions, arguments, references and report details remain backend-only.
+    visible = "\n".join(part for part in (title, rationale, actions) if part)
+    escaped = html.escape(visible, quote=False)
+    available = TELEGRAM_MAX_MESSAGE_CHARS - len(heading) - 2
+    while len(escaped) > available:
+        visible = visible[:-1]
+        escaped = html.escape(visible, quote=False)
+    return [f"{heading}\n{escaped}"]
 
 
 def send_agent_proposal_request(
@@ -1188,7 +1169,7 @@ def send_agent_proposal_request(
     nonce: str | None = None,
     message_thread_id: int | None = None,
 ) -> ApprovalDelivery:
-    """Send an Assistant proposal with complete Act instructions and opaque controls."""
+    """Send one user-facing Assistant proposal with opaque approval controls."""
 
     _require_chat_id(chat_id)
     callback_nonce = nonce or create_callback_nonce()
@@ -1253,13 +1234,13 @@ def edit_agent_proposal_outcome(
     if status == "denied":
         heading = "❌ <b>Assistant plan denied</b>"
     elif execution_status == "succeeded":
-        heading = "✅ <b>Approved · Act completed</b>"
-    elif execution_status in {"failed", "interrupted"}:
-        heading = "⚠️ <b>Approved · Act did not complete</b>"
+        heading = "✅ <b>Approved · Completed</b>"
+    elif execution_status in {"failed", "interrupted", "cancelled"}:
+        heading = "⚠️ <b>Approved · Did not complete</b>"
     elif execution_status == "running":
-        heading = "⏳ <b>Approved · Act is working</b>"
+        heading = "⏳ <b>Approved · Running</b>"
     else:
-        heading = "✅ <b>Approved · Act queued</b>"
+        heading = "✅ <b>Approved · Queued</b>"
     text = _agent_proposal_html_chunks(
         heading=heading,
         title=title,

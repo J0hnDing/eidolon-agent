@@ -1,4 +1,4 @@
-from app.models.agents import AgentCredential, AgentPolicy, AgentProposal, AssistantAssessmentState
+from app.models.agents import AgentCredential, AgentPolicy, AgentProposal, AssistantAssessmentState, AssistantFollowUp
 from app.models.entities import (
     ActSession,
     ActTurn,
@@ -47,6 +47,7 @@ __all__ = [
     "AgentPolicy",
     "AgentProposal",
     "AssistantAssessmentState",
+    "AssistantFollowUp",
     "ActSession",
     "ActTurn",
     "ApprovalRequest",

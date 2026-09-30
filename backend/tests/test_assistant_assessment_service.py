@@ -348,7 +348,7 @@ def test_assessment_schedule_can_be_edited_and_persists(
     assert persisted["schedule_json"]["every"] == 5
 
 
-def test_completed_assessment_notifies_even_without_proposals(db_session, monkeypatch):
+def test_completed_assessment_keeps_notifications_in_its_session(db_session, monkeypatch):
     from app.models import ActTurn
     from app.services.telegram_service import TelegramService
 
@@ -357,9 +357,7 @@ def test_completed_assessment_notifies_even_without_proposals(db_session, monkey
     AssistantAssessmentService(db_session).notify_completed(ActTurn(
         session_id=12, user_message="Assess", status="succeeded", assistant_message="No new work to propose."
     ))
-    assert len(sent) == 1
-    assert "0 proposals" in sent[0]["description"]
-    assert sent[0] == {"title": "Assessment Success", "description": "You have 0 proposals."}
+    assert sent == []
 
 
 def test_assessment_selects_assistant_thread_for_reply(db_session, monkeypatch):
@@ -414,6 +412,11 @@ def test_assessment_cleanup_checks_attachments_and_removes_only_stale_history(
             instruction="instruction", references_json=[reference], fingerprint=str(number),
         ))
         (directory / f"{number}.json").write_text("{}", encoding="utf-8")
+    db_session.add(AgentProposal(
+        id=8, source_session_id=1, title="approved", rationale="reason", actions="action",
+        instruction="instruction", references_json=["todo:done"], fingerprint="8", status="approved",
+    ))
+    (directory / "8.json").write_text("{}", encoding="utf-8")
     db_session.commit()
 
     class Executor:
@@ -445,6 +448,6 @@ def test_assessment_cleanup_checks_attachments_and_removes_only_stale_history(
 
     monkeypatch.setattr(assistant_assessment_service.UrllibAtlasProviderAdapter, "_request", request)
     AssistantAssessmentService(db_session, executor=Executor()).cleanup_proposals()  # type: ignore[arg-type]
-    expected = set(range(1, 8)) if unavailable else {1, 4, 7}
+    expected = set(range(1, 9)) if unavailable else {1, 4, 7, 8}
     assert set(db_session.scalars(select(AgentProposal.id))) == expected
     assert {int(path.stem) for path in directory.iterdir()} == expected

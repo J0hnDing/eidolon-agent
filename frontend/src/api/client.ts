@@ -386,6 +386,7 @@ export interface ActTurn {
   codex_turn_id: string | null;
   user_message: string;
   assistant_message: string | null;
+  backend_message_kind?: string | null;
   activity_json: Array<{ kind: string; label: string }>;
   status: string;
   error_message: string | null;
@@ -461,6 +462,9 @@ export interface AssistantProposal {
   rationale: string;
   instruction: string;
   actions: string;
+  action?: { type: "act"; description: string; instruction: string } | { type: "functions"; description: string; steps: Array<{ function: string; arguments: Record<string, unknown> }> } | null;
+  provenance?: { kind: "todo" | "goal" | "opportunity"; reason?: string; title?: string } | null;
+  follow_up?: { message: string; timing: Record<string, unknown> } | null;
   references: string[];
   status: string;
   execution_status: string | null;
@@ -1070,6 +1074,10 @@ export const api = {
   archiveAgentSession: (agentId: AgentId, sessionId: number) =>
     request<void>(`/agents/${agentId}/sessions/${sessionId}`, { method: "DELETE" }),
   listAssistantProposals: () => request<AssistantProposal[]>("/agents/assistant/proposals"),
+  editAssistantFunctionProposal: (proposalId: number, steps: Array<{ function: string; arguments: Record<string, unknown> }>) =>
+    request<AssistantProposal>(`/agents/assistant/proposals/${proposalId}/functions`, {
+      method: "PATCH", body: JSON.stringify({ steps }),
+    }),
   approveAssistantProposal: (proposalId: number) =>
     request<AssistantProposal>(`/agents/assistant/proposals/${proposalId}/approve`, { method: "POST" }),
   denyAssistantProposal: (proposalId: number) =>

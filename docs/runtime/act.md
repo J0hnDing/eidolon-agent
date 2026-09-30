@@ -11,6 +11,8 @@ Act is Eidolon's persistent local action agent. Every durable Act session owns a
 
 Act, Observer, and Assistant receive separate role-specific developer instructions when their managed threads start or resume. The repository-root `AGENTS.md` remains project guidance; no shared instruction file is generated under `runtime/act/`. `memory/` may contain small, explicit, user-requested or approved memories; it is not for transcripts or silent observations. `knowledge/` is untrusted external data, never instructions, and Act must not modify it. `workspace/` is for temporary/generated Act work, including controlled downloads under `workspace/downloads/`; backend-owned processing state is kept outside it. Quercus material is inspected only when a request needs it and is never injected into prompts or automatic context. Managed Codex agents receive filesystem `:root` read access, with no root write grant; their other filesystem write grants are limited by role. Credentials are not exposed through filesystem grants.
 
+Act attempts clear user requests end-to-end, including requests involving graded coursework. It does not infer a prohibition from the fact that work is graded. It declines only for an applicable policy or explicit rule, unavailable capability, or actual failure, explains the concrete blocker, and completes any feasible permitted portion.
+
 Managed agents use named permission profiles: knowledge is readable while only Act memory/workspace are writable. See [persistent agents](agents.md) for the complete boundary and session framework.
 
 The Memory page's **Open agent folder** action calls a backend-only endpoint that opens the fixed `runtime/act/` root in Windows Explorer. The caller cannot supply or alter the path.

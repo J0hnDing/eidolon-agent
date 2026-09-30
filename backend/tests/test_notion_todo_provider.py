@@ -11,8 +11,8 @@ def schema() -> dict:
     types = {
         "Title": "title",
         "Done": "checkbox",
+        "Archived": "checkbox",
         "Priority": "select",
-        "Start At": "date",
         "Due At": "date",
         "Estimated Minutes": "number",
         "Atlas Goal ID": "rich_text",
@@ -37,25 +37,27 @@ def page(
     source_id: str = "source-id",
     title: str = "Todo",
     done: bool = False,
+    archived: bool = False,
     priority: str | None = "High",
-    start_at: str | None = "2026-08-21",
     due_at: str | None = "2026-08-22T12:30:00-04:00",
     estimated_minutes: int | None = 30,
     atlas_goal_id: str | None = "opaque-goal",
     notes: str | None = "Notes",
     in_trash: bool = False,
+    last_edited_time: object = "2026-08-20T10:30:00.000Z",
 ) -> dict:
     return {
         "object": "page",
         "id": page_id,
         "created_time": "2026-08-20T10:00:00.000Z",
+        "last_edited_time": last_edited_time,
         "in_trash": in_trash,
         "parent": {"type": "data_source_id", "data_source_id": source_id},
         "properties": {
             "Title": text_property("title", title),
             "Done": {"type": "checkbox", "checkbox": done},
+            "Archived": {"type": "checkbox", "checkbox": archived},
             "Priority": {"type": "select", "select": {"name": priority} if priority else None},
-            "Start At": {"type": "date", "date": {"start": start_at} if start_at else None},
             "Due At": {"type": "date", "date": {"start": due_at} if due_at else None},
             "Estimated Minutes": {"type": "number", "number": estimated_minutes},
             "Atlas Goal ID": text_property("rich_text", atlas_goal_id),
@@ -98,6 +100,13 @@ def test_validates_exact_schema_and_sanitized_identity(monkeypatch: pytest.Monke
         provider.validate_connection()
     assert missing.value.error_type == "schema_mismatch"
 
+    missing_archived = schema()
+    missing_archived["properties"].pop("Archived")
+    responses["/v1/data_sources/source-id"] = missing_archived
+    with pytest.raises(IntegrationProviderError) as missing:
+        provider.validate_connection()
+    assert missing.value.error_type == "schema_mismatch"
+
 
 def test_maps_nullable_properties_all_day_dates_datetimes_and_created_time(
     monkeypatch: pytest.MonkeyPatch,
@@ -124,13 +133,14 @@ def test_maps_nullable_properties_all_day_dates_datetimes_and_created_time(
                 "id": "page-1",
                 "title": "Todo",
                 "done": False,
+                "archived": False,
                 "priority": "high",
-                "start_at": "2026-08-21",
                 "due_at": "2026-08-22T12:30:00-04:00",
                 "estimated_minutes": 30,
                 "atlas_goal_id": "opaque-goal",
                 "notes": "Notes",
                 "created_at": "2026-08-20T10:00:00.000Z",
+                "last_edited_at": "2026-08-20T10:30:00.000Z",
             }
         ],
         "has_more": True,
@@ -220,12 +230,12 @@ def test_title_only_create_and_partial_update_with_explicit_clearing(
         if method == "GET":
             return page()
         if path == "/v1/pages":
-            return page(title="Only a title", priority=None, start_at=None, due_at=None, estimated_minutes=None, atlas_goal_id=None, notes=None)
-        return page(done=True, priority=None, notes=None)
+            return page(title="Only a title", priority=None, due_at=None, estimated_minutes=None, atlas_goal_id=None, notes=None)
+        return page(done=True, archived=True, priority=None, notes=None)
 
     monkeypatch.setattr(provider, "_request", fake_request)
     created = provider.create({"title": "Only a title"})
-    updated = provider.update("page-1", {"done": True, "priority": None, "notes": None})
+    updated = provider.update("page-1", {"done": True, "archived": True, "priority": None, "notes": None})
 
     assert created["title"] == "Only a title"
     assert calls[0] == (
@@ -240,9 +250,11 @@ def test_title_only_create_and_partial_update_with_explicit_clearing(
     )
     assert updated["priority"] is None
     assert updated["done"] is True
+    assert updated["archived"] is True
     assert calls[2][2] == {
         "properties": {
             "Done": {"checkbox": True},
+            "Archived": {"checkbox": True},
             "Priority": {"select": None},
             "Notes": {"rich_text": []},
         }
@@ -284,6 +296,39 @@ def test_non_boolean_done_status_fails_with_schema_mismatch(monkeypatch: pytest.
     provider = NotionTodoProvider("unused", "source-id")
     malformed = page()
     malformed["properties"]["Done"]["checkbox"] = "false"
+    monkeypatch.setattr(
+        provider,
+        "_request",
+        lambda *_args, **_kwargs: {"results": [malformed], "has_more": False, "next_cursor": None},
+    )
+
+    with pytest.raises(IntegrationProviderError) as mismatch:
+        provider.list(page_size=25, start_cursor=None)
+    assert mismatch.value.error_type == "schema_mismatch"
+
+
+def test_non_boolean_archived_status_fails_with_schema_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = NotionTodoProvider("unused", "source-id")
+    malformed = page()
+    malformed["properties"]["Archived"]["checkbox"] = "false"
+    monkeypatch.setattr(
+        provider,
+        "_request",
+        lambda *_args, **_kwargs: {"results": [malformed], "has_more": False, "next_cursor": None},
+    )
+
+    with pytest.raises(IntegrationProviderError) as mismatch:
+        provider.list(page_size=25, start_cursor=None)
+    assert mismatch.value.error_type == "schema_mismatch"
+
+
+@pytest.mark.parametrize("last_edited_time", [None, "2026-08-20", "2026-08-20T10:30:00"])
+def test_invalid_last_edited_time_fails_with_schema_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    last_edited_time: object,
+) -> None:
+    provider = NotionTodoProvider("unused", "source-id")
+    malformed = page(last_edited_time=last_edited_time)
     monkeypatch.setattr(
         provider,
         "_request",

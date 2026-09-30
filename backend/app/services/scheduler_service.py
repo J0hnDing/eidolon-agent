@@ -111,7 +111,28 @@ class SchedulerService:
         self.load_active_schedules()
         self.register_platform_services(now=startup_at)
         self.register_assistant_assessment()
+        from app.services.assistant_action_service import (
+            process_due_followups,
+            reconcile_function_actions,
+            retry_backend_messages,
+        )
+
+        reconcile_function_actions(self.session_factory)
+        followup_trigger = IntervalTrigger(seconds=30, timezone="UTC") if IntervalTrigger else {"type": "interval", "seconds": 30}
+        self.scheduler.add_job(
+            self._process_assistant_followups, followup_trigger,
+            id="assistant_followups", args=[], replace_existing=True, max_instances=1,
+            coalesce=True, misfire_grace_time=None,
+        )
+        process_due_followups(self.session_factory)
+        retry_backend_messages(self.session_factory)
         self.queue_startup_catchups(startup_at)
+
+    def _process_assistant_followups(self) -> None:
+        from app.services.assistant_action_service import process_due_followups, retry_backend_messages
+
+        process_due_followups(self.session_factory)
+        retry_backend_messages(self.session_factory)
 
     def shutdown(self) -> None:
         if self.scheduler is not None and getattr(self.scheduler, "running", False):

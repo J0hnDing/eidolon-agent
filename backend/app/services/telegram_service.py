@@ -389,17 +389,18 @@ class TelegramService:
             mapping = self.create_topic_for_session(proposal.source_session_id, title=proposal.title)
             row, token = self._connected_api_credential()
         try:
+            title, rationale, actions = self._assessment_proposal_text(proposal)
             try:
                 delivery = send_agent_proposal_request(
                     self.api_factory(token),
                     row.paired_chat_id or "",
                     message_thread_id=mapping.message_thread_id,
                     proposal_id=proposal.id,
-                    title=proposal.title,
-                    rationale=proposal.rationale,
-                    instruction=proposal.instruction,
-                    actions=proposal.actions,
-                    references=_proposal_references(proposal.references_json),
+                    title=title,
+                    rationale=rationale,
+                    instruction="",
+                    actions=actions,
+                    references=[],
                 )
             except TelegramProviderError as exc:
                 self._reconcile_missing_topic(row, mapping.message_thread_id, exc)
@@ -424,15 +425,16 @@ class TelegramService:
             self.db.commit()
             return
         try:
+            title, rationale, actions = self._assessment_proposal_text(proposal)
             edit_agent_proposal_outcome(
                 self.api_factory(token),
                 row.paired_chat_id or "",
                 int(proposal.telegram_message_ids_json[0]),
-                title=proposal.title,
-                rationale=proposal.rationale,
-                instruction=proposal.instruction,
-                actions=proposal.actions,
-                references=_proposal_references(proposal.references_json),
+                title=title,
+                rationale=rationale,
+                instruction="",
+                actions=actions,
+                references=[],
                 status=proposal.status,
                 execution_status=proposal.execution_status,
             )
@@ -442,6 +444,24 @@ class TelegramService:
         proposal.telegram_outcome_fingerprint = _proposal_outcome_fingerprint(proposal)
         self.db.commit()
         self.db.refresh(proposal)
+
+    def _assessment_proposal_text(self, proposal: AgentProposal) -> tuple[str, str, str]:
+        provenance = proposal.provenance_json or {}
+        kind = provenance.get("kind")
+        if kind in {"todo", "goal"}:
+            from app.services.assistant_assessment_result_service import resolve_target_name
+
+            target = ({"type": "todo", "id": provenance.get("todo_id")}
+                      if kind == "todo" else provenance.get("target", {}))
+            name = resolve_target_name(self.db, target)
+            prefix = "Todo" if kind == "todo" else "Goal"
+            label = f"{prefix}: {name}" if name != prefix else prefix
+            return (label,
+                    provenance.get("reason", ""), proposal.action_json["description"])
+        if kind == "opportunity":
+            return (f"Opportunity: {provenance.get('title', 'Opportunity')}", "",
+                    proposal.action_json["description"])
+        return proposal.title, proposal.rationale, proposal.actions
 
     def poll_once(self) -> int:
         row, token = self._configured_api_credential()

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -10,11 +10,8 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.execution.context import InvocationContext
-from app.models import ActSession, ActTurn, AgentProposal
-from app.schemas.agents import AgentPlanRequest
+from app.models import ActTurn, AgentProposal, AssistantFollowUp
 from app.services.act_workspace_service import ensure_act_workspace
-from app.services.agent_policy_service import AgentPermissionError, AgentPolicyService
 
 
 def _write_managed_file(path: Path, content: str) -> None:
@@ -46,69 +43,41 @@ class AgentProposalService:
     def list(self) -> list[dict]:
         return [self.serialize(row) for row in self.db.scalars(select(AgentProposal).order_by(AgentProposal.id.desc()))]
 
-    def submit(self, context: InvocationContext, arguments: dict) -> AgentProposal:
-        if (
-            context.principal_kind != "agent"
-            or context.agent_id != "assistant"
-            or context.agent_session_id is None
-        ):
-            raise AgentPermissionError("Plan requests require an authenticated Assistant session")
-        session_id = context.agent_session_id
-        AgentPolicyService(self.db).require_session("assistant", session_id)
-        AgentPolicyService(self.db).require_function("assistant", "plan_approval_request")
-        request = AgentPlanRequest.model_validate(arguments)
-        if (
-            request.replaces_proposal_id is not None
-            and self.db.get(AgentProposal, request.replaces_proposal_id) is None
-        ):
-            raise ValueError("The prior proposal does not exist")
-        fingerprint = hashlib.sha256(
-            json.dumps(
-                {
-                    "instruction": " ".join(request.instruction.casefold().split()),
-                    "references": sorted(request.references),
-                },
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
-        existing = self.db.scalar(select(AgentProposal).where(AgentProposal.fingerprint == fingerprint))
-        if existing is not None:
-            return existing
-        if request.replaces_proposal_id is None:
-            claimed = self.db.execute(
-                update(ActSession)
-                .where(
-                    ActSession.id == session_id,
-                    ActSession.agent_id == "assistant",
-                    ActSession.proposal_count < 5,
-                )
-                .values(proposal_count=ActSession.proposal_count + 1)
-            )
-            if not claimed.rowcount:
-                self.db.rollback()
-                raise ValueError("This thread has reached its limit of 5 new proposals. Replacements remain unlimited.")
-        proposal = AgentProposal(
-            source_session_id=session_id,
-            title=request.title,
-            rationale=request.rationale,
-            instruction=request.instruction,
-            actions=request.actions,
-            references_json=request.references,
-            fingerprint=fingerprint,
-            replaces_proposal_id=request.replaces_proposal_id,
-            material_change=request.material_change,
+    def edit_functions(self, proposal_id: int, steps: list[dict]) -> AgentProposal:
+        proposal = self.db.get(AgentProposal, proposal_id)
+        if proposal is None or proposal.status != "pending" or not proposal.action_json:
+            raise ValueError("Pending function proposal not found")
+        if proposal.action_json["type"] != "functions":
+            raise ValueError("Only function sequences can be edited")
+        if not steps:
+            raise ValueError("A function sequence needs at least one step")
+        from app.services.assistant_assessment_result_service import (
+            deterministic_catalog,
+            proposal_fingerprint,
+            validate_action,
         )
-        self.db.add(proposal)
+
+        action = {**proposal.action_json, "steps": steps}
+        validate_action(action, deterministic_catalog(self.db), proposal.follow_up_json)
+        fingerprint = proposal_fingerprint(action, proposal.provenance_json or {})
+        existing = self.db.scalar(select(AgentProposal.id).where(
+            AgentProposal.fingerprint == fingerprint, AgentProposal.id != proposal_id,
+        ))
+        if existing is not None:
+            raise ValueError("An identical proposal already exists")
+        claimed = self.db.execute(update(AgentProposal).where(
+            AgentProposal.id == proposal_id, AgentProposal.status == "pending",
+        ).values(action_json=action, fingerprint=fingerprint))
+        if not claimed.rowcount:
+            self.db.rollback()
+            raise ValueError("Proposal was already decided")
         try:
             self.db.commit()
         except IntegrityError:
             self.db.rollback()
-            existing = self.db.scalar(select(AgentProposal).where(AgentProposal.fingerprint == fingerprint))
-            if existing is None:
-                raise
-            return existing
+            raise ValueError("An identical proposal already exists") from None
+        self.db.refresh(proposal)
         self.mirror(proposal)
-        self._telegram(proposal, initial=True)
         return proposal
 
     def decide(self, proposal_id: int, approve: bool) -> AgentProposal:
@@ -117,39 +86,63 @@ class AgentProposalService:
             raise ValueError("Proposal not found")
         if proposal.status != "pending":
             return proposal
-        if approve:
-            AgentPolicyService(self.db).require_function("assistant", "plan_approval_request")
+        action = proposal.action_json or {
+            "type": "act", "description": proposal.actions, "instruction": proposal.instruction,
+        }
+        if approve and action["type"] == "functions":
+            from app.services.assistant_assessment_result_service import deterministic_catalog, validate_action
+
+            validate_action(action, deterministic_catalog(self.db), proposal.follow_up_json)
         claimed = self.db.execute(
             update(AgentProposal)
-            .where(AgentProposal.id == proposal_id, AgentProposal.status == "pending")
+            .where(AgentProposal.id == proposal_id, AgentProposal.status == "pending",
+                   AgentProposal.fingerprint == proposal.fingerprint)
             .values(status="approved" if approve else "denied")
         )
         if not claimed.rowcount:
             self.db.rollback()
-            return self.db.get(AgentProposal, proposal_id)
+            current = self.db.get(AgentProposal, proposal_id)
+            if current is not None and current.status == "pending":
+                raise ValueError("Proposal changed; review the current sequence before approving")
+            return current
         try:
             if approve:
-                from app.services.act_session_service import ActSessionService
+                if action["type"] == "act":
+                    from app.services.act_session_service import ActSessionService
 
-                service = ActSessionService(self.db, agent_id="act")
-                session = service.create_session(origin="plan_approval", commit=False)
-                turn = service.enqueue_turn(session.id, proposal.instruction, commit=False)
-                proposal.act_session_id = session.id
-                proposal.act_turn_id = turn.id
+                    service = ActSessionService(self.db, agent_id="act")
+                    session = service.create_session(origin="plan_approval", commit=False)
+                    turn = service.enqueue_turn(session.id, action["instruction"], commit=False)
+                    proposal.act_session_id = session.id
+                    proposal.act_turn_id = turn.id
                 proposal.execution_status = "queued"
+                if proposal.follow_up_json is not None:
+                    timing = proposal.follow_up_json["timing"]
+                    due_at = (datetime.fromisoformat(timing["at"].replace("Z", "+00:00"))
+                              if timing["type"] == "absolute" else None)
+                    self.db.add(AssistantFollowUp(
+                        proposal_id=proposal.id, session_id=proposal.source_session_id,
+                        message=proposal.follow_up_json["message"], timing_json=timing,
+                        due_at=due_at, status="waiting",
+                    ))
             self.db.commit()
         except Exception:
             self.db.rollback()
             raise
         self.db.refresh(proposal)
-        if approve:
+        if approve and action["type"] == "act":
             service.synchronize_telegram(session)
         self.mirror(proposal)
         self._telegram(proposal)
         if approve:
-            from app.services.act_turn_dispatcher import act_turn_dispatcher
+            if action["type"] == "functions":
+                from app.services.assistant_action_service import dispatch_function_proposal
 
-            act_turn_dispatcher.notify()
+                dispatch_function_proposal(proposal.id)
+            else:
+                from app.services.act_turn_dispatcher import act_turn_dispatcher
+
+                act_turn_dispatcher.notify()
         return proposal
 
     def refresh_execution(self, session_id: int | None = None) -> None:
@@ -160,6 +153,14 @@ class AgentProposalService:
             turn = self.db.get(ActTurn, proposal.act_turn_id)
             if turn is not None and proposal.execution_status != turn.status:
                 proposal.execution_status = turn.status
+                follow_up = self.db.scalar(select(AssistantFollowUp).where(
+                    AssistantFollowUp.proposal_id == proposal.id,
+                ))
+                if follow_up is not None:
+                    if turn.status == "succeeded":
+                        follow_up.status = "scheduled"
+                    elif turn.status in {"failed", "cancelled", "interrupted"}:
+                        follow_up.status = "cancelled"
                 self.db.commit()
                 self.mirror(proposal)
                 self._telegram(proposal)
@@ -200,6 +201,10 @@ class AgentProposalService:
             "rationale": proposal.rationale,
             "instruction": proposal.instruction,
             "actions": proposal.actions,
+            "action": proposal.action_json,
+            "provenance": proposal.provenance_json,
+            "follow_up": proposal.follow_up_json,
+            "execution_state": proposal.execution_state_json,
             "references": proposal.references_json,
             "status": proposal.status,
             "execution_status": proposal.execution_status,

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.schemas.act import ActSessionCreate, ActSessionRead, ActSessionSummary, ActTurnCreate, ActTurnRead
 from app.schemas.agents import AgentPolicyUpdate
+from app.schemas.assistant_assessment import FunctionStep
 from app.services.act_session_service import ActSessionError, ActSessionService
 from app.services.agent_policy_service import AGENTS, AgentPermissionError, AgentPolicyService
 from app.services.agent_proposal_service import AgentProposalService
@@ -17,6 +18,11 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 class AssessmentUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool
+
+
+class FunctionSequenceUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    steps: list[FunctionStep]
 
 
 def service(agent_id: str, db: Session) -> ActSessionService:
@@ -48,6 +54,16 @@ def decide(proposal_id: int, decision: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Decision not found")
     try:
         return AgentProposalService.serialize(AgentProposalService(db).decide(proposal_id, decision == "approve"))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@router.patch("/assistant/proposals/{proposal_id}/functions")
+def edit_function_proposal(proposal_id: int, payload: FunctionSequenceUpdate, db: Session = Depends(get_db)):
+    try:
+        return AgentProposalService.serialize(AgentProposalService(db).edit_functions(
+            proposal_id, [step.model_dump() for step in payload.steps],
+        ))
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
 

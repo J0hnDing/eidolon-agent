@@ -14,10 +14,9 @@ from app.db import Base
 from app.execution.context import InvocationContext
 from app.execution.context_factory import InvocationContextFactory
 from app.execution.executor import InvocationExecutor
-from app.execution.types import InvocationOutcome, InvocationTargetRef
+from app.execution.types import InvocationExecutionError, InvocationOutcome, InvocationTargetRef
 from app.models import ActSession, ActTurn
 from app.services.agent_policy_service import AgentPolicyService
-from app.services.agent_proposal_service import AgentProposalService
 
 
 @pytest.fixture
@@ -138,42 +137,19 @@ def test_backend_core_download_runs_through_registered_handler(
     assert len(calls) == 1
 
 
-def test_agent_private_plan_request_uses_authenticated_context(
-    db: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_obsolete_plan_request_is_not_exposed(db: Session) -> None:
     session = ActSession(agent_id="assistant", codex_thread_id="assistant-private")
     db.add(session)
     db.commit()
     context = InvocationContext(
-        principal_kind="agent",
-        origin="agent_mcp",
-        agent_id="assistant",
+        principal_kind="agent", origin="agent_mcp", agent_id="assistant",
         agent_session_id=session.id,
     )
-    seen = []
-    monkeypatch.setattr(
-        AgentProposalService,
-        "submit",
-        lambda _self, supplied_context, arguments: (
-            seen.append((supplied_context, arguments))
-            or SimpleNamespace(status="pending", id=42)
-        ),
-    )
-
-    outcome = InvocationExecutor(db).execute(
-        InvocationTargetRef(category="agent_private", target_id="plan_approval_request"),
-        {
-            "title": "Plan",
-            "rationale": "Useful",
-            "actions": "Work",
-            "instruction": "Do the work",
-        },
-        context,
-    )
-
-    assert outcome.output == {"status": "pending", "proposal_id": 42}
-    assert seen[0][0] is context
+    with pytest.raises(InvocationExecutionError):
+        InvocationExecutor(db).execute(
+            InvocationTargetRef(category="agent_private", target_id="plan_approval_request"),
+            {}, context,
+        )
 
 
 def test_agent_private_browser_authentication_uses_authenticated_act_context(

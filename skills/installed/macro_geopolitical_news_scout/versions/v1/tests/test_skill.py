@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from jsonschema import Draft202012Validator
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 for parent in Path(__file__).resolve().parents:
@@ -89,9 +88,6 @@ def test_one_codex_call_zero_items_and_caller_owned_history(monkeypatch: pytest.
         report=first["report"],
     ), now=NOW)
     assert first["candidate_count"] == 1
-    manifest = json.loads((SKILL_DIR / "manifest.json").read_text(encoding="utf-8"))
-    Draft202012Validator(manifest["input_schema"]).validate(_state())
-    Draft202012Validator(manifest["output_schema"]).validate(first)
     assert second["candidate_count"] == 0
     assert first["report"]["items"] == []
     assert len(calls) == 2

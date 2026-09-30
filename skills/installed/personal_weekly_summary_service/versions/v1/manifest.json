@@ -1,0 +1,48 @@
+{
+  "manifest_version": 1,
+  "name": "personal_weekly_summary_service",
+  "description": "Create a deterministic weekly Personal Feed report from Notion todos, Atlas goals, and Google Calendar events.",
+  "runtime": "service",
+  "entrypoint": "skill.py",
+  "instructions_path": null,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "active_start": {"type": "string", "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"},
+      "active_end": {"type": "string", "pattern": "^(?:(?:[01][0-9]|2[0-3]):[0-5][0-9]|24:00)$"}
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "week_start": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+      "report_id": {"type": "string", "minLength": 1, "maxLength": 128},
+      "already_reported": {"type": "boolean"}
+    },
+    "required": ["week_start", "report_id", "already_reported"],
+    "additionalProperties": false
+  },
+  "function_requirements": [],
+  "integration_requirements": [
+    {"provider": "notion", "operations": ["notion.todo.list", "notion.report.create"], "resource_scope": {}},
+    {"provider": "atlas", "operations": ["atlas.goal.list"], "resource_scope": {}},
+    {"provider": "google_calendar", "operations": ["google_calendar.event.list"], "resource_scope": {}}
+  ],
+  "dependencies": [],
+  "permissions": {
+    "network": [],
+    "filesystem_read": ["./cache"],
+    "filesystem_write": ["./cache"],
+    "secrets": [],
+    "shell": false,
+    "codex": {"call_response": false, "internet_access": false}
+  },
+  "schedule": {
+    "type": "weekly",
+    "day": "sunday",
+    "time": "21:00",
+    "timezone": "America/Toronto",
+    "input": {"active_start": "09:00", "active_end": "24:00"}
+  }
+}

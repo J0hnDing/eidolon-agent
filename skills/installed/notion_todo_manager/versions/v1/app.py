@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 _DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$")
-_TODO_FIELDS = {"title", "priority", "start_at", "due_at", "estimated_minutes", "atlas_goal_id", "notes"}
+_TODO_FIELDS = {"title", "priority", "due_at", "estimated_minutes", "atlas_goal_id", "notes"}
 _ERROR_MESSAGES = {
     "connection_unavailable": "Notion is unavailable right now. Try again shortly.",
     "invalid_credential": "The Notion connection needs attention.",
@@ -51,7 +51,7 @@ def _validate_optional_fields(payload: dict[str, Any]) -> None:
         priority = payload["priority"]
         if priority is not None and priority not in ("low", "medium", "high"):
             raise RequestError("priority must be low, medium, high, or null")
-    for name in ("start_at", "due_at"):
+    for name in ("due_at",):
         if name in payload and payload[name] is not None:
             if not isinstance(payload[name], str) or not _DATE_PATTERN.fullmatch(payload[name]):
                 raise RequestError(f"{name} must be an ISO date or date-time")

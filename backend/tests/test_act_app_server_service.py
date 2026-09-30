@@ -207,6 +207,10 @@ def test_managed_agents_receive_only_their_role_specific_instructions() -> None:
     assert ASSISTANT_INSTRUCTIONS_TEMPLATE.count("[ACT_CAPABILITY_CATALOG]") == 1
     rendered = render_agent_instructions("assistant", [{"id": "example.read"}])
     assert '[{"id": "example.read"}]' in rendered
+    with_functions = render_agent_instructions(
+        "assistant", [], [{"id": "example.write", "input_schema": {"type": "object"}}],
+    )
+    assert '"id": "example.write"' in with_functions
     runtime_rendered = render_agent_instructions(
         "assistant",
         act_runtime_capability_catalog(),
@@ -214,8 +218,11 @@ def test_managed_agents_receive_only_their_role_specific_instructions() -> None:
     assert '"id": "browser.playwright"' in runtime_rendered
     assert '"id": "browser.authenticate"' in runtime_rendered
     assert '"id": "telegram.send_file"' in runtime_rendered
-    assert "## 1. Advance existing work" in assistant
-    assert "## 2. Find ways to advance the user's goals" in assistant
+    assert "## 1. Todo Doer" in assistant
+    assert "## 2. Goal Doer" in assistant
+    assert "## 3. Opportunity Scout" in assistant
+    assert "[DETERMINISTIC_FUNCTION_CATALOG]" not in assistant
+    assert ASSISTANT_INSTRUCTIONS_TEMPLATE.count("[DETERMINISTIC_FUNCTION_CATALOG]") == 1
 
 
 def test_act_thread_receives_required_playwright_config(monkeypatch, tmp_path) -> None:
@@ -273,6 +280,7 @@ def test_act_thread_receives_required_playwright_config(monkeypatch, tmp_path) -
         assert bridge_env["EIDOLON_BROWSER_AUTH_TOKEN"] not in params["developerInstructions"]
         assert "@oai/sky" in params["developerInstructions"]
         assert "Browser authenticate" in params["developerInstructions"]
+        assert "Do not assume that graded coursework is prohibited" in params["developerInstructions"]
 
 
 def test_agent_start_fails_closed_when_inherited_plugin_tools_remain(
@@ -509,14 +517,8 @@ def test_agent_process_config_restricts_paths_and_inherited_tools(monkeypatch, t
     assert str(root / "knowledge") not in act["filesystem"]
 
     act_config = managed_config("act", root)
-    assert act_config["mcp_servers"]["untrusted"]["enabled"] is False
-    assert act_config["mcp_servers"]["playwright"] == {
-        "command": "npx",
-        "args": ["-y", "@playwright/mcp@latest"],
-        "enabled": True,
-        "default_tools_approval_mode": "approve",
-        "required": True,
-    }
+    assert "untrusted" not in act_config["mcp_servers"]
+    assert "playwright" not in act_config["mcp_servers"]
 
 
 def test_managed_process_rejects_non_official_docs_mcp_endpoint(monkeypatch, tmp_path):

@@ -247,6 +247,13 @@ function AgentDetail({ agentId, initialAgent, onAgentUpdate }: {
     }, "Could not deny the plan");
   }
 
+  async function editFunctionProposal(proposalId: number, steps: Array<{ function: string; arguments: Record<string, unknown> }>) {
+    await work(async () => {
+      await api.editAssistantFunctionProposal(proposalId, steps);
+      setProposals(await api.listAssistantProposals());
+    }, "Could not update the function sequence");
+  }
+
   async function updateAssessment(enabled: boolean) {
     await work(async () => setAssessment(await api.updateAssistantAssessment(enabled)), "Could not update the assessment service");
   }
@@ -295,6 +302,7 @@ function AgentDetail({ agentId, initialAgent, onAgentUpdate }: {
           onRunAssessment={runAssessment}
           onApprove={(proposalId) => setConfirmAction({ kind: "approve-proposal", proposalId })}
           onDeny={denyProposal}
+          onEditFunctions={editFunctionProposal}
         />
       )}
 
@@ -394,7 +402,7 @@ function AgentFunctionList({ agent }: { agent: AgentDefinition }) {
   );
 }
 
-function AssistantControls({ assessment, proposals, isWorking, onAssessmentChange, onRunAssessment, onApprove, onDeny }: {
+function AssistantControls({ assessment, proposals, isWorking, onAssessmentChange, onRunAssessment, onApprove, onDeny, onEditFunctions }: {
   assessment: AssistantAssessment | null;
   proposals: AssistantProposal[];
   isWorking: boolean;
@@ -402,6 +410,7 @@ function AssistantControls({ assessment, proposals, isWorking, onAssessmentChang
   onRunAssessment: () => Promise<void>;
   onApprove: (proposalId: number) => void;
   onDeny: (proposalId: number) => Promise<void>;
+  onEditFunctions: (proposalId: number, steps: Array<{ function: string; arguments: Record<string, unknown> }>) => Promise<void>;
 }) {
   return (
     <div className="section-grid assistant-controls">
@@ -421,18 +430,20 @@ function AssistantControls({ assessment, proposals, isWorking, onAssessmentChang
         </div>
       </section>
       <section className="detail-panel stack">
-        <div><h2>Proposed plans</h2><p className="muted">Approval creates exactly one linked Act session with the instruction shown here.</p></div>
+        <div><h2>Proposed actions</h2><p className="muted">Approval runs the shown function sequence or sends an instruction to a linked Act session.</p></div>
         <div className="assistant-proposal-list">
           {proposals.map((proposal) => (
             <article key={proposal.id} className="assistant-proposal">
               <header><div><strong>{proposal.title}</strong><small>{formatTimestamp(proposal.created_at)}</small></div><span className={`badge status-${proposal.status}`}>{proposal.status}</span></header>
-              <p>{proposal.rationale}</p>
+              {proposal.rationale && <p>{proposal.rationale}</p>}
               {proposal.actions && <p><strong>Actions:</strong> {proposal.actions}</p>}
               {proposal.references.length > 0 && <p className="muted">References: {proposal.references.join(", ")}</p>}
-              <details><summary>Act instruction</summary><pre>{proposal.instruction}</pre></details>
+              {proposal.action?.type === "functions" ? <details><summary>Function sequence</summary><pre>{JSON.stringify(proposal.action.steps, null, 2)}</pre></details> : <details><summary>Act instruction</summary><pre>{proposal.action?.type === "act" ? proposal.action.instruction : proposal.instruction}</pre></details>}
+              {proposal.status === "pending" && proposal.action?.type === "functions" && <FunctionSequenceEditor proposal={proposal} disabled={isWorking} onSave={onEditFunctions} />}
+              {proposal.follow_up && <p className="muted">Follow-up: {proposal.follow_up.message}</p>}
               {proposal.act_session_id !== null && <Link to={`/agents/act?session=${proposal.act_session_id}`}>Open linked Act session</Link>}
               {proposal.execution_status && <p className="muted">Execution: {proposal.execution_status}</p>}
-              {proposal.status === "pending" && <div className="button-row"><button type="button" onClick={() => onApprove(proposal.id)} disabled={isWorking}>Approve plan</button><button type="button" className="secondary" onClick={() => onDeny(proposal.id)} disabled={isWorking}>Deny</button></div>}
+              {proposal.status === "pending" && <div className="button-row"><button type="button" onClick={() => onApprove(proposal.id)} disabled={isWorking}>Approve action</button><button type="button" className="secondary" onClick={() => onDeny(proposal.id)} disabled={isWorking}>Deny</button></div>}
             </article>
           ))}
           {!proposals.length && <p className="muted">No plans have been proposed.</p>}
@@ -440,6 +451,30 @@ function AssistantControls({ assessment, proposals, isWorking, onAssessmentChang
       </section>
     </div>
   );
+}
+
+function FunctionSequenceEditor({ proposal, disabled, onSave }: {
+  proposal: AssistantProposal;
+  disabled: boolean;
+  onSave: (proposalId: number, steps: Array<{ function: string; arguments: Record<string, unknown> }>) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState(JSON.stringify(proposal.action?.type === "functions" ? proposal.action.steps : [], null, 2));
+  const [error, setError] = useState<string | null>(null);
+  return <details><summary>Edit function sequence</summary><form onSubmit={async (event) => {
+    event.preventDefault();
+    try {
+      const parsed: unknown = JSON.parse(draft);
+      if (!Array.isArray(parsed) || !parsed.every((step) =>
+        step !== null && typeof step === "object" && typeof step.function === "string" &&
+        step.arguments !== null && typeof step.arguments === "object" && !Array.isArray(step.arguments))) {
+        throw new Error("Enter an array of function calls with object arguments.");
+      }
+      setError(null);
+      await onSave(proposal.id, parsed as Array<{ function: string; arguments: Record<string, unknown> }>);
+    } catch (reason) {
+      setError(errorMessage(reason, "Enter valid JSON function steps"));
+    }
+  }}><textarea aria-label="Function sequence JSON" value={draft} onChange={(event) => setDraft(event.target.value)} rows={8} disabled={disabled} /><button type="submit" disabled={disabled}>Save sequence</button>{error && <p className="error-text">{error}</p>}</form></details>;
 }
 
 function AgentSessions({ agent, sessions, session, activeSessionId, draft, isWorking, activeTurnId, onCreate, onSelect, onDraftChange, onSubmit, onCancel, onArchive }: {
@@ -473,7 +508,7 @@ function AgentSessions({ agent, sessions, session, activeSessionId, draft, isWor
               <div className="message-list" aria-live="polite">
                 {session.turns.map((turn) => (
                   <div key={turn.id} className="agent-turn">
-                    <article className="message user"><span>You</span><p>{turn.user_message}</p></article>
+                    {!turn.backend_message_kind && <article className="message user"><span>You</span><p>{turn.user_message}</p></article>}
                     <article className={`message assistant ${isActiveTurn(turn) ? "thinking-message" : ""}`}><span>{agent.name}</span><div className="message-body">{isActiveTurn(turn) && <div className="thinking-row"><span className="thinking-spinner" aria-hidden="true" /><p>{agent.name} is thinking...</p></div>}{turn.assistant_message && <p>{turn.assistant_message}</p>}{turn.error_message && <p className="error-text">{turn.error_message}</p>}{turn.activity_json.length > 0 && <details className="act-work-details"><summary>{turn.activity_json.length} recorded activit{turn.activity_json.length === 1 ? "y" : "ies"}</summary><div className="act-work-details-content"><ul>{turn.activity_json.map((activity, index) => <li key={`${activity.kind}-${index}`}>{activity.label}</li>)}</ul></div></details>}</div></article>
                   </div>
                 ))}

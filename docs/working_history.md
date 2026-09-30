@@ -946,3 +946,42 @@ Added the checked-in daily_feed_service with a daily 08:30 America/Toronto sched
 ### Limitations
 
 The service is installed disabled and paused by default; the user must share and configure the standalone Notion page, approve runtime permissions and integration access, and enable the schedule before it can run.
+
+## 2026-09-23 02:11 — Assistant Opportunity Scout Notion reports
+
+- Category: feature
+- Area: Assistant assessments and Notion Reports
+
+### Summary
+
+Added an Assistant assessment-only report tool that writes one Opportunities report containing only opportunity names and short descriptions. Successful assessments require the report write; the tool does not request per-call approval. Updated the Reports category contract, documentation, and focused backend tests.
+
+### Limitations
+
+Existing Notion Reports data sources must add the Opportunities Select option before assessments can write reports; live Notion write was not performed.
+
+## 2026-09-26 22:49 — Refactor Macro Geopolitical News Scout into weekly callable function
+
+- Category: feature
+- Area: skills and scheduling
+
+### Summary
+
+Converted the installed macro scout to a bounded function that returns report content and newly seen sources. Weekly Report Service now calls it each Monday, creates the Macro Notion report, and persists caller-owned history only after report creation. Startup reconciliation retires the old service schedule when its runtime changes. Updated contracts, docs, and focused tests.
+
+### Limitations
+
+New function access and changed effective runtime permissions require normal approval before the weekly service can run; service and function availability must be enabled through existing controls.
+
+## 2026-09-29 21:47 — Restore scout, archive, feed, and weekly report runs
+
+- Category: bugfix
+- Area: Notion Todo and scheduled skills
+
+### Summary
+
+Refreshed current integration and function approvals, selected Codex CLI supported scout models, removed the Macro Scout test-only jsonschema import, removed start_at from the Notion Todo contract/provider/Todo Manager/docs, and verified successful live runs for GitHub Scout, Paper Scout, Macro Scout, Weekly Report, Daily Notion Done Archive, and Daily Feed.
+
+### Limitations
+
+The existing Notion Date column remains in the data source and is ignored by Eidolon.

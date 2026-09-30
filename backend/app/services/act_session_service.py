@@ -12,6 +12,7 @@ from app.models import (
     ActSession,
     ActTurn,
     AgentPolicy,
+    AssistantFollowUp,
     WeComObserverUserBinding,
 )
 from app.services.act_app_server_service import (
@@ -90,6 +91,14 @@ class ActSessionService:
         self.db.execute(statement.on_conflict_do_update(index_elements=[AgentPolicy.id], set_={"revision": AgentPolicy.revision}))
         sessions = list(self.db.scalars(select(ActSession).where(ActSession.agent_id == "assistant").order_by(ActSession.created_at, ActSession.id)))
         for old in sessions[:max(0, len(sessions) - limit)]:
+            if self.db.scalar(select(AssistantFollowUp.id).where(
+                AssistantFollowUp.session_id == old.id,
+                AssistantFollowUp.status.in_(("waiting", "scheduled", "sent")),
+            )):
+                self.db.rollback()
+                raise AssistantSessionCapacityError(
+                    "Assistant session capacity is full because the oldest session has a pending follow-up"
+                )
             if self.db.scalar(select(ActTurn.id).where(ActTurn.session_id == old.id, ActTurn.status.in_(ACTIVE_TURN_STATUSES))):
                 self.db.rollback()
                 raise AssistantSessionCapacityError("Assistant session capacity is full because the oldest session is busy")
@@ -163,6 +172,9 @@ class ActSessionService:
             turn.activity_json = [{"kind": "cancelled", "label": "Cancelled before Act started"}]
             self.db.commit()
             self.db.refresh(turn)
+            from app.services.agent_proposal_service import AgentProposalService
+
+            AgentProposalService(self.db).refresh_execution(session.id)
             return turn
         self.db.commit()
         if turn.codex_turn_id:
@@ -175,6 +187,11 @@ class ActSessionService:
 
     def archive(self, session_id: int, *, commit: bool = True) -> None:
         session = self.read_session(session_id)
+        if session.agent_id == "assistant" and self.db.scalar(select(AssistantFollowUp.id).where(
+            AssistantFollowUp.session_id == session.id,
+            AssistantFollowUp.status.in_(("waiting", "scheduled", "sent")),
+        )):
+            raise ActSessionError("Cannot archive an Assistant session with a pending follow-up")
         if self.db.scalar(
             select(ActTurn).where(
                 ActTurn.session_id == session.id,

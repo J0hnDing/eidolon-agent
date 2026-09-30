@@ -23,9 +23,9 @@ from app.services.wecom_provider import WECOM_AGENT_ID, WeComProviderError
 from app.services.wecom_service import wecom_observer_worker
 
 
-def deliver_agent_turn_result(turn_id: int) -> None:
+def deliver_agent_turn_result(turn_id: int, *, session_factory=SessionLocal) -> None:
     """Deliver one pending result according to the turn's persisted transport."""
-    db = SessionLocal()
+    db = session_factory()
     turn: ActTurn | None = None
     try:
         turn = db.get(ActTurn, turn_id)

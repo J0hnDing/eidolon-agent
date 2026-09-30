@@ -20,7 +20,7 @@
 
   function todoPayload(form) {
     const estimated = valueOrNull(form, "estimated_minutes");
-    return { title: valueOrNull(form, "title"), priority: valueOrNull(form, "priority"), start_at: valueOrNull(form, "start_at"), due_at: valueOrNull(form, "due_at"), estimated_minutes: estimated === null ? null : Number(estimated), atlas_goal_id: valueOrNull(form, "atlas_goal_id"), notes: valueOrNull(form, "notes") };
+    return { title: valueOrNull(form, "title"), priority: valueOrNull(form, "priority"), due_at: valueOrNull(form, "due_at"), estimated_minutes: estimated === null ? null : Number(estimated), atlas_goal_id: valueOrNull(form, "atlas_goal_id"), notes: valueOrNull(form, "notes") };
   }
 
   async function request(url, options = {}) {
@@ -61,7 +61,7 @@
   function openEditor(todo) {
     const card = list.querySelector(`[data-id="${CSS.escape(todo.id)}"]`);
     card.classList.add("editing");
-    card.insertAdjacentHTML("beforeend", `<form class="edit-form">${field("Title", "title", todo.title, "text", true)}${field("Priority", "priority", todo.priority)}${field("Start date/time", "start_at", todo.start_at)}${field("Due date/time", "due_at", todo.due_at)}${field("Estimate (minutes)", "estimated_minutes", todo.estimated_minutes, "number")}${field("Atlas goal reference", "atlas_goal_id", todo.atlas_goal_id, "text", true)}${field("Notes", "notes", todo.notes, "text", true)}<div class="actions"><button class="button primary" type="submit">Save changes</button><button class="button secondary cancel-button" type="button">Cancel</button></div></form>`);
+    card.insertAdjacentHTML("beforeend", `<form class="edit-form">${field("Title", "title", todo.title, "text", true)}${field("Priority", "priority", todo.priority)}${field("Due date/time", "due_at", todo.due_at)}${field("Estimate (minutes)", "estimated_minutes", todo.estimated_minutes, "number")}${field("Atlas goal reference", "atlas_goal_id", todo.atlas_goal_id, "text", true)}${field("Notes", "notes", todo.notes, "text", true)}<div class="actions"><button class="button primary" type="submit">Save changes</button><button class="button secondary cancel-button" type="button">Cancel</button></div></form>`);
     const form = card.querySelector(".edit-form");
     form.addEventListener("submit", async (event) => {
       event.preventDefault();

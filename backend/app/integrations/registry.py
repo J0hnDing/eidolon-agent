@@ -542,6 +542,59 @@ _ATLAS_PREFERENCE_OUTPUT = _object_schema(
     },
     ["title", "domain", "value", "strength", "context", "rationale", "effective_from", "effective_to"],
 )
+_ATLAS_GOAL_OUTPUT = {
+    "type": "object",
+    "properties": {
+        "revision": {"type": "integer", "minimum": 1},
+        "progress": {"type": "integer", "minimum": 0, "maximum": 100},
+        "result": {"type": ["string", "null"]},
+        "following_goal_ids": {"type": "array", "items": {"type": "string"}},
+        "subgoals": {"type": "array", "items": {"$ref": "#/$defs/goal"}},
+    },
+    "required": ["revision", "progress", "result", "following_goal_ids", "subgoals"],
+}
+_ATLAS_GOAL_LIST_OUTPUT = _object_schema(
+    {
+        "goals": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/goal"}},
+        "progressions": {"type": "array", "items": {"type": "object"}},
+    },
+    ["goals", "progressions"],
+)
+_ATLAS_GOAL_LIST_OUTPUT["$defs"] = {"goal": _ATLAS_GOAL_OUTPUT}
+_ATLAS_GOAL_ID = {"type": "string", "minLength": 1, "maxLength": 128}
+_ATLAS_GOAL_TARGET_DATE = {
+    "type": ["string", "null"],
+    "pattern": "^\\d{4}(?:-\\d{2}(?:-\\d{2})?)?$",
+}
+_ATLAS_GOAL_FOLLOWING = {
+    "type": "array", "maxItems": 100, "uniqueItems": True, "items": _ATLAS_GOAL_ID,
+}
+_ATLAS_GOAL_FIELDS = {
+    "title": {"type": "string", "minLength": 1, "maxLength": 500},
+    "description": {"type": "string", "maxLength": 4000},
+    "horizon": {"enum": ["short", "middle", "long"]},
+    "importance": {"enum": ["low", "medium", "high"]},
+    "target_date": _ATLAS_GOAL_TARGET_DATE,
+    "progress": {"type": "integer", "minimum": 0, "maximum": 100},
+    "result": {"type": "string", "maxLength": 4000},
+    "following_goal_ids": _ATLAS_GOAL_FOLLOWING,
+}
+_ATLAS_GOAL_DETAIL = _object_schema(
+    {
+        "id": _ATLAS_GOAL_ID,
+        "parent_goal_id": {"type": ["string", "null"]},
+        "revision": {"type": "integer", "minimum": 1},
+        **_ATLAS_GOAL_FIELDS,
+        "result": {"type": ["string", "null"]},
+        "target_date": {"type": ["string", "null"]},
+    },
+    ["id", "parent_goal_id", "revision", *_ATLAS_GOAL_FIELDS],
+)
+_ATLAS_GOAL_UPDATE_INPUT = _object_schema(
+    {"id": _ATLAS_GOAL_ID, "expected_revision": {"type": "integer", "minimum": 1}, **_ATLAS_GOAL_FIELDS},
+    ["id", "expected_revision"],
+)
+_ATLAS_GOAL_UPDATE_INPUT["minProperties"] = 3
 _KNOWLEDGE_STATUS = {"enum": ["unassessed", "unknown", "known"]}
 _KNOWLEDGE_BRANCH = {"enum": ["subjects", "ideologies"]}
 _KNOWLEDGE_SUMMARY = _object_schema(
@@ -635,7 +688,7 @@ _ATLAS_OPERATIONS = (
     IntegrationOperationSpec(
         id="atlas.goal.list",
         title="List Atlas goals",
-        description="List matching top-level goals while retaining each complete subgoal tree and progression edges.",
+        description="List matching top-level goals with effective progress, complete subgoal trees, and progression edges.",
         input_schema=_object_schema(
             {
                 "importance": {"enum": ["low", "medium", "high"]},
@@ -644,19 +697,59 @@ _ATLAS_OPERATIONS = (
             },
             [],
         ),
-        output_schema=_object_schema(
-            {
-                "goals": {"type": "array", "maxItems": 100, "items": {"type": "object"}},
-                "progressions": {"type": "array", "items": {"type": "object"}},
-            },
-            ["goals", "progressions"],
-        ),
+        output_schema=_ATLAS_GOAL_LIST_OUTPUT,
         effects=frozenset({IntegrationEffect.READ}),
         resource=ResourceSpec("atlas.goal", ()),
         risk=RiskLevel.LOW,
-        contract_version=2,
+        contract_version=5,
         presentation=OperationPresentation(
             usage_example={"operation": "atlas.goal.list", "input": {"importance": "high", "horizon": "long"}},
+            normalized_errors=_ATLAS_ERRORS,
+            open_world=False,
+        ),
+    ),
+    IntegrationOperationSpec(
+        id="atlas.goal.create",
+        title="Create Atlas Goal or subgoal",
+        description=(
+            "Create one top-level Goal or one subgoal under parent_goal_id. "
+            "following_goal_ids are sibling prerequisites for a subgoal; subgoal progress defaults to zero."
+        ),
+        input_schema=_object_schema(
+            {
+                **_ATLAS_GOAL_FIELDS,
+                "parent_goal_id": _ATLAS_GOAL_ID,
+                "request_id": {"type": "string", "minLength": 36, "maxLength": 36, "pattern": "^[0-9a-fA-F-]{36}$"},
+            },
+            ["title"],
+        ),
+        output_schema=_object_schema(
+            {"goal": _ATLAS_GOAL_DETAIL, "created": {"type": "boolean"}}, ["goal", "created"]
+        ),
+        effects=frozenset({IntegrationEffect.CREATE}),
+        resource=ResourceSpec("atlas.goal", ()),
+        risk=RiskLevel.MEDIUM,
+        presentation=OperationPresentation(
+            usage_example={"operation": "atlas.goal.create", "input": {"title": "Draft proposal", "parent_goal_id": "goal-id", "progress": 0}},
+            normalized_errors=_ATLAS_ERRORS,
+            open_world=False,
+        ),
+    ),
+    IntegrationOperationSpec(
+        id="atlas.goal.update",
+        title="Edit Atlas Goal or subgoal",
+        description=(
+            "Edit standard Goal fields using the current revision. Subgoals may also replace their "
+            "following_goal_ids and set Result at 100% effective progress. Parent progress rolls up from subgoals."
+        ),
+        input_schema=_ATLAS_GOAL_UPDATE_INPUT,
+        output_schema=_object_schema({"goal": _ATLAS_GOAL_DETAIL}, ["goal"]),
+        effects=frozenset({IntegrationEffect.UPDATE}),
+        resource=ResourceSpec("atlas.goal", ("id",)),
+        risk=RiskLevel.MEDIUM,
+        contract_version=2,
+        presentation=OperationPresentation(
+            usage_example={"operation": "atlas.goal.update", "input": {"id": "goal-id", "expected_revision": 1, "progress": 100, "result": "Submitted"}},
             normalized_errors=_ATLAS_ERRORS,
             open_world=False,
         ),
@@ -830,6 +923,12 @@ _TODO_DATE = {
     "type": ["string", "null"],
     "pattern": "^\\d{4}-\\d{2}-\\d{2}(?:T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2}))?$",
 }
+_TODO_TIMESTAMP = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 64,
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$",
+}
 _TODO_PRIORITY = {"type": ["string", "null"], "enum": ["low", "medium", "high", None]}
 _TODO_OPTIONAL_TEXT = {"type": ["string", "null"], "maxLength": 2000}
 _TODO_OUTPUT = _object_schema(
@@ -837,32 +936,34 @@ _TODO_OUTPUT = _object_schema(
         "id": {"type": "string", "minLength": 1, "maxLength": 128},
         "title": {"type": "string", "minLength": 1, "maxLength": 2000},
         "done": {"type": "boolean"},
+        "archived": {"type": "boolean"},
         "priority": _TODO_PRIORITY,
-        "start_at": _TODO_DATE,
         "due_at": _TODO_DATE,
         "estimated_minutes": {"type": ["integer", "null"], "minimum": 1},
         "atlas_goal_id": _TODO_OPTIONAL_TEXT,
         "notes": _TODO_OPTIONAL_TEXT,
         "created_at": {"type": "string", "minLength": 1, "maxLength": 64},
+        "last_edited_at": _TODO_TIMESTAMP,
     },
     [
         "id",
         "title",
         "done",
+        "archived",
         "priority",
-        "start_at",
         "due_at",
         "estimated_minutes",
         "atlas_goal_id",
         "notes",
         "created_at",
+        "last_edited_at",
     ],
 )
 _TODO_MUTABLE_PROPERTIES = {
     "title": {"type": "string", "minLength": 1, "maxLength": 2000},
     "done": {"type": "boolean"},
+    "archived": {"type": "boolean"},
     "priority": _TODO_PRIORITY,
-    "start_at": _TODO_DATE,
     "due_at": _TODO_DATE,
     "estimated_minutes": {"type": ["integer", "null"], "minimum": 1},
     "atlas_goal_id": _TODO_OPTIONAL_TEXT,
@@ -894,7 +995,10 @@ _NOTION_OPERATIONS = (
     IntegrationOperationSpec(
         id="notion.todo.list",
         title="List Notion todos",
-        description="List one bounded page of todos from the configured Notion data source, newest-created first.",
+        description=(
+            "List one bounded page of todos from the configured Notion data source, newest-created first; "
+            "trashed pages are excluded and archived rows remain readable."
+        ),
         input_schema=_object_schema(
             {
                 "page_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
@@ -913,7 +1017,7 @@ _NOTION_OPERATIONS = (
         effects=frozenset({IntegrationEffect.READ}),
         resource=ResourceSpec("notion.todo", ()),
         risk=RiskLevel.LOW,
-        contract_version=2,
+        contract_version=4,
         presentation=OperationPresentation(
             usage_example={"operation": "notion.todo.list", "input": {"page_size": 25}},
             normalized_errors=_NOTION_ERRORS,
@@ -923,13 +1027,13 @@ _NOTION_OPERATIONS = (
     IntegrationOperationSpec(
         id="notion.todo.create",
         title="Create Notion todo",
-        description="Create one todo in the configured Notion data source; only title is required.",
+        description="Create one todo in the configured Notion data source; only title is required and archived defaults to false.",
         input_schema=_object_schema(dict(_TODO_MUTABLE_PROPERTIES), ["title"]),
         output_schema=_TODO_OUTPUT,
         effects=frozenset({IntegrationEffect.CREATE}),
         resource=ResourceSpec("notion.todo", ()),
         risk=RiskLevel.MEDIUM,
-        contract_version=2,
+        contract_version=4,
         presentation=OperationPresentation(
             usage_example={"operation": "notion.todo.create", "input": {"title": "Buy groceries"}},
             normalized_errors=_NOTION_ERRORS,
@@ -939,13 +1043,13 @@ _NOTION_OPERATIONS = (
     IntegrationOperationSpec(
         id="notion.todo.update",
         title="Update Notion todo",
-        description="Partially update one contained Notion todo; explicit null clears an optional property.",
+        description="Partially update one contained Notion todo, including its Archived checkbox; explicit null clears an optional property.",
         input_schema=_TODO_UPDATE_INPUT,
         output_schema=_TODO_OUTPUT,
         effects=frozenset({IntegrationEffect.UPDATE}),
         resource=ResourceSpec("notion.todo", ("id",)),
         risk=RiskLevel.MEDIUM,
-        contract_version=2,
+        contract_version=4,
         presentation=OperationPresentation(
             usage_example={"operation": "notion.todo.update", "input": {"id": "page-id", "done": True}},
             normalized_errors=_NOTION_ERRORS,

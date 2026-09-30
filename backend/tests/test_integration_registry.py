@@ -16,7 +16,9 @@ from app.services.integration_registry import OPERATIONS
 
 EXPECTED_OPERATION_IDS = {
     "atlas.experience.list",
+    "atlas.goal.create",
     "atlas.goal.list",
+    "atlas.goal.update",
     "atlas.interest.get",
     "atlas.interest.list",
     "atlas.knowledge.frontier.list",

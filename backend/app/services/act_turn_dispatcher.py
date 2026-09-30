@@ -10,6 +10,7 @@ from sqlalchemy import select, update
 
 from app.db import SessionLocal
 from app.models import ActSession, ActTurn, AgentCredential
+from app.schemas.assistant_assessment import ASSESSMENT_RESPONSE_SCHEMA, AssistantAssessmentResult
 from app.services.act_app_server_service import act_app_server_service, agent_app_servers, is_missing_rollout_error
 from app.services.agent_policy_service import AgentPolicyService
 from app.services.codex_routing_service import CodexRoutingService
@@ -165,6 +166,7 @@ class ActTurnDispatcher:
         if session is None or session.status != "active":
             self._fail(db, turn, "Act session is no longer active")
             return
+        initial_assessment = False
         try:
             route = "assessment" if self.agent_id == "assistant" else self.agent_id
             routing = CodexRoutingService(db).resolve(role=route, action=route)
@@ -210,11 +212,18 @@ class ActTurnDispatcher:
                     )
 
             input_text = self._turn_input(db, turn, recovered_thread=recovered_thread)
+            initial_assessment = (
+                self.agent_id == "assistant" and session.origin == "assessment"
+                and turn.id == db.scalar(select(ActTurn.id).where(
+                    ActTurn.session_id == session.id, ActTurn.backend_message_kind.is_(None),
+                ).order_by(ActTurn.id).limit(1))
+            )
+            response_schema = ASSESSMENT_RESPONSE_SCHEMA if initial_assessment else ACT_RESPONSE_SCHEMA
             try:
                 result = self.app_server.sessions.run_structured_turn(
                     session.codex_thread_id,
                     input_text,
-                    ACT_RESPONSE_SCHEMA,
+                    response_schema,
                     timeout_seconds=900,
                     model=model,
                     reasoning_effort=effort,
@@ -235,7 +244,7 @@ class ActTurnDispatcher:
                 result = self.app_server.sessions.run_structured_turn(
                     session.codex_thread_id,
                     self._turn_input(db, turn, recovered_thread=True),
-                    ACT_RESPONSE_SCHEMA,
+                    response_schema,
                     timeout_seconds=900,
                     model=model,
                     reasoning_effort=effort,
@@ -245,18 +254,14 @@ class ActTurnDispatcher:
             if turn.cancel_requested_at is not None or self._stop.is_set():
                 self._cancelled(db, turn)
             else:
-                if (
-                    self.agent_id == "assistant"
-                    and session.origin == "assessment"
-                    and turn.id == db.scalar(
-                        select(ActTurn.id).where(ActTurn.session_id == session.id)
-                        .order_by(ActTurn.id).limit(1)
-                    )
-                ):
-                    from app.services.assistant_assessment_service import AssistantAssessmentService
-                    if not AssistantAssessmentService(db).report_written(turn.id):
-                        raise RuntimeError("Required opportunity scout report was not written to Notion")
-                turn.assistant_message = _response_text(result.output_text)
+                if initial_assessment:
+                    from app.services.assistant_assessment_result_service import AssistantAssessmentResultService
+
+                    parsed = AssistantAssessmentResult.model_validate_json(result.output_text)
+                    AssistantAssessmentResultService(db).accept(turn, parsed)
+                    turn.assistant_message = "Assessment complete."
+                else:
+                    turn.assistant_message = _response_text(result.output_text)
                 turn.activity_json = (
                     ([{"kind": "threadRecovery", "label": "Recovered the Act session"}]
                     if recovered_thread else [])
@@ -287,9 +292,7 @@ class ActTurnDispatcher:
                 from app.services.agent_proposal_service import AgentProposalService
                 AgentProposalService(db).refresh_execution(session.id)
                 if self.agent_id == "assistant":
-                    if session.origin == "assessment" and turn.id == db.scalar(
-                        select(ActTurn.id).where(ActTurn.session_id == session.id).order_by(ActTurn.id).limit(1)
-                    ):
+                    if initial_assessment:
                         from app.services.assistant_assessment_service import AssistantAssessmentService
                         AssistantAssessmentService(db).notify_completed(turn)
                     from app.services.act_session_service import ActSessionError, ActSessionService
@@ -304,8 +307,17 @@ class ActTurnDispatcher:
 
     @staticmethod
     def _turn_input(db, turn: ActTurn, *, recovered_thread: bool) -> str:
+        inserted = list(db.scalars(select(ActTurn).where(
+            ActTurn.session_id == turn.session_id,
+            ActTurn.id < turn.id,
+            ActTurn.backend_message_kind.is_not(None),
+        ).order_by(ActTurn.id)))
+        inserted_context = "\n\n".join(
+            f"Assistant (backend message): {item.assistant_message or ''}" for item in inserted
+        )
         if not recovered_thread:
-            return turn.user_message
+            return (f"<backend_assistant_messages>\n{inserted_context}\n</backend_assistant_messages>\n\n"
+                    if inserted_context else "") + turn.user_message
         completed = list(
             db.scalars(
                 select(ActTurn)
@@ -318,17 +330,21 @@ class ActTurnDispatcher:
             )
         )
         if not completed:
-            return turn.user_message
+            return (inserted_context + "\n\n" if inserted_context else "") + turn.user_message
         history = "\n\n".join(
             f"User: {item.user_message}\nAct: {item.assistant_message or ''}"
-            for item in completed[-20:]
+            for item in [row for row in completed if row.backend_message_kind is None][-20:]
+        )
+        backend_context = (
+            f"<backend_assistant_messages>\n{inserted_context}\n</backend_assistant_messages>\n\n"
+            if inserted_context else ""
         )
         return (
             "The previous Codex rollout is unavailable. The following is historical "
             "conversation context only. Do not repeat its actions or tool calls. Continue "
             "from the current request.\n\n"
             f"<historical_conversation>\n{history}\n</historical_conversation>\n\n"
-            f"Current user request: {turn.user_message}"
+            f"{backend_context}Current user request: {turn.user_message}"
         )
 
     @staticmethod

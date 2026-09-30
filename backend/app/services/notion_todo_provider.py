@@ -17,8 +17,8 @@ MAX_PROVIDER_RESPONSE_BYTES = 2_000_000
 PROPERTY_TYPES = {
     "Title": "title",
     "Done": "checkbox",
+    "Archived": "checkbox",
     "Priority": "select",
-    "Start At": "date",
     "Due At": "date",
     "Estimated Minutes": "number",
     "Atlas Goal ID": "rich_text",
@@ -173,11 +173,13 @@ class NotionTodoProvider:
     def _todo_from_page(self, page: dict[str, Any]) -> dict[str, Any]:
         page_id = page.get("id")
         created_at = page.get("created_time")
+        last_edited_at = page.get("last_edited_time")
         properties = page.get("properties")
         if not isinstance(page_id, str) or not page_id or not isinstance(properties, dict):
             raise IntegrationProviderError("schema_mismatch", "A Notion todo row is malformed")
         self._in_trash(page)
         self._validate_created_at(created_at)
+        self._validate_last_edited_at(last_edited_at)
         self._require_page_property_types(properties)
         title = self._text_value(properties["Title"], "title", required=True)
         priority_value = properties["Priority"].get("select")
@@ -195,17 +197,21 @@ class NotionTodoProvider:
         done = properties["Done"].get("checkbox")
         if not isinstance(done, bool):
             raise IntegrationProviderError("schema_mismatch", "A Notion todo done status is invalid")
+        archived = properties["Archived"].get("checkbox")
+        if not isinstance(archived, bool):
+            raise IntegrationProviderError("schema_mismatch", "A Notion todo archived status is invalid")
         return {
             "id": page_id,
             "title": title,
             "done": done,
+            "archived": archived,
             "priority": priority,
-            "start_at": self._date_value(properties["Start At"]),
             "due_at": self._date_value(properties["Due At"]),
             "estimated_minutes": estimated,
             "atlas_goal_id": self._text_value(properties["Atlas Goal ID"], "rich_text"),
             "notes": self._text_value(properties["Notes"], "rich_text"),
             "created_at": created_at,
+            "last_edited_at": last_edited_at,
         }
 
     @staticmethod
@@ -230,6 +236,17 @@ class NotionTodoProvider:
             datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             raise IntegrationProviderError("schema_mismatch", "A Notion todo creation time is invalid") from None
+
+    @staticmethod
+    def _validate_last_edited_at(value: Any) -> None:
+        if not isinstance(value, str):
+            raise IntegrationProviderError("schema_mismatch", "A Notion todo last edited time is invalid")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if "T" not in value or parsed.tzinfo is None:
+                raise ValueError
+        except ValueError:
+            raise IntegrationProviderError("schema_mismatch", "A Notion todo last edited time is invalid") from None
 
     @staticmethod
     def _date_value(prop: dict[str, Any]) -> str | None:
@@ -271,17 +288,21 @@ class NotionTodoProvider:
             properties["Title"] = {"title": [cls._text_fragment(title)]}
         if "done" in values:
             properties["Done"] = {"checkbox": values["done"]}
+        if "archived" in values:
+            archived = values["archived"]
+            if not isinstance(archived, bool):
+                raise IntegrationProviderError("invalid_input", "Todo archived input is invalid")
+            properties["Archived"] = {"checkbox": archived}
         if "priority" in values:
             priority = values["priority"]
             properties["Priority"] = {
                 "select": {"name": PRIORITY_TO_NOTION[priority]} if priority is not None else None
             }
-        for field, notion_name in (("start_at", "Start At"), ("due_at", "Due At")):
-            if field in values:
-                value = values[field]
-                if value is not None:
-                    cls._validate_date_input(value)
-                properties[notion_name] = {"date": {"start": value} if value is not None else None}
+        if "due_at" in values:
+            value = values["due_at"]
+            if value is not None:
+                cls._validate_date_input(value)
+            properties["Due At"] = {"date": {"start": value} if value is not None else None}
         if "estimated_minutes" in values:
             properties["Estimated Minutes"] = {"number": values["estimated_minutes"]}
         for field, notion_name in (("atlas_goal_id", "Atlas Goal ID"), ("notes", "Notes")):

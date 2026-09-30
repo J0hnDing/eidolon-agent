@@ -289,6 +289,8 @@ class ActTurn(Base):
     codex_turn_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     user_message: Mapped[str] = mapped_column(Text, nullable=False)
     assistant_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    backend_message_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    assessment_report_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     activity_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
     error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)

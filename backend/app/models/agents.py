@@ -38,6 +38,10 @@ class AgentProposal(Base):
     fingerprint: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     replaces_proposal_id: Mapped[int | None] = mapped_column(Integer)
     material_change: Mapped[str | None] = mapped_column(Text)
+    action_json: Mapped[dict | None] = mapped_column(JSON)
+    provenance_json: Mapped[dict | None] = mapped_column(JSON)
+    follow_up_json: Mapped[dict | None] = mapped_column(JSON)
+    execution_state_json: Mapped[dict | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
     execution_status: Mapped[str | None] = mapped_column(String(32))
     act_session_id: Mapped[int | None] = mapped_column(Integer)
@@ -46,6 +50,20 @@ class AgentProposal(Base):
     telegram_message_ids_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     telegram_connection_id: Mapped[int | None] = mapped_column(Integer)
     telegram_outcome_fingerprint: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class AssistantFollowUp(Base):
+    __tablename__ = "assistant_follow_ups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    proposal_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True, index=True)
+    session_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    timing_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sent_turn_id: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="waiting")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 

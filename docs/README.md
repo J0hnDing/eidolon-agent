@@ -41,6 +41,7 @@ The product and repository are named **Eidolon**. Existing environment variables
 - [Function registry and invocation](runtime/functions.md)
 - [Extending the function catalog](runtime/function_extension_guide.md)
 - [Scheduling](runtime/scheduling.md)
+- [Personal weekly summary](runtime/personal_weekly_summary.md)
 
 ## Integrations, Roadmap, and History
 

@@ -102,12 +102,8 @@ class McpFunctionService:
             self.agent_identity = AgentPolicyService(db).authenticate(agent_token)
         entries = FunctionCatalogService(db, project_root=project_root).list_entries()
         if self.agent_identity is not None:
-            from app.schemas.agents import AgentOpportunityReport, AgentPlanRequest
             from app.services.agent_policy_service import AgentPolicyService
             entries = [entry for entry in entries if AgentPolicyService(db).decision(self.agent_identity[0], entry)[0]]
-            if self.agent_identity[0] == "assistant":
-                entries.append({"id": "plan_approval_request", "category": "agent_private", "title": "Request plan approval", "description": "Submit a concrete plan for user approval. Approval creates a new Act session; existing function approvals still apply. Backend saves proposal history.", "risk_level": "low", "availability": "available", "mcp_exposed": True, "input_schema": AgentPlanRequest.model_json_schema(), "output_schema": {"type": "object", "properties": {"status": {"type": "string"}, "proposal_id": {"type": "integer"}}, "required": ["status", "proposal_id"]}})
-                entries.append({"id": "opportunity_scout_report", "category": "agent_private", "title": "Write opportunity scout report", "description": "Write one Opportunities report for this assessment. Supply only opportunity names and short descriptions; an empty list is valid when none qualify. No approval is required.", "risk_level": "medium", "availability": "available", "mcp_exposed": True, "input_schema": AgentOpportunityReport.model_json_schema(), "output_schema": {"type": "object", "properties": {"report_id": {"type": "string"}}, "required": ["report_id"]}, "mcp_read_only": False})
             if self.agent_identity[0] == "act":
                 entries.extend(act_private_tool_entries())
         self.excluded_ids = sorted(

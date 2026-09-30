@@ -22,11 +22,7 @@ AGENTS = {
     "observer": ("Observer", "A conversational observer with read-only access by default."),
     "assistant": ("Assistant", "Assesses goals and todos, researches useful actions, and proposes plans for approval."),
 }
-PLAN_TOOL_ID = "plan_approval_request"
-OPPORTUNITY_REPORT_TOOL_ID = "opportunity_scout_report"
 PRIVATE_TOOL_AGENTS = {
-    PLAN_TOOL_ID: "assistant",
-    OPPORTUNITY_REPORT_TOOL_ID: "assistant",
     BROWSER_AUTHENTICATE_CAPABILITY_ID: "act",
     TELEGRAM_SEND_FILE_CAPABILITY_ID: "act",
 }
@@ -44,9 +40,16 @@ class AgentPolicyService:
     def policy(self, agent_id: str) -> AgentPolicyUpdate:
         self.require_agent(agent_id)
         row = self.db.get(AgentPolicy, agent_id)
-        return (
+        policy = (
             AgentPolicyUpdate.model_validate(row.policy_json) if row else AgentPolicyUpdate(read_only=agent_id != "act")
         )
+        if agent_id == "assistant":
+            obsolete = {"plan_approval_request", "opportunity_scout_report"}
+            policy = policy.model_copy(update={
+                "allowed_functions": [item for item in policy.allowed_functions if item not in obsolete],
+                "banned_functions": [item for item in policy.banned_functions if item not in obsolete],
+            })
+        return policy
 
     @staticmethod
     def require_agent(agent_id: str) -> None:
@@ -147,29 +150,6 @@ class AgentPolicyService:
         for entry in FunctionCatalogService(self.db).list_entries():
             allowed, reason = self.decision(agent_id, entry)
             functions.append({**entry, "allowed": allowed, "reason": reason})
-        if agent_id == "assistant":
-            functions.append(
-                {
-                    "id": PLAN_TOOL_ID,
-                    "title": "Request plan approval",
-                    "description": "Privately propose work for a new Act session.",
-                    "risk_level": "low",
-                    "mcp_read_only": False,
-                    "allowed": PLAN_TOOL_ID not in policy.banned_functions,
-                    "reason": "Assistant-only plan request",
-                }
-            )
-            functions.append(
-                {
-                    "id": OPPORTUNITY_REPORT_TOOL_ID,
-                    "title": "Write opportunity scout report",
-                    "description": "Write the mandatory assessment opportunity list to Notion Reports.",
-                    "risk_level": "medium",
-                    "mcp_read_only": False,
-                    "allowed": OPPORTUNITY_REPORT_TOOL_ID not in policy.banned_functions,
-                    "reason": "Assistant-only assessment report",
-                }
-            )
         return {
             "id": agent_id,
             "name": name,
@@ -225,3 +205,20 @@ class AgentPolicyService:
             if self.decision("act", entry)[0]
         ]
         return [*function_entries, *act_runtime_capability_catalog()]
+
+    def deterministic_catalog(self) -> list[dict]:
+        return [
+            {
+                "id": entry["id"],
+                "description": entry["description"],
+                "input_schema": entry["input_schema"],
+            }
+            for entry in FunctionCatalogService(self.db).list_entries(refresh=True)
+            if entry.get("availability") == "available"
+            and entry.get("mcp_exposed") is True
+            and entry.get("agent_selectable", True) is not False
+            and entry.get("requires_invocation_approval") is not True
+            and entry.get("uses_codex") is not True
+            and entry.get("category") in {"integration", "user", "backend_core"}
+            and isinstance(entry.get("input_schema"), dict)
+        ]

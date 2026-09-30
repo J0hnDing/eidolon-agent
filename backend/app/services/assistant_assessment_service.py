@@ -14,7 +14,6 @@ from app.models import (
     ActTurn,
     AgentProposal,
     AssistantAssessmentState,
-    McpAuditRecord,
     ScheduleRuntimeState,
     TelegramBotConnection,
 )
@@ -25,7 +24,6 @@ from app.services.act_session_service import (
     AssistantSessionCapacityError,
 )
 from app.services.act_workspace_service import ensure_act_workspace
-from app.services.agent_policy_service import OPPORTUNITY_REPORT_TOOL_ID
 from app.services.atlas_provider import UrllibAtlasProviderAdapter
 from app.services.github_provider import IntegrationProviderError
 
@@ -54,22 +52,9 @@ class AssistantAssessmentService:
         self._now = now or utc_now
         self.executor = executor or InvocationExecutor(db)
 
-    def report_written(self, turn_id: int) -> bool:
-        return self.db.scalar(select(McpAuditRecord.id).where(
-            McpAuditRecord.agent_turn_id == turn_id,
-            McpAuditRecord.function_id == OPPORTUNITY_REPORT_TOOL_ID,
-            McpAuditRecord.status == "succeeded",
-            McpAuditRecord.resource.like("notion-page:%"),
-        ).limit(1)) is not None
-
     def notify_completed(self, turn: ActTurn) -> None:
-        import logging
-
         from app.services.telegram_service import TELEGRAM_ASSISTANT_ROLE, TelegramService
 
-        proposals = list(self.db.scalars(select(AgentProposal).where(
-            AgentProposal.source_session_id == turn.session_id
-        )))
         connection = self.db.scalar(select(TelegramBotConnection).where(
             TelegramBotConnection.role == "assistant_agent",
             TelegramBotConnection.is_default.is_(True),
@@ -85,16 +70,24 @@ class AssistantAssessmentService:
                 turn.delivery_chat_id = topic.telegram_chat_id
                 turn.delivery_message_thread_id = topic.message_thread_id
                 turn.delivery_status = "pending"
+                questions = list(self.db.scalars(select(ActTurn).where(
+                    ActTurn.session_id == turn.session_id,
+                    ActTurn.backend_message_kind == "goal_question",
+                    ActTurn.delivery_status.is_(None),
+                ).order_by(ActTurn.id)))
+                for question in questions:
+                    question.delivery_provider = "telegram"
+                    question.delivery_connection_id = topic.connection_id
+                    question.delivery_chat_id = topic.telegram_chat_id
+                    question.delivery_message_thread_id = topic.message_thread_id
+                    question.delivery_status = "pending"
                 self.db.commit()
+                from app.services.agent_turn_delivery import deliver_agent_turn_result
+
+                for question in questions:
+                    deliver_agent_turn_result(question.id)
             except Exception:
                 self.db.rollback()
-        try:
-            TelegramService(self.db).execute_notification({
-                "title": "Assessment Success" if turn.status == "succeeded" else "Assessment Fail",
-                "description": f"You have {len(proposals)} proposals.",
-            })
-        except Exception:
-            logging.getLogger(__name__).warning("Assistant assessment Telegram notification could not be delivered")
 
     def status(self) -> dict[str, Any]:
         state = self._state()
@@ -221,7 +214,7 @@ class AssistantAssessmentService:
         proposals = list(self.db.scalars(select(AgentProposal)))
         references = {
             reference for proposal in proposals for reference in proposal.references_json
-            if reference.startswith(("todo:", "goal:")) and reference.partition(":")[2]
+            if reference.startswith(("todo:", "goal:", "subgoal:")) and reference.partition(":")[2]
         }
         inactive: set[str] = set()
         todo_refs = {ref for ref in references if ref.startswith("todo:")}
@@ -258,13 +251,14 @@ class AssistantAssessmentService:
             except InvocationExecutionError:
                 # Unavailable or incomplete sources are not evidence of deletion.
                 pass
-        goal_refs = {ref for ref in references if ref.startswith("goal:")}
+        goal_refs = {ref for ref in references if ref.startswith(("goal:", "subgoal:"))}
         if goal_refs:
             try:
                 inactive.update(self._inactive_goals(goal_refs))
             except IntegrationProviderError:
                 pass
-        removed = [proposal for proposal in proposals if inactive.intersection(proposal.references_json)]
+        removed = [proposal for proposal in proposals
+                   if proposal.status == "pending" and inactive.intersection(proposal.references_json)]
         if not removed:
             return
         directory = ensure_act_workspace().knowledge / "assistant" / "plans"
@@ -282,7 +276,11 @@ class AssistantAssessmentService:
         records = provider._record_list(provider._request(
             "/api/records?category=goal", None, timeout=10, max_bytes=2_000_000, method="GET"
         ), "goal")
-        present = {f"goal:{record['id']}" for record in records if not record.get("trashed", False)}
+        present = {
+            f"{kind}:{record['id']}"
+            for record in records if not record.get("trashed", False)
+            for kind in ("goal", "subgoal")
+        }
         inactive = references - present
         for reference in references & present:
             goal_id = quote(reference.partition(":")[2], safe="")

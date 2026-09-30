@@ -39,7 +39,7 @@ class FakeExecutor:
 
 
 def todo(todo_id: str, *, done: bool) -> dict:
-    return {"id": todo_id, "done": done}
+    return {"id": todo_id, "done": done, "archived": False}
 
 
 def service(fake: FakeExecutor) -> NotionDoneCleanupService:
@@ -49,7 +49,7 @@ def service(fake: FakeExecutor) -> NotionDoneCleanupService:
     )
 
 
-def test_cleanup_paginates_and_deletes_only_done_todos() -> None:
+def test_cleanup_paginates_and_archives_only_unarchived_done_todos() -> None:
     fake = FakeExecutor()
     fake.pages = {
         None: {
@@ -68,14 +68,15 @@ def test_cleanup_paginates_and_deletes_only_done_todos() -> None:
 
     assert result["status"] == "succeeded"
     assert result["scanned_count"] == 3
-    assert result["deleted_ids"] == ["done-1", "done-2"]
-    assert [call for call in fake.calls if call[0] == "notion.todo.delete"] == [
-        ("notion.todo.delete", {"id": "done-1"}),
-        ("notion.todo.delete", {"id": "done-2"}),
+    assert result["archived_count"] == 2
+    assert result["archived_ids"] == ["done-1", "done-2"]
+    assert [call for call in fake.calls if call[0] == "notion.todo.update"] == [
+        ("notion.todo.update", {"id": "done-1", "archived": True}),
+        ("notion.todo.update", {"id": "done-2", "archived": True}),
     ]
 
 
-def test_cleanup_continues_after_individual_delete_failure() -> None:
+def test_cleanup_continues_after_individual_archive_failure() -> None:
     fake = FakeExecutor()
     fake.pages = {
         None: {
@@ -89,8 +90,31 @@ def test_cleanup_continues_after_individual_delete_failure() -> None:
     result = service(fake).run()
 
     assert result["status"] == "partial"
-    assert result["deleted_ids"] == ["deleted"]
+    assert result["archived_ids"] == ["deleted"]
     assert result["failures"] == [{"id": "failed", "error_type": "rate_limited"}]
+
+
+def test_cleanup_skips_already_archived_done_todos() -> None:
+    fake = FakeExecutor()
+    fake.pages = {
+        None: {
+            "todos": [
+                {"id": "already-archived", "done": True, "archived": True},
+                {"id": "needs-archive", "done": True, "archived": False},
+            ],
+            "has_more": False,
+            "next_cursor": None,
+        }
+    }
+
+    result = service(fake).run()
+
+    assert result["matched_count"] == 1
+    assert result["archived_count"] == 1
+    assert result["archived_ids"] == ["needs-archive"]
+    assert [call for call in fake.calls if call[0] == "notion.todo.update"] == [
+        ("notion.todo.update", {"id": "needs-archive", "archived": True})
+    ]
 
 
 def test_cleanup_normalizes_list_failure_without_deleting() -> None:

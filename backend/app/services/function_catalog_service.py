@@ -387,6 +387,7 @@ class FunctionCatalogService:
                     "call_name": skill.name,
                     "skill_id": skill.id,
                     "active_version": contract.active_version,
+                    "uses_codex": bool(permissions.get("codex")),
                     "availability": availability,
                     "availability_reasons": availability_reasons,
                     "invocation": {
