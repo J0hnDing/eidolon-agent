@@ -182,6 +182,7 @@ class GoogleOAuthClientStatus(BaseModel):
     status: Literal["configured", "not_configured", "unavailable", "conflict"]
     calendar_redirect_uri: str
     gmail_redirect_uri: str
+    drive_redirect_uri: str
     created_at: datetime | None = None
     updated_at: datetime | None = None
     error_type: str | None = None
@@ -205,6 +206,18 @@ class GoogleCalendarConnectionStatus(BaseModel):
 
 class GmailConnectionStatus(BaseModel):
     provider: Literal["gmail"] = "gmail"
+    connected: bool
+    status: Literal["connected", "disconnected", "unavailable", "invalid"]
+    account_email: str | None = None
+    last_validated_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    error_type: str | None = None
+    oauth_redirect_uri: str
+
+
+class GoogleDriveConnectionStatus(BaseModel):
+    provider: Literal["google_drive"] = "google_drive"
     connected: bool
     status: Literal["connected", "disconnected", "unavailable", "invalid"]
     account_email: str | None = None

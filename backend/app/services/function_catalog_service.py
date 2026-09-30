@@ -205,6 +205,7 @@ class FunctionCatalogService:
                 "atlas": "Atlas is not running and unlocked",
                 "notion": "Notion connection is not configured",
                 "google_calendar": "Google Calendar connection is not configured",
+                "google_drive": "Google Drive connection is not configured",
                 "gmail": "Gmail connection is not configured",
                 "outlook": "Outlook connection is not configured",
                 "telegram": "Telegram bot is not paired",

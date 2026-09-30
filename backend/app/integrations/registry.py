@@ -1728,6 +1728,56 @@ _TELEGRAM_OPERATIONS = (
     ),
 )
 
+_DRIVE_ID = {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+$"}
+_DRIVE_METADATA = _object_schema(
+    {"id": _DRIVE_ID, "name": {"type": "string"}, "mime_type": {"type": "string"},
+     "parents": {"type": "array", "items": {"type": "string"}},
+     "modified_time": {"type": ["string", "null"]}, "web_url": {"type": ["string", "null"]}},
+    ["id", "name", "mime_type", "parents", "modified_time", "web_url"],
+)
+_DRIVE_LOCAL_FILE = _object_schema(
+    {"path": {"type": "string"}, "filename": {"type": "string"},
+     "bytes": {"type": "integer", "minimum": 0}, "media_type": {"type": "string"}},
+    ["path", "filename", "bytes", "media_type"],
+)
+_DRIVE_ERRORS = _COMMON_ERRORS + ("unsupported_file_type",)
+_GOOGLE_DRIVE_OPERATIONS = (
+    IntegrationOperationSpec(
+        id="google_drive.search", title="Search Google Drive",
+        description="Search file names or list a folder in the connected Google Drive.",
+        input_schema=_object_schema({"query": {"type": "string", "minLength": 1, "maxLength": 200}, "parent_id": _DRIVE_ID,
+                                     "mime_type": {"type": "string", "minLength": 1, "maxLength": 200},
+                                     "limit": {"type": "integer", "minimum": 1, "maximum": 100}}, []),
+        output_schema=_object_schema({"files": {"type": "array", "maxItems": 100, "items": _DRIVE_METADATA}}, ["files"]),
+        effects=frozenset({IntegrationEffect.READ}), resource=ResourceSpec("google_drive.file", ()), risk=RiskLevel.LOW,
+        presentation=OperationPresentation(usage_example={"operation": "google_drive.search", "input": {"query": "notes"}}, normalized_errors=_DRIVE_ERRORS, open_world=False),
+    ),
+    IntegrationOperationSpec(
+        id="google_drive.download", title="Download Google Drive file",
+        description="Save one Drive file in knowledge/google drive download and return its local Eidolon file reference.",
+        input_schema=_object_schema({"file_id": _DRIVE_ID, "export_format": {"type": "string", "enum": ["docx", "xlsx", "pptx", "pdf", "txt", "csv"]}}, ["file_id"]),
+        output_schema=_object_schema({"file": _DRIVE_LOCAL_FILE, "metadata": _DRIVE_METADATA}, ["file", "metadata"]),
+        effects=frozenset({IntegrationEffect.READ}), resource=ResourceSpec("google_drive.file", ("file_id",)), risk=RiskLevel.LOW,
+        presentation=OperationPresentation(usage_example={"operation": "google_drive.download", "input": {"file_id": "file-id"}}, normalized_errors=_DRIVE_ERRORS, open_world=False),
+    ),
+    IntegrationOperationSpec(
+        id="google_drive.upload", title="Upload Eidolon file to Google Drive",
+        description="Upload one bounded local Eidolon file to the connected Drive.",
+        input_schema=_object_schema({"file": _DRIVE_LOCAL_FILE, "name": {"type": "string", "minLength": 1, "maxLength": 180}, "parent_id": _DRIVE_ID}, ["file"]),
+        output_schema=_DRIVE_METADATA,
+        effects=frozenset({IntegrationEffect.CREATE}), resource=ResourceSpec("google_drive.file", ()), risk=RiskLevel.MEDIUM,
+        presentation=OperationPresentation(usage_example={"operation": "google_drive.upload", "input": {"file": {"path": "workspace/downloads/note.txt", "filename": "note.txt", "bytes": 12, "media_type": "text/plain"}}}, normalized_errors=_DRIVE_ERRORS, open_world=False),
+    ),
+    IntegrationOperationSpec(
+        id="google_drive.read", title="Read Google Drive file",
+        description="Retrieve a Drive file and return bounded model-readable text and metadata.",
+        input_schema=_object_schema({"file_id": _DRIVE_ID}, ["file_id"]),
+        output_schema=_object_schema({"metadata": _DRIVE_METADATA, "text": {"type": "string", "maxLength": 200000}}, ["metadata", "text"]),
+        effects=frozenset({IntegrationEffect.READ}), resource=ResourceSpec("google_drive.file", ("file_id",)), risk=RiskLevel.LOW,
+        presentation=OperationPresentation(usage_example={"operation": "google_drive.read", "input": {"file_id": "file-id"}}, normalized_errors=_DRIVE_ERRORS, open_world=False),
+    ),
+)
+
 _PROVIDER_SPECS = (
     ProviderSpec(
         id="github",
@@ -1768,6 +1818,10 @@ _PROVIDER_SPECS = (
         id="telegram",
         display_name="Telegram",
         supported_operations=frozenset(operation.id for operation in _TELEGRAM_OPERATIONS),
+    ),
+    ProviderSpec(
+        id="google_drive", display_name="Google Drive",
+        supported_operations=frozenset(operation.id for operation in _GOOGLE_DRIVE_OPERATIONS),
     ),
     ProviderSpec(
         id="fred",
@@ -1979,6 +2033,7 @@ DEFAULT_INTEGRATION_REGISTRY = IntegrationOperationRegistry(
         *_ATLAS_OPERATIONS,
         *_NOTION_OPERATIONS,
         *_GOOGLE_CALENDAR_OPERATIONS,
+        *_GOOGLE_DRIVE_OPERATIONS,
         *_EMAIL_OPERATIONS,
         *_TELEGRAM_OPERATIONS,
         *_MACRO_OPERATIONS,

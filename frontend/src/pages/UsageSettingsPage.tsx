@@ -16,6 +16,7 @@ import {
   GitHubConnectionStatus,
   GmailConnectionStatus,
   GoogleCalendarConnectionStatus,
+  GoogleDriveConnectionStatus,
   GoogleOAuthClientStatus,
   MicrosoftOAuthClientStatus,
   NotionConnectionStatus,
@@ -134,6 +135,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
   const [googleClientId, setGoogleClientId] = useState("");
   const [googleClientSecret, setGoogleClientSecret] = useState("");
   const [gmail, setGmail] = useState<GmailConnectionStatus | null>(null);
+  const [googleDrive, setGoogleDrive] = useState<GoogleDriveConnectionStatus | null>(null);
   const [microsoftOAuth, setMicrosoftOAuth] = useState<MicrosoftOAuthClientStatus | null>(null);
   const [outlook, setOutlook] = useState<OutlookConnectionStatus | null>(null);
   const [microsoftClientId, setMicrosoftClientId] = useState("");
@@ -190,7 +192,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setRouting(normalizeRoutingSettings(nextRouting));
         setRoutingDirty(false);
       } else if (section === "integrations") {
-        const [nextGitHub, nextBrowserAuthentication, nextAtlas, nextNotion, nextQuercus, nextQuercusProcessing, nextGoogleOAuth, nextGoogleCalendar, nextGmail, nextMicrosoftOAuth, nextOutlook, nextTelegram, nextTelegramAgent, nextTelegramObserverAgent, nextTelegramAssistantAgent, nextWeCom, nextCodexMcp, nextMacroApiKeys] = await Promise.all([
+        const [nextGitHub, nextBrowserAuthentication, nextAtlas, nextNotion, nextQuercus, nextQuercusProcessing, nextGoogleOAuth, nextGoogleCalendar, nextGmail, nextGoogleDrive, nextMicrosoftOAuth, nextOutlook, nextTelegram, nextTelegramAgent, nextTelegramObserverAgent, nextTelegramAssistantAgent, nextWeCom, nextCodexMcp, nextMacroApiKeys] = await Promise.all([
           api.getGitHubConnection(),
           api.getBrowserAuthentication(),
           api.getAtlasStatus().catch((err) => atlasUnavailableStatus(err)),
@@ -209,6 +211,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           api.getGoogleOAuthClient().catch((err) => googleOAuthUnavailableStatus(err)),
           api.getGoogleCalendarConnection().catch((err) => googleCalendarUnavailableStatus(err)),
           api.getGmailConnection().catch((err) => gmailUnavailableStatus(err)),
+          api.getGoogleDriveConnection().catch((err) => googleDriveUnavailableStatus(err)),
           api.getMicrosoftOAuthClient().catch((err) => microsoftOAuthUnavailableStatus(err)),
           api.getOutlookConnection().catch((err) => outlookUnavailableStatus(err)),
           api.getTelegramConnection().catch((err) => telegramUnavailableStatus(err)),
@@ -243,6 +246,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setGoogleOAuth(nextGoogleOAuth);
         setGoogleCalendar(nextGoogleCalendar);
         setGmail(nextGmail);
+        setGoogleDrive(nextGoogleDrive);
         setMicrosoftOAuth(nextMicrosoftOAuth);
         setOutlook(nextOutlook);
         setTelegram(nextTelegram);
@@ -301,19 +305,24 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     const url = new URL(window.location.href);
     const calendarResult = url.searchParams.get("google_calendar");
     const gmailResult = url.searchParams.get("gmail");
+    const driveResult = url.searchParams.get("google_drive");
     const outlookResult = url.searchParams.get("outlook");
-    if (!calendarResult && !gmailResult && !outlookResult) return;
+    if (!calendarResult && !gmailResult && !driveResult && !outlookResult) return;
     if (calendarResult === "connected") setSaved("Google Calendar connected.");
     else if (calendarResult === "denied") setError("Google Calendar authorization was denied.");
     else if (calendarResult) setError("Google Calendar authorization failed or expired. Try connecting again.");
     if (gmailResult === "connected") setSaved("Gmail connected.");
     else if (gmailResult === "denied") setError("Gmail authorization was denied.");
     else if (gmailResult) setError("Gmail authorization failed or expired. Try connecting again.");
+    if (driveResult === "connected") setSaved("Google Drive connected.");
+    else if (driveResult === "denied") setError("Google Drive authorization was denied.");
+    else if (driveResult) setError("Google Drive authorization failed or expired. Try connecting again.");
     if (outlookResult === "connected") setSaved("Outlook connected.");
     else if (outlookResult === "denied") setError("Outlook authorization was denied.");
     else if (outlookResult) setError("Outlook authorization failed or expired. Try connecting again.");
     url.searchParams.delete("google_calendar");
     url.searchParams.delete("gmail");
+    url.searchParams.delete("google_drive");
     url.searchParams.delete("outlook");
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   }, [section]);
@@ -754,6 +763,33 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     }
   }
 
+  async function startGoogleDriveOAuth() {
+    if (!googleOAuth?.configured) return;
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      const result = await api.startGoogleDriveOAuth();
+      window.location.assign(result.authorization_url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start Google Drive authorization");
+      setLoading(false);
+    }
+  }
+
+  async function removeGoogleDriveConnection() {
+    setError(null);
+    setSaved(null);
+    setLoading(true);
+    try {
+      await api.removeGoogleDriveConnection();
+      setGoogleDrive(await api.getGoogleDriveConnection());
+      setSaved("Google Drive connection removed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove Google Drive connection");
+    } finally { setLoading(false); }
+  }
+
   async function removeGmailConnection() {
     setError(null);
     setSaved(null);
@@ -1189,7 +1225,8 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
 
   const googleServiceGrantPresent = Boolean(
     (googleCalendar && googleCalendar.status !== "disconnected")
-    || (gmail && gmail.status !== "disconnected"),
+    || (gmail && gmail.status !== "disconnected")
+    || (googleDrive && googleDrive.status !== "disconnected"),
   );
   const microsoftServiceGrantPresent = Boolean(outlook && outlook.status !== "disconnected");
 
@@ -1424,12 +1461,12 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           })}
         </section>
       )}
-      {section === "integrations" && googleOAuth && googleCalendar && gmail && (
+      {section === "integrations" && googleOAuth && googleCalendar && gmail && googleDrive && (
         <section className="detail-panel stack">
           <div>
             <h2>Google connection</h2>
             <p className="muted">
-              One Google OAuth client is shared by Calendar and Gmail. Each service has its own authorization grant, refresh token, scopes, selected account, connect button, and disconnect action, so the two accounts may differ.
+              One Google OAuth client is shared by Calendar, Gmail, and Drive. Each service has its own authorization grant, refresh token, scopes, and selected account.
             </p>
             <p className="muted">The requested <code>gmail.modify</code> scope is restricted by Google; configure the consent screen and testing users before connecting Gmail.</p>
           </div>
@@ -1442,10 +1479,11 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
             <div>
               <h3>Shared OAuth client</h3>
               <p className="muted">
-                Enable the Google Calendar and Gmail APIs on one Web application OAuth client and register both redirect URIs:
+                Enable the Google Calendar, Gmail, and Drive APIs on one Web application OAuth client and register all three redirect URIs:
               </p>
               <p><code>{googleOAuth.calendar_redirect_uri}</code></p>
               <p><code>{googleOAuth.gmail_redirect_uri}</code></p>
+              <p><code>{googleOAuth.drive_redirect_uri}</code></p>
             </div>
             <label>
               {googleOAuth.configured ? "Replacement Google OAuth client ID" : "Google OAuth client ID"}
@@ -1479,7 +1517,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
               </button>
               {googleOAuth.configured && !googleServiceGrantPresent && <button type="button" className="secondary" onClick={() => void removeGoogleOAuthClient()} disabled={loading}>Remove shared OAuth client</button>}
             </div>
-            {googleServiceGrantPresent && <p className="muted">Disconnect both services before replacing or removing the shared OAuth client.</p>}
+            {googleServiceGrantPresent && <p className="muted">Disconnect all Google services before replacing or removing the shared OAuth client.</p>}
           </div>
 
           <div className="settings-subsection stack">
@@ -1494,6 +1532,12 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
             <dl className="detail-grid"><div><dt>Status</dt><dd>{gmail.connected ? "Connected" : gmail.status}</dd></div><div><dt>Account</dt><dd>{gmail.account_email ?? "None"}</dd></div><div><dt>Last validated</dt><dd>{formatDate(gmail.last_validated_at)}</dd></div></dl>
             {gmail.error_type && <p className="error-text">Gmail status: {gmail.error_type.replace(/_/g, " ")}</p>}
             <div className="button-row"><button type="button" onClick={() => void startGmailOAuth()} disabled={loading || !googleOAuth.configured}>{gmail.connected ? "Choose another Gmail account" : "Connect Gmail"}</button>{gmail.status !== "disconnected" && <button type="button" className="secondary" onClick={() => void removeGmailConnection()} disabled={loading}>Disconnect Gmail</button>}</div>
+          </div>
+          <div className="settings-subsection stack">
+            <div><h3>Google Drive</h3><p className="muted">Uses a separate full Drive scope and saves downloads to knowledge/google drive download. Google's restricted scope may require OAuth verification outside test users.</p></div>
+            <dl className="detail-grid"><div><dt>Status</dt><dd>{googleDrive.connected ? "Connected" : googleDrive.status}</dd></div><div><dt>Account</dt><dd>{googleDrive.account_email ?? "None"}</dd></div><div><dt>Last validated</dt><dd>{formatDate(googleDrive.last_validated_at)}</dd></div></dl>
+            {googleDrive.error_type && <p className="error-text">Drive status: {googleDrive.error_type.replace(/_/g, " ")}</p>}
+            <div className="button-row"><button type="button" onClick={() => void startGoogleDriveOAuth()} disabled={loading || !googleOAuth.configured}>{googleDrive.connected ? "Choose another Drive account" : "Connect Drive"}</button>{googleDrive.status !== "disconnected" && <button type="button" className="secondary" onClick={() => void removeGoogleDriveConnection()} disabled={loading}>Disconnect Drive</button>}</div>
           </div>
         </section>
       )}
@@ -2287,6 +2331,7 @@ function googleOAuthUnavailableStatus(err: unknown): GoogleOAuthClientStatus {
     status: "unavailable",
     calendar_redirect_uri: "http://localhost:8000/settings/integrations/google-calendar/oauth/callback",
     gmail_redirect_uri: "http://localhost:8000/settings/integrations/gmail/oauth/callback",
+    drive_redirect_uri: "http://localhost:8000/settings/integrations/google-drive/oauth/callback",
     created_at: null,
     updated_at: null,
     error_type: err instanceof Error ? err.message : "unavailable",
@@ -2304,6 +2349,15 @@ function gmailUnavailableStatus(err: unknown): GmailConnectionStatus {
     updated_at: null,
     error_type: err instanceof Error ? err.message : "unavailable",
     oauth_redirect_uri: "http://localhost:8000/settings/integrations/gmail/oauth/callback",
+  };
+}
+
+function googleDriveUnavailableStatus(err: unknown): GoogleDriveConnectionStatus {
+  return {
+    provider: "google_drive", connected: false, status: "unavailable", account_email: null,
+    last_validated_at: null, created_at: null, updated_at: null,
+    error_type: err instanceof Error ? err.message : "unavailable",
+    oauth_redirect_uri: "http://localhost:8000/settings/integrations/google-drive/oauth/callback",
   };
 }
 

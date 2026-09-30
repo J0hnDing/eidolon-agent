@@ -4,7 +4,7 @@ Eidolon supports one default trusted Gmail connection and five provider-neutral 
 
 ## OAuth Setup and Storage
 
-In Google Cloud, enable the Gmail and Google Calendar APIs and create one OAuth client of type **Web application**. Configure it once in Eidolon's shared Google connection section and register both service callback URIs. Gmail uses this one:
+In Google Cloud, enable the Gmail, Google Calendar, and Drive APIs and create one OAuth client of type **Web application**. Configure it once in Eidolon's shared Google connection section and register all three service callback URIs. Gmail uses this one:
 
 ```text
 http://localhost:8000/settings/integrations/gmail/oauth/callback
@@ -47,7 +47,7 @@ For approved email sends, the user-selected Telegram approval channel intentiona
 - `GET /settings/integrations/gmail`: sanitized connection status and exact redirect URI.
 - `GET /settings/integrations/google`: sanitized shared OAuth-client status and both redirect URIs.
 - `PUT /settings/integrations/google/oauth-client`: stores the shared write-only client ID and client secret.
-- `DELETE /settings/integrations/google/oauth-client`: removes the shared client only when Calendar and Gmail are disconnected.
+- `DELETE /settings/integrations/google/oauth-client`: removes the shared client only when Calendar, Gmail, and Drive are disconnected.
 - `POST /settings/integrations/gmail/oauth/start`: starts a Gmail-specific grant using the configured shared client and returns the authorization URL.
 - `GET /settings/integrations/gmail/oauth/callback`: hidden OAuth callback that redirects with a bounded result.
 - `DELETE /settings/integrations/gmail`: removes only Eidolon's local Gmail credential and connection.

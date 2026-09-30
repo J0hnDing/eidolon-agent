@@ -860,6 +860,7 @@ describe("Google Calendar OAuth connection", () => {
       status: "configured",
       calendar_redirect_uri: "http://localhost:8000/settings/integrations/google-calendar/oauth/callback",
       gmail_redirect_uri: "http://localhost:8000/settings/integrations/gmail/oauth/callback",
+      drive_redirect_uri: "http://localhost:8000/settings/integrations/google-drive/oauth/callback",
       created_at: "2026-08-29T12:00:00Z",
       updated_at: "2026-08-29T12:00:00Z",
       error_type: null,

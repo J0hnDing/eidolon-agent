@@ -54,6 +54,7 @@ _PROVIDER_NAMES = {
     "atlas": "Atlas",
     "notion": "Notion",
     "google_calendar": "Google Calendar",
+    "google_drive": "Google Drive",
     "gmail": "Gmail",
     "outlook": "Outlook",
     "telegram": "Telegram",
@@ -67,7 +68,7 @@ _PROVIDER_NAMES = {
 _SPECIAL_ERROR_MESSAGES = {
     "atlas_locked": "Atlas is locked",
     "node_already_known": "The selected Knowledge node is already known",
-    "stale_revision": "The Knowledge node changed before it could be updated",
+    "stale_revision": "The selected Atlas record changed before it could be updated",
     "codex_unavailable": "A compatible Codex CLI is unavailable",
     "codex_failed": "Codex could not expand the Knowledge node",
     "schema_mismatch": "The provider resource does not match the required schema",

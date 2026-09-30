@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import json
 import re
 from dataclasses import dataclass
@@ -11,11 +10,9 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from pypdf import PdfReader
-from pypdf.errors import PdfReadError
-
 from app.integrations.types import IntegrationOperationSpec
 from app.services.github_provider import IntegrationProviderError
+from app.services.local_document_reader import LocalDocumentReadError, extract_pdf_text
 
 HUGGINGFACE_BASE = "https://huggingface.co"
 ARXIV_BASE = "https://arxiv.org"
@@ -292,19 +289,8 @@ class UrllibHuggingFaceProviderAdapter:
             max_bytes=MAX_PDF_RESPONSE_BYTES,
         )
         try:
-            reader = PdfReader(io.BytesIO(raw_pdf))
-            parts: list[str] = []
-            size = 0
-            for page in reader.pages:
-                text = (page.extract_text() or "").strip()
-                if not text:
-                    continue
-                size += (2 if parts else 0) + len(text)
-                parts.append(text)
-                if size > MAX_CONTENT_CHARS:
-                    break
-            content = "\n\n".join(parts)
-        except (PdfReadError, ValueError, OSError) as exc:
+            content = extract_pdf_text(raw_pdf, MAX_CONTENT_CHARS + 3)
+        except LocalDocumentReadError as exc:
             raise IntegrationProviderError("unsupported_file_type", "The arXiv PDF could not be read as text") from exc
         if len(content) < 500:
             raise IntegrationProviderError(

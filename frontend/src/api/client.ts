@@ -640,6 +640,7 @@ export interface GoogleOAuthClientStatus {
   status: "configured" | "not_configured" | "unavailable" | "conflict";
   calendar_redirect_uri: string;
   gmail_redirect_uri: string;
+  drive_redirect_uri: string;
   created_at: string | null;
   updated_at: string | null;
   error_type: string | null;
@@ -655,6 +656,10 @@ export interface GmailConnectionStatus {
   updated_at: string | null;
   error_type: string | null;
   oauth_redirect_uri: string;
+}
+
+export interface GoogleDriveConnectionStatus extends Omit<GmailConnectionStatus, "provider"> {
+  provider: "google_drive";
 }
 
 export interface MicrosoftOAuthClientStatus {
@@ -1274,6 +1279,12 @@ export const api = {
     }),
   removeGoogleCalendarConnection: () =>
     request<void>("/settings/integrations/google-calendar", { method: "DELETE" }),
+  getGoogleDriveConnection: () =>
+    request<GoogleDriveConnectionStatus>("/settings/integrations/google-drive"),
+  startGoogleDriveOAuth: () =>
+    request<{ authorization_url: string }>("/settings/integrations/google-drive/oauth/start", { method: "POST" }),
+  removeGoogleDriveConnection: () =>
+    request<void>("/settings/integrations/google-drive", { method: "DELETE" }),
   getGmailConnection: () =>
     request<GmailConnectionStatus>("/settings/integrations/gmail"),
   startGmailOAuth: () =>

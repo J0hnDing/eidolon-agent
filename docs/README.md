@@ -51,6 +51,7 @@ The product and repository are named **Eidolon**. Existing environment variables
 - [Eidolon-Atlas integration](integrations/atlas.md)
 - [Notion Todo and Reports integration](integrations/notion.md)
 - [Google Calendar OAuth integration](integrations/google_calendar.md)
+- [Google Drive integration](integrations/google_drive.md)
 - [Gmail OAuth integration](integrations/gmail.md)
 - [Outlook OAuth and Microsoft Graph integration](integrations/outlook.md)
 - [Telegram Notification and Approval bot](integrations/telegram.md)

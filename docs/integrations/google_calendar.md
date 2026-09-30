@@ -4,7 +4,7 @@ Eidolon supports one trusted Google Calendar connection and exactly five typed e
 
 ## OAuth Setup and Storage
 
-In Google Cloud, enable the Google Calendar and Gmail APIs and create one OAuth client of type **Web application**. The client is configured once in Eidolon's shared Google connection section. Register both service callback URIs on that client; Calendar uses this one:
+In Google Cloud, enable the Google Calendar, Gmail, and Drive APIs and create one OAuth client of type **Web application**. The client is configured once in Eidolon's shared Google connection section. Register all three service callback URIs on that client; Calendar uses this one:
 
 ```text
 http://localhost:8000/settings/integrations/google-calendar/oauth/callback
@@ -20,7 +20,7 @@ https://www.googleapis.com/auth/calendar.events.owned
 
 The callback consumes the state, rejects missing or denied Calendar permission, requires a refresh token, and retrieves a stable Google subject plus verified email through UserInfo. Eidolon stores the shared client configuration once under the `google_oauth` OS-secret namespace and stores only Calendar's refresh token under `google_calendar`. SQLite stores opaque secret references, `credential_kind="oauth_refresh"`, verified email, a SHA-256-derived account identifier, sanitized status, and timestamps. Access tokens are assembled from the shared client and Calendar grant only for individual function calls and are never persisted.
 
-A failed or abandoned account replacement leaves the current Calendar connection active. A successful replacement removes the prior local refresh credential; if the Google account identity changes, existing Google Calendar skill authorizations are invalidated. Disconnect removes only Eidolon's local Calendar grant and connection. It does not affect Gmail or call Google's project-wide token-revocation endpoint. Replacing or removing the shared OAuth client requires both Calendar and Gmail to be disconnected.
+A failed or abandoned account replacement leaves the current Calendar connection active. A successful replacement removes the prior local refresh credential; if the Google account identity changes, existing Google Calendar skill authorizations are invalidated. Disconnect removes only Eidolon's local Calendar grant and connection. It does not affect Gmail or Drive or call Google's project-wide token-revocation endpoint. Replacing or removing the shared OAuth client requires Calendar, Gmail, and Drive to be disconnected.
 
 OAuth callbacks always redirect to `/settings/integrations` with `connected`, `denied`, or `failed`; provider details are not returned. Uvicorn access logging removes the callback query string before formatting so authorization codes and state do not enter access logs.
 
@@ -65,7 +65,7 @@ The capability scanner blocks direct Google API/OAuth/UserInfo hosts, Google-sen
 - `GET /settings/integrations/google-calendar`: sanitized connection status and exact redirect URI.
 - `GET /settings/integrations/google`: sanitized shared OAuth-client status and both redirect URIs.
 - `PUT /settings/integrations/google/oauth-client`: stores the shared write-only `client_id` and `client_secret`.
-- `DELETE /settings/integrations/google/oauth-client`: removes the shared client only when Calendar and Gmail are disconnected.
+- `DELETE /settings/integrations/google/oauth-client`: removes the shared client only when Calendar, Gmail, and Drive are disconnected.
 - `POST /settings/integrations/google-calendar/oauth/start`: creates Calendar-specific pending state from the configured shared client and returns Google's authorization URL.
 - `GET /settings/integrations/google-calendar/oauth/callback`: hidden OAuth callback that redirects with a bounded result.
 - `DELETE /settings/integrations/google-calendar`: removes the local credential and connection.

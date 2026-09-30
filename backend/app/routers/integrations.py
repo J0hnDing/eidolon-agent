@@ -15,6 +15,7 @@ from app.schemas.integration import (
     GitHubCredentialWrite,
     GmailConnectionStatus,
     GoogleCalendarConnectionStatus,
+    GoogleDriveConnectionStatus,
     GoogleOAuthClientStatus,
     GoogleOAuthClientWrite,
     GoogleOAuthStartResponse,
@@ -561,6 +562,55 @@ def remove_google_calendar_connection(db: Session = Depends(get_db)) -> Response
 @router.get("/settings/integrations/gmail", response_model=GmailConnectionStatus)
 def gmail_connection_status(db: Session = Depends(get_db)) -> GmailConnectionStatus:
     return build_default_integration_service(db).gmail_connection_status()
+
+
+@router.get("/settings/integrations/google-drive", response_model=GoogleDriveConnectionStatus)
+def google_drive_connection_status(db: Session = Depends(get_db)) -> GoogleDriveConnectionStatus:
+    return build_default_integration_service(db).google_drive_connection_status()
+
+
+@router.post("/settings/integrations/google-drive/oauth/start", response_model=GoogleOAuthStartResponse)
+def start_google_drive_oauth(db: Session = Depends(get_db)) -> GoogleOAuthStartResponse:
+    try:
+        return GoogleOAuthStartResponse(authorization_url=build_default_integration_service(db).start_google_drive_oauth())
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+
+
+@router.get("/settings/integrations/google-drive/oauth/callback", response_class=RedirectResponse, include_in_schema=False)
+def complete_google_drive_oauth(
+    state_value: str = Query(default="", alias="state"),
+    code_value: str = Query(default="", alias="code"),
+    error: str = Query(default=""),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    service = build_default_integration_service(db)
+    if error:
+        try:
+            service.discard_google_drive_oauth(state_value)
+        except IntegrationError:
+            result = "failed"
+        else:
+            result = "denied" if error == "access_denied" else "failed"
+        return RedirectResponse(f"{GOOGLE_OAUTH_RETURN_URL}?google_drive={result}", status_code=303)
+    try:
+        service.complete_google_drive_oauth(state_value, code_value)
+        FunctionCatalogService(db).refresh()
+    except IntegrationError:
+        return RedirectResponse(f"{GOOGLE_OAUTH_RETURN_URL}?google_drive=failed", status_code=303)
+    finally:
+        code_value = ""
+    return RedirectResponse(f"{GOOGLE_OAUTH_RETURN_URL}?google_drive=connected", status_code=303)
+
+
+@router.delete("/settings/integrations/google-drive", status_code=status.HTTP_204_NO_CONTENT)
+def remove_google_drive_connection(db: Session = Depends(get_db)) -> Response:
+    try:
+        build_default_integration_service(db).remove_google_drive_connection()
+        FunctionCatalogService(db).refresh()
+    except IntegrationError as exc:
+        raise _http_error(exc) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/settings/integrations/gmail/oauth/start", response_model=GoogleOAuthStartResponse)

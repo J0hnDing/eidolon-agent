@@ -252,7 +252,7 @@ def test_content_falls_back_to_bounded_pdf_text(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(adapter, "_request_bytes", fake_request)
     monkeypatch.setattr(
-        "app.services.huggingface_provider.PdfReader",
+        "app.services.local_document_reader.PdfReader",
         lambda *_args, **_kwargs: SimpleNamespace(
             pages=[Page("A" * (MAX_CONTENT_CHARS + 10)), Page("must not be read")]
         ),
@@ -289,7 +289,7 @@ def test_pdf_truncation_reads_past_an_exactly_full_first_page(
         ),
     )
     monkeypatch.setattr(
-        "app.services.huggingface_provider.PdfReader",
+        "app.services.local_document_reader.PdfReader",
         lambda *_args, **_kwargs: SimpleNamespace(pages=[Page("A" * MAX_CONTENT_CHARS), Page("second page")]),
     )
 

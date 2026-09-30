@@ -6,6 +6,7 @@ from .atlas import AtlasProviderAdapter
 from .github import GitHubProviderAdapter
 from .gmail import GmailProviderAdapter
 from .google_calendar import GoogleCalendarProviderAdapter
+from .google_drive import GoogleDriveProviderAdapter
 from .huggingface import HuggingFaceProviderAdapter
 from .macro import MacroProviderAdapter
 from .notion import NotionProviderAdapter
@@ -21,6 +22,7 @@ def build_provider_adapters(compatibility_service: Any) -> tuple[object, ...]:
         AtlasProviderAdapter(compatibility_service),
         NotionProviderAdapter(compatibility_service),
         GoogleCalendarProviderAdapter(compatibility_service),
+        GoogleDriveProviderAdapter(compatibility_service),
         GmailProviderAdapter(compatibility_service),
         OutlookProviderAdapter(compatibility_service),
         TelegramProviderAdapter(compatibility_service),
@@ -37,6 +39,7 @@ __all__ = [
     "GmailProviderAdapter",
     "GitHubProviderAdapter",
     "GoogleCalendarProviderAdapter",
+    "GoogleDriveProviderAdapter",
     "HuggingFaceProviderAdapter",
     "MacroProviderAdapter",
     "NotionProviderAdapter",

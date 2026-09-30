@@ -187,6 +187,7 @@ def test_default_adapter_composition_is_exact_and_secret_free() -> None:
         "atlas",
         "notion",
         "google_calendar",
+        "google_drive",
         "gmail",
         "outlook",
         "telegram",

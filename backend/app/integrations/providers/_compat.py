@@ -9,6 +9,7 @@ _NAMESPACES = {
     "github": "github",
     "notion": "notion",
     "google_calendar": "google_calendar",
+    "google_drive": "google_drive",
     "gmail": "gmail",
     "outlook": "outlook",
 }
@@ -36,7 +37,7 @@ def credential(compatibility_service: Any, provider_id: str) -> tuple[Any, str]:
         raise IntegrationProviderError(
             "connection_unavailable", "Stored integration credential is unavailable"
         ) from None
-    if provider_id in {"google_calendar", "gmail"}:
+    if provider_id in {"google_calendar", "google_drive", "gmail"}:
         try:
             value = compatibility_service._google_runtime_credential(value)  # noqa: SLF001
         except Exception as exc:

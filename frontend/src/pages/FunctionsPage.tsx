@@ -18,6 +18,7 @@ const providerLabels: Record<string, string> = {
   atlas: "Atlas",
   notion: "Notion",
   google_calendar: "Google Calendar",
+  google_drive: "Google Drive",
   gmail: "Gmail",
   telegram: "Telegram",
 };

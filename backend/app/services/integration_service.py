@@ -26,6 +26,7 @@ from app.schemas.integration import (
     GitHubConnectionStatus,
     GmailConnectionStatus,
     GoogleCalendarConnectionStatus,
+    GoogleDriveConnectionStatus,
     GoogleOAuthClientStatus,
     MicrosoftOAuthClientStatus,
     NotionConnectionStatus,
@@ -52,6 +53,12 @@ from app.services.google_calendar_provider import (
     GoogleCalendarProviderAdapter,
     UrllibGoogleCalendarProviderAdapter,
     google_oauth_state_store,
+)
+from app.services.google_drive_provider import (
+    GOOGLE_DRIVE_REDIRECT_URI,
+    GOOGLE_DRIVE_SECRET_NAMESPACE,
+    GoogleDriveClient,
+    google_drive_oauth_state_store,
 )
 from app.services.google_oauth import (
     GOOGLE_OAUTH_CLIENT_SECRET_NAMESPACE,
@@ -151,6 +158,17 @@ GMAIL_PROVIDER_ERROR_MESSAGES = {
     "provider_unavailable": "Gmail is unavailable",
     "internal_failure": "Gmail integration failed safely",
 }
+GOOGLE_DRIVE_PROVIDER_ERROR_MESSAGES = {
+    "invalid_credential": "The Google Drive authorization is invalid or revoked",
+    "not_found": "The requested Google Drive file was not found",
+    "provider_forbidden": "Google denied the requested Drive operation",
+    "rate_limited": "Google Drive rate limited the integration request",
+    "provider_timeout": "Google Drive did not respond before the timeout",
+    "response_too_large": "Google Drive response exceeded the operation limit",
+    "provider_unavailable": "Google Drive is unavailable",
+    "internal_failure": "Google Drive integration failed safely",
+    "unsupported_file_type": "The Drive file type is not supported",
+}
 OUTLOOK_PROVIDER_ERROR_MESSAGES = {
     "invalid_credential": "The Outlook authorization is invalid or revoked",
     "not_found": "The requested Outlook message or conversation was not found",
@@ -198,6 +216,7 @@ PROVIDER_DISPLAY_NAMES = {
     "atlas": "Atlas",
     "notion": "Notion",
     "google_calendar": "Google Calendar",
+    "google_drive": "Google Drive",
     "gmail": "Gmail",
     "outlook": "Outlook",
     "huggingface": "Hugging Face",
@@ -217,6 +236,8 @@ def provider_error_message(provider: str, error_type: str) -> str:
         messages = NOTION_PROVIDER_ERROR_MESSAGES
     elif provider == "google_calendar":
         messages = GOOGLE_CALENDAR_PROVIDER_ERROR_MESSAGES
+    elif provider == "google_drive":
+        messages = GOOGLE_DRIVE_PROVIDER_ERROR_MESSAGES
     elif provider == "gmail":
         messages = GMAIL_PROVIDER_ERROR_MESSAGES
     elif provider == "outlook":
@@ -254,6 +275,8 @@ class IntegrationService:
     notion_daily_feed_provider_factory: Callable[[str, str], DailyFeedPageProvider] | None = None
     google_calendar: GoogleCalendarProviderAdapter | None = None
     google_oauth_states: GoogleOAuthStateStore | None = None
+    google_drive: GoogleDriveClient | None = None
+    google_drive_oauth_states: GoogleOAuthStateStore | None = None
     gmail: GmailProviderAdapter | None = None
     gmail_oauth_states: GoogleOAuthStateStore | None = None
     outlook: OutlookProviderAdapter | None = None
@@ -282,6 +305,10 @@ class IntegrationService:
             self.google_calendar = UrllibGoogleCalendarProviderAdapter()
         if self.google_oauth_states is None:
             self.google_oauth_states = google_oauth_state_store
+        if self.google_drive is None:
+            self.google_drive = GoogleDriveClient()
+        if self.google_drive_oauth_states is None:
+            self.google_drive_oauth_states = google_drive_oauth_state_store
         if self.gmail is None:
             self.gmail = UrllibGmailProviderAdapter()
         if self.gmail_oauth_states is None:
@@ -566,6 +593,7 @@ class IntegrationService:
                 status="conflict" if exc.error_type == "google_oauth_configuration_conflict" else "unavailable",
                 calendar_redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
                 gmail_redirect_uri=GMAIL_OAUTH_REDIRECT_URI,
+                drive_redirect_uri=GOOGLE_DRIVE_REDIRECT_URI,
                 error_type=exc.error_type,
             )
         if config is None:
@@ -574,6 +602,7 @@ class IntegrationService:
                 status="not_configured",
                 calendar_redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
                 gmail_redirect_uri=GMAIL_OAUTH_REDIRECT_URI,
+                drive_redirect_uri=GOOGLE_DRIVE_REDIRECT_URI,
             )
         available = self.secret_store is not None and self.secret_store.implementation_id == config.secret_store_id
         return GoogleOAuthClientStatus(
@@ -581,6 +610,7 @@ class IntegrationService:
             status="configured" if available else "unavailable",
             calendar_redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
             gmail_redirect_uri=GMAIL_OAUTH_REDIRECT_URI,
+            drive_redirect_uri=GOOGLE_DRIVE_REDIRECT_URI,
             created_at=config.created_at,
             updated_at=config.updated_at,
             error_type=None if available else "connection_unavailable",
@@ -607,10 +637,10 @@ class IntegrationService:
                 raise IntegrationError("connection_unavailable", "Stored Google OAuth client is unavailable") from None
             if existing_client == {"client_id": client_id, "client_secret": client_secret}:
                 return self.google_oauth_client_status()
-            if self._connection("google_calendar") is not None or self._connection("gmail") is not None:
+            if any(self._connection(provider) is not None for provider in ("google_calendar", "gmail", "google_drive")):
                 raise IntegrationError(
                     "google_oauth_configuration_in_use",
-                    "Disconnect Calendar and Gmail before replacing the shared Google OAuth client",
+                    "Disconnect Calendar, Gmail, and Drive before replacing the shared Google OAuth client",
                 )
         serialized = serialize_google_oauth_client(client_id, client_secret)
         try:
@@ -657,10 +687,10 @@ class IntegrationService:
         config = self._google_oauth_client_config(migrate_legacy=False)
         if config is None:
             return self.google_oauth_client_status()
-        if self._connection("google_calendar") is not None or self._connection("gmail") is not None:
+        if any(self._connection(provider) is not None for provider in ("google_calendar", "gmail", "google_drive")):
             raise IntegrationError(
                 "google_oauth_configuration_in_use",
-                "Disconnect Calendar and Gmail before removing the shared Google OAuth client",
+                "Disconnect Calendar, Gmail, and Drive before removing the shared Google OAuth client",
             )
         if self.secret_store is None or self.secret_store.implementation_id != config.secret_store_id:
             raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
@@ -889,6 +919,123 @@ class IntegrationService:
             except SecretStoreError:
                 pass
         return self.gmail_connection_status()
+
+    def google_drive_connection_status(self) -> GoogleDriveConnectionStatus:
+        connection = self._connection("google_drive")
+        if connection is None:
+            return GoogleDriveConnectionStatus(
+                connected=False,
+                status="disconnected",
+                oauth_redirect_uri=GOOGLE_DRIVE_REDIRECT_URI,
+            )
+        google_client = self.google_oauth_client_status()
+        available = (
+            google_client.configured
+            and self.secret_store is not None
+            and self.secret_store.implementation_id == connection.secret_store_id
+        )
+        status = connection.status if available else "unavailable"
+        return GoogleDriveConnectionStatus(
+            connected=available and connection.status == "connected",
+            status=status,
+            account_email=connection.account_login,
+            last_validated_at=connection.last_validated_at,
+            created_at=connection.created_at,
+            updated_at=connection.updated_at,
+            error_type=(connection.error_type or google_client.error_type) if status != "connected" else None,
+            oauth_redirect_uri=GOOGLE_DRIVE_REDIRECT_URI,
+        )
+
+    def start_google_drive_oauth(self) -> str:
+        client = self._required_google_oauth_client()
+        assert self.google_drive_oauth_states is not None
+        assert self.google_drive is not None
+        state = self.google_drive_oauth_states.create(client["client_id"], client["client_secret"])
+        return self.google_drive.authorization_url(client["client_id"], state)
+
+    def discard_google_drive_oauth(self, state: str) -> None:
+        if not 1 <= len(state) <= 512:
+            raise IntegrationError("invalid_credential", "Google Drive OAuth response is invalid or expired")
+        assert self.google_drive_oauth_states is not None
+        try:
+            self.google_drive_oauth_states.consume(state)
+        except IntegrationProviderError as exc:
+            raise IntegrationError(exc.error_type, provider_error_message("google_drive", exc.error_type)) from None
+
+    def complete_google_drive_oauth(self, state: str, code: str) -> GoogleDriveConnectionStatus:
+        if not 1 <= len(state) <= 512 or not 1 <= len(code) <= 8192:
+            raise IntegrationError("invalid_credential", "Google Drive OAuth response is invalid or expired")
+        if self.secret_store is None:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        assert self.google_drive_oauth_states is not None
+        assert self.google_drive is not None
+        try:
+            pending = self.google_drive_oauth_states.consume(state)
+            tokens = self.google_drive.exchange_code(pending, code)
+            identity = self.google_drive.identity(tokens["access_token"])
+        except IntegrationProviderError as exc:
+            raise IntegrationError(exc.error_type, provider_error_message("google_drive", exc.error_type)) from None
+        credential = json.dumps(
+            {"refresh_token": tokens["refresh_token"]},
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        try:
+            new_reference = self.secret_store.put(credential, namespace=GOOGLE_DRIVE_SECRET_NAMESPACE)
+        except SecretStoreError:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable") from None
+        finally:
+            credential = ""
+            tokens = {}
+        previous = self._connection("google_drive")
+        previous_reference = previous.secret_reference if previous is not None else None
+        previous_account_id = previous.account_id if previous is not None else None
+        now = utc_now()
+        try:
+            if previous is None:
+                connection = IntegrationConnection(
+                    provider="google_drive",
+                    is_default=True,
+                    secret_store_id=self.secret_store.implementation_id,
+                    secret_reference=new_reference,
+                    credential_kind="oauth_refresh",
+                    status="connected",
+                    account_login=identity["email"],
+                    account_id=identity["account_id"],
+                    created_at=now,
+                    updated_at=now,
+                    last_validated_at=now,
+                )
+                self._make_default("google_drive", connection)
+                self.db.add(connection)
+            else:
+                connection = previous
+                self._make_default("google_drive", connection)
+                connection.secret_store_id = self.secret_store.implementation_id
+                connection.secret_reference = new_reference
+                connection.credential_kind = "oauth_refresh"
+                connection.status = "connected"
+                connection.account_login = identity["email"]
+                connection.account_id = identity["account_id"]
+                connection.error_type = None
+                connection.updated_at = now
+                connection.last_validated_at = now
+            if previous_account_id is not None and previous_account_id != identity["account_id"]:
+                self.invalidate_provider_authorizations("google_drive", "Google Drive account identity changed")
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            try:
+                self.secret_store.delete(new_reference, namespace=GOOGLE_DRIVE_SECRET_NAMESPACE)
+            except SecretStoreError:
+                pass
+            raise IntegrationError("internal_failure", "Google Drive connection could not be saved safely") from None
+        if previous_reference and previous_reference != new_reference:
+            try:
+                self.secret_store.delete(previous_reference, namespace=GOOGLE_DRIVE_SECRET_NAMESPACE)
+            except SecretStoreError:
+                pass
+        return self.google_drive_connection_status()
 
     def microsoft_oauth_client_status(self) -> MicrosoftOAuthClientStatus:
         config = self._microsoft_oauth_client_config()
@@ -1602,6 +1749,36 @@ class IntegrationService:
             oauth_redirect_uri=GMAIL_OAUTH_REDIRECT_URI,
         )
 
+    def remove_google_drive_connection(self) -> GoogleDriveConnectionStatus:
+        connection = self._connection("google_drive")
+        if connection is None:
+            return GoogleDriveConnectionStatus(
+                connected=False,
+                status="disconnected",
+                oauth_redirect_uri=GOOGLE_DRIVE_REDIRECT_URI,
+            )
+        if self.secret_store is None or self.secret_store.implementation_id != connection.secret_store_id:
+            raise IntegrationError("connection_unavailable", "Operating-system secret storage is unavailable")
+        try:
+            self.secret_store.delete(connection.secret_reference, namespace=GOOGLE_DRIVE_SECRET_NAMESPACE)
+        except SecretStoreError:
+            raise IntegrationError(
+                "connection_unavailable",
+                "Operating-system secret storage could not remove the credential",
+            ) from None
+        try:
+            self.invalidate_provider_authorizations("google_drive", "Google Drive connection removed")
+            self.db.delete(connection)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise IntegrationError("internal_failure", "Google Drive connection could not be removed safely") from None
+        return GoogleDriveConnectionStatus(
+            connected=False,
+            status="disconnected",
+            oauth_redirect_uri=GOOGLE_DRIVE_REDIRECT_URI,
+        )
+
     def ensure_authorization_requests(
         self,
         skill: Skill,
@@ -2086,7 +2263,7 @@ class IntegrationService:
             return False
         if self.secret_store is None or self.secret_store.implementation_id != connection.secret_store_id:
             return False
-        if provider in {"google_calendar", "gmail"}:
+        if provider in {"google_calendar", "google_drive", "gmail"}:
             try:
                 config = self._google_oauth_client_config(migrate_legacy=True)
             except IntegrationError:

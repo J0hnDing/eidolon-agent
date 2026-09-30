@@ -50,6 +50,7 @@ from app.services.wecom_service import start_wecom_observer_worker, stop_wecom_o
 GOOGLE_OAUTH_CALLBACK_PATHS = (
     "/settings/integrations/google-calendar/oauth/callback",
     "/settings/integrations/gmail/oauth/callback",
+    "/settings/integrations/google-drive/oauth/callback",
 )
 
 
