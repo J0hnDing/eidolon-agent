@@ -1,13 +1,15 @@
+import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from jsonschema import Draft202012Validator
 from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
 from app.models import ActSession, ActTurn, AgentProposal, AssistantFollowUp
-from app.schemas.assistant_assessment import ASSESSMENT_RESPONSE_SCHEMA
+from app.schemas.assistant_assessment import ASSESSMENT_RESPONSE_SCHEMA, parse_assessment_response
 from app.services import act_turn_dispatcher
 from app.services.act_turn_dispatcher import ACT_RESPONSE_SCHEMA, ActTurnDispatcher
 from app.services.agent_proposal_service import AgentProposalService
@@ -42,9 +44,9 @@ def test_only_first_origin_assessment_turn_uses_assessment_schema(database, monk
             if len(schemas) == 1:
                 return SimpleNamespace(output_text=(
                     '{"todo_doer":{"proposals":[]},"goal_doer":{"questions":[],"proposals":[]},'
-                    '"opportunity_scout":{"opportunities":[]}}'
+                    '"opportunity_scout":{"opportunities":[]},"title":"Assistant assessment"}'
                 ), items=[])
-            return SimpleNamespace(output_text='{"response":"Thanks"}', items=[])
+            return SimpleNamespace(output_text='{"response":"Thanks","title":null}', items=[])
 
     class FakeServer:
         sessions = FakeSessions()
@@ -81,6 +83,53 @@ def test_only_first_origin_assessment_turn_uses_assessment_schema(database, monk
     dispatcher._execute(db, second.id)
     assert second.status == "succeeded"
     assert schemas == [ASSESSMENT_RESPONSE_SCHEMA, ACT_RESPONSE_SCHEMA]
+
+
+def test_assessment_transport_schema_is_strict_and_decodes_function_arguments():
+    definitions = ASSESSMENT_RESPONSE_SCHEMA["$defs"]
+    for schema in [ASSESSMENT_RESPONSE_SCHEMA, *definitions.values()]:
+        if schema.get("type") == "object":
+            assert schema["additionalProperties"] is False
+            assert set(schema["required"]) == set(schema["properties"])
+    assert definitions["FunctionStep"]["properties"]["arguments"]["type"] == "string"
+
+    payload = {
+        "title": "Review goals and opportunities",
+        "todo_doer": {"proposals": [{
+            "todo_id": "todo-1",
+            "action": {"type": "functions", "description": "Create an event", "steps": [{
+                "function": "google_calendar.event.create",
+                "arguments": '{"title":"Study","end":{"date_time":"2026-10-01T10:00:00Z"}}',
+            }]},
+        }]},
+        "goal_doer": {"questions": [], "proposals": [{
+            "target": {"type": "goal", "id": "goal-1"}, "reason": "Helps the goal",
+            "action": {"type": "functions", "description": "List items", "steps": [{
+                "function": "notion.todo.list", "arguments": "{}",
+            }]}, "follow_up": None,
+        }]},
+        "opportunity_scout": {"opportunities": [{
+            "title": "Opportunity", "description": "A concrete opportunity", "proposals": [{
+                "action": {"type": "functions", "description": "List items", "steps": [{
+                    "function": "notion.todo.list", "arguments": "{}",
+                }]}, "follow_up": None,
+            }],
+        }]},
+    }
+    Draft202012Validator(ASSESSMENT_RESPONSE_SCHEMA).validate(payload)
+    parsed = parse_assessment_response(json.dumps(payload))
+    assert "title" not in parsed.model_dump()
+    assert parsed.todo_doer.proposals[0].action.steps[0].arguments == {
+        "title": "Study", "end": {"date_time": "2026-10-01T10:00:00Z"},
+    }
+    assert len(parsed.todo_doer.proposals) == 1
+    assert parsed.goal_doer.proposals[0].action.steps[0].arguments == {}
+    assert parsed.opportunity_scout.opportunities[0].proposals[0].action.steps[0].arguments == {}
+
+    for arguments in ("not json", "[]", "null"):
+        payload["todo_doer"]["proposals"][0]["action"]["steps"][0]["arguments"] = arguments
+        with pytest.raises(ValueError, match="Function arguments"):
+            parse_assessment_response(json.dumps(payload))
 
 
 def test_live_function_validation_rejects_unresolved_or_unknown_calls():

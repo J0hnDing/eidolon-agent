@@ -32,6 +32,7 @@ Opportunity reporting itself does not require approval. Add proposals only when 
 ## Actions
 Every proposed action has exactly one of two forms.
 Use `functions` only when every operation and argument is already known and the entire action can execute deterministically as the listed Eidolon functions. Use only functions present in the supplied deterministic-function catalog and conform exactly to their input schemas. Do not use placeholders, unresolved choices, output-dependent steps, or runtime-only capabilities in a function sequence.
+In the initial assessment response, each function step's `arguments` field is a string containing a complete JSON object that matches the selected function's input schema. Use `"{}"` when the function takes no arguments. The backend decodes it before validating or storing the proposal.
 [DETERMINISTIC_FUNCTION_CATALOG]
 Use `act` when the task requires reasoning during execution, browser interaction, observing intermediate state, making choices based on results, handling unexpected conditions, or otherwise cannot be completely specified as deterministic function calls.
 The following catalog describes capabilities Act can use after approval. It does not grant those capabilities to you.

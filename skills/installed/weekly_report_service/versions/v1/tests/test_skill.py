@@ -62,9 +62,9 @@ def test_run_uses_fixed_scout_input_and_creates_native_notion_blocks(monkeypatch
     assert create_input["name"] == "Weekly GitHub Projects Report — 2026-08-31"
     assert create_input["select"] == "GitHub Projects"
     assert [block["type"] for block in create_input["children"]] == [
-        "heading_1", "callout", "divider", "heading_2", "paragraph", "paragraph", "bookmark", "divider"
+        "heading_2", "paragraph", "paragraph", "bookmark", "divider"
     ]
-    assert create_input["children"][3]["heading_2"]["rich_text"][0]["text"]["link"] == {
+    assert create_input["children"][0]["heading_2"]["rich_text"][0]["text"]["link"] == {
         "url": "https://github.com/example/project"
     }
     assert result == {"report": _created_report(create_input["name"]), "repository_count": 1}

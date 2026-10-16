@@ -1199,7 +1199,7 @@ def test_direct_user_notion_and_atlas_calls_reuse_configured_containment(
 
     assert notion_output == {"todos": [], "has_more": False, "next_cursor": None}
     assert configured_sources[-1] == "only-configured-source"
-    assert atlas_output == {"personal_info": None}
+    assert atlas_output == {"personal_info": None, "completeness": {}}
     assert atlas.calls == [("atlas.person.get", {})]
 
 
@@ -1209,20 +1209,19 @@ def test_atlas_goal_update_requires_authorization_and_audits_goal_id(db: Session
     atlas = FakeAtlasProviderAdapter()
     service = IntegrationService(db, project_root=tmp_path, secret_store=None, atlas=atlas)
     service.provider_connected = lambda provider: provider == "atlas"  # type: ignore[method-assign]
-    payload = {"id": "goal-1", "expected_revision": 2, "progress": 55}
+    payload = {"id": "goal-1", "expected_revision": 2, "commitment": 55}
 
     with pytest.raises(IntegrationError):
         invoke(service, "atlas.goal.update", payload, caller_context(skill))
     assert atlas.calls == []
 
     authorize(service, skill, manifest)
-    assert invoke(service, "atlas.goal.update", payload, caller_context(skill)) == {
-        "goal": {
-            "id": "goal-1", "parent_goal_id": None, "revision": 3,
-            "title": "Fake Goal", "description": "", "horizon": "short", "importance": "medium",
-            "target_date": None, "progress": 55, "result": None, "following_goal_ids": [],
-        }
-    }
+    output = invoke(service, "atlas.goal.update", payload, caller_context(skill))
+    assert output["goal"]["id"] == "goal-1"
+    assert output["goal"]["revision"] == 3
+    assert output["goal"]["commitment"] == 55
+    assert output["goal"]["progress"] is None
+    assert output["goal"]["blueprint"] == {"nodes": [], "edges": []}
     assert atlas.calls == [("atlas.goal.update", payload)]
     audit = db.scalar(select(IntegrationAuditRecord).where(
         IntegrationAuditRecord.operation_id == "atlas.goal.update",
@@ -1247,6 +1246,42 @@ def test_atlas_goal_create_requires_authorization(db: Session, tmp_path: Path) -
     assert output["created"] is True
     assert output["goal"]["title"] == "New"
     assert atlas.calls == [("atlas.goal.create", {"title": "New"})]
+
+
+def test_atlas_read_capability_requires_declared_current_authorization(db: Session, tmp_path: Path) -> None:
+    from app.integrations.atlas_read import ATLAS_READ_SPECS
+
+    inputs = {
+        "atlas.records.get": {"id": "person-1"},
+        "atlas.links.get": {"id": "link-1"},
+        "atlas.history.list": {"kind": "record", "id": "person-1"},
+        "atlas.attachments.list": {"record_id": "person-1"},
+        "atlas.attachments.read": {"kind": "resume", "id": "person-1"},
+    }
+    operations = [spec.id for spec in ATLAS_READ_SPECS]
+    requirement = {"provider": "atlas", "operations": operations, "resource_scope": {}}
+    skill, manifest = create_installed_skill(db, tmp_path, requirement=requirement)
+    atlas = FakeAtlasProviderAdapter()
+    service = IntegrationService(db, project_root=tmp_path, secret_store=None, atlas=atlas)
+    service.provider_connected = lambda provider: provider == "atlas"  # type: ignore[method-assign]
+
+    for operation in operations:
+        with pytest.raises(IntegrationError):
+            invoke(service, operation, inputs.get(operation, {}), caller_context(skill))
+    assert atlas.calls == []
+
+    authorize(service, skill, manifest)
+    for operation in operations:
+        assert isinstance(invoke(service, operation, inputs.get(operation, {}), caller_context(skill)), dict)
+    assert [operation for operation, _ in atlas.calls] == operations
+
+    count = len(atlas.calls)
+    with pytest.raises(IntegrationError) as invalid:
+        invoke(service, "atlas.records.get", {"id": "person-1", "url": "http://example.test"}, caller_context(skill))
+    assert invalid.value.error_type == "invalid_input"
+    with pytest.raises(IntegrationError):
+        invoke(service, "atlas.goal.create", {"title": "Undeclared write"}, caller_context(skill))
+    assert len(atlas.calls) == count
 
 
 def test_atlas_know_uses_bounded_codex_and_audits_only_node_id(db: Session, tmp_path: Path) -> None:

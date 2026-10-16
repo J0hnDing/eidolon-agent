@@ -54,6 +54,10 @@ def test_registry_is_authoritative_and_context_is_selected_only() -> None:
         "github.repository.trending.list",
     }
     assert {operation_id for operation_id in OPERATIONS if operation_id.startswith("atlas.")} == {
+        "atlas.describe", "atlas.records.search", "atlas.records.get", "atlas.links.get",
+        "atlas.person.completeness.get", "atlas.states.get", "atlas.personality.get",
+        "atlas.history.list", "atlas.graph.get", "atlas.knowledge.read",
+        "atlas.attachments.list", "atlas.attachments.read",
         "atlas.person.get",
         "atlas.experience.list",
         "atlas.goal.create",

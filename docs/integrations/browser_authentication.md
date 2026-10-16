@@ -16,17 +16,17 @@ The first identity is `uoft`:
 
 ## Runtime flow
 
-Act navigates with its existing Playwright MCP tools. Playwright's backend-configured init-page module holds the actual current `Page` and exposes a per-turn authenticated local pipe only to the private Eidolon MCP child. `browser.authenticate` first asks that bridge for the real current URL. The backend canonicalizes its origin and refuses unsupported schemes, ports, hosts, deceptive suffixes, or caller-supplied alternatives before reading the secret.
+Act navigates with its existing Playwright MCP tools. The backend-owned browser runtime keeps the selected `Page` for each conversation and exposes a per-turn authenticated local pipe to its trusted MCP children. Browser automation and credential injection resolve the same conversation and selected tab. `browser.authenticate` first asks that bridge for the real current URL. The backend canonicalizes its origin and refuses unsupported schemes, ports, hosts, deceptive suffixes, or caller-supplied alternatives before reading the secret.
 
 Act must begin from the exact service link supplied by the user or an authenticated source such as the relevant course page. The capability authenticates the current page; it does not discover or guess tenant-, course-, or site-specific application instances.
 
 For an allowed login page, the backend loads the secret and sends it over the per-turn pipe. The bridge independently rechecks the page origin immediately before filling the username, password, and submit control. It never logs or returns the payload. The private tool returns only the identity and one bounded state.
 
-The persistent Playwright profile retains cookies and storage. If the page is already on an authenticated origin, the capability reports `already_authenticated` without loading or reinjecting the secret.
+All Act conversations share one backend-owned persistent Playwright context and profile at `~/.eidolon/browser-profiles/act-shared`. Each conversation owns its tabs and selected page; popups inherit that ownership. Conversations can browse concurrently while sharing cookies and website authentication, with one process owning the profile lock. Live pages and pending MFA challenges persist across turns and managed-agent restarts. Cookies persist across backend restarts; websites may expire their own sessions, and logout is shared. Older per-conversation profiles remain untouched and are not automatically merged. Memory, knowledge, and workspace remain shared under `~/.eidolon/agents`. Canceling a turn targets only its session; archiving stops that session runtime and closes only its pages, and backend shutdown closes all managed runtimes and the shared browser. Turn completion revokes its connection token without closing pages. If the page is already on an authenticated origin, the capability reports `already_authenticated` without loading or reinjecting the secret.
 
 ## MFA and failures
 
-MFA is never bypassed. A recognized interactive challenge returns `mfa_required`; the visible browser remains available for the user to complete it. Act can continue after the browser reaches an authenticated page, including after a managed-process restart through the same persistent profile.
+MFA is never bypassed. A recognized interactive challenge returns `mfa_required`; the visible browser remains available for the user to complete it. Act can continue after the browser reaches an authenticated page, including after a managed-process restart on the same live page.
 
 Failures are normalized to safe states or fixed errors such as unsupported origin, missing/unavailable credential, unavailable browser bridge, authentication failure, or additional user action. Provider text, locators, page content, submitted values, and low-level bridge errors are not returned.
 

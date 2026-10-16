@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from app.integrations.atlas_read import ATLAS_READ_SPECS
 from app.services.function_catalog_service import FunctionCatalogService
+from app.services.mcp_function_service import McpFunctionService
 
 
 def test_catalog_mcp_hints_and_approval_are_derived_from_canonical_specs(
@@ -39,4 +41,22 @@ def test_catalog_mcp_hints_and_approval_are_derived_from_canonical_specs(
     assert entries["email.send"]["mcp_read_only"] is False
     assert entries["email.send"]["requires_invocation_approval"] is True
     assert entries["email.send"]["invocation"]["effects"] == ["send"]
+
+    # New Atlas capability contracts reach both planning discovery and MCP without
+    # a second tool registry or independent approval/permission metadata.
+    for spec in ATLAS_READ_SPECS:
+        projected = entries[spec.id]
+        assert projected["availability"] == "available"
+        assert projected["input_schema"] == spec.input_schema
+        assert projected["output_schema"] == spec.output_schema
+        assert projected["mcp_read_only"] is True
+        assert projected["mcp_destructive"] is False
+        assert projected["requires_invocation_approval"] is False
+    monkeypatch.setattr(FunctionCatalogService, "list_entries", lambda _self: list(entries.values()))
+    tools = {tool.name: tool for tool in McpFunctionService(None, project_root=tmp_path).list_tools()}
+    for spec in ATLAS_READ_SPECS:
+        tool = tools[McpFunctionService.tool_name("integration", spec.id)]
+        assert tool.inputSchema == spec.input_schema
+        assert tool.outputSchema == spec.output_schema
+        assert tool.annotations.readOnlyHint is True
 

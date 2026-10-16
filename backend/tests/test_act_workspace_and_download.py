@@ -49,6 +49,11 @@ def public_resolver(_host: str, _port: int, **_kwargs):
     return [(None, None, None, None, ("93.184.216.34", 443))]
 
 
+def test_default_agent_root_is_outside_the_source_repository() -> None:
+    repository = Path(__file__).resolve().parents[2]
+    assert not act_workspace_service.ACT_ROOT.resolve().is_relative_to(repository)
+
+
 def test_workspace_is_bootstrapped_with_empty_memory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("app.services.act_workspace_service.ACT_ROOT", tmp_path / "act")
     workspace = ensure_act_workspace()

@@ -101,11 +101,13 @@ def test_running_turn_cancellation_interrupts_the_live_codex_turn(session_factor
 
 class FakeRuntimeSessions(FakeThreadSessions):
     def run_structured_turn(self, thread_id: str, message: str, _schema, **kwargs):
+        assert kwargs["timeout_seconds"] == 7200
         assert thread_id == "thread-act"
-        assert message == "Use Eidolon"
+        assert message.startswith("<eidolon_session_metadata>")
+        assert message.split("\n\n", 1)[1] == "Use Eidolon"
         kwargs["on_turn_started"]("turn-codex")
         return SimpleNamespace(
-            output_text='{"response":"Done"}',
+            output_text='{"response":"Done","title":null}',
             items=[{"type": "mcpToolCall", "name": "atlas.goals.list"}],
         )
 
@@ -125,6 +127,7 @@ class MissingRolloutSessions(FakeThreadSessions):
         self.inputs: list[tuple[str, str]] = []
 
     def run_structured_turn(self, thread_id: str, message: str, _schema, **kwargs):
+        assert kwargs["timeout_seconds"] == 7200
         self.inputs.append((thread_id, message))
         kwargs["on_turn_started"]("turn-recovered")
         return SimpleNamespace(output_text='{"response":"Recovered"}', items=[])
@@ -156,7 +159,7 @@ def test_dispatcher_resumes_and_completes_queued_turn(
     db.close()
     runtime = FakeRuntime()
     monkeypatch.setattr("app.services.act_turn_dispatcher.SessionLocal", session_factory)
-    monkeypatch.setattr("app.services.act_turn_dispatcher.act_app_server_service", runtime)
+    monkeypatch.setattr("app.services.act_turn_dispatcher.get_agent_app_server", lambda *_args: runtime)
     monkeypatch.setattr(
         "app.services.act_turn_dispatcher.CodexRoutingService.resolve",
         lambda *_args, **_kwargs: SimpleNamespace(
@@ -233,7 +236,7 @@ def test_dispatcher_replaces_missing_rollout_without_replaying_completed_turns(
     db.close()
     runtime = MissingRolloutRuntime()
     monkeypatch.setattr("app.services.act_turn_dispatcher.SessionLocal", session_factory)
-    monkeypatch.setattr("app.services.act_turn_dispatcher.act_app_server_service", runtime)
+    monkeypatch.setattr("app.services.act_turn_dispatcher.get_agent_app_server", lambda *_args: runtime)
     monkeypatch.setattr(
         "app.services.act_turn_dispatcher.CodexRoutingService.resolve",
         lambda *_args, **_kwargs: SimpleNamespace(

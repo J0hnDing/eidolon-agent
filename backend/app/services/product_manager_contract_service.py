@@ -6,7 +6,7 @@ from typing import Any
 from jsonschema import Draft202012Validator, SchemaError
 
 from app.models import Skill
-from app.schemas.manifest import ManifestIntegrationResourceScope
+from app.schemas.manifest import ManifestIntegrationResourceScope, validate_runtime_entrypoint
 from app.services.codex_output_schema import output_schema_for_action
 from app.services.default_permissions import approval_required_permissions, default_build_time_dependencies
 
@@ -308,6 +308,10 @@ class ProductManagerContractService:
             raise ProductManagerContractError("A completed ProductManager plan requires blueprint and permissions")
 
         runtime = blueprint.get("runtime")
+        try:
+            validate_runtime_entrypoint(runtime, str(blueprint.get("entrypoint") or ""))
+        except ValueError as exc:
+            raise ProductManagerContractError(f"Invalid blueprint entrypoint: {exc}") from exc
         requires_invocation_approval = blueprint.get("requires_invocation_approval") is True
         if requires_invocation_approval and runtime != "function":
             raise ProductManagerContractError(
@@ -362,6 +366,7 @@ class ProductManagerContractService:
             "name": str(blueprint["name"]).strip(),
             "description": str(blueprint["description"]).strip(),
             "runtime": blueprint["runtime"],
+            "entrypoint": str(blueprint["entrypoint"]).strip(),
             "requires_invocation_approval": bool(
                 blueprint.get("requires_invocation_approval", False)
             ),

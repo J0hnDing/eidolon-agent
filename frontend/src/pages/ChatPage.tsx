@@ -9,7 +9,9 @@ import {
 } from "../features/chat/ChatWorkspace";
 import { useChatConversations } from "../features/chat/useChatConversations";
 import { mergeProjectConversationState } from "../features/chat/projectConversationState";
-import { ChatMessage, initialMessagesForMode } from "../lib/chatStore";
+import { actSessionMessages, isActiveActTurn } from "../features/chat/actConversationState";
+import { useAwaitingActReply } from "../features/chat/useAwaitingActReply";
+import { ChatMessage } from "../lib/chatStore";
 import { usePolling } from "../lib/usePolling";
 
 export default function ChatPage() {
@@ -20,11 +22,18 @@ export default function ChatPage() {
   const [projectStateNeedsPolling, setProjectStateNeedsPolling] = useState(false);
   const [actStateNeedsPolling, setActStateNeedsPolling] = useState(false);
   const [activeActTurnId, setActiveActTurnId] = useState<number | null>(null);
+  const [activeActTurn, setActiveActTurn] = useState<ActTurn | null>(null);
+  const [submittedReplyId, setSubmittedReplyId] = useState<number | null>(null);
+  const submissionPending = useRef(false);
   const pendingActSessions = useRef(new Map<string, Promise<ActSession>>());
   const hasPendingMessage = chat.messages.some(
     (message) => message.kind === "thinking" || message.actionStatus === "working",
   );
   const isBusy = isSending || isGenerating || hasPendingMessage;
+  const awaitingReply = useAwaitingActReply(
+    chat.mode === "act" && activeActTurn?.session_id === chat.activeConversation?.actSessionId ? activeActTurn : null,
+  );
+  const canReplyToAct = awaitingReply !== null && awaitingReply.id !== submittedReplyId;
 
   async function syncProjectConversation(conversationId: string): Promise<boolean> {
     try {
@@ -62,7 +71,10 @@ export default function ChatPage() {
       const session = await (agentId === "act" ? api.getActSession(sessionId) : api.getAgentSession(agentId, sessionId));
       const activeTurn = [...session.turns].reverse().find(isActiveActTurn) ?? null;
       setActStateNeedsPolling(Boolean(activeTurn));
-      if (conversationId === chat.activeConversationId) setActiveActTurnId(activeTurn?.id ?? null);
+      if (conversationId === chat.activeConversationId) {
+        setActiveActTurnId(activeTurn?.id ?? null);
+        setActiveActTurn(activeTurn);
+      }
       chat.updateConversation(conversationId, (conversation) => ({
         ...conversation,
         title: session.title,
@@ -90,6 +102,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     setActiveActTurnId(null);
+    setActiveActTurn(null);
     setActStateNeedsPolling(false);
     const sessionId = chat.activeConversation?.actSessionId;
     if (chat.mode !== "project" && sessionId !== undefined) {
@@ -170,7 +183,10 @@ export default function ChatPage() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const content = chat.draft.trim();
-    if (!content) return;
+    if (!content || submissionPending.current || isSending || isGenerating || (hasPendingMessage && !canReplyToAct)) return;
+    submissionPending.current = true;
+    const replyingToId = canReplyToAct ? awaitingReply?.id ?? null : null;
+    if (replyingToId !== null) setSubmittedReplyId(replyingToId);
 
     const conversationId = chat.activeConversationId;
     const mode = chat.mode;
@@ -250,6 +266,7 @@ export default function ChatPage() {
         ]);
       }
     } catch (err) {
+      if (replyingToId !== null) setSubmittedReplyId(null);
       chat.removeMessageFromConversation(conversationId, thinkingId);
       if (mode !== "project" && actSessionId !== undefined && await syncActConversation(conversationId, actSessionId, mode)) {
         setError(null);
@@ -265,6 +282,7 @@ export default function ChatPage() {
       ]);
       setError(message);
     } finally {
+      submissionPending.current = false;
       setIsSending(false);
     }
   }
@@ -434,6 +452,7 @@ export default function ChatPage() {
       draft={chat.draft}
       mode={chat.mode}
       isBusy={isBusy}
+      canReplyToAct={canReplyToAct}
       isSending={isSending}
       isGenerating={isGenerating}
       error={error}
@@ -450,36 +469,4 @@ export default function ChatPage() {
       onDenyRuntime={handleDenyRuntime}
     />
   );
-}
-
-function isActiveActTurn(turn: ActTurn): boolean {
-  return turn.status === "queued" || turn.status === "running";
-}
-
-function actSessionMessages(session: ActSession, agentId: AgentId): ChatMessage[] {
-  return [
-    ...initialMessagesForMode(agentId),
-    ...session.turns.flatMap((turn) => {
-      const active = isActiveActTurn(turn);
-      const result = active
-        ? "Eidolon is thinking..."
-        : turn.assistant_message ?? turn.error_message ?? `${agentId} did not return a response.`;
-      return [
-        { id: turn.id * 10 + 2, role: "user" as const, content: turn.user_message, actTurnId: turn.id },
-        {
-          id: turn.id * 10 + 3,
-          role: "assistant" as const,
-          content: result,
-          kind: active ? "thinking" as const : "text" as const,
-          actTurnId: turn.id,
-          actWork: {
-            status: turn.status,
-            activities: turn.activity_json,
-            startedAt: turn.started_at ?? turn.created_at,
-            completedAt: turn.completed_at,
-          },
-        },
-      ];
-    }),
-  ];
 }

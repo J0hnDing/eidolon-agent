@@ -58,45 +58,106 @@ def test_todo_cohort_uses_open_snapshot_and_new_tasks() -> None:
 
 
 def test_goal_snapshot_compares_progress_and_keeps_new_goals_separate() -> None:
-    old = {"goal-1": {"title": "A", "progress": 20, "children": []}}
+    old = {"goal-1": {"title": "A", "progress": 20.5, "blueprint_nodes": []}}
     new = {
-        "goal-1": {"title": "A", "progress": 40, "children": [{"id": "sub-1", "parent": "goal-1", "title": "First step", "progress": 0}]},
-        "goal-2": {"title": "B", "progress": 0, "children": []},
+        "goal-1": {"title": "A", "progress": 40.25, "blueprint_nodes": [{"id": "step-1", "title": "First step", "progress": 0}]},
+        "goal-2": {"title": "B", "progress": None, "blueprint_nodes": []},
     }
-    metrics, last = skill._goal_metrics(new, skill.date(2026, 9, 21), {"goals": old}, {})
+    metrics, last = skill._goal_metrics(new, skill.date(2026, 9, 21), {"goals": old}, {"goal_snapshot_schema": 2})
     assert metrics == {
-        "goals_advanced": 1, "goal_coverage": 100.0, "new_goals": 1, "new_subgoals": 1,
-        "advanced_goal_names": ["A"], "new_goal_names": ["B"], "new_subgoal_names": ["First step"],
+        "goals_advanced": 1, "goal_coverage": 100.0, "new_goals": 1, "new_blueprint_steps": 1,
+        "advanced_goal_names": ["A"], "new_goal_names": ["B"], "new_blueprint_step_names": ["A: First step"],
     }
     assert last == {"goal-1": "2026-09-21"}
 
 
 def test_goal_tree_edit_without_progress_increase_is_not_advancement() -> None:
-    old = {"goal-1": {"title": "A", "progress": 40, "children": []}}
-    new = {"goal-1": {"title": "A", "progress": 40, "children": [{"id": "sub-1", "parent": "goal-1", "title": "Plan", "progress": 0}]}}
-    metrics, last = skill._goal_metrics(new, skill.date(2026, 9, 21), {"goals": old}, {})
+    old = {"goal-1": {"title": "A", "progress": 40, "blueprint_nodes": []}}
+    new = {"goal-1": {"title": "A", "progress": 40, "blueprint_nodes": [{"id": "step-1", "title": "Plan", "progress": 0}]}}
+    metrics, last = skill._goal_metrics(new, skill.date(2026, 9, 21), {"goals": old}, {"goal_snapshot_schema": 2})
     assert metrics["goals_advanced"] == 0
     assert metrics["goal_coverage"] == 0.0
-    assert metrics["new_subgoals"] == 1
+    assert metrics["new_blueprint_steps"] == 1
     assert last == {}
 
 
 def test_goal_reaching_full_progress_counts_in_prior_active_cohort() -> None:
-    old = {"goal-1": {"title": "A", "progress": 80, "children": []}}
-    new = {"goal-1": {"title": "A", "progress": 100, "children": []}}
-    metrics, last = skill._goal_metrics(new, skill.date(2026, 9, 21), {"goals": old}, {})
+    old = {"goal-1": {"title": "A", "progress": 80, "blueprint_nodes": []}}
+    new = {"goal-1": {"title": "A", "progress": 100, "blueprint_nodes": []}}
+    metrics, last = skill._goal_metrics(new, skill.date(2026, 9, 21), {"goals": old}, {"goal_snapshot_schema": 2})
     assert metrics["goals_advanced"] == 1
     assert metrics["goal_coverage"] == 100.0
     assert last == {"goal-1": "2026-09-21"}
 
 
-def test_goal_progress_snapshot_validates_recursive_values(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_goal_snapshot_accepts_current_blueprints_and_unassessed_progress(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         skill, "_call",
-        lambda *_args: {"goals": [{"id": "root", "title": "Root", "progress": 50, "subgoals": [{"id": "child", "title": "Child", "progress": 30, "subgoals": []}]}]},
+        lambda *_args: {"goals": [
+            {"id": "root", "title": "Root", "progress": 30.5, "blueprint": {"nodes": [{"id": "step", "title": "Step", "progress": 30.5}], "edges": []}},
+            {"id": "unassessed", "title": "Unassessed", "progress": None, "blueprint": {"nodes": [], "edges": []}},
+        ], "graph": {"edges": []}},
     )
-    assert skill._goal_snapshot()["root"]["progress"] == 50
-    assert skill._goal_snapshot()["root"]["children"][0]["progress"] == 30
+    assert skill._goal_snapshot() == {
+        "root": {"title": "Root", "progress": 30.5, "blueprint_nodes": [{"id": "step", "title": "Step", "progress": 30.5}]},
+        "unassessed": {"title": "Unassessed", "progress": None, "blueprint_nodes": []},
+    }
+
+
+@pytest.mark.parametrize("progress", [True, -1, 101, "50", float("nan"), float("inf")])
+def test_goal_snapshot_rejects_invalid_progress(monkeypatch: pytest.MonkeyPatch, progress: object) -> None:
+    monkeypatch.setattr(skill, "_call", lambda *_args: {"goals": [
+        {"id": "root", "title": "Root", "progress": progress, "blueprint": {"nodes": [], "edges": []}},
+    ]})
+    with pytest.raises(ValueError, match="invalid Goal progress"):
+        skill._goal_snapshot()
+
+
+def test_unassessed_progress_is_not_invented_or_counted_as_advancement() -> None:
+    old = {
+        "unknown": {"title": "Unknown", "progress": None, "blueprint_nodes": []},
+        "assessed": {"title": "Assessed", "progress": 20, "blueprint_nodes": []},
+    }
+    new = {
+        "unknown": {"title": "Unknown", "progress": 50, "blueprint_nodes": []},
+        "assessed": {"title": "Assessed", "progress": None, "blueprint_nodes": []},
+    }
+    metrics, last = skill._goal_metrics(new, skill.date(2026, 9, 21), {"goals": old}, {"goal_snapshot_schema": 2})
+    assert metrics["goals_advanced"] == 0
+    assert metrics["goal_coverage"] is None
+    assert last == {}
+    metrics = {**dict.fromkeys(skill.METRIC_KEYS), **metrics}
+    blocks = skill._report_blocks(metrics, new, last, [{"week_start": "2026-09-21", "metrics": metrics}], True)
+    text = json.dumps(blocks)
+    assert "Assessed (unassessed)" in text
+    assert "None%" not in text
+
+
+def test_blueprint_step_ids_are_scoped_to_the_owning_goal() -> None:
+    old = {"a": {"title": "A", "progress": None, "blueprint_nodes": [{"id": "step", "title": "First", "progress": 0}]}}
+    new = {**old, "b": {"title": "B", "progress": None, "blueprint_nodes": [{"id": "step", "title": "Second", "progress": 0}]}}
+    metrics, _ = skill._goal_metrics(new, skill.date(2026, 9, 21), {"goals": old}, {"goal_snapshot_schema": 2})
+    assert metrics["new_blueprint_steps"] == 1
+    assert metrics["new_blueprint_step_names"] == ["B: Second"]
+
+
+def test_legacy_goal_cache_establishes_baseline_and_preserves_other_history() -> None:
+    old = {"a": {"title": "A", "progress": 20, "children": [{"id": "sub", "title": "Old subgoal"}]}}
+    new = {"a": {"title": "A", "progress": 30.5, "blueprint_nodes": [{"id": "step", "title": "Step", "progress": 30.5}]}}
+    state = {
+        "goals": old, "last_advanced": {"a": "2026-09-07"},
+        "history": [{"week_start": "2026-09-14", "metrics": {"goals_advanced": 1, "goal_coverage": 100, "scheduled_hours": 3, "new_subgoals": 2}}],
+    }
+    metrics, last = skill._goal_metrics(new, skill.date(2026, 9, 21), state, state)
+    assert metrics["goals_advanced"] is None
+    assert metrics["goal_coverage"] is None
+    assert metrics["new_blueprint_steps"] is None
+    assert metrics["new_goals"] == 0
+    assert last == {}
+    history = skill._history(state, skill.date(2026, 9, 21), metrics)
+    assert history[0]["metrics"]["scheduled_hours"] == 3
+    assert history[0]["metrics"]["goals_advanced"] is None
+    assert "new_blueprint_steps" not in history[0]["metrics"]
 
 
 def test_run_creates_report_then_persists_rolling_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -108,13 +169,18 @@ def test_run_creates_report_then_persists_rolling_history(tmp_path: Path, monkey
         if operation == "notion.todo.list":
             return {"todos": [], "has_more": False, "next_cursor": None}
         if operation == "atlas.goal.list":
-            return {"goals": [], "progressions": []}
+            return {"goals": [], "graph": {"edges": []}}
         if operation == "google_calendar.event.list":
             return {"events": [], "has_more": False, "next_page_token": None}
         assert operation == "notion.report.create"
         assert input["select"] == "Personal Feed"
         assert input["name"].startswith("Personal Weekly Summary")
         assert len(input["children"]) <= 100
+        assert all(block["type"] != "heading_1" for block in input["children"])
+        assert [
+            block["heading_2"]["rich_text"][0]["text"]["content"]
+            for block in input["children"] if block["type"] == "heading_2"
+        ] == ["Todos", "Goals", "Calendar"]
         return {"id": "report-1", "name": input["name"], "select": input["select"], "created_time": "2026-09-27T21:00:00Z"}
 
     monkeypatch.setattr(skill.integration_runtime_capabilities, "call", fake_call)
@@ -125,5 +191,6 @@ def test_run_creates_report_then_persists_rolling_history(tmp_path: Path, monkey
     state = json.loads((tmp_path / skill.STATE_FILE).read_text(encoding="utf-8"))
     assert state["history"][0]["week_start"] == "2026-09-21"
     assert state["history"][0]["metrics"]["completion_rate"] is None
+    assert state["goal_snapshot_schema"] == 2
     assert skill.run({}, now=now)["already_reported"] is True
     assert len(calls) == 4

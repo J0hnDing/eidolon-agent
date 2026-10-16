@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.execution.context import InvocationContext
 from app.execution.types import InvocationExecutionError, InvocationOutcome, InvocationTargetRef
 from app.models import InvocationApproval
+from app.services.act_chat_message_service import ActChatMessageCapability, ActChatMessageError
 from app.services.act_telegram_file_service import (
     ActTelegramFileCapability,
     ActTelegramFileError,
@@ -33,6 +34,8 @@ class AgentPrivateHandler:
             return self._authenticate_browser(input_json, context)
         if target.target_id == "telegram.send_file":
             return self._send_telegram_file(input_json, context)
+        if target.target_id == "chat.send_message":
+            return self._send_chat_message(input_json, context)
         raise InvocationExecutionError("not_exposed", "Agent-private target is unavailable")
 
     def _authenticate_browser(
@@ -96,6 +99,24 @@ class AgentPrivateHandler:
         except AgentPermissionError as exc:
             raise InvocationExecutionError(exc.error_type, str(exc)) from None
         except (ActTelegramFileError, TelegramProviderError, TelegramServiceError) as exc:
+            raise InvocationExecutionError(exc.error_type, str(exc)) from None
+        return InvocationOutcome(status="succeeded", output=result)
+
+    def _send_chat_message(self, input_json: dict, context: InvocationContext) -> InvocationOutcome:
+        if (context.principal_kind != "agent" or context.agent_id != "act"
+                or context.agent_session_id is None):
+            raise InvocationExecutionError("agent_permission_denied", "Live chat messaging requires an authenticated Act session")
+        if set(input_json) - {"text", "wait_for_reply", "timeout_seconds"}:
+            raise InvocationExecutionError("invalid_input", "Only message text and reply waiting options are accepted")
+        try:
+            policy = AgentPolicyService(self.db)
+            policy.require_session("act", context.agent_session_id)
+            policy.require_function("act", "chat.send_message")
+            result = ActChatMessageCapability(self.db).send(
+                context.agent_session_id, input_json.get("text"),
+                input_json.get("wait_for_reply", False), input_json.get("timeout_seconds", 120),
+            )
+        except (AgentPermissionError, ActChatMessageError, TelegramProviderError, TelegramServiceError) as exc:
             raise InvocationExecutionError(exc.error_type, str(exc)) from None
         return InvocationOutcome(status="succeeded", output=result)
 

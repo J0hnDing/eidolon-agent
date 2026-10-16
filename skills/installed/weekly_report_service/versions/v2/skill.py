@@ -26,7 +26,7 @@ MACRO_REPORT_SELECT = "Macro"
 REPORT_TIMEZONE = ZoneInfo("America/Toronto")
 SCOUT_INPUT = {"limit": 25, "period": "weekly"}
 SEEN_REPOSITORIES_FILENAME = "seen_repositories.json"
-SEEN_PAPERS_FILENAME = "seen_papers.json"
+REPORTED_PAPERS_FILENAME = "seen_papers.json"
 MACRO_STATE_FILENAME = "macro_geopolitical_news_scout.json"
 MAX_MACRO_SEEN = 5000
 MAX_MACRO_ITEMS = 8
@@ -50,8 +50,7 @@ PAPER_FIELDS = {
 }
 MAX_REPOSITORIES = 6
 MAX_SEEN_REPOSITORIES = 15
-MAX_SELECTED_PAPERS = 6
-MAX_SEEN_PAPERS = 6
+MAX_SELECTED_PAPERS = 3
 MAX_AUTHORS = 100
 MAX_NOTION_TEXT = 2_000
 MAX_NOTION_BLOCKS = 100
@@ -105,20 +104,20 @@ def run(payload: dict[str, Any], *, now: datetime | None = None) -> dict[str, An
         )
 
         failure_code = "seen_papers_load_failed"
-        seen_papers = _load_seen_values(
-            SEEN_PAPERS_FILENAME,
-            label="paper",
+        reported_papers = _load_seen_values(
+            REPORTED_PAPERS_FILENAME,
+            label="reported paper",
             validator=_is_paper_input_id,
         )
         failure_code = "paper_scout_failed"
         paper_output = function_runtime_capabilities.call_function(
             PAPER_SCOUT_FUNCTION,
-            {"seen_papers": seen_papers},
+            {"excluded_papers": reported_papers},
         )
         failure_code = "paper_scout_invalid_output"
-        selected_papers, newly_seen_papers = _validated_paper_scout_output(
+        selected_papers = _validated_paper_scout_output(
             paper_output,
-            excluded_papers=seen_papers,
+            excluded_papers=reported_papers,
         )
         research_report_name = f"Weekly AI Research Report — {report_date}"
         failure_code = "research_report_blocks_invalid"
@@ -135,12 +134,11 @@ def run(payload: dict[str, Any], *, now: datetime | None = None) -> dict[str, An
         )
         failure_code = "seen_papers_persist_failed"
         _persist_seen_values(
-            SEEN_PAPERS_FILENAME,
-            seen_papers,
-            newly_seen_papers,
-            label="paper",
+            REPORTED_PAPERS_FILENAME,
+            reported_papers,
+            [paper["paper_id"] for paper in selected_papers],
+            label="reported paper",
         )
-
         failure_code = "macro_state_load_failed"
         macro_state = _load_macro_state()
         failure_code = "macro_scout_failed"
@@ -278,24 +276,10 @@ def _validated_paper_scout_output(
     output: dict[str, Any],
     *,
     excluded_papers: list[str],
-) -> tuple[list[dict[str, Any]], list[str]]:
-    if not isinstance(output, dict) or set(output) != {
-        "selected_papers",
-        "seen_papers",
-    }:
+) -> list[dict[str, Any]]:
+    if not isinstance(output, dict) or set(output) != {"selected_papers"}:
         raise ValueError("Research Paper Scout output has the wrong top-level shape")
-    newly_seen = _validated_unique_ids(
-        output["seen_papers"],
-        maximum=MAX_SEEN_PAPERS,
-        label="seen paper",
-        validator=_is_paper_id,
-    )
     excluded_keys = {_paper_id_key(paper_id) for paper_id in excluded_papers}
-    if any(_paper_id_key(paper_id) in excluded_keys for paper_id in newly_seen):
-        raise ValueError(
-            "Research Paper Scout returned an excluded paper as newly seen"
-        )
-
     selected = output["selected_papers"]
     if not isinstance(selected, list) or len(selected) > MAX_SELECTED_PAPERS:
         raise ValueError("Research Paper Scout returned an invalid selected paper list")
@@ -306,7 +290,11 @@ def _validated_paper_scout_output(
             raise ValueError("Research Paper Scout returned an invalid selected paper")
         paper_id = paper["paper_id"]
         paper_key = paper_id.casefold() if _is_paper_id(paper_id) else ""
-        if not paper_key or paper_key in selected_ids:
+        if not paper_key:
+            raise ValueError("Research Paper Scout returned an invalid paper ID")
+        if paper_key in excluded_keys:
+            raise ValueError("Research Paper Scout selected a previously reported paper")
+        if paper_key in selected_ids:
             raise ValueError("Research Paper Scout selected a duplicate paper")
         selected_ids.add(paper_key)
         rank = paper["rank"]
@@ -350,39 +338,30 @@ def _validated_paper_scout_output(
             )
         validated.append(paper)
 
-    if not validated:
-        if newly_seen:
-            raise ValueError(
-                "Research Paper Scout returned seen papers without selections"
-            )
-        return validated, newly_seen
-    selected_keys = {_paper_id_key(paper["paper_id"]) for paper in validated}
-    returned_seen_keys = {_paper_id_key(paper_id) for paper_id in newly_seen}
-    if returned_seen_keys != selected_keys:
-        raise ValueError(
-            "Research Paper Scout seen_papers must contain exactly the selected paper IDs"
-        )
-    return validated, newly_seen
+    return validated
 
 
-def _validated_macro_report(value: Any) -> dict[str, Any]:
+def _validated_macro_report(value: Any, *, allow_legacy: bool = False) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != {"macro_picture", "items", "upcoming_catalysts"}:
         raise ValueError("Macro Scout returned an invalid report")
-    if not _is_string(value["macro_picture"], 700, allow_empty=True):
+    if not _is_string(value["macro_picture"], 900, allow_empty=True):
         raise ValueError("Macro Scout returned an invalid macro picture")
     items = value["items"]
     if not isinstance(items, list) or len(items) > MAX_MACRO_ITEMS:
         raise ValueError("Macro Scout returned too many developments")
     for item in items:
-        if not isinstance(item, dict) or set(item) != {
+        fields = {"what_happened", "explanation", "analysis", "sources"}
+        limits = (("what_happened", 200), ("explanation", 250), ("analysis", 450))
+        legacy = allow_legacy and isinstance(item, dict) and set(item) == {
             "what_happened", "why_it_matters", "new_since_previous", "watch_next", "sources"
-        }:
+        }
+        if legacy:
+            fields = set(item)
+            limits = (("what_happened", 450), ("why_it_matters", 500), ("new_since_previous", 350), ("watch_next", 350))
+        if not isinstance(item, dict) or set(item) != fields:
             raise ValueError("Macro Scout returned an invalid development")
-        for field, maximum in (
-            ("what_happened", 450), ("why_it_matters", 500),
-            ("new_since_previous", 350), ("watch_next", 350),
-        ):
-            if not _is_string(item[field], maximum):
+        for field, maximum in limits:
+            if not _is_string(item[field], maximum, allow_empty=field == "explanation"):
                 raise ValueError("Macro Scout returned invalid development text")
         sources = item["sources"]
         if (
@@ -458,7 +437,7 @@ def _load_macro_state() -> dict[str, Any]:
     ):
         raise ValueError("Weekly Report service macro fetch time is invalid")
     if value["report"] is not None:
-        _validated_macro_report(value["report"])
+        _validated_macro_report(value["report"], allow_legacy=True)
     return value
 
 
@@ -606,22 +585,7 @@ def _is_https_url(
 def _report_blocks(
     repositories: list[dict[str, Any]], report_date: str
 ) -> list[dict[str, Any]]:
-    blocks = [
-        _heading("heading_1", "GitHub Projects Weekly Report"),
-        {
-            "type": "callout",
-            "callout": {
-                "rich_text": [
-                    _text(
-                        f"Generated deterministically on {report_date} from GitHub Scout output."
-                    )
-                ],
-                "icon": {"type": "emoji", "emoji": "📊"},
-                "color": "blue_background",
-            },
-        },
-        {"type": "divider", "divider": {}},
-    ]
+    blocks = []
     if not repositories:
         blocks.append(
             _paragraph(
@@ -655,28 +619,13 @@ def _research_report_blocks(
     selected_papers: list[dict[str, Any]],
     report_date: str,
 ) -> list[dict[str, Any]]:
-    blocks = [
-        _heading("heading_1", "AI Research Weekly Report"),
-        {
-            "type": "callout",
-            "callout": {
-                "rich_text": [
-                    _text(
-                        f"Generated deterministically on {report_date} from Research Paper Scout output."
-                    )
-                ],
-                "icon": {"type": "emoji", "emoji": "🔬"},
-                "color": "purple_background",
-            },
-        },
-        {"type": "divider", "divider": {}},
-    ]
+    blocks = []
     if not selected_papers:
         blocks.append(
             _paragraph(
                 [
                     _text(
-                        "Research Paper Scout found no papers valuable enough to recommend this week."
+                        "Research Paper Scout selected no new papers for this report."
                     )
                 ]
             )
@@ -703,28 +652,35 @@ def _research_report_blocks(
 
 
 def _macro_report_blocks(report: dict[str, Any]) -> list[dict[str, Any]]:
-    blocks = [
-        _heading("heading_1", "Macro & Geopolitical News Scout"),
-        _paragraph([_text(report["macro_picture"] or "No material change to the macro picture identified.")]),
-    ]
+    blocks = []
+    sources: dict[str, list[int]] = {}
     if not report["items"]:
         blocks.append(_paragraph([_text("No material new developments identified.")]))
-    for item in report["items"]:
-        blocks.extend((
-            _heading("heading_2", item["what_happened"]),
-            _paragraph([_text(f"Why it matters: {item['why_it_matters']}")]),
-            _paragraph([_text(f"New since previous report: {item['new_since_previous']}")]),
-            _paragraph([_text(f"Watch next: {item['watch_next']}")]),
-        ))
+    for index, item in enumerate(report["items"], start=1):
+        blocks.append({
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": [_text(item["what_happened"], bold=True)]},
+        })
+        if item["explanation"].strip():
+            blocks.append(_paragraph([_text(item["explanation"])]))
+        blocks.append(_paragraph([_text(item["analysis"])]))
         for url in item["sources"]:
-            parsed = urlparse(url)
-            label = f"Source: {parsed.hostname}{parsed.path[:100]}"
-            blocks.append(_paragraph([_text(label, link=url)]))
+            events = sources.setdefault(url, [])
+            if index not in events:
+                events.append(index)
+    blocks.append(_paragraph([_text(report["macro_picture"] or "No material change to the macro picture identified.")]))
+
     if report["upcoming_catalysts"]:
         blocks.append(_heading("heading_2", "Important upcoming catalysts"))
         blocks.extend(
             _paragraph([_text(catalyst)]) for catalyst in report["upcoming_catalysts"]
         )
+    if sources:
+        blocks.append(_heading("heading_2", "Sources"))
+        for url, events in sources.items():
+            parsed = urlparse(url)
+            label = f"Events {', '.join(map(str, events))}: {parsed.hostname}{parsed.path[:100]}"
+            blocks.append(_paragraph([_text(label, link=url)]))
     return blocks
 
 

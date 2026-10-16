@@ -1,14 +1,17 @@
+import json
 from types import SimpleNamespace
 
 import pytest
+from jsonschema import Draft202012Validator
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.db import Base
 from app.models import ActSession, ActTurn, TelegramBotConnection, TelegramTopicSession
+from app.schemas.assistant_assessment import ASSESSMENT_RESPONSE_SCHEMA
 from app.services.act_session_service import ActSessionService
-from app.services.act_turn_dispatcher import ActTurnDispatcher
+from app.services.act_turn_dispatcher import ACT_RESPONSE_SCHEMA, ActTurnDispatcher
 from app.services.agent_policy_service import AgentPolicyService
 from app.services.codex_routing_service import CodexRoutingService
 from app.services.product_manager_session_service import ProductManagerSessionService
@@ -47,11 +50,29 @@ class _FakeCodexSessions:
 
 
 class _FakeRuntimeSessions(_FakeCodexSessions):
+    def __init__(self, name: str | None, generated_title: str | None = None) -> None:
+        super().__init__(name)
+        self.generated_title = generated_title
+        self.turn_inputs: list[str] = []
+        self.schemas: list[dict] = []
+
     def run_structured_turn(self, thread_id: str, _input: str, _schema: dict, **kwargs):
+        self.turn_inputs.append(_input)
+        self.schemas.append(_schema)
         on_turn_started = kwargs.get("on_turn_started")
         if on_turn_started is not None:
             on_turn_started("codex-turn-1")
-        return SimpleNamespace(output_text='{"response":"completed"}', items=[])
+        if _schema is ASSESSMENT_RESPONSE_SCHEMA:
+            payload = {
+                "title": self.generated_title,
+                "todo_doer": {"proposals": []},
+                "goal_doer": {"questions": [], "proposals": []},
+                "opportunity_scout": {"opportunities": []},
+            }
+        else:
+            payload = {"response": "completed", "title": self.generated_title}
+        Draft202012Validator(_schema).validate(payload)
+        return SimpleNamespace(output_text=json.dumps(payload), items=[])
 
 
 class _FakeAppServer:
@@ -135,7 +156,7 @@ def _title_sync(
         db,
         telegram_secret_store=store,
         telegram_api_factory=(lambda _token: api) if api is not None else FakeTelegramBotApi,
-        codex_sessions_factory=lambda _agent_id: codex,
+        codex_sessions_factory=lambda _agent_id, _session_id: codex,
     )
 
 
@@ -166,7 +187,7 @@ def test_dispatcher_syncs_title_only_after_successful_turn(db: Session, monkeypa
     db.add(turn)
     db.commit()
 
-    monkeypatch.setattr("app.services.act_turn_dispatcher.act_app_server_service", app_server)
+    monkeypatch.setattr("app.services.act_turn_dispatcher.get_agent_app_server", lambda _agent_id, _session_id: app_server)
     monkeypatch.setattr(
         CodexRoutingService,
         "resolve",
@@ -302,6 +323,31 @@ def test_telegram_manual_rename_updates_session_and_native_codex_name(db: Sessio
     assert not [call for call in api.calls if call[0] == "editForumTopic"]
 
 
+def test_telegram_rename_routes_to_its_own_act_runtime(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    first = _make_session(db, thread_id="thread-first", title="First title")
+    second = _make_session(db, thread_id="thread-second", title="Second title")
+    clients = {
+        first.id: _FakeCodexSessions("First title"),
+        second.id: _FakeCodexSessions("Second title"),
+    }
+    routes = []
+
+    def runtime_for(agent_id: str, session_id: int):
+        routes.append((agent_id, session_id))
+        return SimpleNamespace(sessions=clients[session_id])
+
+    monkeypatch.setattr("app.services.act_app_server_service.get_agent_app_server", runtime_for)
+
+    assert TitleSyncService(db).sync_from_telegram(first, "Renamed first") is True
+
+    assert routes == [("act", first.id)]
+    assert clients[first.id].reads == ["thread-first"]
+    assert clients[first.id].sets == [("thread-first", "Renamed first")]
+    assert clients[second.id].reads == []
+    assert clients[second.id].sets == []
+    assert second.title == "Second title"
+
+
 def test_telegram_projection_failure_keeps_native_backend_title(db: Session) -> None:
     api = FakeTelegramBotApi()
     session = _make_session(db, title="Old topic title")
@@ -339,3 +385,169 @@ def test_native_app_server_thread_name_methods_use_thread_contracts() -> None:
         ("thread/read", {"threadId": "thread-1"}, 10),
         ("thread/name/set", {"threadId": "thread-1", "name": "Renamed natively"}, 10),
     ]
+
+
+@pytest.mark.parametrize("agent_id", ["act", "observer", "assistant"])
+@pytest.mark.parametrize("native_name", [None, "New Chat"])
+def test_generated_title_names_native_thread_and_existing_telegram_topic(
+    db: Session, agent_id: str, native_name: str | None,
+) -> None:
+    api = FakeTelegramBotApi()
+    session = _make_session(db, agent_id=agent_id)
+    store, _connection, mapping = _make_telegram_binding(db, session, api, topic_name="New Chat")
+    codex = _FakeCodexSessions(native_name)
+
+    assert _title_sync(db, codex, store=store, api=api).sync_from_codex(
+        session, codex, "  Review   course syllabus  ",
+    ) is True
+
+    assert codex.sets == [(session.codex_thread_id, "Review course syllabus")]
+    assert session.title == mapping.topic_name == "Review course syllabus"
+    assert [call[0] for call in api.calls] == ["editForumTopic"]
+    assert _title_sync(db, codex, store=store, api=api).sync_from_codex(session, codex, "Another title") is False
+    assert len(codex.sets) == 1
+
+
+@pytest.mark.parametrize("native_name", [None, "Manual name"])
+def test_generated_title_preserves_manual_session_name(db: Session, native_name: str | None) -> None:
+    session = _make_session(db, title="Manual name")
+    codex = _FakeCodexSessions(native_name)
+
+    assert _title_sync(db, codex).sync_from_codex(session, codex, "Generated replacement") is False
+    assert session.title == "Manual name"
+    assert codex.name == "Manual name"
+    assert codex.sets == ([(session.codex_thread_id, "Manual name")] if native_name is None else [])
+
+
+def test_generated_title_preserves_existing_native_name(db: Session) -> None:
+    session = _make_session(db)
+    codex = _FakeCodexSessions("Native existing title")
+    assert _title_sync(db, codex).sync_from_codex(session, codex, "Generated replacement") is True
+    assert session.title == "Native existing title"
+    assert codex.sets == []
+
+
+@pytest.mark.parametrize("candidate", [None, "", "  ", 42, {"title": "Bad"}, "New Chat"])
+def test_missing_or_invalid_generated_title_does_not_name_thread(db: Session, candidate: object) -> None:
+    session = _make_session(db)
+    codex = _FakeCodexSessions(None)
+    assert _title_sync(db, codex).sync_from_codex(session, codex, candidate) is False
+    assert session.title == "New Chat"
+    assert codex.sets == []
+
+
+def test_native_title_set_failure_can_retry(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _make_session(db)
+    codex = _FakeCodexSessions(None)
+    setter = codex.set_thread_name
+
+    def fail_set(*_args):
+        raise RuntimeError("App Server unavailable")
+
+    monkeypatch.setattr(codex, "set_thread_name", fail_set)
+    sync = _title_sync(db, codex)
+    assert sync.sync_from_codex(session, codex, "Course syllabus") is False
+    assert session.title == "New Chat"
+    monkeypatch.setattr(codex, "set_thread_name", setter)
+    assert sync.sync_from_codex(session, codex, "Course syllabus") is True
+    assert session.title == "Course syllabus"
+
+
+def test_generated_title_telegram_failure_retries_without_renaming_native_thread(db: Session) -> None:
+    api = FakeTelegramBotApi()
+    session = _make_session(db)
+    store, _connection, mapping = _make_telegram_binding(db, session, api, topic_name="New Chat")
+    codex = _FakeCodexSessions(None)
+    sync = _title_sync(db, codex, store=store, api=api)
+    api.errors.append(TelegramProviderError("transport", "Telegram is unavailable"))
+    assert sync.sync_from_codex(session, codex, "Course syllabus") is True
+    assert session.title == "Course syllabus"
+    assert mapping.topic_name == "New Chat"
+    assert sync.sync_from_codex(session, codex) is True
+    assert mapping.topic_name == "Course syllabus"
+    assert len(codex.sets) == 1
+
+
+@pytest.mark.parametrize("status,thread_id", [("archived", "thread-1"), ("active", "pending:unused")])
+def test_generated_title_skips_archived_or_pending_sessions(db: Session, status: str, thread_id: str) -> None:
+    session = _make_session(db, thread_id=thread_id)
+    session.status = status
+    db.commit()
+    codex = _FakeCodexSessions(None)
+    assert _title_sync(db, codex).sync_from_codex(session, codex, "Course syllabus") is False
+    assert codex.reads == codex.sets == []
+
+
+def test_failed_turn_does_not_set_a_title(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    sessions = _FakeRuntimeSessions(None, "Course syllabus")
+    session = _make_session(db)
+    turn = ActTurn(session_id=session.id, user_message="Review syllabus", status="running")
+    db.add(turn)
+    db.commit()
+
+    def fail_turn(*_args, **_kwargs):
+        raise RuntimeError("Turn failed")
+
+    monkeypatch.setattr(sessions, "run_structured_turn", fail_turn)
+    monkeypatch.setattr("app.services.act_turn_dispatcher.get_agent_app_server", lambda *_: _FakeAppServer(sessions))
+    monkeypatch.setattr(CodexRoutingService, "resolve", lambda *_args, **_kwargs: SimpleNamespace(
+        effective_model=None, effective_reasoning_effort=None,
+    ))
+    monkeypatch.setattr(AgentPolicyService, "policy", lambda *_: SimpleNamespace(model=None, reasoning_effort=None))
+    ActTurnDispatcher()._execute(db, turn.id)
+    assert turn.status == "failed"
+    assert session.title == "New Chat"
+    assert sessions.reads == sessions.sets == []
+
+
+@pytest.mark.parametrize("agent_id,origin", [
+    ("act", "web"), ("observer", "web"), ("assistant", "web"), ("assistant", "assessment"),
+])
+def test_dispatcher_generates_title_in_one_turn_for_every_chat_path(
+    db: Session, monkeypatch: pytest.MonkeyPatch, agent_id: str, origin: str,
+) -> None:
+    sessions = _FakeRuntimeSessions(None, "Review course syllabus")
+    app_server = _FakeAppServer(sessions)
+    session = _make_session(db, agent_id=agent_id, origin=origin, thread_id="pending:generated")
+    turn = ActTurn(session_id=session.id, user_message="Review my course syllabus", status="running")
+    db.add(turn)
+    db.commit()
+    monkeypatch.setattr("app.services.act_turn_dispatcher.get_agent_app_server", lambda *_: app_server)
+    monkeypatch.setattr(CodexRoutingService, "resolve", lambda *_args, **_kwargs: SimpleNamespace(
+        effective_model=None, effective_reasoning_effort=None,
+    ))
+    monkeypatch.setattr(AgentPolicyService, "policy", lambda *_: SimpleNamespace(model=None, reasoning_effort=None))
+    monkeypatch.setattr("app.services.assistant_assessment_result_service.AssistantAssessmentResultService.accept",
+                        lambda *_: None)
+    monkeypatch.setattr("app.services.assistant_assessment_service.AssistantAssessmentService.notify_completed",
+                        lambda *_: None)
+    monkeypatch.setattr("app.services.act_session_service.ActSessionService.prune_assistant_sessions", lambda *_: None)
+
+    dispatcher = ActTurnDispatcher(agent_id)
+    original_sync = TitleSyncService.sync_from_codex
+
+    def sync_before_completion(sync, current_session, client, generated_title=None):
+        assert db.get(ActTurn, turn.id).status == "running"
+        return original_sync(sync, current_session, client, generated_title)
+
+    monkeypatch.setattr(TitleSyncService, "sync_from_codex", sync_before_completion)
+    dispatcher._execute(db, turn.id)
+
+    assert turn.status == "succeeded"
+    assert turn.assistant_message == ("Assessment complete." if origin == "assessment" else "completed")
+    assert session.title == "Review course syllabus"
+    assert len(sessions.turn_inputs) == 1
+    assert '"needsTitle": true' in sessions.turn_inputs[0]
+    assert sessions.schemas == [ASSESSMENT_RESPONSE_SCHEMA if origin == "assessment" else ACT_RESPONSE_SCHEMA]
+    assert sessions.sets == [(session.codex_thread_id, "Review course syllabus")]
+
+    # A later answer cannot overwrite the generated or manually renamed title.
+    sessions.generated_title = None
+    second = ActTurn(session_id=session.id, user_message="Thanks", status="running")
+    db.add(second)
+    db.commit()
+    monkeypatch.setattr(TitleSyncService, "sync_from_codex", original_sync)
+    dispatcher._execute(db, second.id)
+    assert second.status == "succeeded"
+    assert '"needsTitle": false' in sessions.turn_inputs[1]
+    assert len(sessions.sets) == 1

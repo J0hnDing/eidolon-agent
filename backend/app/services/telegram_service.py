@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.db import SessionLocal
 from app.models import (
     ActSession,
+    ActTurn,
     AgentProposal,
     InvocationApproval,
     TelegramBotConnection,
@@ -1038,12 +1039,13 @@ class TelegramService:
                     )
             self.db.commit()
             if turn is not None:
-                self.send_agent_thinking(
-                    row,
-                    turn.id,
-                    agent_label,
-                    message_thread_id=message_thread_id,
-                )
+                if turn.status == "queued":
+                    self.send_agent_thinking(
+                        row,
+                        turn.id,
+                        agent_label,
+                        message_thread_id=message_thread_id,
+                    )
             else:
                 self._send_agent_reply(row, reply, message_thread_id=message_thread_id)
         except (ActSessionError, TelegramServiceError) as exc:
@@ -1161,6 +1163,32 @@ class TelegramService:
         if draft_id is not None:
             self._update_agent_draft(row, draft_id, reply, message_thread_id=message_thread_id)
         self._send_agent_reply(row, reply, message_thread_id=message_thread_id)
+
+    def send_act_chat_message(self, turn: ActTurn, text: str) -> int:
+        """Deliver live text only to the running turn's immutable Telegram destination."""
+        if self.role != TELEGRAM_ACT_ROLE or turn.delivery_provider != "telegram":
+            raise TelegramServiceError("authorization_missing_or_stale", "Live chat messages require the Act Telegram bot")
+        row, token = self._connected_api_credential()
+        try:
+            mapping = self._topic_mapping_for_session(row.id, turn.session_id)
+            if (mapping is None or row.id != turn.delivery_connection_id
+                    or str(row.paired_chat_id or "") != turn.delivery_chat_id
+                    or mapping.telegram_chat_id != turn.delivery_chat_id
+                    or mapping.message_thread_id != turn.delivery_message_thread_id):
+                raise TelegramServiceError("telegram_topic_unavailable", "The current Act turn's paired Telegram topic is unavailable")
+            try:
+                result = self.api_factory(token).send_message(
+                    int(mapping.telegram_chat_id), text, message_thread_id=mapping.message_thread_id,
+                )
+            except TelegramProviderError as exc:
+                self._reconcile_missing_topic(row, mapping.message_thread_id, exc)
+                raise
+            message_id = result.get("message_id")
+            if isinstance(message_id, bool) or not isinstance(message_id, int) or message_id < 1:
+                raise TelegramServiceError("provider_unavailable", "Telegram returned an invalid message receipt")
+            return message_id
+        finally:
+            token = ""
 
     def send_act_workspace_document(
         self,

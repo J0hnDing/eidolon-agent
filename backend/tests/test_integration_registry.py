@@ -15,6 +15,18 @@ from app.integrations import (
 from app.services.integration_registry import OPERATIONS
 
 EXPECTED_OPERATION_IDS = {
+    "atlas.describe",
+    "atlas.records.search",
+    "atlas.records.get",
+    "atlas.links.get",
+    "atlas.person.completeness.get",
+    "atlas.states.get",
+    "atlas.personality.get",
+    "atlas.history.list",
+    "atlas.graph.get",
+    "atlas.knowledge.read",
+    "atlas.attachments.list",
+    "atlas.attachments.read",
     "atlas.experience.list",
     "atlas.goal.create",
     "atlas.goal.list",

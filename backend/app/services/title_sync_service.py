@@ -31,6 +31,10 @@ def normalize_title(value: object, *, maximum: int = SESSION_TITLE_MAX_CHARS) ->
     return " ".join(value.split())[:maximum]
 
 
+def needs_session_title(session: ActSession) -> bool:
+    return normalize_title(session.title) in ("", "New Chat")
+
+
 class TitleSyncService:
     """Synchronize one session title across Codex, Eidolon, and Telegram."""
 
@@ -40,16 +44,22 @@ class TitleSyncService:
         *,
         telegram_secret_store: SecretStore | None = None,
         telegram_api_factory: Callable[[str], TelegramBotApi] = UrllibTelegramBotApi,
-        codex_sessions_factory: Callable[[str], CodexThreadNameClient] | None = None,
+        codex_sessions_factory: Callable[[str, int], CodexThreadNameClient] | None = None,
     ) -> None:
         self.db = db
         self.telegram_secret_store = telegram_secret_store
         self.telegram_api_factory = telegram_api_factory
         self.codex_sessions_factory = codex_sessions_factory or _default_codex_sessions
 
-    def sync_from_codex(self, session: ActSession, codex_sessions: CodexThreadNameClient) -> bool:
-        """Read the native Codex name after a successful turn and project it."""
+    def sync_from_codex(
+        self,
+        session: ActSession,
+        codex_sessions: CodexThreadNameClient,
+        generated_title: object = None,
+    ) -> bool:
+        """Initialize a missing native name from the same turn, then project it."""
 
+        self.db.refresh(session)
         if session.status != "active" or session.codex_thread_id.startswith("pending:"):
             return False
         try:
@@ -58,9 +68,22 @@ class TitleSyncService:
             self._log_failure("Codex title read", session, exc)
             return False
         normalized = normalize_title(native_name)
-        if not normalized:
-            return False
-
+        if not normalized or normalized == "New Chat":
+            # A Telegram rename or archive may have arrived while the turn ran.
+            self.db.refresh(session)
+            if session.status != "active":
+                return False
+            normalized = (
+                normalize_title(generated_title) if needs_session_title(session)
+                else normalize_title(session.title)
+            )
+            if not normalized or normalized == "New Chat":
+                return False
+            try:
+                codex_sessions.set_thread_name(session.codex_thread_id, normalized)
+            except Exception as exc:  # noqa: BLE001 - retry naming on a later turn.
+                self._log_failure("Codex title update", session, exc)
+                return False
         mapping = self._mapping_for_session(session.id)
         session_changed = normalize_title(session.title) != normalized
         topic_title = normalize_title(normalized, maximum=TELEGRAM_TOPIC_TITLE_MAX_CHARS)
@@ -172,7 +195,7 @@ class TitleSyncService:
 
     def _propagate_to_codex(self, session: ActSession, normalized: str) -> None:
         try:
-            codex_sessions = self.codex_sessions_factory(session.agent_id)
+            codex_sessions = self.codex_sessions_factory(session.agent_id, session.id)
             current_name = codex_sessions.read_thread_name(session.codex_thread_id)
             if normalize_title(current_name) == normalized:
                 return
@@ -217,7 +240,7 @@ class TitleSyncService:
         )
 
 
-def _default_codex_sessions(agent_id: str) -> CodexThreadNameClient:
-    from app.services.act_app_server_service import agent_app_servers
+def _default_codex_sessions(agent_id: str, session_id: int) -> CodexThreadNameClient:
+    from app.services.act_app_server_service import get_agent_app_server
 
-    return agent_app_servers[agent_id].sessions
+    return get_agent_app_server(agent_id, session_id).sessions

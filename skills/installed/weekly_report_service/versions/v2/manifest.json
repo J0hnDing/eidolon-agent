@@ -36,7 +36,7 @@
         "required": ["id", "name", "created_time", "select"],
         "additionalProperties": false
       },
-      "paper_count": {"type": "integer", "minimum": 0, "maximum": 6},
+      "paper_count": {"type": "integer", "minimum": 0, "maximum": 3},
       "macro_report": {
         "type": "object",
         "properties": {

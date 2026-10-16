@@ -72,6 +72,7 @@ def test_function_helper_returns_only_normalized_errors(monkeypatch: pytest.Monk
     with pytest.raises(capabilities.IntegrationRuntimeCapabilityError) as exc_info:
         capabilities.call(operation="github.repository.get", input={})
     assert exc_info.value.error_type == "repository_outside_scope"
+    assert str(exc_info.value) == "[repository_outside_scope] Repository is outside scope"
     assert "runtime-capability" not in str(exc_info.value)
 
 

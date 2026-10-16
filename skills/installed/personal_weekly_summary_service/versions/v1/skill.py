@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from datetime import UTC, date, datetime, time, timedelta
@@ -14,12 +15,13 @@ import integration_runtime_capabilities
 
 ZONE = ZoneInfo("America/Toronto")
 STATE_FILE = "personal_weekly_summary.json"
+GOAL_SNAPSHOT_SCHEMA = 2
 MAX_PAGES = 100
 PAGE_SIZE = 100
 RATE_KEYS = ("completion_rate", "on_time_rate", "carryover_rate", "goal_coverage", "occupation_rate")
 METRIC_KEYS = (
     "completion_rate", "on_time_rate", "carryover_rate", "goals_advanced",
-    "goal_coverage", "new_goals", "new_subgoals", "scheduled_hours",
+    "goal_coverage", "new_goals", "new_blueprint_steps", "scheduled_hours",
     "occupation_rate", "longest_free_hours",
 )
 SPARK = "▁▂▃▄▅▆▇█"
@@ -57,7 +59,7 @@ def run(input_json: dict[str, Any], *, now: datetime | None = None) -> dict[str,
     metrics.update(_calendar_metrics(events, week_start, week_end, active_start, active_end))
     history = _history(state, week_start, metrics)
     name = f"Personal Weekly Summary — {week_start.isoformat()} to {(week_end - timedelta(days=1)).isoformat()}"
-    children = _report_blocks(name, metrics, goals, last_advanced, history, comparable)
+    children = _report_blocks(metrics, goals, last_advanced, history, comparable)
     if len(children) > 100 or len(json.dumps(children).encode("utf-8")) > 500_000:
         raise ValueError("Personal weekly summary report exceeds Notion limits")
     report = _call("notion.report.create", {"name": name, "select": "Personal Feed", "children": children})
@@ -75,6 +77,7 @@ def run(input_json: dict[str, Any], *, now: datetime | None = None) -> dict[str,
         "report_id": report["id"],
         "open_ids": sorted(open_ids),
         "goals": goals,
+        "goal_snapshot_schema": GOAL_SNAPSHOT_SCHEMA,
         "last_advanced": last_advanced,
         "history": history,
     })
@@ -138,42 +141,39 @@ def _goal_snapshot() -> dict[str, dict[str, Any]]:
     if not isinstance(roots, list) or len(roots) > 100:
         raise ValueError("Atlas returned invalid goals")
     result: dict[str, dict[str, Any]] = {}
-    seen_ids: set[str] = set()
     for root in roots:
         if not isinstance(root, dict):
             raise ValueError("Atlas returned invalid goals")
         root_id = root.get("id")
-        if not isinstance(root_id, str) or not root_id or root_id in seen_ids:
+        if not isinstance(root_id, str) or not root_id or root_id in result:
             raise ValueError("Atlas returned duplicate or invalid goal IDs")
-        children: list[dict[str, Any]] = []
-        pending = [(root, None)]
-        while pending:
-            goal, parent = pending.pop()
-            goal_id = goal.get("id")
-            if not isinstance(goal_id, str) or not goal_id or goal_id in seen_ids:
-                raise ValueError("Atlas returned duplicate or invalid goal IDs")
-            progress = goal.get("progress")
-            if not isinstance(progress, int) or isinstance(progress, bool) or not 0 <= progress <= 100:
-                raise ValueError("Atlas returned invalid Goal progress")
-            seen_ids.add(goal_id)
-            subgoals = goal.get("subgoals")
-            if not isinstance(subgoals, list) or any(not isinstance(child, dict) for child in subgoals):
-                raise ValueError("Atlas returned invalid subgoals")
-            if parent is not None:
-                children.append({
-                    "id": goal_id, "parent": parent,
-                    "title": _short(goal.get("title")),
-                    "progress": progress,
-                    "description": goal.get("description"),
-                    "target_date": goal.get("target_date"),
-                })
-            pending.extend((child, goal_id) for child in subgoals)
+        progress = root.get("progress")
+        if "progress" not in root or (progress is not None and not _assessed_progress(progress)):
+            raise ValueError("Atlas returned invalid Goal progress")
+        blueprint = root.get("blueprint")
+        if not isinstance(blueprint, dict) or not isinstance(blueprint.get("nodes"), list):
+            raise ValueError("Atlas returned an invalid Goal blueprint")
+        nodes: dict[str, dict[str, Any]] = {}
+        for node in blueprint["nodes"]:
+            if not isinstance(node, dict):
+                raise ValueError("Atlas returned an invalid Goal blueprint step")
+            node_id = node.get("id")
+            if not isinstance(node_id, str) or not node_id or node_id in nodes:
+                raise ValueError("Atlas returned duplicate or invalid blueprint step IDs")
+            if not _assessed_progress(node.get("progress")):
+                raise ValueError("Atlas returned invalid blueprint step progress")
+            nodes[node_id] = {"id": node_id, "title": _short(node.get("title")), "progress": node["progress"]}
         result[root_id] = {
             "title": _short(root.get("title")),
-            "progress": root["progress"],
-            "children": sorted(children, key=lambda child: child["id"]),
+            "progress": progress,
+            "blueprint_nodes": sorted(nodes.values(), key=lambda node: node["id"]),
         }
     return result
+
+
+def _assessed_progress(value: Any) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and 0 <= value <= 100 and math.isfinite(value))
 
 
 def _todo_metrics(
@@ -229,30 +229,29 @@ def _goal_metrics(
         goal_id: value for goal_id, value in old_last.items()
         if goal_id in goals and isinstance(value, str)
     }
+    compatible = state.get("goal_snapshot_schema") == GOAL_SNAPSHOT_SCHEMA
+    if not compatible:
+        last_advanced = {}
     if previous is None:
         return {
             "goals_advanced": None, "goal_coverage": None,
-            "new_goals": None, "new_subgoals": None,
-            "advanced_goal_names": [], "new_goal_names": [], "new_subgoal_names": [],
+            "new_goals": None, "new_blueprint_steps": None,
+            "advanced_goal_names": [], "new_goal_names": [], "new_blueprint_step_names": [],
         }, last_advanced
-    old_child_ids = {
-        child["id"] for goal in prior_goals.values() for child in goal.get("children", [])
-    }
-    new_child_ids = {
-        child["id"] for goal in goals.values() for child in goal["children"]
-    }
-    progress_comparable = all(
-        isinstance(goal, dict)
-        and isinstance(goal.get("progress"), int)
-        and not isinstance(goal["progress"], bool)
-        and 0 <= goal["progress"] <= 100
+    # Old snapshots contain recursive record subgoals and integer roll-ups.
+    # Those values cannot be compared with current local blueprint progress.
+    progress_comparable = compatible and all(
+        isinstance(goal, dict) and "progress" in goal
+        and (goal["progress"] is None or _assessed_progress(goal["progress"]))
+        and isinstance(goal.get("blueprint_nodes"), list)
         for goal in prior_goals.values()
     )
     if not progress_comparable:
         last_advanced = {}
     eligible = {
         goal_id for goal_id, prior_goal in prior_goals.items()
-        if goal_id in goals and prior_goal.get("progress", 100) < 100
+        if goal_id in goals and _assessed_progress(prior_goal["progress"])
+        and prior_goal["progress"] < 100 and _assessed_progress(goals[goal_id]["progress"])
     } if progress_comparable else set()
     advanced = {
         goal_id for goal_id in eligible
@@ -261,18 +260,22 @@ def _goal_metrics(
     for goal_id in advanced:
         last_advanced[goal_id] = week_start.isoformat()
     new_goal_ids = goals.keys() - prior_goals.keys()
-    new_children = [
-        child for goal in goals.values() for child in goal["children"]
-        if child["id"] not in old_child_ids
-    ]
+    old_steps = {
+        (goal_id, node["id"])
+        for goal_id, goal in prior_goals.items() for node in goal["blueprint_nodes"]
+    } if progress_comparable else set()
+    new_steps = [
+        (goal_id, node) for goal_id, goal in goals.items() for node in goal["blueprint_nodes"]
+        if (goal_id, node["id"]) not in old_steps
+    ] if progress_comparable else []
     return {
         "goals_advanced": len(advanced) if progress_comparable else None,
         "goal_coverage": _rate(len(advanced), len(eligible)) if progress_comparable else None,
         "new_goals": len(new_goal_ids),
-        "new_subgoals": len(new_child_ids - old_child_ids),
+        "new_blueprint_steps": len(new_steps) if progress_comparable else None,
         "advanced_goal_names": sorted(goals[goal_id]["title"] for goal_id in advanced),
         "new_goal_names": sorted(goals[goal_id]["title"] for goal_id in new_goal_ids),
-        "new_subgoal_names": sorted(_short(child["title"]) for child in new_children),
+        "new_blueprint_step_names": sorted(f"{goals[goal_id]['title']}: {node['title']}" for goal_id, node in new_steps),
     }, last_advanced
 
 
@@ -348,6 +351,11 @@ def _history(state: dict[str, Any], week_start: date, metrics: dict[str, Any]) -
         if isinstance(row, dict) and isinstance(row.get("week_start"), str)
         and isinstance(row.get("metrics"), dict)
     }
+    if state.get("goal_snapshot_schema") != GOAL_SNAPSHOT_SCHEMA:
+        by_week = {
+            key: {**row, "metrics": {**row["metrics"], "goals_advanced": None, "goal_coverage": None}}
+            for key, row in by_week.items()
+        }
     by_week[week_start.isoformat()] = {"week_start": week_start.isoformat(), "metrics": metrics}
     oldest_offset = min(
         3,
@@ -363,10 +371,10 @@ def _history(state: dict[str, Any], week_start: date, metrics: dict[str, Any]) -
 
 
 def _report_blocks(
-    name: str, metrics: dict[str, Any], goals: dict[str, dict[str, Any]],
+    metrics: dict[str, Any], goals: dict[str, dict[str, Any]],
     last_advanced: dict[str, str], history: list[dict[str, Any]], comparable: bool,
 ) -> list[dict[str, Any]]:
-    blocks = [_block("heading_1", name)]
+    blocks = []
     if not comparable:
         blocks.append(_block("paragraph", "First observation: weekly Todo and Goal comparisons begin after the next Sunday snapshot."))
     blocks.append(_block("heading_2", "Todos"))
@@ -378,13 +386,13 @@ def _report_blocks(
     blocks.append(_block("heading_2", "Goals"))
     for key, label in (
         ("goals_advanced", "Goals advanced"), ("goal_coverage", "Goal coverage rate"),
-        ("new_goals", "New goals"), ("new_subgoals", "New subgoals"),
+        ("new_goals", "New goals"), ("new_blueprint_steps", "New blueprint steps"),
     ):
         blocks.append(_metric_block(label, key, metrics, history))
     for key, label in (
         ("advanced_goal_names", "Advanced"),
         ("new_goal_names", "New goals"),
-        ("new_subgoal_names", "New subgoals"),
+        ("new_blueprint_step_names", "New blueprint steps"),
     ):
         names = metrics[key]
         for index in range(0, len(names), 25):
@@ -396,7 +404,8 @@ def _report_blocks(
             continue
         last = last_advanced.get(goal_id)
         weeks = (week_start - date.fromisoformat(last)).days // 7 if last else None
-        prefix = f"{goal['title']} ({goal['progress']}%)"
+        progress_text = "unassessed" if goal["progress"] is None else f"{goal['progress']:g}%"
+        prefix = f"{goal['title']} ({progress_text})"
         label = f"{prefix}: {weeks} week(s) since observed advancement" if weeks is not None else f"{prefix}: no observed advancement yet"
         goal_lines.append(label)
     for index in range(0, len(goal_lines), 10):
@@ -408,7 +417,7 @@ def _report_blocks(
         ("longest_free_hours", "Longest weekday active-hours free block"),
     ):
         blocks.append(_metric_block(label, key, metrics, history))
-    blocks.append(_block("paragraph", "Timed events are merged before counting; all-day events are excluded. Goal advancement means effective progress increased since the previous snapshot. Observed Todo on-time uses Notion's last edit time, which can be later than completion."))
+    blocks.append(_block("paragraph", "Timed events are merged before counting; all-day events are excluded. Goal advancement means Atlas blueprint-derived progress increased between two assessed weekly snapshots; unassessed progress is excluded. Legacy Goal snapshots establish a fresh baseline. Observed Todo on-time uses Notion's last edit time, which can be later than completion."))
     return blocks
 
 

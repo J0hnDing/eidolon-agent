@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import queue
 import subprocess
+import sys
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from app.services.codex_cli_service import codex_cli_service
@@ -79,6 +81,8 @@ class CodexAppServerClient:
 
     def __init__(self, command: str | None = None, *, extra_args: tuple[str, ...] = ()) -> None:
         self.command = command
+        self._running_command: str | None = None
+        self._running_command_stamp: tuple[int, int] | None = None
         self.extra_args = extra_args
         self._process: subprocess.Popen[str] | None = None
         self._reader: threading.Thread | None = None
@@ -99,20 +103,70 @@ class CodexAppServerClient:
     def stop(self) -> None:
         with self._lifecycle_lock:
             process, self._process = self._process, None
+            self._running_command = None
+            self._running_command_stamp = None
             self._reader_error = CodexAppServerConnectionError("Codex App Server was stopped")
             self._fail_generation(self._generation, self._reader_error)
             if process is None:
                 return
-            process.terminate()
+            # EOF lets Codex close its MCP children and their browsers before a
+            # turn resumes using the same persistent profile.
+            with self._write_lock:
+                if process.stdin is not None:
+                    try:
+                        process.stdin.close()
+                    except (OSError, ValueError):
+                        pass
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                process.kill()
+                if sys.platform == "win32":
+                    # Terminate only this App Server's tree, including its MCP
+                    # browser; unrelated Desktop and session processes survive.
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=False,
+                            timeout=5,
+                            creationflags=subprocess.CREATE_NO_WINDOW,
+                        )
+                    except (OSError, subprocess.TimeoutExpired):
+                        process.kill()
+                else:
+                    process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
 
     def restart(self) -> None:
         with self._lifecycle_lock:
             self.stop()
             self._ensure_started_locked()
+
+    def refresh_command(self) -> None:
+        """Follow a newly installed CLI for the shared model and usage server."""
+        if self.command is not None:
+            return
+        command = codex_cli_service.command(refresh=True)
+        stamp = self._command_stamp(command)
+        with self._lifecycle_lock:
+            if self._process is not None and self._process.poll() is None and (
+                self._running_command != command or self._running_command_stamp != stamp
+            ):
+                self.stop()
+                self._ensure_started_locked()
+
+    @staticmethod
+    def _command_stamp(command: str) -> tuple[int, int] | None:
+        try:
+            stat = Path(command).stat()
+        except OSError:
+            return None
+        return stat.st_size, stat.st_mtime_ns
 
     def request(self, method: str, params: Any, *, timeout: float = 30) -> dict[str, Any]:
         self.start()
@@ -138,10 +192,7 @@ class CodexAppServerClient:
             return
 
         if process is not None:
-            try:
-                process.terminate()
-            except OSError:
-                pass
+            self.stop()
 
         command = self.command or codex_cli_service.command()
         process = subprocess.Popen(
@@ -157,6 +208,8 @@ class CodexAppServerClient:
         )
         with self._state_lock:
             self._process = process
+            self._running_command = command
+            self._running_command_stamp = self._command_stamp(command)
             self._generation += 1
             generation = self._generation
             self._reader_error = None
@@ -180,10 +233,7 @@ class CodexAppServerClient:
             )
             self._write({"method": "initialized"}, generation=generation)
         except BaseException:
-            try:
-                process.terminate()
-            except OSError:
-                pass
+            self.stop()
             raise
 
     def _request_running(self, method: str, params: Any, *, timeout: float) -> dict[str, Any]:

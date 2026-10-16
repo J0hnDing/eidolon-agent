@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.integrations.registry import DEFAULT_INTEGRATION_REGISTRY
 from app.models import AgentRun, AgentRunStep, ApprovalRequest, Skill, SkillGenerationRequest
-from app.schemas.manifest import ManifestPermissions, classify_permission_risk
+from app.schemas.manifest import ManifestPermissions, classify_permission_risk, entrypoint_source_file
 from app.schemas.proposed_skill import ProposedSkillValidationRead
 from app.services.agent_run_artifact_store import AgentRunArtifactStore
 from app.services.build_dependency_service import BuildDependencyError, BuildDependencyService
@@ -1852,6 +1852,7 @@ class AgentWorkflowService:
                 }
             )
         skill_runtime = str(blueprint.get("runtime") or "function")
+        entrypoint = str(blueprint["entrypoint"])
         skill_name = self.proposed_service.validate_skill_name(str(blueprint["name"]))
         display_name = skill_name.replace("_", " ").replace("-", " ").title()
         plan.update(
@@ -1860,6 +1861,7 @@ class AgentWorkflowService:
                 "skill_name": skill_name,
                 "display_name": display_name,
                 "runtime": skill_runtime,
+                "entrypoint": entrypoint,
                 "requires_invocation_approval": bool(
                     blueprint.get("requires_invocation_approval", False)
                 ),
@@ -1872,7 +1874,7 @@ class AgentWorkflowService:
                 "files_to_generate": [
                     "manifest.json",
                     "README.md",
-                    "app.py" if skill_runtime == "web_app" else "skill.py",
+                    entrypoint_source_file(skill_runtime, entrypoint),
                     "tests/test_app.py" if skill_runtime == "web_app" else "tests/test_skill.py",
                 ],
             }

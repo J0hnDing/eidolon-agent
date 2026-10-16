@@ -9,6 +9,7 @@ The backend is a FastAPI app in `backend/app/main.py`. Routers live under `backe
 - `/memory-facts`: explicit user memory CRUD.
 - `POST /act/workspace/open-root`: open the fixed local Act root; accepts no path input.
 - `/skills`: skill listing/detail, function/web-app enable/disable, proposed skill workflow, runs, validation, install/reject/delete, files, versions, repair, runtime permissions, and backend-mediated skill Codex calls. Bare skill-record creation and schedule creation are not exposed; user-facing creation must use the controlled proposed-skill workflow.
+- `GET /skills/{skill_id}/runs?include_children=true` adds the descendant function-run records and skill names to each run, so service history can expose the specific nested failure behind a generic parent error. The default response remains the selected skill's own run list.
 - `/functions/catalog`: the unified backend-core, user, and integration function catalog with availability state, reasons, and UI-only active-running projection for the Functions page.
 - `/functions`: installed user-function discovery and ephemeral run-capability-authenticated invocation.
 - `/web-apps`: lazy application sessions, instance diagnostics, bounded audit records, explicit stop, and instance-capability-authenticated Codex calls. The host-routed proxy is internal and omitted from OpenAPI.

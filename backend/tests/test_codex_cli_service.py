@@ -39,6 +39,31 @@ def test_automatic_resolution_selects_newest_cli(
     assert status.source == "codex_desktop"
 
 
+def test_automatic_resolution_discovers_versioned_desktop_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local_app_data = tmp_path / "LocalAppData"
+    desktop = local_app_data / "OpenAI" / "Codex" / "bin" / "build-id" / "codex.exe"
+    path_cli = tmp_path / "path" / "codex.exe"
+    desktop.parent.mkdir(parents=True)
+    path_cli.parent.mkdir()
+    desktop.touch()
+    path_cli.touch()
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.delenv("PERSONAL_AGENT_CODEX_COMMAND", raising=False)
+    monkeypatch.setattr(CodexCliService, "_path_candidates", staticmethod(lambda _: [str(path_cli)]))
+    monkeypatch.setattr(
+        "app.services.codex_cli_service.subprocess.run",
+        _version_runner({str(desktop): "0.158.0-alpha.2.1", str(path_cli): "0.146.0"}),
+    )
+
+    status = CodexCliService().resolve()
+
+    assert status.resolved_path == str(desktop)
+    assert status.source == "codex_desktop"
+    assert status.version == "0.158.0"
+
+
 def test_explicit_override_wins_even_when_another_cli_is_newer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

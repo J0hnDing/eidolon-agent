@@ -380,6 +380,31 @@ def test_docker_runner_stores_failed_invalid_json_run(tmp_path: Path, db_session
     assert db_session.get(type(run), run.id) is not None
 
 
+def test_docker_runner_records_integration_auth_failure(tmp_path: Path, db_session: Session) -> None:
+    skill_dir = tmp_path / "integration_failure_skill"
+    write_skill(skill_dir)
+    skill = create_skill_record(db_session, skill_dir)
+    stderr = (
+        "Traceback (most recent call last):\n"
+        "integration_runtime_capabilities.IntegrationRuntimeCapabilityError: "
+        "[invalid_credential] The Google Calendar authorization is invalid or revoked\n"
+    )
+
+    def fake_runner(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        if "/skill/tests" in command:
+            return completed(stdout="tests passed")
+        return completed(stderr=stderr, returncode=1)
+
+    run = make_runner(db_session, tmp_path, fake_runner).run(skill.id, skill_dir, {})
+    assert run.status == "failed"
+    assert run.exit_code == 1
+    assert run.stderr == stderr
+    assert run.error_message == (
+        "Integration authentication/authorization error [invalid_credential]: "
+        "The Google Calendar authorization is invalid or revoked"
+    )
+
+
 def test_docker_runner_handles_timeout(tmp_path: Path, db_session: Session) -> None:
     skill_dir = tmp_path / "timeout_skill"
     write_skill(skill_dir)

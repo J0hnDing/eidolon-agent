@@ -4,20 +4,18 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
+import tempfile
+from http.client import IncompleteRead
 from pathlib import Path, PurePosixPath
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
+from urllib.request import Request, build_opener
 
-from app.services.act_download_service import (
-    ALLOWED_MEDIA_TYPES,
-    ALLOWED_SUFFIXES,
-    MAX_DOWNLOAD_BYTES,
-    _publish_unique,
-    _safe_name,
-    _validate_content,
-)
+from app.services.act_download_service import MAX_DOWNLOAD_BYTES, _publish_unique, _safe_name
 from app.services.act_workspace_service import ensure_act_workspace
 from app.services.github_provider import IntegrationProviderError
-from app.services.google_calendar_provider import UrllibGoogleCalendarProviderAdapter
+from app.services.google_calendar_provider import UrllibGoogleCalendarProviderAdapter, _NoRedirect
 from app.services.google_oauth import (
     GoogleOAuthStateStore,
     PendingGoogleOAuth,
@@ -35,7 +33,10 @@ GOOGLE_DRIVE_REDIRECT_URI = "http://localhost:8000/settings/integrations/google-
 GOOGLE_DRIVE_SECRET_NAMESPACE = "google_drive"
 GOOGLE_DRIVE_BASE = "https://www.googleapis.com/drive/v3/files"
 GOOGLE_DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3/files"
-GOOGLE_DRIVE_DOWNLOAD_FOLDER = "google drive download"
+GOOGLE_DRIVE_DOWNLOAD_FOLDER = "google_drive_download"
+MAX_DRIVE_DOWNLOAD_BYTES = 8 * 1024**3
+MAX_DRIVE_READ_BYTES = 25 * 1024**2
+DRIVE_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 GOOGLE_NATIVE_EXPORTS = {
     "application/vnd.google-apps.document": {"docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx"), "pdf": ("application/pdf", ".pdf"), "txt": ("text/plain", ".txt")},
     "application/vnd.google-apps.spreadsheet": {"xlsx": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx"), "pdf": ("application/pdf", ".pdf"), "csv": ("text/csv", ".csv")},
@@ -78,7 +79,8 @@ class GoogleDriveClient(UrllibGoogleCalendarProviderAdapter):
             return self._upload(values, headers)
         if operation_id in {"google_drive.download", "google_drive.read"}:
             metadata = self._get_metadata(values["file_id"], headers)
-            local = self._download(metadata, values.get("export_format"), headers)
+            max_bytes = MAX_DRIVE_READ_BYTES if operation_id == "google_drive.read" else MAX_DRIVE_DOWNLOAD_BYTES
+            local = self._download(metadata, values.get("export_format"), headers, max_bytes=max_bytes)
             if operation_id == "google_drive.read":
                 try:
                     text = read_local_document(ensure_act_workspace().root / local["path"])
@@ -102,7 +104,7 @@ class GoogleDriveClient(UrllibGoogleCalendarProviderAdapter):
         url = f"{GOOGLE_DRIVE_BASE}/{quote(file_id, safe='')}?{urlencode({'fields': GOOGLE_DRIVE_FIELDS})}"
         return self._metadata(self._request_json(url, method="GET", headers=headers, body=None, timeout=15, max_bytes=100_000))
 
-    def _download(self, metadata: dict, export_format: str | None, headers: dict) -> dict:
+    def _download(self, metadata: dict, export_format: str | None, headers: dict, *, max_bytes: int) -> dict:
         mime = metadata["mime_type"]
         file_id = quote(metadata["id"], safe="")
         if mime in GOOGLE_NATIVE_EXPORTS:
@@ -117,28 +119,52 @@ class GoogleDriveClient(UrllibGoogleCalendarProviderAdapter):
             if export_format is not None or mime.startswith("application/vnd.google-apps."):
                 raise IntegrationProviderError("unsupported_file_type", "Drive file cannot be exported")
             name = metadata["name"]
-            suffix = Path(name).suffix.lower()
             media_type = mime
             url = f"{GOOGLE_DRIVE_BASE}/{file_id}?alt=media"
-        if suffix not in ALLOWED_SUFFIXES or (media_type not in ALLOWED_MEDIA_TYPES[suffix] and media_type != "application/octet-stream"):
-            raise IntegrationProviderError("unsupported_file_type", "Drive file type is not supported")
-        raw = self._request_bytes(url, method="GET", headers={"Authorization": headers["Authorization"]}, body=None, timeout=30, max_bytes=MAX_DOWNLOAD_BYTES)
         folder = ensure_act_workspace().knowledge / GOOGLE_DRIVE_DOWNLOAD_FOLDER
-        folder.mkdir(parents=True, exist_ok=True)
         try:
             safe_name = _safe_name(name)
-            import tempfile
-            with tempfile.NamedTemporaryFile(dir=folder, delete=False) as temporary:
-                temporary.write(raw)
-                temp = Path(temporary.name)
-            try:
-                _validate_content(temp, suffix, media_type)
-                target = _publish_unique(temp, folder, safe_name)
-            finally:
-                temp.unlink(missing_ok=True)
-        except (OSError, ValueError):
-            raise IntegrationProviderError("unsupported_file_type", "Drive file failed local validation") from None
-        return {"path": f"knowledge/{GOOGLE_DRIVE_DOWNLOAD_FOLDER}/{target.name}", "filename": target.name, "bytes": len(raw), "media_type": media_type}
+        except ValueError:
+            raise IntegrationProviderError("invalid_input", "Drive file name is invalid") from None
+        target, size = self._stream_download(url, headers, folder, safe_name, max_bytes=max_bytes)
+        return {"path": f"knowledge/{GOOGLE_DRIVE_DOWNLOAD_FOLDER}/{target.name}", "filename": target.name, "bytes": size, "media_type": media_type}
+
+    def _stream_download(self, url: str, headers: dict, folder: Path, name: str, *, max_bytes: int) -> tuple[Path, int]:
+        request = Request(url, method="GET", headers={"Authorization": headers["Authorization"]})
+        temporary_path: Path | None = None
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            if self._opener is None:
+                self._opener = build_opener(_NoRedirect())
+            with self._opener.open(request, timeout=60) as response:
+                declared = response.headers.get("Content-Length")
+                expected_size = int(declared) if declared and declared.isdigit() else None
+                if expected_size is not None and expected_size > max_bytes:
+                    raise IntegrationProviderError("response_too_large", "Drive file exceeds the operation limit")
+                with tempfile.NamedTemporaryFile(dir=folder, delete=False) as temporary:
+                    temporary_path = Path(temporary.name)
+                    size = 0
+                    while chunk := response.read(DRIVE_DOWNLOAD_CHUNK_BYTES):
+                        size += len(chunk)
+                        if size > max_bytes:
+                            raise IntegrationProviderError("response_too_large", "Drive file exceeds the operation limit")
+                        temporary.write(chunk)
+                    temporary.flush()
+                    os.fsync(temporary.fileno())
+            if expected_size is not None and size != expected_size:
+                raise IntegrationProviderError("provider_unavailable", "Drive download ended before its declared size")
+            target = _publish_unique(temporary_path, folder, name)
+            temporary_path = None
+            return target, size
+        except HTTPError as exc:
+            raise self._http_error(exc, oauth_request=False) from None
+        except (TimeoutError, URLError):
+            raise IntegrationProviderError("provider_timeout", "Drive download did not respond before the timeout") from None
+        except (IncompleteRead, OSError, ValueError):
+            raise IntegrationProviderError("provider_unavailable", "Drive file could not be saved") from None
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
 
     def _upload(self, values: dict, headers: dict) -> dict:
         reference = values["file"]

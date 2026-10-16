@@ -68,7 +68,7 @@ class CodexRoutingService:
         reasoning_effort_override: str | None = None,
     ) -> ResolvedInvocationSettings:
         payload = self._payload((self.db.get(CodexRoutingSettings, 1) or CodexRoutingSettings()).settings_json)
-        catalog = self.catalog_service.read_model_catalog()
+        catalog = self.catalog_service.read_model_catalog(refresh=True)
         return self._resolve_from_payload(
             payload,
             catalog,

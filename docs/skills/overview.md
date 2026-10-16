@@ -34,7 +34,7 @@ Every skill package needs a valid `manifest.json`.
 
 `README.md` is optional.
 
-Every skill needs an executable Python entrypoint referenced by `entrypoint` and tests written or maintained by TesterAgent. Function and service skills usually declare `skill.py`; web applications declare an importable ASGI target such as `app:app` and may include package-owned web assets.
+Every skill needs an executable Python entrypoint referenced by `entrypoint` and tests written or maintained by TesterAgent. Function and service skills declare their Python entrypoint path; web applications declare an importable ASGI target such as `app:app` and may include package-owned web assets.
 
 `SKILL.md` is optional. When reusable instructions are useful, `instructions_path` should reference that file, usually `SKILL.md`.
 

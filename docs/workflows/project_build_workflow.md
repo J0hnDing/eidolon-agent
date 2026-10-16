@@ -127,7 +127,7 @@ The `task_dag` package contains its executor, prompt composition, and ProductMan
         "difficulty": "easy|medium|hard",
         "requires_tests": true,
         "parallel_safe": true,
-        "write_paths": ["skill.py"],
+        "write_paths": ["src/example.py"],
         "acceptance_criteria": ["string"],
         "test_expectations": ["string"],
         "function_ids": []
@@ -154,9 +154,9 @@ Backend validation must reject the graph when:
 
 Task `write_paths` are Builder-owned skill package paths only. They must not include Tester-owned files such as `tests/test_skill.py` or `tests/test_<task_id>.py`; the backend sanitizes those paths out of ProductManager DAG output before validation.
 
-Function and service tasks normally claim a Python file entrypoint such as `skill.py`; services preserve scheduler-only exposure. Web-application tasks claim an importable ASGI module such as `app.py` and may claim skill-owned HTML/CSS/JavaScript assets. No runtime may claim Eidolon frontend files, custom Dockerfiles, or startup commands.
+Function and service tasks claim the Python entrypoint declared by the blueprint; services preserve scheduler-only exposure. Web-application tasks claim the source file for their declared importable ASGI module and may claim skill-owned HTML/CSS/JavaScript assets. No runtime may claim Eidolon frontend files, custom Dockerfiles, or startup commands.
 
-The blueprint does not define package file paths. ProductManager assigns Builder-owned paths directly to task nodes in `task_dag.json`; the backend does not invent omitted task outputs. `README.md` and `SKILL.md` are not universal package requirements; `manifest.json` remains backend-owned and is always validated, including any entrypoint or instructions file it declares.
+The blueprint declares the runtime entrypoint. ProductManager assigns the other Builder-owned paths directly to task nodes in `task_dag.json`; the backend does not invent omitted task outputs. `README.md` and `SKILL.md` are not universal package requirements; `manifest.json` remains backend-owned and is always validated, including any entrypoint or instructions file it declares.
 
 ### Task Node Execution
 
@@ -217,15 +217,15 @@ Interface artifact shape:
 
 ```json
 {
-  "created_paths": ["skill.py"],
+  "created_paths": ["src/example.py"],
   "updated_paths": ["manifest.json"],
   "interfaces": {
-    "entrypoint": "skill.py",
+    "entrypoint": "src/example.py",
     "input_schema": {},
     "output_schema": {}
   },
   "contracts_for_children": [
-    "skill.py reads one JSON object from stdin and writes one JSON object to stdout"
+    "src/example.py reads one JSON object from stdin and writes one JSON object to stdout"
   ],
   "known_limitations": []
 }

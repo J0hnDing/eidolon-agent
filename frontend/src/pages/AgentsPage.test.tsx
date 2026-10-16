@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AgentDefinition, api } from "../api/client";
+import { AgentDefinition, AgentSession, api } from "../api/client";
 import AgentsPage from "./AgentsPage";
 
 const agents: AgentDefinition[] = [
@@ -40,6 +40,47 @@ afterEach(() => {
 });
 
 describe("AgentsPage", () => {
+  it("renders Act notices and submits a reply without starting another running turn", async () => {
+    const session: AgentSession = {
+      id: 4, agent_id: "act", title: "MarkUs", origin: "web", status: "active", wecom_user_id: null,
+      created_at: "2026-10-09T12:00:00Z", updated_at: "2026-10-09T12:00:00Z", turns: [{
+        id: 9, session_id: 4, agent_id: "act", codex_turn_id: null, user_message: "Sign in", assistant_message: null,
+        status: "running", activity_json: [], error_message: null, cancel_requested_at: null,
+        delivery_message_thread_id: null, delivery_status: null, started_at: null, completed_at: null,
+        created_at: "2026-10-09T12:00:00Z", live_messages: [{
+          id: 2, role: "assistant", text: "Enter 123 in Duo Mobile", reply_status: "awaiting",
+          reply_expires_at: new Date(Date.now() + 60000).toISOString(), reply_to_message_id: null,
+          created_at: "2026-10-09T12:00:01Z",
+        }],
+      }],
+    };
+    vi.spyOn(api, "listAgents").mockResolvedValue(agents);
+    vi.spyOn(api, "getAgent").mockResolvedValue(agents[0]);
+    vi.spyOn(api, "listAgentSessions").mockResolvedValue([session]);
+    vi.spyOn(api, "getAgentSession").mockImplementation(async () => structuredClone(session));
+    const run = vi.spyOn(api, "runAgentTurn").mockImplementation(async () => {
+      session.turns[0].live_messages![0].reply_status = "answered";
+      session.turns[0].live_messages!.push({
+        id: 3, role: "user", text: "Done", reply_status: "none", reply_expires_at: null,
+        reply_to_message_id: 2, created_at: "2026-10-09T12:00:02Z",
+      });
+      return structuredClone(session.turns[0]);
+    });
+    render(<MemoryRouter initialEntries={["/agents/act"]}>
+      <Routes><Route path="/agents/:agentId" element={<AgentsPage />} /></Routes>
+    </MemoryRouter>);
+    await screen.findByText("Enter 123 in Duo Mobile");
+    const input = screen.getByRole("textbox", { name: "Message Act" }) as HTMLInputElement;
+    expect(input.disabled).toBe(false);
+    fireEvent.change(input, { target: { value: "Done" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await screen.findByText("Done");
+    await waitFor(() => expect(input.disabled).toBe(true));
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("act", 4, "Done");
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+  });
+
   it("shows Assistant boundaries, proposals, assessment controls, and session retention", async () => {
     vi.spyOn(api, "listAgents").mockResolvedValue(agents);
     vi.spyOn(api, "getAgent").mockResolvedValue(agents[2]);

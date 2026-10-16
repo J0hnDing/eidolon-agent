@@ -81,6 +81,8 @@ class CodexUsageService:
         ):
             return self._model_catalog
         try:
+            if refresh:
+                self.client.refresh_command()
             models: list[dict[str, Any]] = []
             cursor: str | None = None
             while True:

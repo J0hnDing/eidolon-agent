@@ -62,6 +62,10 @@ The Reports contract exposes four additional operations:
 
 Report metadata is exactly `id`, `name`, `created_time`, and `select`. Create passes native Notion blocks through without Markdown parsing or block conversion. Get uses Notion block-children pagination and returns only the selected page of raw top-level blocks; callers must follow `next_cursor` for more. Both report reads and writes are contained to the configured Reports data source.
 
+Reports use the Notion `Name` property as their page title. Report generators must not repeat that title as a heading in the content; retain useful section and item headings, source links, analysis, and metric definitions. The checked-in weekly GitHub, AI Research, Macro, Personal Feed, and Assistant opportunity reports follow this convention.
+
+Weekly GitHub and AI Research reports start directly with their content or empty-result message; omit technical generation callouts and their leading divider.
+
 After validating the structured first-turn Assistant assessment, the backend writes the ordered opportunity title and description pairs to this configured Reports data source with `Select = Opportunities` and a date-stamped name. An empty opportunity list is valid. The backend performs this report write without proposal or per-call approval. The Reports data source must contain the exact `Opportunities` Select option.
 
 The Daily Feed contract adds one medium-risk operation:

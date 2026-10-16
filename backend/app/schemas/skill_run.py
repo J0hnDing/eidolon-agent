@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Any
 
@@ -44,3 +46,5 @@ class SkillRunRead(SkillRunBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    skill_name: str | None = None
+    child_runs: list[SkillRunRead] = Field(default_factory=list)

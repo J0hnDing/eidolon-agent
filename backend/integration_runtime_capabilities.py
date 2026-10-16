@@ -14,6 +14,10 @@ class IntegrationRuntimeCapabilityError(RuntimeError):
         super().__init__(message)
         self.error_type = error_type
 
+    def __str__(self) -> str:
+        # Keep the normalized type in uncaught tracebacks across the process boundary.
+        return f"[{self.error_type}] {super().__str__()}"
+
 
 def call(
     *,

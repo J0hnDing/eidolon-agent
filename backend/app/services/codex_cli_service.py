@@ -183,6 +183,11 @@ class CodexCliService:
         local_app_data = os.getenv("LOCALAPPDATA")
         if local_app_data:
             candidates.append(str(Path(local_app_data) / "Programs" / "OpenAI" / "Codex" / "bin" / "codex.exe"))
+            desktop_bin = Path(local_app_data) / "OpenAI" / "Codex" / "bin"
+            try:
+                candidates.extend(str(path) for path in desktop_bin.glob("*/codex.exe"))
+            except OSError:
+                pass
         candidates.extend(self._path_candidates("codex"))
         return self._existing_unique(candidates)
 

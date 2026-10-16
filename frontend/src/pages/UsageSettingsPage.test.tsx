@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api/client";
 import ApprovalRequestsPage from "./ApprovalRequestsPage";
 import UsageSettingsPage, { SettingsSection } from "./UsageSettingsPage";
+import { IntegrationId } from "../features/integrations/IntegrationNavigation";
 
 const permissionPolicy = {
   source: "backend/app/static/default_permissions.json",
@@ -47,6 +48,7 @@ beforeEach(() => {
   vi.spyOn(api, "getGoogleOAuthClient").mockImplementation(unavailable);
   vi.spyOn(api, "getGoogleCalendarConnection").mockImplementation(unavailable);
   vi.spyOn(api, "getGmailConnection").mockImplementation(unavailable);
+  vi.spyOn(api, "getGoogleDriveConnection").mockImplementation(unavailable);
   vi.spyOn(api, "getMicrosoftOAuthClient").mockImplementation(unavailable);
   vi.spyOn(api, "getOutlookConnection").mockImplementation(unavailable);
   vi.spyOn(api, "getTelegramConnection").mockImplementation(unavailable);
@@ -62,10 +64,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function renderSettings(section: SettingsSection) {
+function renderSettings(section: SettingsSection, integration?: IntegrationId) {
   return render(
     <MemoryRouter initialEntries={[`/settings/${section}`]}>
-      <UsageSettingsPage section={section} />
+      <UsageSettingsPage section={section} integration={integration} />
     </MemoryRouter>,
   );
 }
@@ -117,8 +119,8 @@ describe("Browser authentication secrets", () => {
     }).mockResolvedValue(configured);
     const remove = vi.spyOn(api, "removeBrowserAuthenticationSecret").mockResolvedValue(undefined);
 
-    renderSettings("integrations");
-    expect(await screen.findByRole("heading", { name: "Browser authentication" })).toBeTruthy();
+    renderSettings("integrations", "browser-authentication");
+    expect(await screen.findByRole("heading", { level: 2, name: "Browser authentication" })).toBeTruthy();
 
     const username = "BROWSER_USERNAME_SENTINEL";
     const password = "BROWSER_PASSWORD_SENTINEL";
@@ -177,7 +179,7 @@ describe("WeCom Observer users", () => {
     });
     const remove = vi.spyOn(api, "removeWeComUser").mockResolvedValue(undefined);
 
-    renderSettings("integrations");
+    renderSettings("integrations", "wecom");
 
     expect(await screen.findByText("alice")).toBeTruthy();
     expect(screen.getByText("One current Observer session")).toBeTruthy();
@@ -279,7 +281,7 @@ describe("GitHub Settings connection", () => {
       error_type: null,
     });
 
-    renderSettings("integrations");
+    renderSettings("integrations", "github");
     const input = await screen.findByLabelText("GitHub token");
     fireEvent.change(input, { target: { value: sentinel } });
     fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
@@ -323,7 +325,7 @@ describe("Macro data API key settings", () => {
     }));
     const put = vi.spyOn(api, "putApiKeyConnection").mockResolvedValue(configured);
 
-    renderSettings("integrations");
+    renderSettings("integrations", "macro-data");
     const fredPanel = screen.getByRole("heading", { name: "FRED" }).closest("div.settings-subsection");
     expect(fredPanel).not.toBeNull();
     const scoped = within(fredPanel as HTMLElement);
@@ -389,7 +391,7 @@ describe("Outlook Settings connection", () => {
       error_type: null,
     });
 
-    renderSettings("integrations");
+    renderSettings("integrations", "microsoft");
     const idInput = await screen.findByLabelText("Microsoft client ID");
     fireEvent.change(idInput, { target: { value: clientId } });
     fireEvent.change(screen.getByLabelText("Microsoft client secret"), { target: { value: clientSecret } });
@@ -421,7 +423,7 @@ describe("Quercus Settings", () => {
     const interval = vi.spyOn(window, "setInterval");
     const processing = vi.spyOn(api, "getQuercusProcessing");
 
-    renderSettings("integrations");
+    renderSettings("integrations", "quercus");
 
     await screen.findByRole("heading", { name: "File processing" });
     expect(processing).toHaveBeenCalledTimes(1);
@@ -440,7 +442,7 @@ describe("Quercus Settings", () => {
       failed_file_count: 0,
     });
 
-    renderSettings("integrations");
+    renderSettings("integrations", "quercus");
 
     await waitFor(() => expect(interval).toHaveBeenCalledWith(expect.any(Function), 3000));
   });
@@ -496,7 +498,7 @@ describe("Quercus Settings", () => {
     ]);
     const remove = vi.spyOn(api, "deleteQuercusCourse").mockResolvedValue(undefined);
 
-    const { container } = renderSettings("integrations");
+    const { container } = renderSettings("integrations", "quercus");
 
     const coursesHeading = await screen.findByRole("heading", { name: "Courses" });
     expect(discover).not.toHaveBeenCalled();
@@ -551,7 +553,7 @@ describe("Quercus Settings", () => {
     const deletion = new Promise<void>((resolve) => { finishDelete = resolve; });
     const remove = vi.spyOn(api, "deleteQuercusCourse").mockReturnValue(deletion);
 
-    renderSettings("integrations");
+    renderSettings("integrations", "quercus");
     const coursesHeading = await screen.findByRole("heading", { name: "Courses" });
     expect(discover).not.toHaveBeenCalled();
     fireEvent.click(coursesHeading.closest("summary")!);
@@ -589,7 +591,7 @@ describe("Quercus Settings", () => {
       processed_file_count: 0, failed_file_count: 0,
     });
 
-    renderSettings("integrations");
+    renderSettings("integrations", "quercus");
     const selector = await screen.findByRole("combobox", { name: "Processing method" });
     fireEvent.change(selector, { target: { value: "marker_surya_llamacpp" } });
     fireEvent.click(screen.getByRole("button", { name: "Save file processing" }));
@@ -626,7 +628,7 @@ describe("Quercus Settings", () => {
       failed_file_count: 0, queued_file_count: 3,
     });
 
-    renderSettings("integrations");
+    renderSettings("integrations", "quercus");
     const button = await screen.findByRole("button", { name: "Reprocess failed files" });
     expect((button as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(button);
@@ -796,7 +798,7 @@ describe("Notion Settings connection", () => {
       error_type: null,
     });
 
-    renderSettings("integrations");
+    renderSettings("integrations", "notion");
     const token = await screen.findByLabelText("Notion token");
     const todoSource = screen.getByLabelText("Notion Todo data-source ID") as HTMLInputElement;
     expect(todoSource.disabled).toBe(true);
@@ -910,20 +912,12 @@ describe("Google Calendar OAuth connection", () => {
     vi.spyOn(api, "getNotionConnection").mockRejectedValue(new Error("not connected"));
     vi.spyOn(api, "getCodexMcpStatus").mockRejectedValue(new Error("not installed"));
 
-    renderSettings("integrations");
+    renderSettings("integrations", "google");
 
     expect(await screen.findByRole("heading", { name: "Google connection" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Google Calendar" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Gmail" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Telegram" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Notification / Approval bot" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Act Agent bot" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Observer Agent bot" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Assistant Agent bot" })).toBeTruthy();
-    expect(screen.getByLabelText("Replacement Notification/Approval bot token")).toBeTruthy();
-    expect(screen.getByLabelText("Act Agent bot token")).toBeTruthy();
-    expect(screen.getByLabelText("Observer Agent bot token")).toBeTruthy();
-    expect(screen.getByLabelText("Assistant Agent bot token")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Notification / Approval bot" })).toBeNull();
     expect(screen.getByText("person@example.com")).toBeTruthy();
     expect(screen.getByText("mail@example.com")).toBeTruthy();
     expect(
@@ -939,6 +933,19 @@ describe("Google Calendar OAuth connection", () => {
     expect(screen.queryByLabelText("Gmail OAuth client ID")).toBeNull();
     expect(screen.getByRole("button", { name: "Choose another Calendar account" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Choose another Gmail account" })).toBeTruthy();
+
+    cleanup();
+    renderSettings("integrations", "telegram");
+    await screen.findByRole("heading", { level: 2, name: "Telegram" });
+    expect(screen.getByRole("heading", { level: 2, name: "Telegram" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Notification / Approval bot" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Act Agent bot" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Observer Agent bot" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Assistant Agent bot" })).toBeTruthy();
+    expect(screen.getByLabelText("Replacement Notification/Approval bot token")).toBeTruthy();
+    expect(screen.getByLabelText("Act Agent bot token")).toBeTruthy();
+    expect(screen.getByLabelText("Observer Agent bot token")).toBeTruthy();
+    expect(screen.getByLabelText("Assistant Agent bot token")).toBeTruthy();
 
     vi.spyOn(api, "listPermissionRequests").mockResolvedValue([]);
     vi.spyOn(api, "listInvocationApprovals").mockResolvedValue([]);
@@ -987,8 +994,8 @@ describe("Codex tools registration", () => {
     const update = vi.spyOn(api, "updateCodexMcp").mockResolvedValue(installed);
     const remove = vi.spyOn(api, "removeCodexMcp").mockResolvedValue(unregistered);
 
-    renderSettings("integrations");
-    expect(await screen.findByRole("heading", { name: "Codex tools" })).toBeTruthy();
+    renderSettings("integrations", "codex");
+    expect(await screen.findByRole("heading", { level: 2, name: "Codex tools" })).toBeTruthy();
     expect(screen.getByText("backend.codex.call")).toBeTruthy();
     expect(screen.getByText(/Open sessions are not hot-refreshed/)).toBeTruthy();
 
@@ -1222,11 +1229,11 @@ describe("Atlas Settings", () => {
     const unlock = vi.spyOn(api, "unlockAtlas").mockResolvedValue(configuredAtlas);
     vi.spyOn(api, "restartAtlas").mockResolvedValue(externalAtlas);
 
-    renderSettings("integrations");
+    renderSettings("integrations", "atlas");
     expect(await screen.findByText("Running (Eidolon-owned)")).toBeTruthy();
     expect(screen.getByText(/Storing the passphrase shifts practical at-rest protection to your Windows account/)).toBeTruthy();
 
-    const atlasSection = screen.getByRole("heading", { name: "Eidolon-Atlas" }).closest("section");
+    const atlasSection = screen.getByRole("heading", { level: 2, name: "Eidolon-Atlas" }).closest("section");
     expect(atlasSection).not.toBeNull();
     expect(within(atlasSection as HTMLElement).queryByLabelText(/API key/i)).toBeNull();
     expect(within(atlasSection as HTMLElement).queryByRole("button", { name: /API key/i })).toBeNull();

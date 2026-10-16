@@ -5,6 +5,7 @@ from copy import deepcopy
 PLAYWRIGHT_CAPABILITY_ID = "browser.playwright"
 BROWSER_AUTHENTICATE_CAPABILITY_ID = "browser.authenticate"
 TELEGRAM_SEND_FILE_CAPABILITY_ID = "telegram.send_file"
+CHAT_SEND_MESSAGE_CAPABILITY_ID = "chat.send_message"
 
 _PLAYWRIGHT_CAPABILITY = {
     "id": PLAYWRIGHT_CAPABILITY_ID,
@@ -28,7 +29,9 @@ _BROWSER_AUTHENTICATE_CAPABILITY = {
         "Authenticate the current Playwright page with a configured browser identity when a supported "
         "website requires login. The backend checks the real page origin, fills credentials without "
         "revealing them, preserves the browser session, and pauses for interactive MFA. Treat only "
-        "authenticated or already_authenticated as confirmed success; stop and surface all other states. "
+        "authenticated or already_authenticated as confirmed success; surface other states without claiming success. "
+        "For mfa_required, inspect the visible challenge and use chat.send_message to request user action "
+        "immediately while keeping the current browser open. "
         "Navigate to the exact user-provided or authenticated service link first; do not guess a tenant, "
         "course, or site instance."
     ),
@@ -109,10 +112,59 @@ _TELEGRAM_SEND_FILE_CAPABILITY = {
 }
 
 
+_CHAT_SEND_MESSAGE_CAPABILITY = {
+    "id": CHAT_SEND_MESSAGE_CAPABILITY_ID,
+    "kind": "runtime_capability",
+    "category": "agent_private",
+    "title": "Send current chat message",
+    "description": (
+        "Immediately send a user-facing message in the current Act conversation without ending the turn. "
+        "Telegram turns send through the Act bot to their original paired topic; web turns appear in Chat. "
+        "Use for time-sensitive information, requests for user action, or meaningful progress. "
+        "Set wait_for_reply=true when the user must respond: the tool waits up to timeout_seconds and "
+        "returns their reply within this same turn. For Duo, send the displayed browser number immediately, "
+        "ask the user to enter it in Duo Mobile and reply done, and wait for that reply; then inspect the "
+        "existing browser page. Do not reload or start a new login after approval. A reply is not proof of "
+        "authentication; verify the browser state. notify() is tool output, not user delivery. "
+        "A timeout is not approval. Callers cannot choose a session, bot, chat, or topic."
+    ),
+    "risk_level": "medium",
+    "requires_invocation_approval": False,
+    "availability": "available",
+    "mcp_exposed": True,
+    "mcp_read_only": False,
+    "mcp_destructive": False,
+    "mcp_open_world": False,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "minLength": 1, "maxLength": 4000},
+            "wait_for_reply": {"type": "boolean", "default": False},
+            "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 120, "default": 120},
+        },
+        "required": ["text"],
+        "additionalProperties": False,
+    },
+    "output_schema": {
+        "type": "object",
+        "properties": {
+            "status": {"type": "string", "enum": ["sent"]},
+            "message_id": {"type": "integer"},
+            "telegram_message_id": {"type": ["integer", "null"]},
+            "reply_status": {"type": "string", "enum": ["not_requested", "received", "timed_out", "cancelled"]},
+            "reply": {"type": ["string", "null"]},
+        },
+        "required": ["status", "message_id", "telegram_message_id", "reply_status", "reply"],
+        "additionalProperties": False,
+    },
+}
+
+
 def act_private_tool_entries() -> list[dict]:
     return [
         deepcopy(_BROWSER_AUTHENTICATE_CAPABILITY),
         deepcopy(_TELEGRAM_SEND_FILE_CAPABILITY),
+        deepcopy(_CHAT_SEND_MESSAGE_CAPABILITY),
     ]
 
 
@@ -131,5 +183,6 @@ def act_runtime_capability_catalog() -> list[dict]:
             _PLAYWRIGHT_CAPABILITY,
             _BROWSER_AUTHENTICATE_CAPABILITY,
             _TELEGRAM_SEND_FILE_CAPABILITY,
+            _CHAT_SEND_MESSAGE_CAPABILITY,
         )
     ]

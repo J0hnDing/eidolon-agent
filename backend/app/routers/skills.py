@@ -194,18 +194,67 @@ def call_codex_for_skill(
 
 
 @router.get("/{skill_id}/runs", response_model=list[SkillRunRead])
-def list_skill_runs(skill_id: int, db: Session = Depends(get_db)) -> list[SkillRun]:
+def list_skill_runs(
+    skill_id: int,
+    include_children: bool = False,
+    db: Session = Depends(get_db),
+) -> list[SkillRunRead]:
     skill = db.get(Skill, skill_id)
     if skill is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
 
-    return list(
+    runs = list(
         db.scalars(
             select(SkillRun)
             .where(SkillRun.skill_id == skill_id)
             .order_by(SkillRun.started_at.desc(), SkillRun.id.desc())
         ).all()
     )
+    if not include_children or not runs:
+        return [SkillRunRead.model_validate(run) for run in runs]
+
+    children_by_parent: dict[int, list[SkillRun]] = {}
+    seen_ids = {run.id for run in runs}
+    frontier = set(seen_ids)
+    descendants: list[SkillRun] = []
+    while frontier:
+        children = list(
+            db.scalars(
+                select(SkillRun)
+                .where(SkillRun.parent_run_id.in_(frontier))
+                .order_by(SkillRun.started_at.desc(), SkillRun.id.desc())
+            ).all()
+        )
+        next_frontier: set[int] = set()
+        for child in children:
+            if child.id in seen_ids:
+                continue
+            seen_ids.add(child.id)
+            children_by_parent.setdefault(child.parent_run_id, []).append(child)
+            descendants.append(child)
+            next_frontier.add(child.id)
+        frontier = next_frontier
+
+    skill_ids = {run.skill_id for run in descendants}
+    skill_names = (
+        dict(db.execute(select(Skill.id, Skill.name).where(Skill.id.in_(skill_ids))).all())
+        if skill_ids
+        else {}
+    )
+
+    def serialize_run(run: SkillRun, *, include_skill_name: bool = False) -> SkillRunRead:
+        serialized = SkillRunRead.model_validate(run)
+        return serialized.model_copy(
+            update={
+                "skill_name": skill_names.get(run.skill_id) if include_skill_name else None,
+                "child_runs": [
+                    serialize_run(child, include_skill_name=True)
+                    for child in children_by_parent.get(run.id, [])
+                ],
+            }
+        )
+
+    return [serialize_run(run) for run in runs]
 
 
 @router.get("/{skill_id}/versions", response_model=list[SkillVersionRead])

@@ -443,7 +443,8 @@ def test_assessment_cleanup_checks_attachments_and_removes_only_stale_history(
         if unavailable:
             raise IntegrationProviderError("provider_unavailable", "Unavailable")
         if path == "/api/records?category=goal":
-            return [{"id": name, "category": "goal", "title": name, "data": {}} for name in ["active", "done"]]
+            return [{"id": name, "category": "goal", "title": name, "data": {},
+                     "progress": 100 if name == "done" else 50} for name in ["active", "done"]]
         return {"goal": {"progress": 100 if "/done/" in path else 50}}
 
     monkeypatch.setattr(assistant_assessment_service.UrllibAtlasProviderAdapter, "_request", request)

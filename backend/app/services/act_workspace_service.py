@@ -5,7 +5,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-ACT_ROOT = Path(__file__).resolve().parents[3] / "runtime" / "act"
+ACT_ROOT = Path.home() / ".eidolon" / "agents"
 
 
 class ActWorkspaceError(RuntimeError):

@@ -61,14 +61,9 @@ def _paper(rank: int = 1, paper_id: str = "2608.12345", **overrides):
     return value
 
 
-def _paper_output(*, papers=None, seen=None):
+def _paper_output(*, papers=None):
     papers = [_paper()] if papers is None else papers
-    if seen is None:
-        seen = [paper["paper_id"] for paper in papers]
-    return {
-        "selected_papers": papers,
-        "seen_papers": seen,
-    }
+    return {"selected_papers": papers}
 
 
 def _macro_output(*, seen=None, items=None):
@@ -105,13 +100,13 @@ def _successful_integrations(calls):
     return invoke
 
 
-def test_run_creates_both_reports_advances_separate_histories_and_notifies(
+def test_run_creates_reports_advances_all_histories_and_notifies(
     cache_dir, monkeypatch
 ):
     (cache_dir / skill.SEEN_REPOSITORIES_FILENAME).write_text(
         json.dumps(["old/repository"]), encoding="utf-8"
     )
-    (cache_dir / skill.SEEN_PAPERS_FILENAME).write_text(
+    (cache_dir / skill.REPORTED_PAPERS_FILENAME).write_text(
         json.dumps(["2501.00001v2"]), encoding="utf-8"
     )
     function_calls = []
@@ -125,7 +120,7 @@ def test_run_creates_both_reports_advances_separate_histories_and_notifies(
             }
         if name == skill.MACRO_SCOUT_FUNCTION:
             return _macro_output(seen=["release-1"])
-        return _paper_output(seen=["2608.12345"])
+        return _paper_output(papers=[_paper()])
 
     integration_calls = []
     monkeypatch.setattr(
@@ -146,13 +141,17 @@ def test_run_creates_both_reports_advances_separate_histories_and_notifies(
             skill.SCOUT_FUNCTION,
             {"limit": 25, "period": "weekly", "excluded_repo": ["old/repository"]},
         ),
-        (skill.PAPER_SCOUT_FUNCTION, {"seen_papers": ["2501.00001v2"]}),
+        (skill.PAPER_SCOUT_FUNCTION, {"excluded_papers": ["2501.00001v2"]}),
         (skill.MACRO_SCOUT_FUNCTION, {"last_fetch_at": None, "seen": [], "report": None}),
     ]
     github_create, research_create, macro_create, notification = integration_calls
     assert github_create["input"]["select"] == "GitHub Projects"
     assert research_create["input"]["select"] == "AI Research"
     assert macro_create["input"]["select"] == "Macro"
+    for created in (github_create, research_create, macro_create):
+        assert all(block["type"] != "heading_1" for block in created["input"]["children"])
+        assert all(block["type"] != "callout" for block in created["input"]["children"])
+        assert created["input"]["children"][0]["type"] != "divider"
     research_blocks = research_create["input"]["children"]
     headings = [
         block[block["type"]]["rich_text"][0]["text"]["content"]
@@ -217,11 +216,8 @@ def test_run_creates_both_reports_advances_separate_histories_and_notifies(
         "example/other",
     ]
     assert json.loads(
-        (cache_dir / skill.SEEN_PAPERS_FILENAME).read_text(encoding="utf-8")
-    ) == [
-        "2501.00001v2",
-        "2608.12345",
-    ]
+        (cache_dir / skill.REPORTED_PAPERS_FILENAME).read_text(encoding="utf-8")
+    ) == ["2501.00001v2", "2608.12345"]
     assert json.loads(
         (cache_dir / skill.MACRO_STATE_FILENAME).read_text(encoding="utf-8")
     )["seen"] == ["release-1"]
@@ -235,7 +231,7 @@ def test_empty_scout_results_create_explicit_reports_without_cache_files(
             return {"repositories": [], "seen_repo": []}
         if name == skill.MACRO_SCOUT_FUNCTION:
             return _macro_output()
-        return _paper_output(papers=[], seen=[])
+        return _paper_output(papers=[])
 
     integration_calls = []
     monkeypatch.setattr(
@@ -261,13 +257,13 @@ def test_empty_scout_results_create_explicit_reports_without_cache_files(
         ]["content"]
     )
     assert (
-        "no papers valuable enough"
+        "selected no new papers"
         in integration_calls[1]["input"]["children"][-1]["paragraph"]["rich_text"][0][
             "text"
         ]["content"]
     )
     assert not (cache_dir / skill.SEEN_REPOSITORIES_FILENAME).exists()
-    assert not (cache_dir / skill.SEEN_PAPERS_FILENAME).exists()
+    assert not (cache_dir / "seen_papers.json").exists()
     assert (cache_dir / skill.MACRO_STATE_FILENAME).exists()
 
 
@@ -276,8 +272,14 @@ def test_empty_scout_results_create_explicit_reports_without_cache_files(
     [
         {},
         _paper_output(papers=[_paper(rank=2)]),
-        _paper_output(papers=[_paper()], seen=[]),
-        _paper_output(papers=[_paper()], seen=["2608.12345", "2608.12345"]),
+        _paper_output(
+            papers=[
+                _paper(rank=index, paper_id=f"2608.{index:05d}")
+                for index in range(1, 5)
+            ]
+        ),
+        {"selected_papers": [_paper()], "seen_papers": ["2608.12345"]},
+        {"selected_papers": [_paper()], "extra": True},
         {"selected_papers": [_paper()], "seen_papers": ["2608.12345"], "extra": True},
         _paper_output(papers=[_paper(upvotes=True)]),
         _paper_output(papers=[_paper(content_source="pdf")]),
@@ -313,7 +315,15 @@ def test_invalid_paper_output_fails_before_research_report(monkeypatch, output):
     )
 
 
-def test_research_notion_failure_keeps_github_history_but_not_paper_history(
+def test_service_rejects_previously_reported_papers_from_scout():
+    with pytest.raises(ValueError, match="previously reported"):
+        skill._validated_paper_scout_output(
+            _paper_output(papers=[_paper()]),
+            excluded_papers=["2608.12345v2"],
+        )
+
+
+def test_research_notion_failure_keeps_github_history_and_does_not_advance_papers(
     cache_dir, monkeypatch
 ):
     def call_function(name, _input):
@@ -347,7 +357,7 @@ def test_research_notion_failure_keeps_github_history_but_not_paper_history(
     assert json.loads(
         (cache_dir / skill.SEEN_REPOSITORIES_FILENAME).read_text(encoding="utf-8")
     ) == ["example/project"]
-    assert not (cache_dir / skill.SEEN_PAPERS_FILENAME).exists()
+    assert not (cache_dir / skill.REPORTED_PAPERS_FILENAME).exists()
     assert integration_calls[-1]["input"] == {
         "title": "Weekly report failed",
         "description": "rate_limited: Notion asked Eidolon to retry later",
@@ -355,7 +365,7 @@ def test_research_notion_failure_keeps_github_history_but_not_paper_history(
     }
 
 
-def test_invalid_research_report_response_does_not_advance_paper_history(
+def test_invalid_research_report_response_does_not_create_paper_history(
     cache_dir, monkeypatch
 ):
     def call_function(name, _input):
@@ -381,7 +391,7 @@ def test_invalid_research_report_response_does_not_advance_paper_history(
     with pytest.raises(ValueError, match="mismatched metadata"):
         skill.run({})
 
-    assert not (cache_dir / skill.SEEN_PAPERS_FILENAME).exists()
+    assert not (cache_dir / skill.REPORTED_PAPERS_FILENAME).exists()
 
 
 def test_macro_report_failure_keeps_prior_reports_but_not_macro_history(
@@ -391,7 +401,7 @@ def test_macro_report_failure_keeps_prior_reports_but_not_macro_history(
         if name == skill.SCOUT_FUNCTION:
             return {"repositories": [], "seen_repo": []}
         if name == skill.PAPER_SCOUT_FUNCTION:
-            return _paper_output(papers=[], seen=[])
+            return _paper_output(papers=[])
         return _macro_output(seen=["release-1"])
 
     calls = []
@@ -424,8 +434,7 @@ def test_macro_scout_output_is_validated_before_notion_write():
     with pytest.raises(ValueError, match="source links"):
         skill._validated_macro_output(
             _macro_output(items=[{
-                "what_happened": "Change", "why_it_matters": "Material",
-                "new_since_previous": "New", "watch_next": "Decision",
+                "what_happened": "Change", "analysis": "Material", "explanation": "",
                 "sources": ["http://example.com"],
             }]),
             previous_seen=[],
@@ -439,9 +448,8 @@ def test_macro_scout_output_is_validated_before_notion_write():
 def test_macro_blocks_render_source_links():
     report = _macro_output(items=[{
         "what_happened": "Major policy decision",
-        "why_it_matters": "Financing conditions changed.",
-        "new_since_previous": "Rates moved.",
-        "watch_next": "Next meeting.",
+        "analysis": "Financing conditions changed.",
+        "explanation": "",
         "sources": ["https://www.federalreserve.gov/new-release"],
     }])["report"]
     blocks = skill._macro_report_blocks(report)
@@ -525,3 +533,41 @@ def test_github_scout_failure_propagates_without_report_fallback(monkeypatch):
             },
         }
     ]
+
+
+def test_macro_bulletins_precede_picture_catalysts_and_deduplicated_sources():
+    item = {
+        "what_happened": "Rates changed", "explanation": "", "analysis": "Credit gets cheaper.",
+        "sources": ["https://example.gov/release"],
+    }
+    report = _macro_output(items=[item, {**item, "explanation": "Policy rate cut."}])["report"]
+    report["upcoming_catalysts"] = ["Friday employment release"]
+    skill._validated_macro_report(report)
+    blocks = skill._macro_report_blocks(report)
+    contents = [
+        "".join(t["text"]["content"] for t in block[block["type"]]["rich_text"])
+        for block in blocks
+    ]
+    assert blocks[0]["type"] == "bulleted_list_item"
+    assert contents == [
+        "Rates changed", "Credit gets cheaper.", "Rates changed", "Policy rate cut.",
+        "Credit gets cheaper.", "Policy remains restrictive.", "Important upcoming catalysts",
+        "Friday employment release", "Sources", "Events 1, 2: example.gov/release",
+    ]
+    assert blocks[-1]["paragraph"]["rich_text"][0]["text"]["link"] == {
+        "url": "https://example.gov/release"
+    }
+
+
+def test_macro_load_preserves_legacy_history(monkeypatch, tmp_path):
+    legacy = _macro_output(items=[{
+        "what_happened": "Old decision", "why_it_matters": "Old analysis",
+        "new_since_previous": "Old delta", "watch_next": "Old watch",
+        "sources": ["https://example.gov/release"],
+    }])["report"]
+    state = {"report": legacy, "seen": ["old-release"], "last_fetch_at": None}
+    monkeypatch.setenv("PERSONAL_AGENT_SKILL_CACHE_DIR", str(tmp_path))
+    (tmp_path / skill.MACRO_STATE_FILENAME).write_text(json.dumps(state), encoding="utf-8")
+    assert skill._load_macro_state() == state
+    with pytest.raises(ValueError, match="invalid development"):
+        skill._validated_macro_report(legacy)

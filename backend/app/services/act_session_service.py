@@ -17,8 +17,9 @@ from app.models import (
 )
 from app.services.act_app_server_service import (
     ActAppServerService,
-    agent_app_servers,
+    get_agent_app_server,
     is_missing_rollout_error,
+    stop_act_app_server,
 )
 from app.services.agent_policy_service import AgentPolicyService
 
@@ -45,7 +46,7 @@ class ActSessionService:
         self.db = db
         AgentPolicyService.require_agent(agent_id)
         self.agent_id = agent_id
-        self.app_server = app_server or agent_app_servers[agent_id]
+        self.app_server = app_server
         self.telegram_sync = telegram_sync or _synchronize_session_to_telegram
 
     def list_sessions(self) -> list[ActSession]:
@@ -68,6 +69,8 @@ class ActSessionService:
                 select(ActTurn).where(ActTurn.session_id == session.id).order_by(ActTurn.id)
             )
         )
+        from app.services.act_chat_message_service import attach_live_messages
+        attach_live_messages(self.db, session.turns)
         self._attach_wecom_users([session])
         return session
 
@@ -104,7 +107,7 @@ class ActSessionService:
                 raise AssistantSessionCapacityError("Assistant session capacity is full because the oldest session is busy")
             if not old.codex_thread_id.startswith("pending:"):
                 try:
-                    self.app_server.sessions.archive_thread(old.codex_thread_id)
+                    self._app_server_for(old).sessions.archive_thread(old.codex_thread_id)
                 except Exception as exc:
                     if not is_missing_rollout_error(exc):
                         self.db.rollback()
@@ -124,6 +127,8 @@ class ActSessionService:
         delivery_message_thread_id: int | None = None,
         commit: bool = True,
     ) -> ActTurn:
+        if not isinstance(message, str) or not message.strip() or len(message) > 16000:
+            raise ActSessionError("A message must contain 1-16000 characters")
         session = self.read_session(session_id)
         if session.status != "active":
             raise ActSessionError("Agent session is archived")
@@ -134,6 +139,14 @@ class ActSessionService:
             )
         )
         if active is not None:
+            if self.agent_id == "act":
+                from app.services.act_chat_message_service import accept_act_reply, attach_live_messages
+                if accept_act_reply(self.db, active, message):
+                    session.updated_at = datetime.now(UTC)
+                    if commit:
+                        self.db.commit()
+                    attach_live_messages(self.db, [active])
+                    return active
             raise ActSessionError("An agent turn is already queued or running for this session")
         turn = ActTurn(
             session_id=session.id,
@@ -179,7 +192,7 @@ class ActSessionService:
         self.db.commit()
         if turn.codex_turn_id:
             try:
-                self.app_server.sessions.interrupt_turn(session.codex_thread_id, turn.codex_turn_id)
+                self._app_server_for(session).sessions.interrupt_turn(session.codex_thread_id, turn.codex_turn_id)
             except Exception as exc:
                 raise ActSessionError(f"Act cancellation could not be confirmed: {exc}") from None
         self.db.refresh(turn)
@@ -226,7 +239,7 @@ class ActSessionService:
                 self.db.flush()
         try:
             if not session.codex_thread_id.startswith("pending:"):
-                self.app_server.sessions.archive_thread(session.codex_thread_id)
+                self._app_server_for(session).sessions.archive_thread(session.codex_thread_id)
         except Exception as exc:
             if not is_missing_rollout_error(exc):
                 raise ActSessionError(f"Could not archive the Codex thread: {exc}") from None
@@ -235,6 +248,11 @@ class ActSessionService:
         session.updated_at = datetime.now(UTC)
         if commit:
             self.db.commit()
+        if self.agent_id == "act" and self.app_server is None:
+            stop_act_app_server(session.id)
+
+    def _app_server_for(self, session: ActSession) -> ActAppServerService:
+        return self.app_server or get_agent_app_server(self.agent_id, session.id)
 
     def _new_session(self, *, origin: str) -> ActSession:
         session = ActSession(

@@ -1,3 +1,4 @@
+from app.models.act_live_message import ActLiveMessage
 from app.models.agents import AgentCredential, AgentPolicy, AgentProposal, AssistantAssessmentState, AssistantFollowUp
 from app.models.entities import (
     ActSession,
@@ -43,6 +44,7 @@ from app.models.entities import (
 )
 
 __all__ = [
+    "ActLiveMessage",
     "AgentCredential",
     "AgentPolicy",
     "AgentProposal",

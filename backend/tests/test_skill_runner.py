@@ -216,6 +216,73 @@ def test_process_exit_error_reports_specific_exit_code(returncode: int, expected
     assert _process_exit_error(returncode) == expected
 
 
+@pytest.mark.parametrize(
+    ("diagnostic", "expected"),
+    [
+        (
+            "The Google Calendar authorization is invalid or revoked",
+            "Integration authentication/authorization error: "
+            "The Google Calendar authorization is invalid or revoked",
+        ),
+        (
+            "[invalid_credential] The Google Calendar authorization is invalid or revoked",
+            "Integration authentication/authorization error [invalid_credential]: "
+            "The Google Calendar authorization is invalid or revoked",
+        ),
+        (
+            "[authorization_missing_or_stale] Integration authorization is missing",
+            "Integration authentication/authorization error [authorization_missing_or_stale]: "
+            "Integration authorization is missing",
+        ),
+        (
+            "[rate_limited] Notion rate limited the integration request",
+            "Integration error [rate_limited]: Notion rate limited the integration request",
+        ),
+        (
+            "Integration connection or configured resource is unavailable",
+            "Integration error: Integration connection or configured resource is unavailable",
+        ),
+    ],
+)
+def test_process_exit_error_recognizes_integration_failure(diagnostic: str, expected: str) -> None:
+    stderr = (
+        "Traceback (most recent call last):\n"
+        f"integration_runtime_capabilities.IntegrationRuntimeCapabilityError: {diagnostic}\n"
+    )
+    assert _process_exit_error(1, stderr) == expected
+    assert _process_exit_error(137, stderr) == "Skill was forcibly killed by SIGKILL (exit code 137)"
+
+
+def test_process_exit_error_does_not_classify_handled_or_unrelated_auth_errors() -> None:
+    stderr = (
+        "integration_runtime_capabilities.IntegrationRuntimeCapabilityError: "
+        "The Google Calendar authorization is invalid or revoked\n"
+        "ValueError: Invalid output\n"
+    )
+    assert _process_exit_error(1, stderr) == "Skill exited with code 1"
+    assert _process_exit_error(1, "ValueError: authorization is invalid or revoked") == "Skill exited with code 1"
+
+
+def test_local_runner_records_integration_auth_failure(tmp_path: Path, db_session: Session) -> None:
+    skill_dir = tmp_path / "integration_failure_skill"
+    write_skill(
+        skill_dir,
+        skill_source=(
+            "from integration_runtime_capabilities import IntegrationRuntimeCapabilityError\n"
+            "raise IntegrationRuntimeCapabilityError('invalid_credential', "
+            "'The Google Calendar authorization is invalid or revoked')\n"
+        ),
+    )
+    run = run_skill(db_session, skill_dir)
+    assert run.status == "failed"
+    assert run.exit_code == 1
+    assert run.error_message == (
+        "Integration authentication/authorization error [invalid_credential]: "
+        "The Google Calendar authorization is invalid or revoked"
+    )
+    assert "IntegrationRuntimeCapabilityError" in run.stderr
+
+
 def test_invalid_manifest_blocks_run(tmp_path: Path, db_session: Session) -> None:
     skill_dir = tmp_path / "invalid_manifest"
     write_skill(skill_dir, manifest_overrides={"name": "Invalid Name"})

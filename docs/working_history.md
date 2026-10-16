@@ -985,3 +985,133 @@ Refreshed current integration and function approvals, selected Codex CLI support
 ### Limitations
 
 The existing Notion Date column remains in the data source and is ignored by Eidolon.
+
+## 2026-09-30 22:26 — Discover updated Codex Desktop models
+
+- Category: bugfix
+- Area: Codex model routing
+
+### Summary
+
+Added versioned Codex Desktop CLI discovery, shared App Server executable refresh on model-catalog refresh, and fresh catalog validation before invocation. Confirmed local Desktop CLI 0.158 advertises GPT-6 Astra, Sol, and Luna; focused backend tests pass.
+
+### Limitations
+
+The already-running Eidolon backend must restart once to load the new code.
+
+## 2026-09-30 16:57 — Google Drive integration
+
+- Category: feature
+- Area: integrations
+
+### Summary
+
+Added separate Google Drive OAuth connection and four catalog functions for search, authenticated download/export into Act knowledge, local file upload, and model-readable text; wired settings, permissions, documentation, and focused tests.
+
+### Limitations
+
+Google Drive API must be enabled and the Drive redirect URI registered in Google Cloud; no live Google account call was made.
+
+## 2026-09-19 02:24 — Act credential-backed browser authentication
+
+- Category: feature
+- Area: act-browser-runtime
+
+### Summary
+
+Added an Act-only browser.authenticate runtime capability using a per-turn authenticated Playwright page bridge, exact-origin credential injection, Windows Credential Manager-backed fixed identities, MFA/session reuse states, and write-only Settings management for the initial U of T identity.
+
+### Limitations
+
+Live U of T authentication was not exercised because no user credential was configured; automated bridge, backend, route, UI, and production-build validation passed.
+
+## 2026-09-07 21:34 — Hugging Face integration and research paper scout
+
+- Category: feature
+- Area: Integrations and weekly reports
+
+### Summary
+
+Implemented huggingface.list_papers, huggingface.search_papers, and huggingface.get_paper with native array results, public read-only provider access, bounded original arXiv HTML/PDF content, and MCP array projection. Added user-owned research_paper_scout with monthly deduplication, seen-paper exclusions, Atlas goals/interests, two Codex stages, ranked selections, and a detailed paper-of-the-week reading guide. Extended weekly_report_service v2 with a separate AI Research Notion report and seen_papers.json history committed after report success. Focused backend, package, cross-package, and frontend tests, Ruff, frontend build, and provider live smoke checks passed. Registered proposed scout skill 9 and pending runtime review 73.
+
+### Limitations
+
+Scout installation and runtime approval remain pending; backend restart is required to load the new provider. The updated weekly flow must pass runtime review after installation. All nested work shares the existing 300-second service deadline. Oversized Notion reports fail without advancing paper history.
+
+## 2026-10-02 01:31 — Remove repeated report title headings in place
+
+- Category: refactor
+- Area: Notion reports and installed report services
+
+### Summary
+
+Removed duplicate leading content headings from all nine affected pages in the configured Notion Reports source; the other two pages already omitted them. Removed two trailing empty blocks from the Macro page. Verified all nine edited bodies match their original content except these deletions, preserving page identities, native links/bookmarks, section headings, and information. Updated weekly_report_service v1/v2 and personal_weekly_summary_service v1 in place so future reports use only the Notion Name property for the title; added regression assertions and documented the convention. Validation: 42 focused tests passed, Ruff passed, and scoped git diff --check passed.
+
+### Limitations
+
+Broader suggestions were reported without changing content or workflow design: technical generation callouts, two AI Research pages dated 2026-09-29 with different contents, and the Macro page ending mid-sentence. Source facts were not independently revalidated. Test runs emitted non-fatal pytest cache warnings.
+
+## 2026-10-03 22:21 — Extend Act turn deadline and correct agent error labels
+
+- Category: bugfix
+- Area: Act runtime
+
+### Summary
+
+Raised the Act turn deadline from 900 to 7200 seconds in normal and missing-rollout recovery paths. Shared session-runner errors now identify Act, Observer, or Assistant while ProductManager retains its own label. Added deadline and label regression coverage and updated Act runtime documentation. Ruff passed; 49 focused tests passed.
+
+### Limitations
+
+The existing backend process requires a restart to load the changed Python code; saved historical errors retain their original text.
+
+## 2026-10-02 11:11 — Move conversational agent workspace outside the source repository
+
+- Category: bugfix
+- Area: Managed agents / workspace
+
+### Summary
+
+Changed the shared Act, Observer, and Assistant root to ~/.eidolon/agents and moved all 205 existing files, including hidden files and local guidance, byte-for-byte. Updated current path documentation and added an external-root regression check. Restarted the backend; Ruff, 81 focused tests, fresh Act instruction discovery, existing-session resume, all three role permission profiles, and all 60 written Quercus resource paths passed verification.
+
+### Limitations
+
+Older conversations retain prior instructions in their history; start a new conversation for clean instruction context. Global Codex guidance remains inherited.
+
+## 2026-09-28 14:52 — Structured Assistant assessment flow
+
+- Category: feature
+- Area: Assistant
+
+### Summary
+
+Reworked the initial Assistant assessment into a strict structured result with backend-owned proposal parsing, deterministic function execution, Goal questions, Opportunity Scout reports, Telegram presentation, and durable follow-ups. Updated API/UI, runtime documentation, and tests.
+
+### Limitations
+
+Live Notion and Telegram provider delivery were not exercised in this local test run.
+
+## 2026-09-28 16:12 — Deterministic personal weekly summary service
+
+- Category: feature
+- Area: Skills, Notion, Atlas, Calendar
+
+### Summary
+
+Added Sunday 21:00 installed service with Todo, Goal, and Calendar metrics, overlap-aware calendar calculations, four-week trends, Personal Feed Notion report, and Notion Done archive contract. Registered the service paused and restarted backend to activate the archive job code.
+
+### Limitations
+
+First run establishes a baseline; on-time uses Notion last edit as a conservative proxy, and Goal activity uses subgoal-tree changes because exact completion/progress fields are unavailable. New service remains paused pending runtime approval and Enable.
+
+## 2026-10-01 13:23 — Concise Macro report with consolidated sources
+
+- Category: feature
+- Area: skills/weekly_report_service and macro_geopolitical_news_scout
+
+### Summary
+
+Replaced required per-event significance, previous-report delta, and watch-next fields with short event bullets, optional explanation, and concise analysis. Moved bigger-picture analysis after events, retained upcoming catalysts, and consolidated linked sources at the end. Preserved compatibility with legacy cached reports. Updated manifest, validation, documentation, and regression tests. All 33 focused tests, Ruff, and diff checks passed.
+
+### Limitations
+
+Applies to future reports; existing Notion reports were not rewritten. Semantic story deduplication remains model-based.

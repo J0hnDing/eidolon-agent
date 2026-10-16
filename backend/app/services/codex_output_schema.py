@@ -150,6 +150,11 @@ _BUILD_BLUEPRINT_SCHEMA = _object_schema(
             "enum": ["function", "web_app", "service"],
             "description": "Skill execution protocol.",
         },
+        "entrypoint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Runtime entrypoint: a relative Python file for function/service, or an importable module:attribute for web_app.",
+        },
         "requires_invocation_approval": {
             "type": "boolean",
             "description": (
@@ -195,6 +200,7 @@ _BUILD_BLUEPRINT_SCHEMA = _object_schema(
         "name",
         "description",
         "runtime",
+        "entrypoint",
         "input_schema",
         "output_schema",
         "expected_behavior",

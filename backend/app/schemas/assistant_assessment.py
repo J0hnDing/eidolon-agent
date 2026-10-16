@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.schemas.agent_chat import SESSION_TITLE_SCHEMA
 
 
 class StrictModel(BaseModel):
@@ -107,3 +110,45 @@ class AssistantAssessmentResult(StrictModel):
 
 
 ASSESSMENT_RESPONSE_SCHEMA = AssistantAssessmentResult.model_json_schema()
+ASSESSMENT_RESPONSE_SCHEMA["properties"]["title"] = SESSION_TITLE_SCHEMA
+ASSESSMENT_RESPONSE_SCHEMA["required"].append("title")
+# Strict model output cannot contain an open-ended object. Function arguments are
+# variable per catalog entry, so encode them at the transport boundary and keep
+# the validated assessment and stored proposals as ordinary JSON objects.
+ASSESSMENT_RESPONSE_SCHEMA["$defs"]["FunctionStep"]["properties"]["arguments"] = {
+    "type": "string",
+    "description": "Function arguments encoded as a JSON object string matching the function input schema.",
+}
+for _proposal in ("GoalProposal", "OpportunityProposal"):
+    _definition = ASSESSMENT_RESPONSE_SCHEMA["$defs"][_proposal]
+    _definition["required"].append("follow_up")
+    _definition["properties"]["follow_up"].pop("default", None)
+
+
+def parse_assessment_response(output_text: str) -> AssistantAssessmentResult:
+    payload = json.loads(output_text)
+    if not isinstance(payload, dict):
+        raise ValueError("Assistant assessment response must be an object")
+    # Session title metadata is handled by the shared chat dispatcher, not by
+    # the assessment proposal/result contract. Older saved responses omit it.
+    payload.pop("title", None)
+    proposals = list(payload.get("todo_doer", {}).get("proposals", []))
+    proposals.extend(payload.get("goal_doer", {}).get("proposals", []))
+    for opportunity in payload.get("opportunity_scout", {}).get("opportunities", []):
+        proposals.extend(opportunity.get("proposals", []))
+    for proposal in proposals:
+        action = proposal.get("action", {})
+        if action.get("type") != "functions":
+            continue
+        for step in action.get("steps", []):
+            encoded = step.get("arguments")
+            if not isinstance(encoded, str):
+                raise ValueError("Function arguments must be encoded as a JSON object string")
+            try:
+                arguments = json.loads(encoded)
+            except json.JSONDecodeError as exc:
+                raise ValueError("Function arguments must contain valid JSON") from exc
+            if not isinstance(arguments, dict):
+                raise ValueError("Function arguments must decode to a JSON object")
+            step["arguments"] = arguments
+    return AssistantAssessmentResult.model_validate(payload)

@@ -12,6 +12,18 @@ class ActTurnCreate(BaseModel):
     message: str = Field(min_length=1, max_length=16000)
 
 
+class ActLiveMessageRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    role: Literal["assistant", "user"]
+    text: str
+    reply_to_message_id: int | None
+    reply_status: str
+    reply_expires_at: datetime | None
+    created_at: datetime
+
+
 class ActTurnRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -22,6 +34,7 @@ class ActTurnRead(BaseModel):
     assistant_message: str | None
     backend_message_kind: str | None = None
     activity_json: list[dict]
+    live_messages: list[ActLiveMessageRead] = Field(default_factory=list)
     status: str
     error_message: str | None
     cancel_requested_at: datetime | None

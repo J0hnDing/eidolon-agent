@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink } from "react-router-dom";
+import { Link, NavLink } from "react-router-dom";
 
 import {
   AtlasIntegrationStatus,
@@ -32,6 +32,8 @@ import {
   api,
 } from "../api/client";
 import { DeleteIconButton } from "../components/DeleteIconButton";
+import { IntegrationIcon, IntegrationId, integrations, IntegrationsDirectory } from "../features/integrations/IntegrationNavigation";
+import { useIntegrationStatuses } from "../features/integrations/useIntegrationStatuses";
 import { formatSystemDateTime } from "../lib/dateTime";
 import {
   AppearanceTheme,
@@ -94,7 +96,10 @@ function normalizeRoutingSettings(settings: CodexRoutingSettings): CodexRoutingS
   };
 }
 
-export default function UsageSettingsPage({ section = "usage" }: { section?: SettingsSection }) {
+export default function UsageSettingsPage({ section = "usage", integration }: { section?: SettingsSection; integration?: IntegrationId }) {
+  const selectedIntegration = section === "integrations" ? integrations.find((item) => item.id === integration) : undefined;
+  const integrationOverview = section === "integrations" && !integration;
+  const connectionStatuses = useIntegrationStatuses(integrationOverview);
   const [appearanceTheme, setAppearanceTheme] = useState<AppearanceTheme>(() => readAppearanceTheme());
   const [usage, setUsage] = useState<CodexAccountUsage | null>(null);
   const [cliStatus, setCliStatus] = useState<CodexCliStatus | null>(null);
@@ -192,74 +197,72 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
         setRouting(normalizeRoutingSettings(nextRouting));
         setRoutingDirty(false);
       } else if (section === "integrations") {
-        const [nextGitHub, nextBrowserAuthentication, nextAtlas, nextNotion, nextQuercus, nextQuercusProcessing, nextGoogleOAuth, nextGoogleCalendar, nextGmail, nextGoogleDrive, nextMicrosoftOAuth, nextOutlook, nextTelegram, nextTelegramAgent, nextTelegramObserverAgent, nextTelegramAssistantAgent, nextWeCom, nextCodexMcp, nextMacroApiKeys] = await Promise.all([
-          api.getGitHubConnection(),
-          api.getBrowserAuthentication(),
-          api.getAtlasStatus().catch((err) => atlasUnavailableStatus(err)),
-          api.getNotionConnection().catch((err) => notionUnavailableStatus(err)),
-          api.getQuercusConnection().catch((err) => quercusUnavailableStatus(err)),
-          api.getQuercusProcessing().then(
-            (value) => {
-              setQuercusProcessingReachable(true);
-              return value;
-            },
-            () => {
-              setQuercusProcessingReachable(false);
-              return quercusProcessingUnavailableStatus();
-            },
-          ),
-          api.getGoogleOAuthClient().catch((err) => googleOAuthUnavailableStatus(err)),
-          api.getGoogleCalendarConnection().catch((err) => googleCalendarUnavailableStatus(err)),
-          api.getGmailConnection().catch((err) => gmailUnavailableStatus(err)),
-          api.getGoogleDriveConnection().catch((err) => googleDriveUnavailableStatus(err)),
-          api.getMicrosoftOAuthClient().catch((err) => microsoftOAuthUnavailableStatus(err)),
-          api.getOutlookConnection().catch((err) => outlookUnavailableStatus(err)),
-          api.getTelegramConnection().catch((err) => telegramUnavailableStatus(err)),
-          api.getTelegramAgentConnection().catch((err) => telegramUnavailableStatus(err)),
-          api.getTelegramObserverAgentConnection().catch((err) => telegramUnavailableStatus(err)),
-          api.getTelegramAssistantAgentConnection().catch((err) => telegramUnavailableStatus(err)),
-          api.getWeComConnection().catch((err) => wecomUnavailableStatus(err)),
-          api.getCodexMcpStatus().catch((err) => codexMcpUnavailableStatus(err)),
-          Promise.all(
-            macroDataProviders.map(({ id }) =>
-              api.getApiKeyConnection(id).catch(() => apiKeyUnavailableStatus(id)),
+        if (integration === "github") {
+          setGitHub(await api.getGitHubConnection());
+        } else if (integration === "browser-authentication") {
+          setBrowserAuthentication(await api.getBrowserAuthentication());
+        } else if (integration === "atlas") {
+          const next = await api.getAtlasStatus().catch((err) => atlasUnavailableStatus(err));
+          setAtlas(next);
+          setAtlasDirectory(atlasDirectoryForStatus(next));
+        } else if (integration === "notion") {
+          const next = await api.getNotionConnection().catch((err) => notionUnavailableStatus(err));
+          setNotion(next);
+          setNotionDataSourceId(next.data_source_id ?? "");
+          setNotionReportDataSourceId(next.report_data_source_id ?? "");
+          setNotionDailyFeedPageId(next.daily_feed_page_id ?? "");
+        } else if (integration === "quercus") {
+          const [next, processing] = await Promise.all([
+            api.getQuercusConnection().catch((err) => quercusUnavailableStatus(err)),
+            api.getQuercusProcessing().then(
+              (value) => { setQuercusProcessingReachable(true); return value; },
+              () => { setQuercusProcessingReachable(false); return quercusProcessingUnavailableStatus(); },
             ),
-          ),
-        ]);
-        setGitHub(nextGitHub);
-        setBrowserAuthentication(nextBrowserAuthentication);
-        setAtlas(nextAtlas);
-        setAtlasDirectory(atlasDirectoryForStatus(nextAtlas));
-        setNotion(nextNotion);
-        setNotionDataSourceId(nextNotion.data_source_id ?? "");
-        setNotionReportDataSourceId(nextNotion.report_data_source_id ?? "");
-        setNotionDailyFeedPageId(nextNotion.daily_feed_page_id ?? "");
-        setQuercus(nextQuercus);
-        setQuercusProcessing(nextQuercusProcessing);
-        setQuercusProcessingMethod(nextQuercusProcessing.method);
-        setLlamaCppDirectory(nextQuercusProcessing.llama_cpp_directory ?? "");
-        const nextQuercusCourses = refresh && nextQuercus.connected
-          ? await api.getQuercusCourses().catch(() => nextQuercus.courses)
-          : nextQuercus.courses;
-        setQuercusCourses(nextQuercusCourses);
-        setSelectedQuercusCourseIds(nextQuercusCourses.filter((course) => course.selected).map((course) => course.course_id));
-        setGoogleOAuth(nextGoogleOAuth);
-        setGoogleCalendar(nextGoogleCalendar);
-        setGmail(nextGmail);
-        setGoogleDrive(nextGoogleDrive);
-        setMicrosoftOAuth(nextMicrosoftOAuth);
-        setOutlook(nextOutlook);
-        setTelegram(nextTelegram);
-        setTelegramAgent(nextTelegramAgent);
-        setTelegramObserverAgent(nextTelegramObserverAgent);
-        setTelegramAssistantAgent(nextTelegramAssistantAgent);
-        setWeCom(nextWeCom);
-        setCodexMcp(nextCodexMcp);
-        setMacroStatuses(
-          Object.fromEntries(nextMacroApiKeys.map((status) => [status.provider, status])) as Partial<
-            Record<MacroDataProvider, ApiKeyConnectionStatus>
-          >,
-        );
+          ]);
+          setQuercus(next);
+          setQuercusProcessing(processing);
+          setQuercusProcessingMethod(processing.method);
+          setLlamaCppDirectory(processing.llama_cpp_directory ?? "");
+          const courses = refresh && next.connected ? await api.getQuercusCourses().catch(() => next.courses) : next.courses;
+          setQuercusCourses(courses);
+          setSelectedQuercusCourseIds(courses.filter((course) => course.selected).map((course) => course.course_id));
+        } else if (integration === "google") {
+          const [oauth, calendar, mail, drive] = await Promise.all([
+            api.getGoogleOAuthClient().catch((err) => googleOAuthUnavailableStatus(err)),
+            api.getGoogleCalendarConnection().catch((err) => googleCalendarUnavailableStatus(err)),
+            api.getGmailConnection().catch((err) => gmailUnavailableStatus(err)),
+            api.getGoogleDriveConnection().catch((err) => googleDriveUnavailableStatus(err)),
+          ]);
+          setGoogleOAuth(oauth);
+          setGoogleCalendar(calendar);
+          setGmail(mail);
+          setGoogleDrive(drive);
+        } else if (integration === "microsoft") {
+          const [oauth, connection] = await Promise.all([
+            api.getMicrosoftOAuthClient().catch((err) => microsoftOAuthUnavailableStatus(err)),
+            api.getOutlookConnection().catch((err) => outlookUnavailableStatus(err)),
+          ]);
+          setMicrosoftOAuth(oauth);
+          setOutlook(connection);
+        } else if (integration === "telegram") {
+          const [notification, act, observer, assistant] = await Promise.all([
+            api.getTelegramConnection().catch((err) => telegramUnavailableStatus(err)),
+            api.getTelegramAgentConnection().catch((err) => telegramUnavailableStatus(err)),
+            api.getTelegramObserverAgentConnection().catch((err) => telegramUnavailableStatus(err)),
+            api.getTelegramAssistantAgentConnection().catch((err) => telegramUnavailableStatus(err)),
+          ]);
+          setTelegram(notification);
+          setTelegramAgent(act);
+          setTelegramObserverAgent(observer);
+          setTelegramAssistantAgent(assistant);
+        } else if (integration === "wecom") {
+          setWeCom(await api.getWeComConnection().catch((err) => wecomUnavailableStatus(err)));
+        } else if (integration === "codex") {
+          setCodexMcp(await api.getCodexMcpStatus().catch((err) => codexMcpUnavailableStatus(err)));
+        } else if (integration === "macro-data") {
+          const statuses = await Promise.all(macroDataProviders.map(({ id }) => api.getApiKeyConnection(id).catch(() => apiKeyUnavailableStatus(id))));
+          setMacroStatuses(Object.fromEntries(statuses.map((status) => [status.provider, status])));
+        }
       } else if (section === "permissions") {
         setPermissionPolicy(await api.getPermissionPolicy());
       }
@@ -272,12 +275,12 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
 
   useEffect(() => {
     void loadSettings();
-  }, [section]);
+  }, [section, integration]);
 
   useEffect(() => {
     const processingIsActive =
       quercusProcessing?.status === "pending" || quercusProcessing?.status === "running";
-    if (section !== "integrations" || !processingIsActive) return;
+    if (section !== "integrations" || integration !== "quercus" || !processingIsActive) return;
     let active = true;
     const refreshQuercusProcessing = async () => {
       try {
@@ -298,7 +301,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
       active = false;
       window.clearInterval(interval);
     };
-  }, [section, quercusProcessing?.status, quercusProcessingReachable]);
+  }, [section, integration, quercusProcessing?.status, quercusProcessingReachable]);
 
   useEffect(() => {
     if (section !== "integrations") return;
@@ -324,8 +327,8 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     url.searchParams.delete("gmail");
     url.searchParams.delete("google_drive");
     url.searchParams.delete("outlook");
-    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
-  }, [section]);
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [section, integration]);
 
   function updateChoice(
     group: "act" | "observer" | "assessment" | "product_manager" | "builder" | "tester",
@@ -1234,11 +1237,14 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
     <section className="page stack">
       <header className="page-header">
         <div>
-          <h1>{settingsPageCopy[section].title}</h1>
-          <p className="muted">{settingsPageCopy[section].description}</p>
+          <h1 className={selectedIntegration ? "integration-detail-title" : undefined}>
+            {selectedIntegration && <IntegrationIcon id={selectedIntegration.id} />}
+            {selectedIntegration?.title ?? settingsPageCopy[section].title}
+          </h1>
+          <p className="muted">{selectedIntegration?.description ?? settingsPageCopy[section].description}</p>
         </div>
         {section !== "appearance" && (
-          <button type="button" className="secondary" onClick={() => void loadSettings(true)} disabled={loading}>
+          <button type="button" className="secondary" onClick={() => integrationOverview ? void connectionStatuses.refresh() : void loadSettings(true)} disabled={integrationOverview ? connectionStatuses.refreshing : loading}>
             Refresh
           </button>
         )}
@@ -1254,9 +1260,17 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </NavLink>
         ))}
       </nav>
+      {selectedIntegration && (
+        <nav className="integration-breadcrumb" aria-label="Integration navigation">
+          <Link to="/settings/integrations"><span aria-hidden="true">←</span> All integrations</Link>
+          <span aria-hidden="true">/</span>
+          <span aria-current="page">{selectedIntegration.title}</span>
+        </nav>
+      )}
+      {integrationOverview && <IntegrationsDirectory statuses={connectionStatuses.statuses} />}
       {error && <p className="error-text">{error}</p>}
       {saved && <p className="success-text">{saved}</p>}
-      {loading && <p className="muted" role="status">Loading {settingsPageCopy[section].title.toLowerCase()}…</p>}
+      {loading && (section !== "integrations" || selectedIntegration) && <p className="muted" role="status">Loading {(selectedIntegration?.title ?? settingsPageCopy[section].title).toLowerCase()}…</p>}
       {section === "appearance" && !loading && (
         <section className="appearance-settings" aria-labelledby="appearance-theme-heading">
           <div className="section-heading">
@@ -1313,7 +1327,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
         </section>
       )}
-      {section === "integrations" && github && (
+      {section === "integrations" && integration === "github" && github && (
         <section className="detail-panel stack">
           <div>
             <h2>GitHub connection</h2>
@@ -1350,7 +1364,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
         </section>
       )}
-      {section === "integrations" && browserAuthentication && (
+      {section === "integrations" && integration === "browser-authentication" && browserAuthentication && (
         <section className="detail-panel stack">
           <div>
             <h2>Browser authentication</h2>
@@ -1411,7 +1425,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           ))}
         </section>
       )}
-      {section === "integrations" && (
+      {section === "integrations" && integration === "macro-data" && (
         <section className="detail-panel stack">
           <div>
             <h2>Macro data API keys</h2>
@@ -1461,7 +1475,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           })}
         </section>
       )}
-      {section === "integrations" && googleOAuth && googleCalendar && gmail && googleDrive && (
+      {section === "integrations" && integration === "google" && googleOAuth && googleCalendar && gmail && googleDrive && (
         <section className="detail-panel stack">
           <div>
             <h2>Google connection</h2>
@@ -1534,14 +1548,14 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
             <div className="button-row"><button type="button" onClick={() => void startGmailOAuth()} disabled={loading || !googleOAuth.configured}>{gmail.connected ? "Choose another Gmail account" : "Connect Gmail"}</button>{gmail.status !== "disconnected" && <button type="button" className="secondary" onClick={() => void removeGmailConnection()} disabled={loading}>Disconnect Gmail</button>}</div>
           </div>
           <div className="settings-subsection stack">
-            <div><h3>Google Drive</h3><p className="muted">Uses a separate full Drive scope and saves downloads to knowledge/google drive download. Google's restricted scope may require OAuth verification outside test users.</p></div>
+            <div><h3>Google Drive</h3><p className="muted">Uses a separate full Drive scope and saves downloads to knowledge/google_drive_download. Google's restricted scope may require OAuth verification outside test users.</p></div>
             <dl className="detail-grid"><div><dt>Status</dt><dd>{googleDrive.connected ? "Connected" : googleDrive.status}</dd></div><div><dt>Account</dt><dd>{googleDrive.account_email ?? "None"}</dd></div><div><dt>Last validated</dt><dd>{formatDate(googleDrive.last_validated_at)}</dd></div></dl>
             {googleDrive.error_type && <p className="error-text">Drive status: {googleDrive.error_type.replace(/_/g, " ")}</p>}
             <div className="button-row"><button type="button" onClick={() => void startGoogleDriveOAuth()} disabled={loading || !googleOAuth.configured}>{googleDrive.connected ? "Choose another Drive account" : "Connect Drive"}</button>{googleDrive.status !== "disconnected" && <button type="button" className="secondary" onClick={() => void removeGoogleDriveConnection()} disabled={loading}>Disconnect Drive</button>}</div>
           </div>
         </section>
       )}
-      {section === "integrations" && microsoftOAuth && outlook && (
+      {section === "integrations" && integration === "microsoft" && microsoftOAuth && outlook && (
         <section className="detail-panel stack">
           <div>
             <h2>Outlook</h2>
@@ -1590,7 +1604,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
         </section>
       )}
-      {section === "integrations" && telegram && telegramAgent && telegramObserverAgent && telegramAssistantAgent && (
+      {section === "integrations" && integration === "telegram" && telegram && telegramAgent && telegramObserverAgent && telegramAssistantAgent && (
         <section className="detail-panel stack">
           <div>
             <h2>Telegram</h2>
@@ -1640,7 +1654,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
         </section>
       )}
-      {section === "integrations" && wecom && (
+      {section === "integrations" && integration === "wecom" && wecom && (
         <section className="detail-panel stack">
           <div>
             <h2>WeCom Observer</h2>
@@ -1681,7 +1695,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
         </section>
       )}
-      {section === "integrations" && codexMcp && (
+      {section === "integrations" && integration === "codex" && codexMcp && (
         <section className="detail-panel stack">
           <div>
             <h2>Codex tools</h2>
@@ -1722,7 +1736,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </p>
         </section>
       )}
-      {section === "integrations" && quercus && (
+      {section === "integrations" && integration === "quercus" && quercus && (
         <section className="detail-panel stack">
           <div>
             <h2>Quercus knowledge sync</h2>
@@ -1821,7 +1835,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           )}
         </section>
       )}
-      {section === "integrations" && notion && (
+      {section === "integrations" && integration === "notion" && notion && (
         <section className="detail-panel stack">
           <div>
             <h2>Notion connection</h2>
@@ -1952,7 +1966,7 @@ export default function UsageSettingsPage({ section = "usage" }: { section?: Set
           </div>
         </section>
       )}
-      {section === "integrations" && atlas && (
+      {section === "integrations" && integration === "atlas" && atlas && (
         <section className="detail-panel stack">
           <div>
             <h2>Eidolon-Atlas</h2>

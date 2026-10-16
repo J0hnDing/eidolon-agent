@@ -227,7 +227,7 @@ def test_telegram_file_delivery_is_private_to_act_but_described_to_assistant(con
     assert private in act_tools
     catalog = AgentPolicyService(db).act_catalog()
     runtime_ids = {entry["id"] for entry in catalog if entry.get("kind") == "runtime_capability"}
-    assert runtime_ids == {"browser.playwright", "browser.authenticate", "telegram.send_file"}
+    assert runtime_ids == {"browser.playwright", "browser.authenticate", "telegram.send_file", "chat.send_message"}
     assert all("input_schema" not in entry for entry in catalog if entry.get("kind") == "runtime_capability")
 
 

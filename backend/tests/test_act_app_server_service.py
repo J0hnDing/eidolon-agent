@@ -15,6 +15,42 @@ from app.services.act_workspace_service import ActWorkspace
 from app.services.function_catalog_service import FunctionCatalogError, FunctionCatalogService
 
 
+class FakeBrowserRuntime:
+    def __init__(self):
+        self.registrations = []
+        self.revoked = []
+        self.closed = []
+        self.stopped = 0
+
+    def register_session(self, session_id, token, workspace_root):
+        self.registrations.append((session_id, token, workspace_root))
+        return r"\\.\pipe\eidolon-browser-auth-shared-test"
+
+    def revoke_session(self, session_id):
+        self.revoked.append(session_id)
+
+    def close_session(self, session_id):
+        self.closed.append(session_id)
+
+    def stop(self):
+        self.stopped += 1
+
+
+@pytest.fixture(autouse=True)
+def browser_runtime(monkeypatch):
+    runtime = FakeBrowserRuntime()
+    monkeypatch.setattr("app.services.act_app_server_service.act_browser_runtime", runtime)
+    return runtime
+
+
+@pytest.mark.parametrize("agent_id", ["act", "observer", "assistant"])
+def test_managed_session_error_label_survives_process_reset(agent_id: str) -> None:
+    service = ActAppServerService(FakeClient(), agent_id=agent_id)  # type: ignore[arg-type]
+    assert service.sessions.agent_name == agent_id.capitalize()
+    service.stop()
+    assert service.sessions.agent_name == agent_id.capitalize()
+
+
 class FakeClient:
     def __init__(
         self,
@@ -247,6 +283,7 @@ def test_act_thread_receives_required_playwright_config(monkeypatch, tmp_path) -
         'args=["-y", "@playwright/mcp@latest"]\n'
     )
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setattr("app.services.act_app_server_service.Path.home", lambda: tmp_path / "user-home")
     monkeypatch.setattr(
         "app.services.act_app_server_service.ensure_act_workspace", lambda: workspace
     )
@@ -267,20 +304,113 @@ def test_act_thread_receives_required_playwright_config(monkeypatch, tmp_path) -
 
         params = next(params for method, params in client.requests if method == "thread/start")
         playwright = params["config"]["mcp_servers.playwright"]
-        assert playwright["command"] == "npx"
-        assert playwright["args"][:2] == ["-y", "@playwright/mcp@latest"]
-        assert playwright["args"][-2] == "--init-page"
-        assert playwright["args"][-1].endswith("browser_authentication_init_page.mjs")
+        import sys
+
+        assert playwright["command"] == sys.executable
+        assert playwright["args"] == ["-m", "app.act_browser_mcp"]
+        assert "--user-data-dir" not in playwright["args"]
         assert playwright["enabled"] is True
         assert playwright["default_tools_approval_mode"] == "approve"
         assert playwright["required"] is True
         bridge_env = playwright["env"]
         assert bridge_env["EIDOLON_BROWSER_AUTH_ENDPOINT"].startswith("\\\\.\\pipe\\eidolon-browser-auth-")
         assert bridge_env["EIDOLON_BROWSER_AUTH_TOKEN"]
+        assert bridge_env["EIDOLON_AGENT_TOKEN"] == params["config"]["mcp_servers.eidolon"]["env"]["EIDOLON_AGENT_TOKEN"]
         assert bridge_env["EIDOLON_BROWSER_AUTH_TOKEN"] not in params["developerInstructions"]
         assert "@oai/sky" in params["developerInstructions"]
         assert "Browser authenticate" in params["developerInstructions"]
         assert "Do not assume that graded coursework is prohibited" in params["developerInstructions"]
+
+
+def test_act_sessions_share_browser_owner_and_keep_separate_credentials(monkeypatch, tmp_path, browser_runtime) -> None:
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from app.db import Base
+    from app.models import ActSession
+
+    workspace = ActWorkspace(
+        root=tmp_path / "agents", memory=tmp_path / "agents" / "memory",
+        knowledge=tmp_path / "agents" / "knowledge",
+        quercus=tmp_path / "agents" / "knowledge" / "quercus",
+        workspace=tmp_path / "agents" / "workspace",
+        downloads=tmp_path / "agents" / "workspace" / "downloads",
+    )
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    original_config = (
+        '[mcp_servers.playwright]\ncommand="npx"\n'
+        'args=["-y", "@playwright/mcp@latest", "--user-data-dir", "shared-profile", '
+        '"--user-data-dir=another-shared-profile", "--isolated"]\n'
+    )
+    (codex_home / "config.toml").write_text(original_config)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setattr("app.services.act_app_server_service.Path.home", lambda: tmp_path / "user-home")
+    monkeypatch.setattr("app.services.act_app_server_service.ensure_act_workspace", lambda: workspace)
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    clients = [FakeClient(include_playwright=True), FakeClient(include_playwright=True)]
+    services = [ActAppServerService(client) for client in clients]
+    with Session(engine) as db:
+        sessions = [ActSession(agent_id="act", codex_thread_id=f"pending:{index}") for index in range(2)]
+        db.add_all(sessions)
+        db.commit()
+        for session, service in zip(sessions, services, strict=True):
+            service.start_thread(db, model=None, reasoning_effort=None, session_id=session.id)
+        services[0].resume_thread(db, "thread-act", model=None, reasoning_effort=None, session_id=sessions[0].id)
+
+        first = [params for method, params in clients[0].requests if method in {"thread/start", "thread/resume"}]
+        second = next(params for method, params in clients[1].requests if method == "thread/start")
+        endpoints = []
+        tokens = []
+        for params in [*first, second]:
+            assert params["cwd"] == str(workspace.root.resolve())
+            args = params["config"]["mcp_servers.playwright"]["args"]
+            assert args == ["-m", "app.act_browser_mcp"]
+            assert "--isolated" not in args
+            assert "shared-profile" not in str(args)
+            env = params["config"]["mcp_servers.playwright"]["env"]
+            endpoints.append(env["EIDOLON_BROWSER_AUTH_ENDPOINT"])
+            tokens.append(env["EIDOLON_BROWSER_AUTH_TOKEN"])
+        assert len(set(endpoints)) == 1
+        assert len(set(tokens)) == 3
+        assert [item[0] for item in browser_runtime.registrations] == [sessions[0].id, sessions[1].id, sessions[0].id]
+        # An App Server refresh never closes any browser tabs.
+        assert browser_runtime.closed == []
+        assert browser_runtime.stopped == 0
+        assert (codex_home / "config.toml").read_text() == original_config
+        for client in clients:
+            process_config = next(arg for arg in client.extra_args if arg.startswith("mcp_servers="))
+            import tomllib
+
+            assert tomllib.loads(process_config)["mcp_servers"]["playwright"]["enabled"] is False
+
+
+def test_act_runtime_registry_reuses_sessions_and_stops_only_the_requested_session(monkeypatch, browser_runtime) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.services import act_app_server_service as runtime
+
+    monkeypatch.setattr(runtime, "_act_app_servers", {})
+    monkeypatch.setattr(runtime, "ActAppServerService", lambda: ActAppServerService(FakeClient()))
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        same_session = list(workers.map(lambda _: runtime.get_agent_app_server("act", 41), range(8)))
+    first = same_session[0]
+    assert all(service is first for service in same_session)
+    second = runtime.get_agent_app_server("act", 42)
+    assert first is not second
+    assert first.client is not second.client
+    assert runtime.get_agent_app_server("observer", 41) is runtime.agent_app_servers["observer"]
+    runtime.stop_act_app_server(41)
+    assert first.client.stopped == 1
+    assert second.client.stopped == 0
+    assert browser_runtime.closed == [41]
+    assert runtime.get_agent_app_server("act", 42) is second
+    assert runtime.get_agent_app_server("act", 41) is not first
+    runtime.stop_act_app_servers()
+    assert second.client.stopped == 1
+    assert runtime._act_app_servers == {}
+    assert browser_runtime.stopped == 1
 
 
 def test_agent_start_fails_closed_when_inherited_plugin_tools_remain(

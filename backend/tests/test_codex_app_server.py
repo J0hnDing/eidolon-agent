@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import queue
+import subprocess
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -12,6 +14,7 @@ from app.services.codex_app_server import (
     CodexAppServerClient,
     CodexAppServerRequestTimeout,
 )
+from app.services.codex_usage_service import CodexUsageService
 from app.services.product_manager_session_service import (
     ProductManagerSessionError,
     ProductManagerSessionService,
@@ -35,8 +38,9 @@ class _FakeStdout:
 
 
 class _FakeStdin:
-    def __init__(self, on_message: Callable[[dict[str, Any]], None]) -> None:
+    def __init__(self, on_message: Callable[[dict[str, Any]], None], on_close: Callable[[], None]) -> None:
         self._on_message = on_message
+        self._on_close = on_close
         self._buffer = ""
 
     def write(self, value: str) -> int:
@@ -50,11 +54,14 @@ class _FakeStdin:
     def flush(self) -> None:
         pass
 
+    def close(self) -> None:
+        self._on_close()
+
 
 class _ScriptedProcess:
     def __init__(self, handler: Callable[[_ScriptedProcess, dict[str, Any]], None]) -> None:
         self.stdout = _FakeStdout()
-        self.stdin = _FakeStdin(lambda message: handler(self, message))
+        self.stdin = _FakeStdin(lambda message: handler(self, message), self.terminate)
         self._closed = False
 
     def respond(self, request: dict[str, Any], result: dict[str, Any]) -> None:
@@ -158,6 +165,108 @@ def test_app_server_restarts_process_before_resuming_persisted_thread(monkeypatc
     assert metadata.model == "gpt-test"
     assert metadata.reasoning_effort == "high"
     service.client.stop()
+
+
+def test_app_server_stop_closes_stdin_before_waiting_for_graceful_exit() -> None:
+    from types import SimpleNamespace
+
+    calls = []
+    process = SimpleNamespace(
+        stdin=SimpleNamespace(close=lambda: calls.append("eof")),
+        wait=lambda **_: calls.append("wait"),
+    )
+    client = CodexAppServerClient("codex")
+    client._process = process
+    client.stop()
+    client.stop()
+    assert calls == ["eof", "wait"]
+    assert client._process is None
+
+
+def test_app_server_stop_kills_own_windows_process_tree_if_eof_does_not_finish(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    calls = []
+
+    def wait(**kwargs):
+        calls.append(("wait", kwargs["timeout"]))
+        if len(calls) == 2:
+            raise subprocess.TimeoutExpired("codex", kwargs["timeout"])
+        return 0
+
+    process = SimpleNamespace(
+        pid=1234,
+        stdin=SimpleNamespace(close=lambda: calls.append("eof")),
+        wait=wait,
+    )
+    monkeypatch.setattr("app.services.codex_app_server.sys.platform", "win32")
+    monkeypatch.setattr("app.services.codex_app_server.subprocess.CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr("app.services.codex_app_server.subprocess.run", lambda args, **_: calls.append(args))
+    client = CodexAppServerClient("codex")
+    client._process = process
+    client.stop()
+    assert calls == ["eof", ("wait", 2), ["taskkill", "/PID", "1234", "/T", "/F"], ("wait", 2)]
+
+
+def test_model_refresh_switches_to_newly_resolved_cli(monkeypatch) -> None:
+    commands: list[str] = []
+    selected = ["old-codex"]
+
+    def handler(process: _ScriptedProcess, request: dict[str, Any]) -> None:
+        if _initialize(process, request):
+            return
+        if request["method"] == "model/list":
+            model = "gpt-6-luna" if commands[-1] == "new-codex" else "gpt-5.6-luna"
+            process.respond(request, {"data": [{"id": model, "model": model}], "nextCursor": None})
+
+    def factory(args: list[str], **_kwargs: Any) -> _ScriptedProcess:
+        commands.append(args[0])
+        return _ScriptedProcess(handler)
+
+    monkeypatch.setattr("app.services.codex_app_server.subprocess.Popen", factory)
+    monkeypatch.setattr(
+        "app.services.codex_app_server.codex_cli_service.command", lambda *, refresh=False: selected[0]
+    )
+    client = CodexAppServerClient()
+    service = CodexUsageService(client=client)
+    try:
+        assert [item["model"] for item in service.read_model_catalog(refresh=True)["models"]] == ["gpt-5.6-luna"]
+        selected[0] = "new-codex"
+        assert [item["model"] for item in service.read_model_catalog(refresh=True)["models"]] == ["gpt-6-luna"]
+        assert commands == ["old-codex", "new-codex"]
+    finally:
+        client.stop()
+
+
+def test_model_refresh_restarts_cli_updated_in_place(monkeypatch, tmp_path: Path) -> None:
+    command = tmp_path / "codex.exe"
+    command.write_bytes(b"old")
+    launches: list[str] = []
+
+    def handler(process: _ScriptedProcess, request: dict[str, Any]) -> None:
+        if _initialize(process, request):
+            return
+        if request["method"] == "model/list":
+            model = "gpt-6-luna" if len(launches) == 2 else "gpt-5.6-luna"
+            process.respond(request, {"data": [{"id": model, "model": model}]})
+
+    def factory(args: list[str], **_kwargs: Any) -> _ScriptedProcess:
+        launches.append(args[0])
+        return _ScriptedProcess(handler)
+
+    monkeypatch.setattr("app.services.codex_app_server.subprocess.Popen", factory)
+    monkeypatch.setattr(
+        "app.services.codex_app_server.codex_cli_service.command", lambda *, refresh=False: str(command)
+    )
+    client = CodexAppServerClient()
+    service = CodexUsageService(client=client)
+    try:
+        assert service.read_model_catalog(refresh=True)["models"][0]["model"] == "gpt-5.6-luna"
+        command.write_bytes(b"updated executable")
+        assert service.read_model_catalog(refresh=True)["models"][0]["model"] == "gpt-6-luna"
+        assert launches == [str(command), str(command)]
+    finally:
+        client.stop()
 
 
 class _FakeSubscription:
@@ -301,11 +410,12 @@ def test_product_manager_failed_turn_raises() -> None:
         service.run_structured_turn("thread-1", "Plan", {"type": "object"}, timeout_seconds=1)
 
 
-def test_product_manager_timeout_interrupts_active_turn() -> None:
+@pytest.mark.parametrize("agent_name", ["ProductManager", "Act", "Observer", "Assistant"])
+def test_product_manager_timeout_interrupts_active_turn(agent_name: str) -> None:
     client = _FakeSessionClient()
-    service = ProductManagerSessionService(client)  # type: ignore[arg-type]
+    service = ProductManagerSessionService(client, agent_name=agent_name)  # type: ignore[arg-type]
 
-    with pytest.raises(ProductManagerTurnTimeout):
+    with pytest.raises(ProductManagerTurnTimeout, match=f"^{agent_name} turn timed out$"):
         service.run_structured_turn("thread-1", "Plan", {"type": "object"}, timeout_seconds=0.01)
 
     assert ("turn/interrupt", {"threadId": "thread-1", "turnId": "turn-1"}) in client.requests

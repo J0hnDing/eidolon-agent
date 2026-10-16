@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import {
@@ -13,6 +13,7 @@ import {
 } from "../api/client";
 import { parseBackendDateTime } from "../lib/dateTime";
 import { usePolling } from "../lib/usePolling";
+import { useAwaitingActReply } from "../features/chat/useAwaitingActReply";
 
 const AGENT_IDS: AgentId[] = ["act", "observer", "assistant"];
 
@@ -115,6 +116,12 @@ function AgentDetail({ agentId, initialAgent, onAgentUpdate }: {
   const [error, setError] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const activeTurn = session ? [...session.turns].reverse().find(isActiveTurn) ?? null : null;
+  const [submittedReplyId, setSubmittedReplyId] = useState<number | null>(null);
+  const submissionPending = useRef(false);
+  const awaitingReply = useAwaitingActReply(
+    agentId === "act" && activeTurn?.session_id === activeSessionId ? activeTurn : null,
+  );
+  const canReplyToAct = awaitingReply !== null && awaitingReply.id !== submittedReplyId;
 
   async function loadAgent(options: { showLoading?: boolean } = {}) {
     if (options.showLoading !== false) setIsLoading(true);
@@ -204,12 +211,24 @@ function AgentDetail({ agentId, initialAgent, onAgentUpdate }: {
   async function sendTurn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const message = draft.trim();
-    if (!message || activeSessionId === null) return;
-    await work(async () => {
-      setDraft("");
-      await api.runAgentTurn(agentId, activeSessionId, message);
-      await loadSession(activeSessionId);
-    }, "Could not send the message");
+    if (!message || activeSessionId === null || isWorking || submissionPending.current || (activeTurn !== null && !canReplyToAct)) return;
+    submissionPending.current = true;
+    const replyingToId = canReplyToAct ? awaitingReply?.id ?? null : null;
+    if (replyingToId !== null) setSubmittedReplyId(replyingToId);
+    try {
+      await work(async () => {
+        setDraft("");
+        try {
+          await api.runAgentTurn(agentId, activeSessionId, message);
+        } catch (reason) {
+          if (replyingToId !== null) setSubmittedReplyId(null);
+          throw reason;
+        }
+        await loadSession(activeSessionId);
+      }, "Could not send the message");
+    } finally {
+      submissionPending.current = false;
+    }
   }
 
   async function confirm() {
@@ -314,6 +333,7 @@ function AgentDetail({ agentId, initialAgent, onAgentUpdate }: {
         draft={draft}
         isWorking={isWorking}
         activeTurnId={activeTurn?.id ?? null}
+        canReplyToAct={canReplyToAct}
         onCreate={createSession}
         onSelect={setActiveSessionId}
         onDraftChange={setDraft}
@@ -477,7 +497,7 @@ function FunctionSequenceEditor({ proposal, disabled, onSave }: {
   }}><textarea aria-label="Function sequence JSON" value={draft} onChange={(event) => setDraft(event.target.value)} rows={8} disabled={disabled} /><button type="submit" disabled={disabled}>Save sequence</button>{error && <p className="error-text">{error}</p>}</form></details>;
 }
 
-function AgentSessions({ agent, sessions, session, activeSessionId, draft, isWorking, activeTurnId, onCreate, onSelect, onDraftChange, onSubmit, onCancel, onArchive }: {
+function AgentSessions({ agent, sessions, session, activeSessionId, draft, isWorking, activeTurnId, canReplyToAct, onCreate, onSelect, onDraftChange, onSubmit, onCancel, onArchive }: {
   agent: AgentDefinition;
   sessions: AgentSessionSummary[];
   session: AgentSession | null;
@@ -485,6 +505,7 @@ function AgentSessions({ agent, sessions, session, activeSessionId, draft, isWor
   draft: string;
   isWorking: boolean;
   activeTurnId: number | null;
+  canReplyToAct: boolean;
   onCreate: () => Promise<void>;
   onSelect: (sessionId: number) => void;
   onDraftChange: (value: string) => void;
@@ -509,14 +530,17 @@ function AgentSessions({ agent, sessions, session, activeSessionId, draft, isWor
                 {session.turns.map((turn) => (
                   <div key={turn.id} className="agent-turn">
                     {!turn.backend_message_kind && <article className="message user"><span>You</span><p>{turn.user_message}</p></article>}
+                    {(turn.live_messages ?? []).map((message) => (
+                      <article key={message.id} className={`message ${message.role}`}><span>{message.role === "user" ? "You" : agent.name}</span><p>{message.text}</p></article>
+                    ))}
                     <article className={`message assistant ${isActiveTurn(turn) ? "thinking-message" : ""}`}><span>{agent.name}</span><div className="message-body">{isActiveTurn(turn) && <div className="thinking-row"><span className="thinking-spinner" aria-hidden="true" /><p>{agent.name} is thinking...</p></div>}{turn.assistant_message && <p>{turn.assistant_message}</p>}{turn.error_message && <p className="error-text">{turn.error_message}</p>}{turn.activity_json.length > 0 && <details className="act-work-details"><summary>{turn.activity_json.length} recorded activit{turn.activity_json.length === 1 ? "y" : "ies"}</summary><div className="act-work-details-content"><ul>{turn.activity_json.map((activity, index) => <li key={`${activity.kind}-${index}`}>{activity.label}</li>)}</ul></div></details>}</div></article>
                   </div>
                 ))}
                 {!session.turns.length && <div className="agent-empty-conversation"><p>Start a conversation with {agent.name}.</p></div>}
               </div>
               <form className="composer" onSubmit={onSubmit}>
-                <input value={draft} onChange={(event) => onDraftChange(event.target.value)} placeholder={`Message ${agent.name}`} aria-label={`Message ${agent.name}`} disabled={isWorking || activeTurnId !== null} />
-                <button type="submit" className="chat-send-button" disabled={isWorking || activeTurnId !== null || !draft.trim()} aria-label="Send message"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7 5 11l4 4M5 11h8a4 4 0 0 0 4-4V5" /></svg></button>
+                <input value={draft} onChange={(event) => onDraftChange(event.target.value)} placeholder={canReplyToAct ? "Reply to Act while it waits..." : `Message ${agent.name}`} aria-label={`Message ${agent.name}`} disabled={isWorking || (activeTurnId !== null && !canReplyToAct)} />
+                <button type="submit" className="chat-send-button" disabled={isWorking || (activeTurnId !== null && !canReplyToAct) || !draft.trim()} aria-label="Send message"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7 5 11l4 4M5 11h8a4 4 0 0 0 4-4V5" /></svg></button>
                 {activeTurnId !== null && <button type="button" className="secondary" onClick={onCancel} disabled={isWorking}>Cancel</button>}
               </form>
             </>

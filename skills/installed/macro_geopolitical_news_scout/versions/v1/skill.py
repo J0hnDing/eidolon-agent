@@ -52,23 +52,22 @@ ATLAS_OPERATIONS = ("atlas.goal.list", "atlas.project.list", "atlas.interest.lis
 RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "macro_picture": {"type": "string", "maxLength": 700},
+        "macro_picture": {"type": "string", "maxLength": 900},
         "items": {
             "type": "array",
             "maxItems": MAX_ITEMS,
             "items": {
                 "type": "object",
                 "properties": {
-                    "what_happened": {"type": "string", "minLength": 1, "maxLength": 450},
-                    "why_it_matters": {"type": "string", "minLength": 1, "maxLength": 500},
-                    "new_since_previous": {"type": "string", "minLength": 1, "maxLength": 350},
-                    "watch_next": {"type": "string", "minLength": 1, "maxLength": 350},
+                    "what_happened": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "explanation": {"type": "string", "maxLength": 250},
+                    "analysis": {"type": "string", "minLength": 1, "maxLength": 450},
                     "sources": {
                         "type": "array", "minItems": 1, "maxItems": 4,
                         "items": {"type": "string", "pattern": "^https://", "maxLength": 1800},
                     },
                 },
-                "required": ["what_happened", "why_it_matters", "new_since_previous", "watch_next", "sources"],
+                "required": ["what_happened", "explanation", "analysis", "sources"],
                 "additionalProperties": False,
             },
         },
@@ -283,29 +282,42 @@ def _prompt() -> str:
         "releases, minor revisions, repetitive coverage, and insignificant political statements. Zero items is "
         "preferred to weak news. Treat series_observation dates as observation periods, not release dates; "
         "corroborate any claim of a new release with an official release or live search. Select at most eight "
-        "distinct developments, with concise what happened, why it matters, what is genuinely new since the "
-        "previous report, what to watch next, and one to four exact "
+        "distinct developments. For each, write a short event bulletin (one sentence, ideally under 25 words), "
+        "an explanation only if needed to understand the event (otherwise an empty string), and concise "
+        "analysis of its implications (one or two sentences, ideally under 60 words). Do not repeat the "
+        "event in the explanation or analysis. No headings or labels such as why it matters, since previous "
+        "report, or watch next; do not generate those sections. Compare with the previous report internally "
+        "to omit unchanged stories. Include one to four exact "
         "HTTPS source URLs. Do not invent facts, surprise estimates, dates, or sources. Treat Atlas as relevance "
         "context only, not evidence. If some fetches failed, avoid claiming comprehensive coverage. Write a very "
-        "short overall macro picture and include only genuinely important dated upcoming catalysts (or none). "
+        "concise final bigger-picture analysis connecting the events (one paragraph, ideally under 120 words), "
+        "without repeating each event. Include only genuinely important dated upcoming catalysts (or none). "
         "Return JSON matching the response schema."
     )
 
 
-def _validated_report(raw: object) -> dict[str, Any]:
+def _validated_report(raw: object, *, allow_legacy: bool = False) -> dict[str, Any]:
     value = json.loads(raw) if isinstance(raw, str) else raw
     if not isinstance(value, dict) or set(value) != {"macro_picture", "items", "upcoming_catalysts"}:
         raise ValueError("Codex returned an invalid macro report")
-    if not isinstance(value["macro_picture"], str) or len(value["macro_picture"]) > 700:
+    if not isinstance(value["macro_picture"], str) or len(value["macro_picture"]) > 900:
         raise ValueError("Codex returned an invalid macro picture")
     items = value["items"]
     if not isinstance(items, list) or len(items) > MAX_ITEMS:
         raise ValueError("Codex returned too many developments")
     for item in items:
-        if not isinstance(item, dict) or set(item) != {"what_happened", "why_it_matters", "new_since_previous", "watch_next", "sources"}:
+        fields = {"what_happened", "explanation", "analysis", "sources"}
+        limits = (("what_happened", 200), ("explanation", 250), ("analysis", 450))
+        legacy = allow_legacy and isinstance(item, dict) and set(item) == {
+            "what_happened", "why_it_matters", "new_since_previous", "watch_next", "sources"
+        }
+        if legacy:
+            fields = set(item)
+            limits = (("what_happened", 450), ("why_it_matters", 500), ("new_since_previous", 350), ("watch_next", 350))
+        if not isinstance(item, dict) or set(item) != fields:
             raise ValueError("Codex returned an invalid development")
-        for key, maximum in (("what_happened", 450), ("why_it_matters", 500), ("new_since_previous", 350), ("watch_next", 350)):
-            if not isinstance(item[key], str) or not item[key].strip() or len(item[key]) > maximum:
+        for key, maximum in limits:
+            if not isinstance(item[key], str) or (key != "explanation" and not item[key].strip()) or len(item[key]) > maximum:
                 raise ValueError("Codex returned invalid development text")
         if not isinstance(item["sources"], list) or not 1 <= len(item["sources"]) <= 4 or any(not _canonical_url(url) or len(url) > 1800 for url in item["sources"]):
             raise ValueError("Codex returned invalid source links")
@@ -325,7 +337,7 @@ def _validated_state(value: object) -> dict[str, Any]:
     if value["last_fetch_at"] is not None and _date(value["last_fetch_at"]) is None:
         raise ValueError("Macro scout received an invalid fetch time")
     if value["report"] is not None:
-        _validated_report(value["report"])
+        _validated_report(value["report"], allow_legacy=True)
     return value
 
 

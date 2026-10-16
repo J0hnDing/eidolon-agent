@@ -40,7 +40,7 @@ For every Project build, the backend creates the skill's `tests/` directory befo
 
 ## Tester Must Not
 
-- Patch `skill.py`, `app.py`, web assets, or other implementation files.
+- Patch the manifest-declared entrypoint, web assets, or other implementation files.
 - Approve permissions.
 - Install dependencies.
 - Install skills.

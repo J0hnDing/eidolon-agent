@@ -45,6 +45,7 @@ import {
 
 const LIVE_AGENT_RUN_STATUSES = new Set(["pending", "running", "waiting_for_approval"]);
 const LIVE_SKILL_STATUSES = new Set(["building"]);
+const LIVE_SKILL_RUN_STATUSES = new Set(["pending", "running"]);
 
 export default function SkillDetailPage() {
   const { skillId } = useParams();
@@ -83,10 +84,12 @@ export default function SkillDetailPage() {
   }, [skillId]);
 
   const hasLiveAgentRun = agentRuns.some((run) => LIVE_AGENT_RUN_STATUSES.has(run.status));
+  const hasLiveSkillRun = runs.some((run) => LIVE_SKILL_RUN_STATUSES.has(run.status));
   const shouldPollSkillDetail = Boolean(
     skill && (
       LIVE_SKILL_STATUSES.has(skill.status)
       || hasLiveAgentRun
+      || hasLiveSkillRun
       || runtimePermissionStatus(runtimePermission) === "pending"
     ),
   );
@@ -103,7 +106,7 @@ export default function SkillDetailPage() {
         api.getSkill(id),
         api.getSkillModel(id),
         api.getCodexModels().catch(() => null),
-        api.listSkillRuns(id),
+        api.listSkillRuns(id, true),
         api.listSkillFiles(id),
         api.listPermissionRequests({ skill_id: id, request_scope: "runtime" }),
         api.getRunnerStatus(),
@@ -935,6 +938,13 @@ export default function SkillDetailPage() {
           <p className="error-text">This service is missing its required schedule.</p>
         )}
       </section>}
+
+      {isInstalled && isService && (
+        <section className="detail-panel">
+          <h2>Run History</h2>
+          <RunHistory runs={runs} />
+        </section>
+      )}
 
       <SkillFilesDisclosure files={files} />
 

@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator, SchemaError
 
+from app.integrations.atlas_read import ATLAS_READ_SPECS
 from app.integrations.types import (
     IntegrationEffect,
     IntegrationOperationSpec,
@@ -517,84 +518,50 @@ _ATLAS_ERRORS = (
 )
 _LIMIT = {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}
 _KEYWORDS = {"type": "string", "minLength": 1, "maxLength": 200}
-_NULLABLE_TEXT = {"type": ["string", "null"]}
-_ATLAS_HOBBY_OUTPUT = _object_schema(
-    {
-        "title": {"type": "string"},
-        "description": _NULLABLE_TEXT,
-        "engagement": _NULLABLE_TEXT,
-        "skill_level": _NULLABLE_TEXT,
-        "started": _NULLABLE_TEXT,
-        "notes": _NULLABLE_TEXT,
-    },
-    ["title", "description", "engagement", "skill_level", "started", "notes"],
-)
-_ATLAS_PREFERENCE_OUTPUT = _object_schema(
-    {
-        "title": {"type": "string"},
-        "domain": _NULLABLE_TEXT,
-        "value": {},
-        "strength": _NULLABLE_TEXT,
-        "context": _NULLABLE_TEXT,
-        "rationale": _NULLABLE_TEXT,
-        "effective_from": _NULLABLE_TEXT,
-        "effective_to": _NULLABLE_TEXT,
-    },
-    ["title", "domain", "value", "strength", "context", "rationale", "effective_from", "effective_to"],
-)
-_ATLAS_GOAL_OUTPUT = {
-    "type": "object",
-    "properties": {
-        "revision": {"type": "integer", "minimum": 1},
-        "progress": {"type": "integer", "minimum": 0, "maximum": 100},
-        "result": {"type": ["string", "null"]},
-        "following_goal_ids": {"type": "array", "items": {"type": "string"}},
-        "subgoals": {"type": "array", "items": {"$ref": "#/$defs/goal"}},
-    },
-    "required": ["revision", "progress", "result", "following_goal_ids", "subgoals"],
-}
 _ATLAS_GOAL_LIST_OUTPUT = _object_schema(
     {
         "goals": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/goal"}},
-        "progressions": {"type": "array", "items": {"type": "object"}},
+        "graph": {"type": "object"},
     },
-    ["goals", "progressions"],
+    ["goals", "graph"],
 )
-_ATLAS_GOAL_LIST_OUTPUT["$defs"] = {"goal": _ATLAS_GOAL_OUTPUT}
 _ATLAS_GOAL_ID = {"type": "string", "minLength": 1, "maxLength": 128}
 _ATLAS_GOAL_TARGET_DATE = {
     "type": ["string", "null"],
     "pattern": "^\\d{4}(?:-\\d{2}(?:-\\d{2})?)?$",
 }
-_ATLAS_GOAL_FOLLOWING = {
-    "type": "array", "maxItems": 100, "uniqueItems": True, "items": _ATLAS_GOAL_ID,
-}
 _ATLAS_GOAL_FIELDS = {
     "title": {"type": "string", "minLength": 1, "maxLength": 500},
     "description": {"type": "string", "maxLength": 4000},
     "horizon": {"enum": ["short", "middle", "long"]},
-    "importance": {"enum": ["low", "medium", "high"]},
+    "success_conditions": {"type": "string", "maxLength": 4000},
+    "pursuit_status": {"enum": ["considered", "active", "paused", "achieved", "abandoned"]},
+    "commitment": {"type": "number", "minimum": 0, "maximum": 100},
     "target_date": _ATLAS_GOAL_TARGET_DATE,
-    "progress": {"type": "integer", "minimum": 0, "maximum": 100},
-    "result": {"type": "string", "maxLength": 4000},
-    "following_goal_ids": _ATLAS_GOAL_FOLLOWING,
+    "blueprint": {"type": "object", "description": "Native Goal blueprint: nodes and edges; Atlas validates its DAG and node progress."},
+    "provenance": {"type": "object"},
+    "custom_field_values": {"type": "object"},
 }
 _ATLAS_GOAL_DETAIL = _object_schema(
     {
         "id": _ATLAS_GOAL_ID,
-        "parent_goal_id": {"type": ["string", "null"]},
         "revision": {"type": "integer", "minimum": 1},
         **_ATLAS_GOAL_FIELDS,
-        "result": {"type": ["string", "null"]},
+        "horizon": {"type": ["string", "null"]},
         "target_date": {"type": ["string", "null"]},
+        "progress": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+        "data": {"type": "object"},
+        "grounding_status": {"type": ["string", "null"]},
+        "connection_status": {"type": ["string", "null"]},
     },
-    ["id", "parent_goal_id", "revision", *_ATLAS_GOAL_FIELDS],
+    ["id", "revision", *_ATLAS_GOAL_FIELDS, "progress", "data", "grounding_status", "connection_status"],
 )
 _ATLAS_GOAL_UPDATE_INPUT = _object_schema(
     {"id": _ATLAS_GOAL_ID, "expected_revision": {"type": "integer", "minimum": 1}, **_ATLAS_GOAL_FIELDS},
     ["id", "expected_revision"],
 )
 _ATLAS_GOAL_UPDATE_INPUT["minProperties"] = 3
+_ATLAS_GOAL_LIST_OUTPUT["$defs"] = {"goal": _ATLAS_GOAL_DETAIL}
 _KNOWLEDGE_STATUS = {"enum": ["unassessed", "unknown", "known"]}
 _KNOWLEDGE_BRANCH = {"enum": ["subjects", "ideologies"]}
 _KNOWLEDGE_SUMMARY = _object_schema(
@@ -606,17 +573,49 @@ _KNOWLEDGE_SUMMARY = _object_schema(
     },
     ["node_id", "name", "path", "status"],
 )
+_ATLAS_PERSON_RESUME = _object_schema(
+    {
+        "filename": {"type": "string"},
+        "mime_type": {"type": "string"},
+        "byte_length": {"type": "integer", "minimum": 1},
+        "created_at": {"type": ["string", "null"]},
+        "updated_at": {"type": ["string", "null"]},
+    },
+    ["filename", "mime_type", "byte_length", "created_at", "updated_at"],
+)
+_ATLAS_PERSON_INFO = _object_schema(
+    {
+        "id": {"type": "string"},
+        "revision": {"type": ["integer", "null"]},
+        "data": {"type": "object"},
+        "custom_field_values": {"type": "object"},
+        **{name: {"type": ["string", "null"]} for name in (
+            "name", "preferred_name", "gender", "birth_date", "birth_place", "marital_status",
+            "address", "postal_code", "occupation", "instagram", "discord", "linkedin_link",
+            "wechat_number", "facebook", "personal_website", "summary", "notes",
+        )},
+        **{name: {"type": "array", "items": {"type": "string"}} for name in (
+            "nationalities", "languages", "emails", "phone_numbers",
+        )},
+        "resume": {"anyOf": [{"type": "null"}, _ATLAS_PERSON_RESUME]},
+    },
+    ["name", "preferred_name", "gender", "birth_date", "birth_place", "nationalities", "languages",
+     "marital_status", "emails", "phone_numbers", "address", "postal_code", "occupation", "instagram",
+     "discord", "linkedin_link", "wechat_number", "facebook", "personal_website", "resume", "summary", "notes",
+     "id", "revision", "data", "custom_field_values"],
+)
 _ATLAS_OPERATIONS = (
+    *ATLAS_READ_SPECS,
     IntegrationOperationSpec(
         id="atlas.person.get",
         title="Get Atlas person",
-        description="Read the non-sensitive built-in Person profile from the unlocked local Atlas.",
+        description="Read the current Person profile, complete non-identifier data, custom fields, resume metadata and Atlas's completeness rates. Government identifiers require the explicit records.get read; resume content requires attachments.read.",
         input_schema=_object_schema({}, []),
-        output_schema=_object_schema({"personal_info": {"type": ["object", "null"]}}, ["personal_info"]),
+        output_schema=_object_schema({"personal_info": {"anyOf": [{"type": "null"}, _ATLAS_PERSON_INFO]}, "completeness": {"type": "object"}}, ["personal_info", "completeness"]),
         effects=frozenset({IntegrationEffect.READ}),
         resource=ResourceSpec("atlas.person", ()),
         risk=RiskLevel.LOW,
-        contract_version=2,
+        contract_version=4,
         presentation=OperationPresentation(
             usage_example={"operation": "atlas.person.get", "input": {}},
             normalized_errors=_ATLAS_ERRORS,
@@ -626,19 +625,18 @@ _ATLAS_OPERATIONS = (
     IntegrationOperationSpec(
         id="atlas.interest.get",
         title="Get Atlas interests",
-        description="Read the user's hobbies and preferences from the unlocked local Atlas without record metadata.",
+        description="Read current Atlas Interests with numeric liking and skill level, complete data and custom fields. Alias of atlas.interest.list.",
         input_schema=_object_schema({}, []),
         output_schema=_object_schema(
             {
-                "hobbies": {"type": "array", "items": _ATLAS_HOBBY_OUTPUT},
-                "preferences": {"type": "array", "items": _ATLAS_PREFERENCE_OUTPUT},
+                "interests": {"type": "array", "items": {"type": "object"}},
             },
-            ["hobbies", "preferences"],
+            ["interests"],
         ),
         effects=frozenset({IntegrationEffect.READ}),
         resource=ResourceSpec("atlas.interest", ()),
         risk=RiskLevel.LOW,
-        contract_version=1,
+        contract_version=2,
         presentation=OperationPresentation(
             usage_example={"operation": "atlas.interest.get", "input": {}},
             normalized_errors=_ATLAS_ERRORS,
@@ -648,19 +646,18 @@ _ATLAS_OPERATIONS = (
     IntegrationOperationSpec(
         id="atlas.interest.list",
         title="List Atlas interests",
-        description="List the user's hobbies and preferences from the unlocked local Atlas without record metadata.",
+        description="List current Atlas Interests with numeric liking and skill level, complete data and custom fields.",
         input_schema=_object_schema({}, []),
         output_schema=_object_schema(
             {
-                "hobbies": {"type": "array", "items": _ATLAS_HOBBY_OUTPUT},
-                "preferences": {"type": "array", "items": _ATLAS_PREFERENCE_OUTPUT},
+                "interests": {"type": "array", "items": {"type": "object"}},
             },
-            ["hobbies", "preferences"],
+            ["interests"],
         ),
         effects=frozenset({IntegrationEffect.READ}),
         resource=ResourceSpec("atlas.interest", ()),
         risk=RiskLevel.LOW,
-        contract_version=1,
+        contract_version=2,
         presentation=OperationPresentation(
             usage_example={"operation": "atlas.interest.list", "input": {}},
             normalized_errors=_ATLAS_ERRORS,
@@ -670,7 +667,7 @@ _ATLAS_OPERATIONS = (
     IntegrationOperationSpec(
         id="atlas.experience.list",
         title="List Atlas experiences",
-        description="List recent experiences, optionally filtered by keywords and ongoing state.",
+        description="List recent experiences with complete native data and custom fields, optionally filtered by keywords and ongoing state.",
         input_schema=_object_schema({"keywords": _KEYWORDS, "ongoing": {"type": "boolean"}, "limit": _LIMIT}, []),
         output_schema=_object_schema(
             {"experiences": {"type": "array", "maxItems": 100, "items": {"type": "object"}}}, ["experiences"]
@@ -678,7 +675,7 @@ _ATLAS_OPERATIONS = (
         effects=frozenset({IntegrationEffect.READ}),
         resource=ResourceSpec("atlas.experience", ()),
         risk=RiskLevel.LOW,
-        contract_version=2,
+        contract_version=3,
         presentation=OperationPresentation(
             usage_example={"operation": "atlas.experience.list", "input": {"keywords": "research", "limit": 10}},
             normalized_errors=_ATLAS_ERRORS,
@@ -688,10 +685,10 @@ _ATLAS_OPERATIONS = (
     IntegrationOperationSpec(
         id="atlas.goal.list",
         title="List Atlas goals",
-        description="List matching top-level goals with effective progress, complete subgoal trees, and progression edges.",
+        description="List current flat Goals with complete native data, blueprints, nullable decimal progress and the motivational graph. Progress derives from blueprint nodes; there are no subgoal records or progression endpoints.",
         input_schema=_object_schema(
             {
-                "importance": {"enum": ["low", "medium", "high"]},
+                "pursuit_status": {"enum": ["considered", "active", "paused", "achieved", "abandoned"]},
                 "horizon": {"enum": ["short", "middle", "long"]},
                 "limit": _LIMIT,
             },
@@ -701,25 +698,23 @@ _ATLAS_OPERATIONS = (
         effects=frozenset({IntegrationEffect.READ}),
         resource=ResourceSpec("atlas.goal", ()),
         risk=RiskLevel.LOW,
-        contract_version=5,
+        contract_version=6,
         presentation=OperationPresentation(
-            usage_example={"operation": "atlas.goal.list", "input": {"importance": "high", "horizon": "long"}},
+            usage_example={"operation": "atlas.goal.list", "input": {"pursuit_status": "active", "horizon": "long"}},
             normalized_errors=_ATLAS_ERRORS,
             open_world=False,
         ),
     ),
     IntegrationOperationSpec(
         id="atlas.goal.create",
-        title="Create Atlas Goal or subgoal",
+        title="Create Atlas Goal",
         description=(
-            "Create one top-level Goal or one subgoal under parent_goal_id. "
-            "following_goal_ids are sibling prerequisites for a subgoal; subgoal progress defaults to zero."
+            "Create one current Atlas Goal with success conditions, pursuit status, commitment and a native blueprint. "
+            "Progress derives from blueprint nodes. Obsolete subgoal, importance, Result and progression inputs are rejected."
         ),
         input_schema=_object_schema(
             {
                 **_ATLAS_GOAL_FIELDS,
-                "parent_goal_id": _ATLAS_GOAL_ID,
-                "request_id": {"type": "string", "minLength": 36, "maxLength": 36, "pattern": "^[0-9a-fA-F-]{36}$"},
             },
             ["title"],
         ),
@@ -729,27 +724,28 @@ _ATLAS_OPERATIONS = (
         effects=frozenset({IntegrationEffect.CREATE}),
         resource=ResourceSpec("atlas.goal", ()),
         risk=RiskLevel.MEDIUM,
+        contract_version=2,
         presentation=OperationPresentation(
-            usage_example={"operation": "atlas.goal.create", "input": {"title": "Draft proposal", "parent_goal_id": "goal-id", "progress": 0}},
+            usage_example={"operation": "atlas.goal.create", "input": {"title": "Draft proposal", "pursuit_status": "active"}},
             normalized_errors=_ATLAS_ERRORS,
             open_world=False,
         ),
     ),
     IntegrationOperationSpec(
         id="atlas.goal.update",
-        title="Edit Atlas Goal or subgoal",
+        title="Edit Atlas Goal",
         description=(
-            "Edit standard Goal fields using the current revision. Subgoals may also replace their "
-            "following_goal_ids and set Result at 100% effective progress. Parent progress rolls up from subgoals."
+            "Edit current Goal fields and blueprint using expected_revision. Progress derives from blueprint nodes. "
+            "target_date:null clears the date. Obsolete subgoal, importance, Result and progression inputs are rejected."
         ),
         input_schema=_ATLAS_GOAL_UPDATE_INPUT,
         output_schema=_object_schema({"goal": _ATLAS_GOAL_DETAIL}, ["goal"]),
         effects=frozenset({IntegrationEffect.UPDATE}),
         resource=ResourceSpec("atlas.goal", ("id",)),
         risk=RiskLevel.MEDIUM,
-        contract_version=2,
+        contract_version=3,
         presentation=OperationPresentation(
-            usage_example={"operation": "atlas.goal.update", "input": {"id": "goal-id", "expected_revision": 1, "progress": 100, "result": "Submitted"}},
+            usage_example={"operation": "atlas.goal.update", "input": {"id": "goal-id", "expected_revision": 1, "pursuit_status": "achieved"}},
             normalized_errors=_ATLAS_ERRORS,
             open_world=False,
         ),
@@ -757,7 +753,7 @@ _ATLAS_OPERATIONS = (
     IntegrationOperationSpec(
         id="atlas.project.list",
         title="List Atlas projects",
-        description="List projects with title, description, status, and GitHub link using minimal optional filters.",
+        description="List projects with title, description, status, GitHub link, complete native data and custom fields using optional filters.",
         input_schema=_object_schema(
             {
                 "keywords": _KEYWORDS,
@@ -773,7 +769,7 @@ _ATLAS_OPERATIONS = (
         effects=frozenset({IntegrationEffect.READ}),
         resource=ResourceSpec("atlas.project", ()),
         risk=RiskLevel.LOW,
-        contract_version=2,
+        contract_version=3,
         presentation=OperationPresentation(
             usage_example={"operation": "atlas.project.list", "input": {"status": "active", "has_github_link": True}},
             normalized_errors=_ATLAS_ERRORS,
@@ -783,7 +779,7 @@ _ATLAS_OPERATIONS = (
     IntegrationOperationSpec(
         id="atlas.relationship.list",
         title="List Atlas relationships",
-        description="List important built-in relationship fields using optional keyword, type, status, and importance filters.",
+        description="List relationships with built-in fields, complete native data and custom fields using optional keyword, type, status and importance filters.",
         input_schema=_object_schema(
             {
                 "keywords": _KEYWORDS,
@@ -800,6 +796,7 @@ _ATLAS_OPERATIONS = (
         effects=frozenset({IntegrationEffect.READ}),
         resource=ResourceSpec("atlas.relationship", ()),
         risk=RiskLevel.LOW,
+        contract_version=2,
         presentation=OperationPresentation(
             usage_example={"operation": "atlas.relationship.list", "input": {"kind": "friend", "importance": "high"}},
             normalized_errors=_ATLAS_ERRORS,
@@ -1858,7 +1855,7 @@ _GOOGLE_DRIVE_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="google_drive.download", title="Download Google Drive file",
-        description="Save one Drive file in knowledge/google drive download and return its local Eidolon file reference.",
+        description="Save one Drive file in knowledge/google_drive_download and return its local Eidolon file reference.",
         input_schema=_object_schema({"file_id": _DRIVE_ID, "export_format": {"type": "string", "enum": ["docx", "xlsx", "pptx", "pdf", "txt", "csv"]}}, ["file_id"]),
         output_schema=_object_schema({"file": _DRIVE_LOCAL_FILE, "metadata": _DRIVE_METADATA}, ["file", "metadata"]),
         effects=frozenset({IntegrationEffect.READ}), resource=ResourceSpec("google_drive.file", ("file_id",)), risk=RiskLevel.LOW,

@@ -247,3 +247,4 @@ diff review, conflict resolution, final testing, and the final response.
 
 Do not delegate when the expected context packaging, review, or integration
 overhead is comparable to completing the task directly.
+## Custom instructions

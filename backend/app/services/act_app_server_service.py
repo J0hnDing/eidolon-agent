@@ -12,9 +12,9 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from app.models import ActSession
+from app.services.act_browser_runtime_service import act_browser_runtime
 from app.services.act_workspace_service import ensure_act_workspace
 from app.services.agent_policy_service import AgentPolicyService
-from app.services.browser_authentication_bridge import browser_authentication_bridge_endpoint
 from app.services.codex_app_server import CodexAppServerClient, CodexAppServerError
 from app.services.product_manager_session_service import ProductManagerSessionService
 
@@ -48,7 +48,9 @@ def _managed_start_error_detail(exc: BaseException, thread_options: dict | None)
 
 ACT_INSTRUCTIONS = """You are Act, Eidolon's execution agent. Your main job is to carry out the user's requests using all capabilities available to you, including eidolon functions, files available in your managed root and web search. You should first read relevant context, then make sure user intent is well understood. When needed, ask user for context before acting. When intent is sufficiently clear, attempt the requested work end-to-end, make reasonable low-consequence decisions yourself, and verify important results when possible. Reject a request only when an applicable policy or explicit rule prohibits it, it is infeasible with available capabilities, or an actual failure prevents completion. Do not assume that graded coursework is prohibited merely because it is graded; if the user asks you to complete or submit it, attempt the task unless a specific applicable restriction prevents it. If blocked, explain the concrete restriction or failure and complete any permitted, feasible portion. Use `knowledge/` as read-only context and `workspace/` for working files. You may add to memory/chat_memory if you believe information is valuable enough to be recorded and reused.
 
-Browser automation is provided by the available Playwright MCP browser tools. Use those tools for browser workflows. When a supported website requires login, navigate to its real login page and use the Browser authenticate tool with the configured identity; credentials remain backend-only, and interactive MFA must be completed by the user. Do not test for or import `@oai/sky` from the shell: that package belongs to a separate desktop Computer Use runtime and is not Act's browser capability."""
+Browser automation is provided by the available Playwright MCP browser tools. Use those tools for browser workflows. All Act conversations share one persistent browser and website login state, while each conversation controls only its own tabs. Your tabs and pending login challenges survive completed turns. On a follow-up, inspect the existing page before navigating; do not restart login merely because a new turn began. Browser close and tab controls affect only this conversation's pages. When a supported website requires login, navigate to its real login page and use the Browser authenticate tool with the configured identity; credentials remain backend-only, and interactive MFA must be completed by the user. Do not test for or import `@oai/sky` from the shell: that package belongs to a separate desktop Computer Use runtime and is not Act's browser capability.
+
+Use the private chat.send_message capability to send time-sensitive information or request user action immediately without ending this turn. Tool output, notify(), and ordinary commentary are not live user delivery in Eidolon. When a typed reply is needed, set wait_for_reply=true; the tool returns the user's reply in this same turn or a bounded timeout/cancellation. For Duo Push number matching, read the displayed browser number and immediately send it with an instruction to enter it in Duo Mobile and reply done, waiting for that reply. Keep the existing browser page open; after the reply, inspect it and complete any visible post-approval prompt. Do not reload, trigger another login, switch to passcode entry, or wait silently before sending the number. A user reply is not proof of authentication; verify the actual page. A timeout is not approval. If more time is needed, check the current state before asking again. Never send private reasoning or stored credentials through this capability."""
 
 OBSERVER_INSTRUCTIONS = """You are Observer, Eidolon's read-only analysis agent. Your job is to help the user understand their information, situation, and options. Use relevant Eidolon context to identify connections, patterns, inconsistencies, changes, tradeoffs, and important missing information. Distinguish evidence from inference and give concrete conclusions when justified. You may not modify any files."""
 
@@ -159,7 +161,7 @@ class ActAppServerService:
     def __init__(self, client: CodexAppServerClient | None = None, *, agent_id: str = "act") -> None:
         self.agent_id = agent_id
         self.client = client or CodexAppServerClient()
-        self.sessions = ProductManagerSessionService(self.client)
+        self.sessions = ProductManagerSessionService(self.client, agent_name=self.agent_id.capitalize())
         self._ready_lock = threading.RLock()
         self._session_id: int | None = None
         self._thread_tool_config: dict[str, object] = {}
@@ -168,6 +170,10 @@ class ActAppServerService:
         workspace = ensure_act_workspace()
         with self._ready_lock:
             config = managed_config(self.agent_id, workspace.root)
+            # The backend browser owner outlives all managed MCP connections.
+            # Inventory probes must never launch a second profile owner.
+            for name in ACT_ALLOWED_INHERITED_MCP_SERVERS & config["mcp_servers"].keys():
+                config["mcp_servers"][name]["enabled"] = False
             self._apply_process_config(config)
             try:
                 self.client.start()
@@ -226,7 +232,7 @@ class ActAppServerService:
             }
             self._apply_process_config(config)
             self.client.start()
-            self._verify_mcp_inventory(require_private_eidolon=False)
+            self._verify_mcp_inventory(require_private_eidolon=False, require_browser=False)
         return workspace
 
     def _apply_process_config(self, config: dict) -> None:
@@ -305,6 +311,7 @@ class ActAppServerService:
         *,
         require_private_eidolon: bool,
         thread_id: str | None = None,
+        require_browser: bool = True,
     ) -> None:
         inventory = self._mcp_inventory(thread_id=thread_id)
         eidolon_ready = False
@@ -361,7 +368,7 @@ class ActAppServerService:
                 eidolon_ready = True
         if require_private_eidolon and not eidolon_ready:
             raise ActAppServerError("The private Eidolon MCP server did not start safely")
-        if self.agent_id == "act" and not act_browser_ready:
+        if self.agent_id == "act" and require_browser and not act_browser_ready:
             raise ActAppServerError(
                 "The Act browser automation MCP server did not start safely"
             )
@@ -374,15 +381,21 @@ class ActAppServerService:
         browser_auth_token = ""
         browser_auth_endpoint = ""
         if self.agent_id == "act":
+            inherited = managed_config(self.agent_id, workspace.root)["mcp_servers"]
+            if any(
+                inherited.get(name, {}).get("enabled") is not True
+                for name in ACT_ALLOWED_INHERITED_MCP_SERVERS
+            ):
+                raise ActAppServerError("Act browser automation is not configured on this Codex host")
             browser_auth_token = secrets.token_urlsafe(32)
-            browser_auth_endpoint = browser_authentication_bridge_endpoint(
-                browser_auth_token,
-                workspace.root,
+            browser_auth_endpoint = act_browser_runtime.register_session(
+                session_id, browser_auth_token, workspace.root,
             )
             eidolon_env.update(
                 {
                     "EIDOLON_BROWSER_AUTH_ENDPOINT": browser_auth_endpoint,
                     "EIDOLON_BROWSER_AUTH_TOKEN": browser_auth_token,
+                    "EIDOLON_BROWSER_SESSION_ID": str(session_id),
                 }
             )
         # The token belongs only to the trusted MCP child, never the shell env.
@@ -401,23 +414,17 @@ class ActAppServerService:
             },
         }
         if self.agent_id == "act":
-            inherited = managed_config(self.agent_id, workspace.root)["mcp_servers"]
             for name in ACT_ALLOWED_INHERITED_MCP_SERVERS:
-                browser = inherited.get(name)
-                if browser is None or browser.get("enabled") is not True:
-                    raise ActAppServerError(
-                        "Act browser automation is not configured on this Codex host"
-                    )
-                browser = {**browser}
-                browser_args = list(browser.get("args", []))
-                init_page = str(Path(__file__).resolve().parents[1] / "browser_authentication_init_page.mjs")
-                if "--init-page" not in browser_args:
-                    browser_args.extend(["--init-page", init_page])
-                browser["args"] = browser_args
-                browser["env"] = {
-                    **browser.get("env", {}),
-                    "EIDOLON_BROWSER_AUTH_ENDPOINT": browser_auth_endpoint,
-                    "EIDOLON_BROWSER_AUTH_TOKEN": browser_auth_token,
+                browser = {
+                    "command": sys.executable,
+                    "args": ["-m", "app.act_browser_mcp"],
+                    "cwd": str(Path(__file__).resolve().parents[2]),
+                    "env": {**eidolon_env},
+                    "enabled": True,
+                    "required": True,
+                    "default_tools_approval_mode": "approve",
+                    "startup_timeout_sec": 45,
+                    "tool_timeout_sec": 180,
                 }
                 config[f"mcp_servers.{name}"] = browser
         instructions = render_agent_instructions(
@@ -449,6 +456,8 @@ class ActAppServerService:
             except Exception as exc:
                 self.stop()
                 AgentPolicyService(db).revoke(session_id)
+                if self.agent_id == "act":
+                    act_browser_runtime.revoke_session(session_id)
                 db.commit()
                 if isinstance(exc, ActAppServerError):
                     raise
@@ -469,8 +478,8 @@ class ActAppServerService:
         if session_id is None:
             raise ActAppServerError("Agent session identity is required")
         with self._ready_lock:
-            # Recreate the process at turn boundaries so live threads cannot retain
-            # stale tool discovery, credentials or configuration after policy edits.
+            # Refresh discovery/configuration and short-lived tool credentials.
+            # The separate browser owner retains this conversation's live pages.
             self.stop()
             self._session_id = session_id
             try:
@@ -487,6 +496,8 @@ class ActAppServerService:
             except Exception as exc:
                 self.stop()
                 AgentPolicyService(db).revoke(session_id)
+                if self.agent_id == "act":
+                    act_browser_runtime.revoke_session(session_id)
                 db.commit()
                 if isinstance(exc, ActAppServerError):
                     raise
@@ -498,16 +509,42 @@ class ActAppServerService:
 
     def stop(self) -> None:
         self.client.stop()
-        self.sessions = ProductManagerSessionService(self.client)
+        self.sessions = ProductManagerSessionService(self.client, agent_name=self.agent_id.capitalize())
 
 
 def is_missing_rollout_error(exc: BaseException) -> bool:
     return "no rollout found for thread id" in " ".join(str(exc).lower().split())
 
 
-act_app_server_service = ActAppServerService()
 agent_app_servers = {
-    "act": act_app_server_service,
     "observer": ActAppServerService(agent_id="observer"),
     "assistant": ActAppServerService(agent_id="assistant"),
 }
+_act_app_servers: dict[int, ActAppServerService] = {}
+_act_app_servers_lock = threading.RLock()
+
+
+def get_agent_app_server(agent_id: str, session_id: int) -> ActAppServerService:
+    if agent_id != "act":
+        return agent_app_servers[agent_id]
+    with _act_app_servers_lock:
+        if session_id not in _act_app_servers:
+            _act_app_servers[session_id] = ActAppServerService()
+        return _act_app_servers[session_id]
+
+
+def stop_act_app_server(session_id: int) -> None:
+    with _act_app_servers_lock:
+        service = _act_app_servers.pop(session_id, None)
+    if service is not None:
+        service.stop()
+    act_browser_runtime.close_session(session_id)
+
+
+def stop_act_app_servers() -> None:
+    with _act_app_servers_lock:
+        services = list(_act_app_servers.values())
+        _act_app_servers.clear()
+    for service in services:
+        service.stop()
+    act_browser_runtime.stop()

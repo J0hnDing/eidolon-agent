@@ -105,6 +105,7 @@ export type SkillRunStatus = "pending" | "running" | "succeeded" | "partial" | "
 export interface SkillRun {
   id: number;
   skill_id: number;
+  skill_name?: string | null;
   status: SkillRunStatus;
   input_json: Record<string, unknown> | null;
   output_json: Record<string, unknown> | null;
@@ -120,6 +121,7 @@ export interface SkillRun {
   output_tokens: number;
   reasoning_output_tokens: number;
   total_tokens: number;
+  child_runs?: SkillRun[];
   schedule_occurrence_key?: string | null;
   scheduled_for_at?: string | null;
   schedule_trigger?: "automatic" | "startup_catch_up" | null;
@@ -380,12 +382,23 @@ export interface CodexRoutingSettings extends CodexRoutingSettingsPayload {
   updated_at: string | null;
 }
 
+export interface ActLiveMessage {
+  id: number;
+  role: "assistant" | "user";
+  text: string;
+  reply_to_message_id: number | null;
+  reply_status: "none" | "awaiting" | "answered" | "expired" | "cancelled" | "failed";
+  reply_expires_at: string | null;
+  created_at: string;
+}
+
 export interface ActTurn {
   id: number;
   session_id: number;
   codex_turn_id: string | null;
   user_message: string;
   assistant_message: string | null;
+  live_messages?: ActLiveMessage[];
   backend_message_kind?: string | null;
   activity_json: Array<{ kind: string; label: string }>;
   status: string;
@@ -1486,7 +1499,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ input }),
     }),
-  listSkillRuns: (id: number) => request<SkillRun[]>(`/skills/${id}/runs`),
+  listSkillRuns: (id: number, includeChildren = false) =>
+    request<SkillRun[]>(`/skills/${id}/runs${includeChildren ? "?include_children=true" : ""}`),
   updateSkill: (id: number, payload: Partial<SkillUpdateInput>) =>
     request<Skill>(`/skills/${id}`, {
       method: "PATCH",

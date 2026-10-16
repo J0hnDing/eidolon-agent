@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from math import isfinite
 from typing import Any
 
 from sqlalchemy import select
@@ -270,8 +271,6 @@ class AssistantAssessmentService:
 
     @staticmethod
     def _inactive_goals(references: set[str]) -> set[str]:
-        from urllib.parse import quote
-
         provider = UrllibAtlasProviderAdapter()
         records = provider._record_list(provider._request(
             "/api/records?category=goal", None, timeout=10, max_bytes=2_000_000, method="GET"
@@ -282,13 +281,17 @@ class AssistantAssessmentService:
             for kind in ("goal", "subgoal")
         }
         inactive = references - present
-        for reference in references & present:
-            goal_id = quote(reference.partition(":")[2], safe="")
-            result = provider._request(
-                f"/api/goals/{goal_id}/progression", None, timeout=10, max_bytes=2_000_000, method="GET"
-            )
-            if result["goal"]["progress"] >= 100:
-                inactive.add(reference)
+        for record in records:
+            # Atlas derives progress from the Goal's local blueprint. An empty
+            # blueprint has no assessed progress and is not a completed Goal.
+            progress = record.get("progress")
+            if progress is None:
+                continue
+            if (not isinstance(progress, (int, float)) or isinstance(progress, bool)
+                    or not 0 <= progress <= 100 or not isfinite(progress)):
+                raise IntegrationProviderError("provider_unavailable", "Atlas returned invalid Goal progress")
+            if progress == 100:
+                inactive.update({f"goal:{record['id']}", f"subgoal:{record['id']}"} & references)
         return inactive
 
     def _record_result(

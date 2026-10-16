@@ -102,9 +102,8 @@ def test_selected_web_source_is_returned_to_caller(monkeypatch: pytest.MonkeyPat
     source = "https://ofac.treasury.gov/recent-actions/example"
     item = {
         "what_happened": "Major sanctions announced",
-        "why_it_matters": "Trade exposure changed.",
-        "new_since_previous": "New designations.",
-        "watch_next": "Implementation date.",
+        "analysis": "Trade exposure changed.",
+        "explanation": "",
         "sources": [source],
     }
     monkeypatch.setattr(skill, "FEEDS", (("Federal Reserve", "https://www.federalreserve.gov/test"),))
@@ -168,12 +167,25 @@ def test_keyed_series_uses_observation_period_and_detects_value_change():
 def test_rejects_unbounded_or_unlinked_codex_output():
     item = {
         "what_happened": "Change",
-        "why_it_matters": "Material effects",
-        "new_since_previous": "New decision",
-        "watch_next": "Next meeting",
+        "analysis": "Material effects",
+        "explanation": "",
         "sources": ["http://example.com"],
     }
     with pytest.raises(ValueError, match="source links"):
         skill._validated_report(_report([item]))
     with pytest.raises(ValueError, match="too many developments"):
         skill._validated_report(_report([item] * 9))
+
+
+def test_legacy_history_is_accepted_but_new_output_requires_concise_contract():
+    legacy = _report([{
+        "what_happened": "Old decision", "why_it_matters": "Old analysis",
+        "new_since_previous": "Old delta", "watch_next": "Old watch",
+        "sources": ["https://example.gov/release"],
+    }])
+    assert skill._validated_state(_state(report=legacy))["report"] == legacy
+    with pytest.raises(ValueError, match="invalid development"):
+        skill._validated_report(legacy)
+    assert skill.RESPONSE_SCHEMA == json.loads(
+        (SKILL_DIR / "manifest.json").read_text()
+    )["output_schema"]["properties"]["report"]

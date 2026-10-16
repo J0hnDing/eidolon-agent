@@ -7,6 +7,7 @@ import AgentRunsPage from "./pages/AgentRunsPage";
 import AgentsPage from "./pages/AgentsPage";
 import ChatPage from "./pages/ChatPage";
 import FunctionsPage from "./pages/FunctionsPage";
+import IntegrationsPage from "./pages/IntegrationsPage";
 import MemoryPage from "./pages/MemoryPage";
 import SkillDetailPage from "./pages/SkillDetailPage";
 import SkillsPage from "./pages/SkillsPage";
@@ -158,7 +159,8 @@ export default function App() {
             <Route path="/settings/usage" element={<UsageSettingsPage />} />
             <Route path="/settings/project" element={<UsageSettingsPage section="project" />} />
             <Route path="/settings/models" element={<UsageSettingsPage section="models" />} />
-            <Route path="/settings/integrations" element={<UsageSettingsPage section="integrations" />} />
+            <Route path="/settings/integrations" element={<IntegrationsPage />} />
+            <Route path="/settings/integrations/:integrationId" element={<IntegrationsPage />} />
             <Route path="/settings/permissions" element={<UsageSettingsPage section="permissions" />} />
           </Routes>
         </div>

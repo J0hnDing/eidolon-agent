@@ -12,7 +12,7 @@ For new Project-mode builds, the backend derives an initial skeleton from the ap
   "name": "example_skill",
   "description": "What this skill does.",
   "runtime": "function",
-  "entrypoint": "skill.py",
+  "entrypoint": "src/example.py",
   "instructions_path": null,
   "input_schema": {
     "type": "object",
@@ -63,7 +63,7 @@ On install, the backend creates exactly one paused `SkillSchedule` row from this
 
 - `runtime` is `function`, `service`, or `web_app`;
 - all runtime protocols require an `entrypoint` and tests;
-- `function` uses a relative Python file such as `skill.py` and bounded JSON stdin/stdout execution;
+- `function` uses its declared relative Python entrypoint and bounded JSON stdin/stdout execution;
 - `service` uses the same bounded JSON protocol, requires object-shaped input/output schemas and one schedule, and can run only from that schedule;
 - registry-callable functions require object-shaped input/output JSON Schema contracts;
 - all runtimes may declare `function_requirements` for backend-controlled server-side calls, but a service itself is never a registry target;

@@ -16,26 +16,45 @@ On upgrade, any legacy Atlas API-key connection and its associated passphrase ar
 
 Storing the passphrase makes the Windows account the practical at-rest security boundary. There is no plaintext, environment-variable, config-file, SQLite-secret, application-encrypted, or backup fallback. Eidolon does not initialize Atlas, change or recover its passphrase, or use it for Atlas backups.
 
-## Function Catalog
+## Read capability
 
-The provider exposes these fixed operations:
+Atlas reads are backend-owned integration functions in the ordinary catalog, available to Act, MCP, and explicitly declared skill/service callers through the same invocation, authorization, schema validation, and audit path. They do not create a generated skill or provide arbitrary HTTP access. Agents should discover the schema, search compact identities, and fetch relevant details as needed.
 
-- `atlas.person.get`: non-sensitive built-in Person projection.
-- `atlas.interest.get` and `atlas.interest.list`: hobbies and preferences with only their meaningful labels and subtype fields; Atlas record metadata and the redundant subtype discriminator are excluded. New generated skills should use `atlas.interest.list`.
-- `atlas.experience.list`: optional title/description keywords, ongoing state, and limit.
-- `atlas.goal.list`: optional importance and horizon filters on top-level goals; retained goals include effective integer progress (0–100), revision, Result, following Goal IDs, complete subgoal trees, and progression edges. Parent progress uses Atlas's existing roll-up calculation.
-- `atlas.goal.create`: create one top-level Goal or a subgoal under `parent_goal_id`. Title is required; description, horizon, importance, target date, and progress are optional. Horizon defaults to `short` for a top-level Goal or inherits the parent for a subgoal; importance defaults to `medium`, progress to 0. Subgoals may supply `following_goal_ids` (the sibling Goals they follow) and Result. A nonempty Result is valid only at 100% effective progress. An optional version-4 UUID `request_id` makes subgoal creation retry-safe; without it a fresh UUID is generated. Top-level creation uses Atlas's ordinary record POST and is not idempotent.
-- `atlas.goal.update`: edit one existing Goal by ID and `expected_revision`. It supports title, description, horizon, importance, target date, and progress. Subgoals also support Result and full replacement of `following_goal_ids`; pass `[]` to clear them. Passing `null` for `target_date` clears it, and an empty Result string clears Result. Atlas commits record fields and following links atomically, rejects invalid sibling/cyclic links, and rejects a nonempty Result below 100% effective progress. Parent progress is derived from active subgoals and cannot be set directly. Stale revisions fail without a write. This replaces the former progress-only edit contract.
-- `atlas.project.list`: optional title/description keywords, status, GitHub-link presence, and limit.
-- `atlas.relationship.list`: optional name/type/notes keywords, kind, status, importance, and limit.
-- `atlas.knowledge.frontier.list`: paged Subjects-only assessment frontier.
-- `atlas.knowledge.search`: ranked compact candidates by name, then known explanation and terms.
-- `atlas.knowledge.node.get`: one bounded node with path, parent, immediate children, explanation, terms, status, and revision.
-- `atlas.knowledge.node.know`: one explicit medium-risk Knowledge establishment.
+| Operation | Read coverage |
+| --- | --- |
+| `atlas.describe` | `overview` returns native schemas and read guidance; `api_reference` returns OpenAPI, optionally one documented `path`; `model` returns model/End/resource catalogs; `custom_fields` returns definitions, optionally by category. Discovery does not authorize any additional operation. |
+| `atlas.records.search` | All current categories, optional `query` and `trashed=false|true|all`; compact identity results by default, complete native records with `include_data=true`. |
+| `atlas.records.get` | Complete native record by `id`: data, custom fields, provenance, facts, links and backlinks. This explicit read includes sensitive Person identifiers and physical health. |
+| `atlas.links.get` | Complete native link by `id`. |
+| `atlas.person.completeness.get` | Atlas's overall and per-area `complete`/`missing` percentages, counts/targets, criteria and available missing-field/domain/spectrum lists. |
+| `atlas.states.get` | Complete state estimates, confidence and recency, optionally `at`, or `view=configuration`. Reads do not save observations or evolve stored state. |
+| `atlas.personality.get` | Complete native Personality response, standalone spectra and exact imported Valence model when present; unknown values and stored precision stay unchanged. |
+| `atlas.history.list` | `kind=record|link` revisions with `id`, or `kind=states` event/manual-estimate history. |
+| `atlas.graph.get` | Full motivational graph, optionally focused by `goal_id`. |
+| `atlas.knowledge.read` | Complete paged native `view=nodes`, one `view=node` with `node_id`, or `view=tree` including connections. |
+| `atlas.attachments.list` | Image or resume metadata by `record_id`. |
+| `atlas.attachments.read` | Explicit image/resume content reads. `kind=image` uses image ID; `kind=resume` uses Person record ID. Default base64 bytes are chunked; `format=text` extracts PDF/DOCX resume text. Nothing is saved to disk. |
 
-These are Eidolon function contracts, not one-for-one Atlas endpoints. Person, Interest, Experience, Goal, Project, and Relationship read native `/api/records` categories. Eidolon explicitly projects the existing bounded fields, excludes sensitive Person fields and Interest record metadata, preserves Experience and Project ordering, rebuilds Goal hierarchy, and fetches native Goal progression graphs for parent goals. Knowledge functions read the primitive flat node list and derive ranking, frontier membership, canonical paths, parents, and immediate children inside Eidolon. Atlas exposes no agent-specific endpoints.
+Native data objects preserve new fields automatically rather than projecting only known legacy fields. Search matches native title/data/custom values. Category strings are validated by Atlas, so new native record categories need no Eidolon enum update. New subsystems with different routes still require a deliberate backend adapter addition.
 
-Reads are low risk. Goal create and edit are medium risk because they write Atlas records and, for subgoals, progression edges. `atlas.knowledge.node.know` is medium risk because it makes one internet-enabled Codex call, writes the selected Knowledge node, and may add immediate name-only unassessed children. It cannot rename, move, delete, merge, or recursively expand nodes.
+Record searches and history return `items`, `total`, and `next_cursor`; native Knowledge node pages return `data`, `total`, and `next_cursor`. Page sizes are 1–100 and byte-bounded. Cursors bind the source snapshot and query; source changes return `stale_revision` and the caller starts again. States history uses native pagination with a first-event/count anchor. Attachment chunks return `next_offset` and `sha256`; supply that hash on later chunks to detect replacement. Native JSON reads are bounded at 32 MiB, collection pages at 512 KiB, and binary reads at 20 MiB (Atlas's image maximum). Oversized responses fail explicitly; narrow the search, fetch a record separately, reduce page size, or use paged Knowledge nodes. Completeness uses the exact shared Atlas Overview calculation: six equally weighted areas (core profile, Goals, Experiences, Relationships, Beliefs, Personality), with `asOfDate` and `definition` metadata. It is a coverage estimate, not a prediction of personal wellbeing.
+
+Transport limits still apply after provider reads: MCP output is limited to 1 MiB and skill integration responses to 5,000,000 bytes. A native response fitting the provider limit can exceed a caller's transport limit; the caller receives `response_too_large`, never a silently shortened record.
+
+## Existing semantic functions
+
+Stable operation IDs remain available with current contracts:
+
+- `atlas.person.get` retains existing profile names and resume metadata, adds complete non-identifier `data`, `custom_field_values`, and top-level `completeness`. Government identifiers remain excluded from this convenience projection; complete record reads are explicit.
+- `atlas.interest.get` / `atlas.interest.list` return `interests` with current numeric `liking` and `skill_level`, native data and custom fields. Interests remain distinct from Ends categorized as interests; the old hobbies/preferences projection is removed.
+- Experience, Project and Relationship lists retain their filters and meaningful projection fields, adding record identity/revision and complete `data` / `custom_field_values`.
+- `atlas.goal.list` returns flat `goals` plus the native motivational `graph`, with optional `horizon`, `pursuit_status`, and `limit`. Progress is a nullable number derived from blueprint steps, preserving fractional values; an empty blueprint is unassessed.
+- `atlas.goal.create` and `atlas.goal.update` accept current Goal fields: title, description, success conditions, pursuit status, commitment, horizon, target date, blueprint, provenance and custom fields. Updates require `expected_revision`; `target_date:null` clears the date. Atlas validates the blueprint DAG. Obsolete subgoal, importance, Result, explicit progress, prerequisite and request-ID inputs are rejected. Create is not idempotent.
+- Knowledge frontier/search/bounded-node functions and `atlas.knowledge.node.know` retain their bounded semantics.
+
+Breaking contract changes increment versions and invalidate old runtime approval fingerprints. Existing skills must review changed Atlas permissions before running again; the backend never rewrites approvals to authorize new read access. Generated skills must explicitly declare selected new read operations. The catalog automatically publishes the registry on backend startup; restart existing MCP sessions to refresh their snapshotted tool contracts.
+
+Reads are low risk. Goal create/edit and `atlas.knowledge.node.know` remain medium risk. The latter makes one internet-enabled Codex call and may mark one node known/add immediate name-only unassessed children; it cannot rename, move, delete, merge, or recursively expand nodes.
 
 Atlas functions are offered to ProductManager whenever Atlas is running and unlocked. Secret-store availability and a saved passphrase do not gate them. `Know_node` additionally requires a compatible Codex CLI. Atlas has an empty manifest resource scope; GitHub continues to use exact repository scopes.
 

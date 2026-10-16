@@ -76,18 +76,7 @@ def _validated_repositories(output: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _report_blocks(repositories: list[dict[str, Any]], report_date: str) -> list[dict[str, Any]]:
-    blocks = [
-        _heading("heading_1", "GitHub Projects Weekly Report"),
-        {
-            "type": "callout",
-            "callout": {
-                "rich_text": [_text(f"Generated deterministically on {report_date} from GitHub Scout output.")],
-                "icon": {"type": "emoji", "emoji": "📊"},
-                "color": "blue_background",
-            },
-        },
-        {"type": "divider", "divider": {}},
-    ]
+    blocks = []
     if not repositories:
         blocks.append(_paragraph([_text("GitHub Scout returned no repositories for this weekly period.")]))
         return blocks

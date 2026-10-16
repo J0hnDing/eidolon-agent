@@ -30,88 +30,81 @@ def test_native_person_projection_excludes_sensitive_fields() -> None:
             {
                 "preferredName": "Jane",
                 "emails": ["jane@example.test"],
+                "postalCode": "M5V 1A1",
+                "occupation": "Engineer",
+                "instagram": "@jane",
+                "discord": "jane.123",
+                "linkedinLink": "https://www.linkedin.com/in/jane",
+                "wechatNumber": "jane-wechat",
+                "facebook": "jane.doe",
+                "personalWebsite": "https://jane.example.test",
                 "summary": "Builder",
                 "passportNumber": "SECRET-PASSPORT",
+                "physicalHealth": {"measurements": [{"weightKg": 70}]},
+                "pronouns": "she/her",
                 "nationalId": "SECRET-ID",
             },
         )
     ]
-    adapter._request = lambda *args, **kwargs: payload  # type: ignore[method-assign]  # noqa: SLF001
+    resume = {"recordId": "person-1", "filename": "resume.pdf", "mimeType": "application/pdf",
+              "byteLength": 1024, "createdAt": "2026-01-02T00:00:00.000Z", "updatedAt": "2026-01-03T00:00:00.000Z"}
+    completeness = {"overall": {"rate": 0.5}}
+    adapter._request = lambda path, *args, **kwargs: (  # type: ignore[method-assign]  # noqa: SLF001
+        resume if path.endswith("/resume") else completeness if path.endswith("/completeness") else payload
+    )
 
     result = adapter.execute(OPERATIONS["atlas.person.get"], {})
 
+    assert result["completeness"] == completeness
+    assert result["personal_info"]["data"]["physicalHealth"]["measurements"][0]["weightKg"] == 70
+    assert result["personal_info"]["data"]["pronouns"] == "she/her"
     assert result["personal_info"]["name"] == "Jane Doe"
     assert result["personal_info"]["emails"] == ["jane@example.test"]
+    assert result["personal_info"]["postal_code"] == "M5V 1A1"
+    assert result["personal_info"]["occupation"] == "Engineer"
+    assert result["personal_info"]["instagram"] == "@jane"
+    assert result["personal_info"]["discord"] == "jane.123"
+    assert result["personal_info"]["linkedin_link"] == "https://www.linkedin.com/in/jane"
+    assert result["personal_info"]["wechat_number"] == "jane-wechat"
+    assert result["personal_info"]["facebook"] == "jane.doe"
+    assert result["personal_info"]["personal_website"] == "https://jane.example.test"
+    assert result["personal_info"]["resume"]["filename"] == "resume.pdf"
+    Draft202012Validator(OPERATIONS["atlas.person.get"].output_schema).validate(result)
     assert "passportNumber" not in json.dumps(result)
     assert "SECRET-ID" not in json.dumps(result)
 
 
-def test_native_interest_projection_returns_hobbies_and_preferences_without_metadata() -> None:
+def test_native_person_projection_handles_missing_resume() -> None:
     adapter = UrllibAtlasProviderAdapter()
-    interests = [
-        record(
-            "preference-1",
-            "interest",
-            "Communication",
-            {
-                "kind": "preference",
-                "domain": "communication",
-                "value": "Async by default",
-                "strength": "strong",
-                "context": "Deep work",
-                "rationale": "Protects focus",
-                "effectiveFrom": "2026-01",
-                "effectiveTo": None,
-                "privateMetadata": "exclude",
-            },
-            revision=4,
-        ),
-        record(
-            "hobby-1",
-            "interest",
-            "Photography",
-            {
-                "kind": "hobby",
-                "description": "Street photography",
-                "engagement": "regular",
-                "skillLevel": "advanced",
-                "started": "2020-05",
-                "notes": "Photo walks",
-            },
-        ),
-    ]
-    adapter._request = lambda *args, **kwargs: interests  # type: ignore[method-assign]  # noqa: SLF001
+    calls: list[str] = []
 
+    def request(path, *args, **kwargs):  # noqa: ANN001, ANN202, ARG001
+        calls.append(path)
+        if path.endswith("/completeness"):
+            return {"overall": {"rate": 0}}
+        return None if path.endswith("/resume") else [record("person-1", "person", "Jane Doe", {})]
+
+    adapter._request = request  # type: ignore[method-assign]  # noqa: SLF001
+    result = adapter.execute(OPERATIONS["atlas.person.get"], {})
+    assert result["personal_info"]["resume"] is None
+    assert calls == ["/api/records?category=person", "/api/records/person-1/resume", "/api/person/completeness"]
+    Draft202012Validator(OPERATIONS["atlas.person.get"].output_schema).validate(result)
+
+
+def test_native_interest_projection_preserves_numeric_ratings_and_data() -> None:
+    adapter = UrllibAtlasProviderAdapter()
+    interests = [record("i-1", "interest", "Photography", {
+        "liking": 85.5, "skillLevel": 40, "provenance": {"attribution": "stated", "evidence": []},
+        "facts": [{"claim": "Practices weekly"}],
+    }, revision=4, customFieldValues={"format": "digital"})]
+    adapter._request = lambda *args, **kwargs: interests  # type: ignore[method-assign]  # noqa: SLF001
     result = adapter.execute(OPERATIONS["atlas.interest.get"], {})
     assert adapter.execute(OPERATIONS["atlas.interest.list"], {}) == result
-
-    assert result == {
-        "hobbies": [
-            {
-                "title": "Photography",
-                "description": "Street photography",
-                "engagement": "regular",
-                "skill_level": "advanced",
-                "started": "2020-05",
-                "notes": "Photo walks",
-            }
-        ],
-        "preferences": [
-            {
-                "title": "Communication",
-                "domain": "communication",
-                "value": "Async by default",
-                "strength": "strong",
-                "context": "Deep work",
-                "rationale": "Protects focus",
-                "effective_from": "2026-01",
-                "effective_to": None,
-            }
-        ],
-    }
-    serialized = json.dumps(result)
-    for field in ("id", "category", "kind", "createdAt", "revision", "privateMetadata"):
-        assert field not in serialized
+    assert result["interests"][0]["liking"] == 85.5
+    assert result["interests"][0]["skill_level"] == 40
+    assert result["interests"][0]["data"] == interests[0]["data"]
+    assert result["interests"][0]["custom_field_values"] == {"format": "digital"}
+    Draft202012Validator(OPERATIONS["atlas.interest.list"].output_schema).validate(result)
 
 
 def test_native_experience_and_project_normalization_preserves_ordering() -> None:
@@ -145,159 +138,143 @@ def test_native_experience_and_project_normalization_preserves_ordering() -> Non
     assert [item["title"] for item in project_result["projects"]] == ["alpha", "Zulu"]
 
 
-def test_native_goals_rebuild_hierarchy_and_progression_edges() -> None:
+def test_legacy_record_lists_keep_enriched_native_data_and_custom_fields() -> None:
     adapter = UrllibAtlasProviderAdapter()
-    goals = [
-        record("root", "goal", "Root", {"importance": "high", "description": "Top"}, parentId=None, position=0, progress=40, revision=1),
-        record("second", "goal", "Second", {"result": "Delivered"}, parentId="root", position=1, progress=60, revision=2),
-        record("first", "goal", "First", {"horizon": "short"}, parentId="root", position=0, progress=20, revision=3),
-    ]
+    payloads = {
+        "experience": [record("e", "experience", "Trip", {"narrative": "Story", "place": "Somewhere", "facts": []},
+                              revision=2, customFieldValues={"mood": "happy"})],
+        "project": [record("p", "project", "Build", {"context": "Context", "provenance": {"attribution": "stated"}},
+                           revision=3, customFieldValues={"team": "solo"})],
+        "relationship": [record("r", "relationship", "Alex", {"kind": "friend", "contact": "Alex contact", "facts": []},
+                                revision=4, customFieldValues={"met": "School"})],
+    }
+    adapter._request = lambda path, *_args, **_kwargs: payloads[path.split("category=")[1]]  # type: ignore[method-assign]  # noqa: SLF001
+    for category, key in (("experience", "experiences"), ("project", "projects"), ("relationship", "relationships")):
+        result = adapter.execute(OPERATIONS[f"atlas.{category}.list"], {})
+        assert result[key][0]["data"] == payloads[category][0]["data"]
+        assert result[key][0]["custom_field_values"] == payloads[category][0]["customFieldValues"]
+        assert result[key][0]["revision"] == payloads[category][0]["revision"]
+
+
+def test_person_completeness_is_available_without_a_profile() -> None:
+    adapter = UrllibAtlasProviderAdapter()
+    completeness = {"overall": {"rate": 0}, "sections": []}
+    adapter._request = lambda path, *_args, **_kwargs: (  # type: ignore[method-assign]  # noqa: SLF001
+        completeness if path.endswith("/completeness") else []
+    )
+    assert adapter.execute(OPERATIONS["atlas.person.get"], {}) == {
+        "personal_info": None, "completeness": completeness,
+    }
+
+
+def native_goal(record_id="goal", **extra):
+    return record(record_id, "goal", "Write report", {
+        "description": "A report", "successConditions": "Published", "pursuitStatus": "active",
+        "commitment": 85, "horizon": "short", "targetDate": "2026-12",
+        "provenance": {"attribution": "stated", "evidence": []},
+        "blueprint": {"nodes": [{"id": "a", "title": "Draft", "description": "", "progress": 33.5}], "edges": []},
+    }, revision=4, trashed=False, progress=33.5, **extra)
+
+
+def test_native_goals_use_flat_records_and_motivational_graph() -> None:
+    adapter = UrllibAtlasProviderAdapter()
+    goals = [native_goal(), native_goal("other")]
+    graph = {"nodes": goals, "edges": [{"sourceId": "goal", "targetId": "other", "type": "REQUIRES"}]}
     calls = []
 
     def request(path, *_args, **_kwargs):
         calls.append(path)
-        if path.startswith("/api/records"):
-            return goals
-        return {"dependencies": [{"goalId": "second", "prerequisiteId": "first"}]}
+        return goals if path.startswith("/api/records") else graph
 
     adapter._request = request  # type: ignore[method-assign]  # noqa: SLF001
-    result = adapter.execute(OPERATIONS["atlas.goal.list"], {})
-
-    assert [item["id"] for item in result["goals"][0]["subgoals"]] == ["first", "second"]
-    assert result["goals"][0]["progress"] == 40
-    assert result["goals"][0]["revision"] == 1
-    assert [item["progress"] for item in result["goals"][0]["subgoals"]] == [20, 60]
-    assert result["goals"][0]["subgoals"][1]["result"] == "Delivered"
-    assert result["goals"][0]["subgoals"][1]["following_goal_ids"] == ["first"]
+    result = adapter.execute(OPERATIONS["atlas.goal.list"], {"horizon": "short", "pursuit_status": "active", "limit": 1})
+    assert len(result["goals"]) == 1
+    assert result["goals"][0]["progress"] == 33.5
+    assert result["goals"][0]["blueprint"]["nodes"][0]["id"] == "a"
+    assert result["goals"][0]["pursuit_status"] == "active"
+    assert result["graph"] == graph
+    assert calls == ["/api/records?category=goal", "/api/goal-graph"]
     Draft202012Validator(OPERATIONS["atlas.goal.list"].output_schema).validate(result)
-    assert result["progressions"] == [
-        {
-            "parent_goal_id": "root",
-            "subgoal_ids": ["first", "second"],
-            "edges": [{"prerequisite_goal_id": "first", "dependent_goal_id": "second"}],
-        }
-    ]
-    assert "/api/goals/root/progression" in calls
 
 
-@pytest.mark.parametrize("progress", [None, True, -1, 101, 10.5])
+@pytest.mark.parametrize("progress", [True, -1, 101, float("inf"), float("nan"), "20"])
 def test_native_goal_list_rejects_invalid_progress(progress) -> None:
     adapter = UrllibAtlasProviderAdapter()
-    adapter._request = (  # type: ignore[method-assign]  # noqa: SLF001
-        lambda path, *_args, **_kwargs: [record("root", "goal", "Root", {}, parentId=None, position=0, progress=progress, revision=1)]
+    goal = {**native_goal(), "progress": progress}
+    adapter._request = lambda path, *_args, **_kwargs: (  # type: ignore[method-assign]  # noqa: SLF001
+        [goal] if path.startswith("/api/records") else {"nodes": [], "edges": []}
     )
     with pytest.raises(IntegrationProviderError, match="invalid Goal progress"):
         adapter.execute(OPERATIONS["atlas.goal.list"], {})
 
 
-def test_goal_create_supports_top_level_and_idempotent_subgoal() -> None:
+def test_goal_without_blueprint_progress_is_unknown() -> None:
+    goal = {**native_goal(), "progress": None}
+    assert UrllibAtlasProviderAdapter._goal_view(goal)["progress"] is None  # noqa: SLF001
+
+
+def test_goal_create_uses_current_native_model_and_blueprint() -> None:
     adapter = UrllibAtlasProviderAdapter()
-    parent = record("parent", "goal", "Plan", {"horizon": "long"}, parentId=None, revision=1, trashed=False)
-    created = record(
-        "child", "goal", "Draft", {"horizon": "long", "importance": "medium", "description": "",
-                                   "targetDate": "", "progress": 100, "result": "Done"},
-        parentId="parent", revision=1, trashed=False,
-    )
     calls = []
+    blueprint = native_goal()["data"]["blueprint"]
 
     def request(path, body, *, method, **_kwargs):
         calls.append((method, path, body))
-        if method == "GET" and path == "/api/records/parent":
-            return parent
-        if method == "POST" and path.startswith("/api/goals/"):
-            return {"record": created, "created": False}
-        if path == "/api/goals/child/progression":
-            return {"goal": {"id": "child", "progress": 100}, "nodes": [], "dependencies": []}
-        if path == "/api/goals/parent/progression":
-            return {"dependencies": [{"goalId": "child", "prerequisiteId": "first"}]}
-        raise AssertionError(path)
+        return {**native_goal(), "data": body["data"], "customFieldValues": body["customFieldValues"]}
 
     adapter._request = request  # type: ignore[method-assign]  # noqa: SLF001
     result = adapter.execute(OPERATIONS["atlas.goal.create"], {
-        "title": "Draft", "parent_goal_id": "parent", "following_goal_ids": ["first"],
-        "progress": 100, "result": "Done", "request_id": "11111111-1111-4111-8111-111111111111",
+        "title": "Plan", "blueprint": blueprint, "commitment": 70,
+        "pursuit_status": "active", "success_conditions": "Delivered", "custom_field_values": {"tag": "work"},
     })
-    assert result["created"] is False
-    assert result["goal"]["horizon"] == "long"
-    assert result["goal"]["following_goal_ids"] == ["first"]
-    assert result["goal"]["result"] == "Done"
-    assert calls[1] == ("POST", "/api/goals/parent/subgoals", {
-        "requestId": "11111111-1111-4111-8111-111111111111", "title": "Draft",
-        "data": created["data"], "customFieldValues": {}, "prerequisiteIds": ["first"],
-    })
-    Draft202012Validator(OPERATIONS["atlas.goal.create"].output_schema).validate(result)
-
-
-def test_goal_create_top_level_uses_native_record_api() -> None:
-    adapter = UrllibAtlasProviderAdapter()
-    calls = []
-
-    def request(path, body, *, method, **_kwargs):
-        calls.append((method, path, body))
-        if method == "POST":
-            return record("root", "goal", "Plan", body["data"], parentId=None, revision=1, trashed=False)
-        return {"goal": {"id": "root", "progress": 0}, "dependencies": []}
-
-    adapter._request = request  # type: ignore[method-assign]  # noqa: SLF001
-    result = adapter.execute(OPERATIONS["atlas.goal.create"], {"title": "Plan"})
-    assert calls[0] == ("POST", "/api/records", {
-        "category": "goal", "title": "Plan", "customFieldValues": {},
-        "data": {"horizon": "short", "importance": "medium", "targetDate": "", "description": "", "progress": 0},
-    })
-    assert result["goal"]["parent_goal_id"] is None
-    assert result["goal"]["progress"] == 0
+    assert calls == [("POST", "/api/records", {
+        "category": "goal", "title": "Plan", "customFieldValues": {"tag": "work"},
+        "data": {"horizon": "short", "description": "", "successConditions": "Delivered",
+                 "pursuitStatus": "active", "commitment": 70, "blueprint": blueprint},
+    })]
+    assert result["goal"]["progress"] == 33.5
     assert result["created"] is True
     Draft202012Validator(OPERATIONS["atlas.goal.create"].output_schema).validate(result)
 
 
-def test_goal_update_preserves_other_data_and_updates_result_and_following_goals() -> None:
+@pytest.mark.parametrize("old_field", ["progress", "result", "importance", "parent_goal_id", "following_goal_ids", "request_id"])
+def test_goal_writes_reject_obsolete_fields_without_transport(old_field) -> None:
     adapter = UrllibAtlasProviderAdapter()
-    current = record(
-        "leaf", "goal", "Write report",
-        {"horizon": "short", "importance": "high", "description": "Keep this", "progress": 20, "result": ""},
-        parentId="parent", revision=4, trashed=False,
-    )
+    adapter._request = lambda *_args, **_kwargs: pytest.fail("Unexpected transport")  # type: ignore[method-assign]  # noqa: SLF001
+    for operation in ("atlas.goal.create", "atlas.goal.update"):
+        with pytest.raises(IntegrationProviderError) as error:
+            adapter.execute(OPERATIONS[operation], {"title": "Plan", old_field: "obsolete"})
+        assert error.value.error_type == "invalid_input"
+
+
+def test_goal_update_preserves_other_data_and_clears_target_date() -> None:
+    adapter = UrllibAtlasProviderAdapter()
+    current = native_goal()
     calls = []
 
     def request(path, body, *, method, **_kwargs):
         calls.append((method, path, body))
-        if method == "GET":
-            if path == "/api/records/leaf":
-                return current
-            if path == "/api/goals/leaf/progression":
-                return {"goal": {"id": "leaf", "progress": 100}, "nodes": []}
-            return {"dependencies": [{"goalId": "leaf", "prerequisiteId": "first"}]}
-        return {**current, "title": body["title"], "revision": 5, "data": body["data"]}
+        return current if method == "GET" else {**current, "revision": 5, "data": body["data"]}
 
     adapter._request = request  # type: ignore[method-assign]  # noqa: SLF001
-    result = adapter.execute(
-        OPERATIONS["atlas.goal.update"], {
-            "id": "leaf", "expected_revision": 4, "title": "Submit report",
-            "progress": 100, "result": "Delivered", "following_goal_ids": ["first"],
-        }
-    )
-    assert calls == [
-        ("GET", "/api/records/leaf", None),
-        ("PATCH", "/api/records/leaf", {
-            "revision": 4,
-            "title": "Submit report", "prerequisiteIds": ["first"],
-            "data": {"horizon": "short", "importance": "high", "description": "Keep this", "progress": 100, "result": "Delivered"},
-        }),
-        ("GET", "/api/goals/leaf/progression", None),
-        ("GET", "/api/goals/parent/progression", None),
-    ]
-    assert result["goal"]["title"] == "Submit report"
+    result = adapter.execute(OPERATIONS["atlas.goal.update"], {
+        "id": "goal", "expected_revision": 4, "commitment": 100, "target_date": None,
+    })
+    assert len(calls) == 2
+    assert calls[0] == ("GET", "/api/records/goal", None)
+    assert calls[1][2]["revision"] == 4
+    assert calls[1][2]["data"]["description"] == "A report"
+    assert calls[1][2]["data"]["commitment"] == 100
+    assert "targetDate" not in calls[1][2]["data"]
     assert result["goal"]["revision"] == 5
-    assert result["goal"]["progress"] == 100
-    assert result["goal"]["result"] == "Delivered"
-    assert result["goal"]["following_goal_ids"] == ["first"]
+    assert result["goal"]["target_date"] is None
     Draft202012Validator(OPERATIONS["atlas.goal.update"].output_schema).validate(result)
 
 
-@pytest.mark.parametrize("reason", ["top_result", "stale", "trashed", "empty"])
+@pytest.mark.parametrize("reason", ["stale", "trashed", "empty"])
 def test_goal_update_rejects_unusable_goal_without_patching(reason) -> None:
     adapter = UrllibAtlasProviderAdapter()
-    current = record("leaf", "goal", "Goal", {"horizon": "short", "progress": 20}, revision=4, trashed=reason == "trashed")
+    current = {**native_goal(), "trashed": reason == "trashed"}
     methods = []
 
     def request(path, _body, *, method, **_kwargs):
@@ -305,14 +282,22 @@ def test_goal_update_rejects_unusable_goal_without_patching(reason) -> None:
         return current
 
     adapter._request = request  # type: ignore[method-assign]  # noqa: SLF001
-    expected_revision = 3 if reason == "stale" else 4
-    extra = {} if reason == "empty" else {"result": "Done"} if reason == "top_result" else {"progress": 50}
+    extra = {} if reason == "empty" else {"commitment": 50}
     with pytest.raises(IntegrationProviderError) as error:
         adapter.execute(OPERATIONS["atlas.goal.update"], {
-            "id": "leaf", "expected_revision": expected_revision, **extra,
+            "id": "goal", "expected_revision": 3 if reason == "stale" else 4, **extra,
         })
     assert error.value.error_type == ("stale_revision" if reason == "stale" else "invalid_input")
     assert "PATCH" not in methods
+
+
+@pytest.mark.parametrize("value", ["2026-1", "2026/01", "2026-02-30", "0000", "2026-01junk"])
+def test_goal_write_rejects_invalid_partial_date(value) -> None:
+    adapter = UrllibAtlasProviderAdapter()
+    adapter._request = lambda *_args, **_kwargs: pytest.fail("Unexpected transport")  # type: ignore[method-assign]  # noqa: SLF001
+    with pytest.raises(IntegrationProviderError) as error:
+        adapter.execute(OPERATIONS["atlas.goal.create"], {"title": "Plan", "target_date": value})
+    assert error.value.error_type == "invalid_input"
 
 
 def test_native_request_never_sends_authorization_header(monkeypatch) -> None:

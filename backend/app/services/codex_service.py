@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Skill, SkillGenerationRequest, SkillVersion
 from app.schemas.codex_routing import ResolvedInvocationSettings
-from app.schemas.manifest import ManifestPermissions, manifest_permission_requests
+from app.schemas.manifest import ManifestPermissions, entrypoint_source_file, manifest_permission_requests
 from app.schemas.skill_codex import SkillCodexRequest
 from app.services.codex_cli_service import codex_cli_service
 from app.services.codex_invocation_recorder import CodexInvocationRecorder
@@ -1678,7 +1678,7 @@ class CodexService:
                 or plan.get("skill_name")
             ),
             "runtime": runtime,
-            "entrypoint": "app:app" if runtime == "web_app" else "skill.py",
+            "entrypoint": str(blueprint.get("entrypoint") or plan.get("entrypoint") or ""),
             "requires_invocation_approval": bool(
                 blueprint.get(
                     "requires_invocation_approval",
@@ -1785,6 +1785,7 @@ class CodexService:
             "description": plan.get("description") or plan.get("goal"),
             "name": plan.get("skill_name"),
             "runtime": plan.get("runtime", "function"),
+            "entrypoint": plan.get("entrypoint"),
         }
 
     def _context_permission_plan(
@@ -1939,6 +1940,7 @@ Payload:
             "name": identity["skill_name"],
             "description": generation_request.user_message,
             "runtime": runtime,
+            "entrypoint": "app:app" if runtime == "web_app" else f"{identity['skill_name']}.py",
             "requires_invocation_approval": False,
             "input_schema": {"type": "object", "additionalProperties": True} if runtime in {"function", "service"} else None,
             "output_schema": {"type": "object", "additionalProperties": True} if runtime in {"function", "service"} else None,
@@ -1953,7 +1955,11 @@ Payload:
         blueprint: dict[str, object],
     ) -> dict[str, object]:
         runtime = str(blueprint.get("runtime") or "function")
-        expected_files = ["manifest.json", "README.md", "app.py" if runtime == "web_app" else "skill.py"]
+        entrypoint = str(
+            blueprint.get("entrypoint")
+            or ("app:app" if runtime == "web_app" else f"{blueprint.get('name', 'generated_skill')}.py")
+        )
+        expected_files = ["manifest.json", "README.md", entrypoint_source_file(runtime, entrypoint)]
         if "manifest.json" not in expected_files:
             expected_files.insert(0, "manifest.json")
         node = {

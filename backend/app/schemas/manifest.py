@@ -217,6 +217,36 @@ class ManifestIntegrationRequirement(BaseModel):
         return self
 
 
+def validate_runtime_entrypoint(runtime: SkillRuntime, entrypoint: str) -> str:
+    if runtime in {"function", "service"}:
+        normalized = entrypoint.replace("\\", "/")
+        if normalized.startswith("/") or normalized.startswith("~") or ":" in normalized:
+            raise ValueError(f"{runtime} entrypoint must be a relative Python file")
+        if normalized == ".." or normalized.startswith("../") or "/../" in normalized:
+            raise ValueError(f"{runtime} entrypoint cannot traverse parent directories")
+        if not normalized.endswith(".py"):
+            raise ValueError(f"{runtime} entrypoint must point to a Python file")
+        return entrypoint
+
+    module, separator, attribute = entrypoint.partition(":")
+    module_parts = module.split(".")
+    if (
+        separator != ":"
+        or not attribute.isidentifier()
+        or not module_parts
+        or any(not part.isidentifier() for part in module_parts)
+    ):
+        raise ValueError("web_app entrypoint must use importable module:attribute syntax")
+    return entrypoint
+
+
+def entrypoint_source_file(runtime: SkillRuntime, entrypoint: str) -> str:
+    if runtime == "web_app":
+        module = entrypoint.partition(":")[0]
+        return f"{module.replace('.', '/')}.py"
+    return entrypoint.replace("\\", "/")
+
+
 class SkillManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -312,14 +342,8 @@ class SkillManifest(BaseModel):
         providers = [requirement.provider for requirement in self.integration_requirements]
         if len(providers) != len(set(providers)):
             raise ValueError("integration_requirements cannot contain duplicate providers")
+        validate_runtime_entrypoint(self.runtime, self.entrypoint)
         if self.runtime in {"function", "service"}:
-            normalized = self.entrypoint.replace("\\", "/")
-            if normalized.startswith("/") or normalized.startswith("~") or ":" in normalized:
-                raise ValueError(f"{self.runtime} entrypoint must be a relative Python file")
-            if normalized == ".." or normalized.startswith("../") or "/../" in normalized:
-                raise ValueError(f"{self.runtime} entrypoint cannot traverse parent directories")
-            if not normalized.endswith(".py"):
-                raise ValueError(f"{self.runtime} entrypoint must point to a Python file")
             for schema_name, schema in (
                 ("input_schema", self.input_schema),
                 ("output_schema", self.output_schema),
@@ -343,15 +367,6 @@ class SkillManifest(BaseModel):
             if self.runtime == "service" and self.schedule is None:
                 raise ValueError("service skills require a schedule")
         else:
-            module, separator, attribute = self.entrypoint.partition(":")
-            module_parts = module.split(".")
-            if (
-                separator != ":"
-                or not attribute.isidentifier()
-                or not module_parts
-                or any(not part.isidentifier() for part in module_parts)
-            ):
-                raise ValueError("web_app entrypoint must use importable module:attribute syntax")
             if self.schedule is not None:
                 raise ValueError("web_app skills cannot declare schedules")
         return self

@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 
 import {
   ApprovalRequest,
+  CodexInvocationUsage,
   ProposedSkillValidation,
   SkillFile,
   SkillRun,
@@ -10,6 +11,7 @@ import {
   SkillVersionComparison,
 } from "../../api/client";
 import { DeleteIconButton } from "../../components/DeleteIconButton";
+import { formatDisplayName } from "../../lib/displayName";
 import { formatSystemDateTime } from "../../lib/dateTime";
 
 export type UpdateChatMessage = {
@@ -312,6 +314,8 @@ export function ValidationResult({ validation }: { validation: ProposedSkillVali
 }
 
 export function RunDetail({ run }: { run: SkillRun }) {
+  const failureSummary = runFailureSummary(run);
+
   return (
     <div className="run-detail">
       <dl className="detail-grid">
@@ -326,11 +330,61 @@ export function RunDetail({ run }: { run: SkillRun }) {
       </dl>
       {run.schedule_occurrence_key && <p className="muted">Idempotency key: <code>{run.schedule_occurrence_key}</code></p>}
       {run.total_tokens > 0 && <p className="muted">{formatTokens(run.input_tokens)} input, {formatTokens(run.cached_input_tokens)} cached input, {formatTokens(run.output_tokens)} output, {formatTokens(run.reasoning_output_tokens)} reasoning output</p>}
-      {run.error_message && <div><h3>Error</h3><pre>{run.error_message}</pre></div>}
+      {failureSummary && (
+        <div className="run-failure-report">
+          <h3>Failure summary</h3>
+          <p>{failureSummary}</p>
+        </div>
+      )}
+      {run.error_message?.trim() && run.error_message.trim() !== failureSummary && (
+        <div><h3>Recorded Error</h3><pre>{run.error_message}</pre></div>
+      )}
+      {run.codex_invocations_json.length > 0 && (
+        <div className="run-codex-call-list">
+          <h3>Codex Calls</h3>
+          {run.codex_invocations_json.map((invocation, index) => (
+            <CodexInvocationDetail
+              key={`${invocation.action}-${index}`}
+              invocation={invocation}
+            />
+          ))}
+        </div>
+      )}
       {run.output_json && <div><h3>Output JSON</h3><pre>{JSON.stringify(run.output_json, null, 2)}</pre></div>}
       <div><h3>Stdout</h3><pre>{run.stdout || "No stdout captured."}</pre></div>
       <div><h3>Stderr</h3><pre>{run.stderr || "No stderr captured."}</pre></div>
+      {(run.child_runs?.length ?? 0) > 0 && (
+        <div className="run-nested-history">
+          <h3>Called Skill Runs</h3>
+          <RunHistory runs={run.child_runs ?? []} />
+        </div>
+      )}
     </div>
+  );
+}
+
+function CodexInvocationDetail({ invocation }: { invocation: CodexInvocationUsage }) {
+  const failed = isFailedCodexInvocation(invocation);
+  const model = invocation.effective_model ?? invocation.model ?? invocation.requested_model;
+
+  return (
+    <section className={`run-codex-call${failed ? " failed" : ""}`}>
+      <h4>{formatDisplayName(invocation.action)} <span>{invocation.status ?? "recorded"}</span></h4>
+      <dl className="detail-grid">
+        <div><dt>Adapter</dt><dd>{invocation.adapter}</dd></div>
+        <div><dt>Model</dt><dd>{model ?? "default"}</dd></div>
+        {invocation.cli_version && <div><dt>CLI Version</dt><dd>{invocation.cli_version}</dd></div>}
+        {invocation.exit_code !== null && invocation.exit_code !== undefined && (
+          <div><dt>Exit Code</dt><dd>{invocation.exit_code}</dd></div>
+        )}
+      </dl>
+      {failed && (
+        <>
+          <p>{codexInvocationFailure(invocation)}</p>
+          {invocation.stderr_tail && <pre>{invocation.stderr_tail}</pre>}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -365,8 +419,11 @@ export function RunHistory({ runs }: { runs: SkillRun[] }) {
         <details key={run.id} className="run-history-entry">
           <summary className="run-history-header">
             <div>
-              <h3>Run #{run.id}</h3>
+              <h3>{run.skill_name ? `${formatDisplayName(run.skill_name)} · ` : ""}Run #{run.id}</h3>
               <span>{formatTimestamp(run.started_at, "not started")}</span>
+              {compactRunFailureSummary(run) && (
+                <span className="run-history-error-summary">{compactRunFailureSummary(run)}</span>
+              )}
             </div>
             <span className="run-history-summary-status">
               <span className={`badge run-${run.status}`}>{run.status}</span>
@@ -382,6 +439,110 @@ export function RunHistory({ runs }: { runs: SkillRun[] }) {
       ))}
     </div>
   );
+}
+
+function runFailureSummary(run: SkillRun): string | null {
+  if (run.status !== "partial" && run.status !== "failed" && run.status !== "blocked") {
+    return null;
+  }
+
+  const error = run.error_message?.trim() || null;
+  if (error && !isGenericRunError(error)) return error;
+
+  const failedChild = (run.child_runs ?? []).find((child) =>
+    child.status === "partial" || child.status === "failed" || child.status === "blocked",
+  );
+  if (failedChild) {
+    const childName = failedChild.skill_name
+      ? formatDisplayName(failedChild.skill_name)
+      : `Skill ${failedChild.skill_id}`;
+    const childError = runFailureSummary(failedChild) ?? statusFailureFallback(failedChild.status);
+    return `${childName} failed in run #${failedChild.id}: ${childError}`;
+  }
+
+  const failedInvocation = run.codex_invocations_json.find(isFailedCodexInvocation);
+  if (failedInvocation) return codexInvocationFailure(failedInvocation);
+
+  const stderrLine = finalDiagnosticLine(run.stderr);
+  if (stderrLine) return integrationFailureSummary(stderrLine) ?? stderrLine;
+  if (error) return error;
+  if (run.exit_code !== null && run.exit_code !== 0) {
+    return `Process exited with code ${run.exit_code}.`;
+  }
+  return statusFailureFallback(run.status);
+}
+
+function integrationFailureSummary(line: string): string | null {
+  const match = /^(?:integration_runtime_capabilities\.)?IntegrationRuntimeCapabilityError: (?:\[([a-z_]+)\] )?(.+)$/.exec(line);
+  if (!match) return null;
+  const [, errorType, message] = match;
+  const authTypes = ["invalid_credential", "authorization_missing_or_stale", "provider_forbidden"];
+  const legacyAuth = !errorType && (
+    message.toLowerCase().includes("authorization is invalid or revoked")
+    || message.toLowerCase().includes("integration authorization is missing")
+  );
+  const label = authTypes.includes(errorType) || legacyAuth
+    ? "Integration authentication/authorization error"
+    : "Integration error";
+  return `${label}${errorType ? ` [${errorType}]` : ""}: ${message}`;
+}
+
+function compactRunFailureSummary(run: SkillRun): string | null {
+  const summary = runFailureSummary(run)?.replace(/\s+/g, " ").trim();
+  if (!summary || summary.length <= 220) return summary ?? null;
+  return `${summary.slice(0, 217).trimEnd()}…`;
+}
+
+function isGenericRunError(message: string): boolean {
+  const normalized = message.trim().toLocaleLowerCase();
+  return /^(?:skill|service|process) exited with code \d+$/.test(normalized)
+    || normalized === "skill completed after one or more runtime codex calls failed"
+    || normalized === "skill reported failed output"
+    || normalized === "skill reported partial output"
+    || normalized === "scheduled service run failed";
+}
+
+function codexInvocationFailure(invocation: CodexInvocationUsage): string {
+  const callName = invocation.action ? formatDisplayName(invocation.action) : "Codex call";
+  const model = invocation.effective_model ?? invocation.model ?? invocation.requested_model;
+  const modelLabel = model ? ` (${model})` : "";
+  const detail = invocation.error_message?.trim()
+    || invocation.stderr_tail?.trim()
+    || invocation.error_type
+    || "No diagnostic details were recorded.";
+  const errorType = invocation.error_type && !detail.includes(invocation.error_type)
+    ? ` [${invocation.error_type}]`
+    : "";
+  const exitCode = invocation.exit_code !== null
+    && invocation.exit_code !== undefined
+    && !detail.toLocaleLowerCase().includes(`exit code ${invocation.exit_code}`)
+    ? ` (exit code ${invocation.exit_code})`
+    : "";
+  return `${callName}${modelLabel} failed${errorType}${exitCode}: ${detail}`;
+}
+
+function isFailedCodexInvocation(invocation: CodexInvocationUsage): boolean {
+  return invocation.status === "failed"
+    || Boolean(invocation.error_type || invocation.error_message || invocation.stderr_tail)
+    || (invocation.exit_code !== null && invocation.exit_code !== undefined && invocation.exit_code !== 0);
+}
+
+function finalDiagnosticLine(stderr: string | null): string | null {
+  if (!stderr?.trim()) return null;
+  const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const usefulLines = lines.filter((line) =>
+    !line.startsWith("Traceback (most recent call last):")
+    && !/^File \".*\", line \d+/.test(line)
+    && !line.startsWith("The above exception was the direct cause")
+    && !line.startsWith("During handling of the above exception"),
+  );
+  return usefulLines[usefulLines.length - 1] ?? lines[lines.length - 1] ?? null;
+}
+
+function statusFailureFallback(status: SkillRun["status"]): string {
+  if (status === "blocked") return "The run was blocked before completing; no diagnostic message was recorded.";
+  if (status === "partial") return "The run completed with failures, but no diagnostic message was recorded.";
+  return "The run failed, but no diagnostic message was recorded.";
 }
 
 export function formatTokens(value: number): string {

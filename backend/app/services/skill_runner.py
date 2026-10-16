@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -82,7 +83,7 @@ def _merge_error_message(existing: str | None, current: str | None) -> str | Non
     return f"{existing}\n{current}"
 
 
-def _process_exit_error(returncode: int) -> str:
+def _process_exit_error(returncode: int, stderr: str | None = None) -> str:
     known_exits = {
         126: "Skill could not be executed (exit code 126)",
         127: "Skill command was not found (exit code 127)",
@@ -91,7 +92,31 @@ def _process_exit_error(returncode: int) -> str:
         139: "Skill crashed with a segmentation fault (exit code 139)",
         143: "Skill was terminated by SIGTERM (exit code 143)",
     }
-    return known_exits.get(returncode, f"Skill exited with code {returncode}")
+    if returncode in known_exits:
+        return known_exits[returncode]
+    # Only classify a terminal integration exception, not an earlier handled failure.
+    last_line = (stderr or "").strip().splitlines()[-1:]
+    match = re.fullmatch(
+        r"(?:integration_runtime_capabilities\.)?IntegrationRuntimeCapabilityError: "
+        r"(?:\[([a-z_]+)\] )?(.+)",
+        last_line[0].strip() if last_line else "",
+    )
+    if match:
+        error_type, message = match.groups()
+        auth_types = {"invalid_credential", "authorization_missing_or_stale", "provider_forbidden"}
+        # Old runtime helpers omitted error_type; recognize their normalized auth messages.
+        legacy_auth = error_type is None and (
+            "authorization is invalid or revoked" in message.lower()
+            or "integration authorization is missing" in message.lower()
+        )
+        label = (
+            "Integration authentication/authorization error"
+            if error_type in auth_types or legacy_auth
+            else "Integration error"
+        )
+        type_label = f" [{error_type}]" if error_type else ""
+        return f"{label}{type_label}: {message}"
+    return f"Skill exited with code {returncode}"
 
 
 def utc_now() -> datetime:
@@ -447,7 +472,7 @@ class LocalSkillRunner:
                 stdout=result.stdout,
                 stderr=result.stderr,
                 exit_code=result.returncode,
-                error_message=_process_exit_error(result.returncode),
+                error_message=_process_exit_error(result.returncode, result.stderr),
             )
             return
 
@@ -873,7 +898,7 @@ class DockerSkillRunner:
                 stdout=result.stdout,
                 stderr=result.stderr,
                 exit_code=result.returncode,
-                error_message=_process_exit_error(result.returncode),
+                error_message=_process_exit_error(result.returncode, result.stderr),
             )
             return
 

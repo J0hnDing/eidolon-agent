@@ -18,6 +18,7 @@ type ChatWorkspaceProps = {
   draft: string;
   mode: ConversationMode;
   isBusy: boolean;
+  canReplyToAct?: boolean;
   isSending: boolean;
   isGenerating: boolean;
   error: string | null;
@@ -41,6 +42,7 @@ export function ChatWorkspace({
   draft,
   mode,
   isBusy,
+  canReplyToAct = false,
   isSending,
   isGenerating,
   error,
@@ -92,6 +94,7 @@ export function ChatWorkspace({
             draft={draft}
             mode={mode}
             isBusy={isBusy}
+            canReplyToAct={canReplyToAct}
             isSending={isSending}
             onDraftChange={onDraftChange}
             onSubmit={onSubmit}
@@ -327,6 +330,7 @@ function ChatComposer({
   draft,
   mode,
   isBusy,
+  canReplyToAct,
   isSending,
   onDraftChange,
   onSubmit,
@@ -334,15 +338,16 @@ function ChatComposer({
   onCancelAct,
 }: Pick<
   ChatWorkspaceProps,
-  "draft" | "mode" | "isBusy" | "isSending" | "onDraftChange" | "onSubmit" | "activeActTurnId" | "onCancelAct"
+  "draft" | "mode" | "isBusy" | "canReplyToAct" | "isSending" | "onDraftChange" | "onSubmit" | "activeActTurnId" | "onCancelAct"
 >) {
+  const acceptingReply = mode === "act" && canReplyToAct && !isSending;
   return (
     <form className="composer" onSubmit={onSubmit}>
       <input
         value={draft}
         onChange={(event) => onDraftChange(event.target.value)}
         placeholder={
-          isBusy
+          acceptingReply ? "Reply to Act while it waits..." : isBusy
             ? mode === "project" ? "Project build is running..." : `${modeLabel(mode)} is thinking...`
             : mode === "project"
               ? "Describe the skill you want to propose"
@@ -354,7 +359,7 @@ function ChatComposer({
       <button
         type="submit"
         className="chat-send-button"
-        disabled={isBusy}
+        disabled={isBusy && !acceptingReply}
         aria-label={isSending ? "Sending message" : "Send message"}
         title={isSending ? "Sending" : "Send message"}
       >
@@ -498,8 +503,8 @@ function ActWorkDetails({ work }: { work: NonNullable<ChatMessage["actWork"]> })
     return () => window.clearInterval(interval);
   }, [active]);
 
-  const startedAt = Date.parse(work.startedAt);
-  const completedAt = work.completedAt ? Date.parse(work.completedAt) : now;
+  const startedAt = parseBackendDateTime(work.startedAt).getTime();
+  const completedAt = work.completedAt ? parseBackendDateTime(work.completedAt).getTime() : now;
   const elapsedMilliseconds = Number.isFinite(startedAt) && Number.isFinite(completedAt)
     ? Math.max(0, completedAt - startedAt)
     : 0;

@@ -12,6 +12,7 @@ from app.models import ActSession, AgentCredential, AgentPolicy
 from app.schemas.agents import AgentPolicyUpdate
 from app.services.act_runtime_capabilities import (
     BROWSER_AUTHENTICATE_CAPABILITY_ID,
+    CHAT_SEND_MESSAGE_CAPABILITY_ID,
     TELEGRAM_SEND_FILE_CAPABILITY_ID,
     act_runtime_capability_catalog,
 )
@@ -23,6 +24,7 @@ AGENTS = {
     "assistant": ("Assistant", "Assesses goals and todos, researches useful actions, and proposes plans for approval."),
 }
 PRIVATE_TOOL_AGENTS = {
+    CHAT_SEND_MESSAGE_CAPABILITY_ID: "act",
     BROWSER_AUTHENTICATE_CAPABILITY_ID: "act",
     TELEGRAM_SEND_FILE_CAPABILITY_ID: "act",
 }

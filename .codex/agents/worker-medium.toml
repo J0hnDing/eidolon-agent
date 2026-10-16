@@ -1,6 +1,6 @@
 name = "worker_medium"
 description = "Handles standard feature and bug-fix work requiring investigation and tests."
-model = "gpt-5.6-luna"
+model = "gpt-6.1-luna"
 model_reasoning_effort = "max"
 sandbox_mode = "workspace-write"
 developer_instructions = """

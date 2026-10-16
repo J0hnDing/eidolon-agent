@@ -96,6 +96,88 @@ describe("SkillDetailPanels", () => {
     expect(disclosures[1].hasAttribute("open")).toBe(false);
     expect(screen.queryByText("Latest Run")).toBeNull();
   });
+
+  it.each([
+    [
+      "The Google Calendar authorization is invalid or revoked",
+      "Integration authentication/authorization error: The Google Calendar authorization is invalid or revoked",
+    ],
+    [
+      "[invalid_credential] The Google Calendar authorization is invalid or revoked",
+      "Integration authentication/authorization error [invalid_credential]: The Google Calendar authorization is invalid or revoked",
+    ],
+    [
+      "[authorization_missing_or_stale] Integration authorization is missing",
+      "Integration authentication/authorization error [authorization_missing_or_stale]: Integration authorization is missing",
+    ],
+    [
+      "[rate_limited] Notion rate limited the integration request",
+      "Integration error [rate_limited]: Notion rate limited the integration request",
+    ],
+    [
+      "Integration connection or configured resource is unavailable",
+      "Integration error: Integration connection or configured resource is unavailable",
+    ],
+  ])("recognizes historical integration failures: %s", (diagnostic, expected) => {
+    const run: SkillRun = {
+      ...makeRun(74, {}),
+      status: "failed",
+      output_json: null,
+      error_message: "Skill exited with code 1",
+      stderr: `Traceback (most recent call last):\nintegration_runtime_capabilities.IntegrationRuntimeCapabilityError: ${diagnostic}\n`,
+      exit_code: 1,
+    };
+    const { container } = render(<RunHistory runs={[run]} />);
+    expect(container.querySelector(".run-history-error-summary")?.textContent).toBe(expected);
+    expect(container.querySelector(".run-failure-report p")?.textContent).toBe(expected);
+  });
+
+  it("keeps an unrelated terminal error from being misclassified as integration auth", () => {
+    const run: SkillRun = {
+      ...makeRun(75, {}),
+      status: "failed",
+      error_message: "Skill exited with code 1",
+      stderr: "integration_runtime_capabilities.IntegrationRuntimeCapabilityError: The Google Calendar authorization is invalid or revoked\nValueError: Invalid output\n",
+      exit_code: 1,
+    };
+    const { container } = render(<RunHistory runs={[run]} />);
+    expect(container.querySelector(".run-history-error-summary")?.textContent).toBe("ValueError: Invalid output");
+  });
+
+  it("retains a specific recorded error and the no-stderr fallback", () => {
+    const run: SkillRun = {
+      ...makeRun(76, {}),
+      status: "failed",
+      error_message: "Skill timed out after 300 seconds",
+      stderr: "integration_runtime_capabilities.IntegrationRuntimeCapabilityError: The Google Calendar authorization is invalid or revoked\n",
+      exit_code: 1,
+    };
+    const { container, rerender } = render(<RunHistory runs={[run]} />);
+    expect(container.querySelector(".run-history-error-summary")?.textContent).toBe(run.error_message);
+    rerender(<RunHistory runs={[{ ...run, stderr: null, error_message: "Skill exited with code 1" }]} />);
+    expect(container.querySelector(".run-history-error-summary")?.textContent).toBe("Skill exited with code 1");
+  });
+
+  it("propagates a nested integration failure to the parent history summary", () => {
+    const child: SkillRun = {
+      ...makeRun(78, {}),
+      status: "failed",
+      skill_name: "calendar_reader",
+      error_message: "Skill exited with code 1",
+      stderr: "integration_runtime_capabilities.IntegrationRuntimeCapabilityError: The Google Calendar authorization is invalid or revoked\n",
+      exit_code: 1,
+    };
+    const parent: SkillRun = {
+      ...makeRun(77, {}),
+      status: "failed",
+      error_message: "Skill exited with code 1",
+      child_runs: [child],
+    };
+    const { container } = render(<RunHistory runs={[parent]} />);
+    expect(container.querySelector(".run-history-error-summary")?.textContent).toBe(
+      "Calendar Reader failed in run #78: Integration authentication/authorization error: The Google Calendar authorization is invalid or revoked",
+    );
+  });
 });
 
 function makeRun(id: number, output: Record<string, unknown>): SkillRun {

@@ -46,8 +46,11 @@ class ProductManagerTurnResult:
 class ProductManagerSessionService:
     """Runs structured ProductManager turns in resumable App Server threads."""
 
-    def __init__(self, client: CodexAppServerClient | None = None) -> None:
+    def __init__(
+        self, client: CodexAppServerClient | None = None, *, agent_name: str = "ProductManager",
+    ) -> None:
         self.client = client or codex_app_server_client
+        self.agent_name = agent_name
         self._threads: dict[str, ProductManagerThreadMetadata] = {}
         self._threads_lock = threading.Lock()
 
@@ -165,9 +168,9 @@ class ProductManagerSessionService:
         on_turn_started: Callable[[str], None] | None = None,
     ) -> ProductManagerTurnResult:
         if not input_text.strip():
-            raise ValueError("ProductManager turn input must not be empty")
+            raise ValueError(f"{self.agent_name} turn input must not be empty")
         if timeout_seconds <= 0:
-            raise ValueError("ProductManager turn timeout must be positive")
+            raise ValueError(f"{self.agent_name} turn timeout must be positive")
 
         deadline = time.monotonic() + timeout_seconds
         params: dict[str, Any] = {
@@ -191,7 +194,7 @@ class ProductManagerSessionService:
                 turn_id = self._started_turn_id(events, thread_id)
                 if turn_id:
                     self._interrupt_best_effort(thread_id, turn_id)
-                raise ProductManagerTurnTimeout("ProductManager turn timed out while starting") from exc
+                raise ProductManagerTurnTimeout(f"{self.agent_name} turn timed out while starting") from exc
 
             turn = response.get("turn")
             if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
@@ -209,7 +212,7 @@ class ProductManagerSessionService:
                 )
             except (CodexAppServerRequestTimeout, TimeoutError) as exc:
                 self._interrupt_best_effort(thread_id, turn_id)
-                raise ProductManagerTurnTimeout("ProductManager turn timed out") from exc
+                raise ProductManagerTurnTimeout(f"{self.agent_name} turn timed out") from exc
 
         with self._threads_lock:
             metadata = self._threads.get(thread_id)
@@ -290,10 +293,10 @@ class ProductManagerSessionService:
                 status = turn.get("status")
                 if status != "completed":
                     detail = self._turn_error(turn.get("error")) or terminal_error or str(status or "failed")
-                    raise ProductManagerSessionError(f"ProductManager turn did not complete: {detail}")
+                    raise ProductManagerSessionError(f"{self.agent_name} turn did not complete: {detail}")
                 output_text = self._final_agent_message(list(items_by_id.values()))
                 if not output_text:
-                    raise ProductManagerSessionError("ProductManager turn completed without a final response")
+                    raise ProductManagerSessionError(f"{self.agent_name} turn completed without a final response")
                 return {
                     "output_text": output_text,
                     "usage": usage,

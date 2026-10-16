@@ -44,7 +44,7 @@ def extract_pdf_text(source: Path | bytes, max_chars: int) -> str:
 def read_local_document(path: Path) -> str:
     suffix = path.suffix.lower()
     try:
-        if suffix in {".txt", ".md", ".csv", ".json"}:
+        if suffix in {".txt", ".md", ".csv", ".json", ".tex"}:
             text = path.read_text(encoding="utf-8")
         elif suffix == ".pdf":
             text = extract_pdf_text(path, MAX_TEXT_CHARS)
