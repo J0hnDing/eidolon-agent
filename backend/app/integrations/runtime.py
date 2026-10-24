@@ -50,6 +50,7 @@ class IntegrationRuntimeError(RuntimeError):
 
 
 _PROVIDER_NAMES = {
+    "valence": "Valence",
     "github": "GitHub",
     "atlas": "Atlas",
     "notion": "Notion",
@@ -68,7 +69,8 @@ _PROVIDER_NAMES = {
 _SPECIAL_ERROR_MESSAGES = {
     "atlas_locked": "Atlas is locked",
     "node_already_known": "The selected Knowledge node is already known",
-    "stale_revision": "The selected Atlas record changed before it could be updated",
+    "stale_revision": "The selected Atlas item or referenced file changed; read it again before updating",
+    "event_id_conflict": "This Atlas event ID already identifies a different States report",
     "codex_unavailable": "A compatible Codex CLI is unavailable",
     "codex_failed": "Codex could not expand the Knowledge node",
     "schema_mismatch": "The provider resource does not match the required schema",
@@ -188,6 +190,7 @@ class IntegrationRuntime:
             "rate_limited": f"{provider} rate limited the integration request",
             "provider_timeout": f"{provider} did not respond before the timeout",
             "response_too_large": f"{provider} response exceeded the operation limit",
+            "request_too_large": f"The upload exceeds {provider}'s native size limit",
             "provider_unavailable": f"{provider} is unavailable",
         }
         return messages.get(error_type, f"{provider} integration failed safely")

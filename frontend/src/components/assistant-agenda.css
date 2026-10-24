@@ -1,0 +1,51 @@
+.assistant-agenda.detail-panel { gap: 16px; padding: 0; border: 0; background: transparent; }
+.assistant-agenda > .section-heading { align-items: center; margin-bottom: 0; }
+.assistant-agenda > .section-heading h2 { margin: 0; font-size: 18px; font-weight: 500; }
+.assistant-agenda > .section-heading p { margin: 8px 0 8px; font-size: 13px; }
+.agenda-list-navigation { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.agenda-list-navigation .button-row { gap: 4px; }
+.agenda-list-navigation button { min-height: 30px; padding: 4px 12px; font-size: 12px; }
+.agenda-list-toolbar { display: grid; grid-template-columns: minmax(200px, 1fr) 150px 160px; gap: 8px; }
+.agenda-list-toolbar input, .agenda-list-toolbar select { min-height: 36px; padding: 7px 10px; font-size: 12px; }
+.agenda-question-context { display: grid; gap: 3px; max-width: 900px; color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.agenda-list-count { color: var(--text-tertiary); font-size: 11px; }
+.agenda-record-list { list-style: none; padding: 0; margin: -4px 0 0; border-top: 1px solid var(--line); }
+.agenda-record-list li { margin: 0; padding: 0; border-bottom: 1px solid var(--line); }
+.assistant-agenda button.agenda-record-row { display: grid; grid-template-columns: minmax(0, 1fr) 170px 76px 16px; align-items: center; gap: 20px; width: 100%; min-height: 88px; padding: 14px 10px; border: 0; border-radius: 4px; background: transparent; color: var(--text); text-align: left; font: inherit; box-shadow: none; }
+.assistant-agenda button.agenda-record-row:hover { background: var(--surface-hover); }
+.agenda-record-content { display: grid; min-width: 0; gap: 3px; }
+.agenda-record-content strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
+.agenda-record-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 12px; font-weight: 400; }
+.agenda-record-meta { color: var(--text-tertiary); font-size: 11px; font-weight: 400; }
+.agenda-record-timing { display: grid; gap: 3px; color: var(--text-secondary); font-size: 11px; font-weight: 400; }
+.agenda-record-timing time { color: var(--text-muted); font-size: 12px; }
+.agenda-record-arrow { color: var(--text-tertiary); font-size: 20px; text-align: right; }
+.agenda-list-empty { padding: 30px 12px; border-top: 1px solid var(--line); text-align: center; }
+.agenda-list-empty p { margin: 0 0 12px; }
+.agenda-detail-modal { width: min(780px, 100%); }
+.agenda-detail-modal > .section-heading { align-items: start; gap: 20px; }
+.agenda-detail-modal > .section-heading h2 { overflow-wrap: anywhere; }
+.agenda-detail-modal > .section-heading button { flex-shrink: 0; }
+.agenda-detail-body { display: grid; gap: 24px; }
+.agenda-detail-labels { display: flex; gap: 16px; align-items: center; font-size: 12px; }
+.agenda-detail-notes h3 { margin: 0 0 10px; color: var(--text-secondary); font-size: 12px; font-weight: 500; }
+.agenda-detail-notes p { margin: 0; overflow-wrap: anywhere; }
+.agenda-detail-schedule { padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); }
+.agenda-detail-schedule p { margin: 0 0 8px; font-size: 12px; }
+.agenda-detail-schedule p:last-child { margin-bottom: 0; }
+.agenda-detail-schedule .agenda-occurrence-history { margin-top: 12px; }
+.agenda-detail-schedule .agenda-occurrence-history ul { padding-left: 18px; font-size: 12px; color: var(--text-secondary); }
+.agenda-detail-schedule .agenda-occurrence-history li { margin-top: 8px; }
+.agenda-detail-actions { padding-top: 20px; border-top: 1px solid var(--line); gap: 8px; }
+.agenda-detail-actions button { min-height: 32px; padding: 5px 10px; font-size: 12px; }
+.agenda-detail-actions .agenda-delete-action { color: var(--error); }
+@media (max-width: 760px) {
+  .agenda-list-toolbar { grid-template-columns: 1fr 1fr; }
+  .agenda-list-toolbar input { grid-column: 1 / -1; }
+  .assistant-agenda button.agenda-record-row { grid-template-columns: minmax(0, 1fr) 76px 12px; gap: 12px; }
+  .agenda-record-timing { grid-column: 1; grid-row: 2; }
+  .agenda-record-row > .badge { grid-column: 2; grid-row: 1 / 3; }
+  .agenda-record-arrow { grid-column: 3; grid-row: 1 / 3; }
+}
+
+.agenda-detail-actions .agenda-delete-action:hover:not(:disabled) { color: var(--canvas); background: var(--error); border-color: var(--error); }

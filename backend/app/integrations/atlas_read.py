@@ -29,12 +29,14 @@ _ERRORS = (
 
 
 def _read(name: str, description: str, inputs: dict, output: dict, example: dict,
-          required: tuple[str, ...] = (), identity: tuple[str, ...] = ()) -> IntegrationOperationSpec:
+          required: tuple[str, ...] = (), identity: tuple[str, ...] = (),
+          version: int = 1) -> IntegrationOperationSpec:
     return IntegrationOperationSpec(
         id=f"atlas.{name}", title=f"Atlas {name.replace('.', ' ')}", description=description,
         input_schema=_object(inputs, required), output_schema=output,
         effects=frozenset({IntegrationEffect.READ}), resource=ResourceSpec(f"atlas.{name}", identity),
         risk=RiskLevel.LOW,
+        contract_version=version,
         presentation=OperationPresentation(
             usage_example={"operation": f"atlas.{name}", "input": example}, normalized_errors=_ERRORS,
         ),
@@ -63,11 +65,15 @@ ATLAS_READ_SPECS = (
     _read("person.completeness.get", "Read Atlas's own overall and per-area Person information completeness "
           "percentages, criteria, and available missing-field lists; uses the same calculation as Atlas's UI.",
           {}, _object({"completeness": _JSON_OBJECT}, ("completeness",)), {}),
-    _read("states.get", "Read complete current Atlas state estimates, confidence and recency, optionally at "
-          "an ISO timestamp, or read their configuration. This does not save or change states.",
+    _read("states.get", "Read complete current Atlas state estimates plus per-record goal, interest and "
+          "relationship satisfaction targets, confidence, evidence and elapsed time since relevant events. "
+          "The existing goal_progression combines Goals and Interests; close_connection combines personal "
+          "Relationships. Exactly seven top-level States remain, with canonical settings and component coverage. "
+          "Optionally read at an ISO timestamp or read configuration including per-record decay rates. "
+          "A prior-only estimate is uncertainty, not evidence of dissatisfaction. This does not save or change states.",
           {"view": {"enum": ["current", "configuration"]},
            "at": {"type": "string", "minLength": 1, "maxLength": 64}},
-          _object({"states": _JSON_OBJECT}, ("states",)), {}),
+          _object({"states": _JSON_OBJECT}, ("states",)), {}, version=3),
     _read("personality.get", "Read the complete Atlas Personality projection, spectra, and exact imported "
           "Valence model where present, preserving native precision and unknown values.",
           {}, _object({"personality": _JSON_OBJECT}, ("personality",)), {}),

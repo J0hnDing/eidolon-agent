@@ -5,14 +5,12 @@ from typing import Callable
 from uuid import uuid4
 
 from sqlalchemy import select, update
-from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from app.models import (
     ActSession,
     ActTurn,
-    AgentPolicy,
-    AssistantFollowUp,
+    TelegramBotConnection,
     WeComObserverUserBinding,
 )
 from app.services.act_app_server_service import (
@@ -29,9 +27,6 @@ ACTIVE_TURN_STATUSES = ("queued", "running")
 class ActSessionError(RuntimeError):
     pass
 
-
-class AssistantSessionCapacityError(ActSessionError):
-    pass
 
 
 class ActSessionService:
@@ -50,6 +45,10 @@ class ActSessionService:
         self.telegram_sync = telegram_sync or _synchronize_session_to_telegram
 
     def list_sessions(self) -> list[ActSession]:
+        if self.agent_id == "assistant":
+            from app.services.assistant_service import AssistantService
+
+            return [AssistantService(self.db).primary_session()]
         sessions = list(
             self.db.scalars(
                 select(ActSession)
@@ -76,8 +75,11 @@ class ActSessionService:
 
     def create_session(self, *, origin: str = "web", commit: bool = True) -> ActSession:
         if self.agent_id == "assistant":
-            self.prune_assistant_sessions(limit=4)
-        session = self._new_session(origin=origin)
+            from app.services.assistant_service import AssistantService
+
+            session = AssistantService(self.db).primary_session(origin=origin, commit=False)
+        else:
+            session = self._new_session(origin=origin)
         if commit:
             self.db.commit()
             self.db.refresh(session)
@@ -86,35 +88,6 @@ class ActSessionService:
 
     def synchronize_telegram(self, session: ActSession) -> None:
         self.telegram_sync(self.db, session)
-
-    def prune_assistant_sessions(self, *, limit: int = 5) -> None:
-        # A SQLite write claim serializes retention + creation across API/MCP
-        # processes, not just Python threads. Preserve any existing policy.
-        statement = insert(AgentPolicy).values(id="assistant", policy_json=AgentPolicyService(self.db).policy("assistant").model_dump(), revision=1)
-        self.db.execute(statement.on_conflict_do_update(index_elements=[AgentPolicy.id], set_={"revision": AgentPolicy.revision}))
-        sessions = list(self.db.scalars(select(ActSession).where(ActSession.agent_id == "assistant").order_by(ActSession.created_at, ActSession.id)))
-        for old in sessions[:max(0, len(sessions) - limit)]:
-            if self.db.scalar(select(AssistantFollowUp.id).where(
-                AssistantFollowUp.session_id == old.id,
-                AssistantFollowUp.status.in_(("waiting", "scheduled", "sent")),
-            )):
-                self.db.rollback()
-                raise AssistantSessionCapacityError(
-                    "Assistant session capacity is full because the oldest session has a pending follow-up"
-                )
-            if self.db.scalar(select(ActTurn.id).where(ActTurn.session_id == old.id, ActTurn.status.in_(ACTIVE_TURN_STATUSES))):
-                self.db.rollback()
-                raise AssistantSessionCapacityError("Assistant session capacity is full because the oldest session is busy")
-            if not old.codex_thread_id.startswith("pending:"):
-                try:
-                    self._app_server_for(old).sessions.archive_thread(old.codex_thread_id)
-                except Exception as exc:
-                    if not is_missing_rollout_error(exc):
-                        self.db.rollback()
-                        raise ActSessionError("Could not archive the oldest Assistant thread") from None
-            AgentPolicyService(self.db).revoke(old.id)
-            self.db.delete(old)
-        self.db.flush()
 
     def enqueue_turn(
         self,
@@ -132,6 +105,32 @@ class ActSessionService:
         session = self.read_session(session_id)
         if session.status != "active":
             raise ActSessionError("Agent session is archived")
+        if self.agent_id == "assistant" and message.strip().casefold() == "/refresh":
+            from app.services.assistant_service import AssistantService
+
+            # This control message never becomes model input or a live reply.
+            AssistantService(self.db).request_refresh(commit=False)
+            turn = ActTurn(
+                session_id=session.id, user_message=message, status="succeeded",
+                backend_message_kind="assistant_refresh",
+                assistant_message="Assistant session will refresh before the next turn.",
+                activity_json=[], completed_at=datetime.now(UTC),
+                delivery_provider=delivery_provider or ("telegram" if delivery_connection_id is not None else None),
+                delivery_connection_id=delivery_connection_id, delivery_chat_id=delivery_chat_id,
+                delivery_message_thread_id=delivery_message_thread_id,
+                delivery_status="pending" if delivery_connection_id is not None else None,
+            )
+            self.db.add(turn)
+            self.db.flush()
+            if commit:
+                self.db.commit()
+                from app.services.agent_memory_service import sync_chat_history_after_commit
+                sync_chat_history_after_commit(self.db)
+                if turn.delivery_status == "pending":
+                    from app.services.agent_turn_delivery import deliver_agent_turn_result
+
+                    deliver_agent_turn_result(turn.id)
+            return turn
         active = self.db.scalar(
             select(ActTurn).where(
                 ActTurn.session_id == session.id,
@@ -139,25 +138,42 @@ class ActSessionService:
             )
         )
         if active is not None:
-            if self.agent_id == "act":
+            if self.agent_id in {"act", "assistant"}:
                 from app.services.act_chat_message_service import accept_act_reply, attach_live_messages
                 if accept_act_reply(self.db, active, message):
                     session.updated_at = datetime.now(UTC)
                     if commit:
                         self.db.commit()
+                        from app.services.agent_memory_service import sync_chat_history_after_commit
+                        sync_chat_history_after_commit(self.db)
                     attach_live_messages(self.db, [active])
                     return active
-            raise ActSessionError("An agent turn is already queued or running for this session")
+            if self.agent_id != "assistant":
+                raise ActSessionError("An agent turn is already queued or running for this session")
+        bound_connection_id, bound_chat_id = delivery_connection_id, delivery_chat_id
+        if self.agent_id == "assistant" and delivery_connection_id is None:
+            # An explicit telegram.send_file call from web Chat uses this fixed
+            # pairing snapshot. Leave provider/status null so ordinary web answers
+            # do not become automatic Telegram deliveries.
+            connection = self.db.scalar(select(TelegramBotConnection).where(
+                TelegramBotConnection.role == "assistant_agent",
+                TelegramBotConnection.is_default.is_(True),
+                TelegramBotConnection.status == "connected",
+                TelegramBotConnection.paired_chat_id.is_not(None),
+                TelegramBotConnection.paired_user_id.is_not(None),
+            ).order_by(TelegramBotConnection.id.desc()).limit(1))
+            if connection is not None:
+                bound_connection_id, bound_chat_id = connection.id, connection.paired_chat_id
         turn = ActTurn(
             session_id=session.id,
             user_message=message,
             status="queued",
             activity_json=[{"kind": "queued", "label": f"Queued for {self.agent_id.title()}"}],
-            # Null provider is retained only for pre-transport rows created by
-            # older callers; all new remote turns identify their transport.
+            # Remote turns identify their transport. Web Assistant turns may
+            # retain a binding snapshot without automatic remote delivery.
             delivery_provider=delivery_provider or ("telegram" if delivery_connection_id is not None else None),
-            delivery_connection_id=delivery_connection_id,
-            delivery_chat_id=delivery_chat_id,
+            delivery_connection_id=bound_connection_id,
+            delivery_chat_id=bound_chat_id,
             delivery_message_thread_id=delivery_message_thread_id,
             delivery_status="pending" if delivery_connection_id is not None else None,
         )
@@ -167,7 +183,9 @@ class ActSessionService:
         if commit:
             self.db.commit()
             self.db.refresh(turn)
-            from app.services.act_turn_dispatcher import agent_dispatchers
+            from app.services.agent_memory_service import sync_chat_history_after_commit
+            sync_chat_history_after_commit(self.db)
+            from app.services.agent_dispatchers import agent_dispatchers
             agent_dispatchers[self.agent_id].notify()
         return turn
 
@@ -188,6 +206,11 @@ class ActSessionService:
             from app.services.agent_proposal_service import AgentProposalService
 
             AgentProposalService(self.db).refresh_execution(session.id)
+            if self.agent_id == "assistant":
+                from app.services.assistant_activation_service import AssistantActivationService
+                AssistantActivationService(self.db).on_turn_completed(turn)
+            from app.services.agent_memory_service import sync_chat_history_after_commit
+            sync_chat_history_after_commit(self.db)
             return turn
         self.db.commit()
         if turn.codex_turn_id:
@@ -200,11 +223,8 @@ class ActSessionService:
 
     def archive(self, session_id: int, *, commit: bool = True) -> None:
         session = self.read_session(session_id)
-        if session.agent_id == "assistant" and self.db.scalar(select(AssistantFollowUp.id).where(
-            AssistantFollowUp.session_id == session.id,
-            AssistantFollowUp.status.in_(("waiting", "scheduled", "sent")),
-        )):
-            raise ActSessionError("Cannot archive an Assistant session with a pending follow-up")
+        if self.agent_id == "assistant":
+            raise ActSessionError("The Assistant has one permanent chat. Use /refresh to start a fresh session.")
         if self.db.scalar(
             select(ActTurn).where(
                 ActTurn.session_id == session.id,
@@ -248,6 +268,8 @@ class ActSessionService:
         session.updated_at = datetime.now(UTC)
         if commit:
             self.db.commit()
+            from app.services.agent_memory_service import sync_chat_history_after_commit
+            sync_chat_history_after_commit(self.db)
         if self.agent_id == "act" and self.app_server is None:
             stop_act_app_server(session.id)
 

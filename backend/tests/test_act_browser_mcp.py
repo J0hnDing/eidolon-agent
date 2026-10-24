@@ -108,17 +108,18 @@ def test_authentication_binds_act_identity_and_session(monkeypatch):
 
 
 @pytest.mark.parametrize("state", ["running", "idle", "canceled", "revoked", "archived"])
-def test_real_database_checks_current_turn_and_revocation(monkeypatch, tmp_path, state):
+@pytest.mark.parametrize("agent_id", ["act", "assistant"])
+def test_real_database_checks_current_turn_and_revocation(monkeypatch, tmp_path, state, agent_id):
     engine = create_engine(f"sqlite:///{tmp_path / 'browser-auth.db'}")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine)
     monkeypatch.setattr(proxy_module, "SessionLocal", factory)
     with factory() as db:
-        session = ActSession(id=7, agent_id="act", codex_thread_id="browser-test")
+        session = ActSession(id=7, agent_id=agent_id, codex_thread_id="browser-test")
         turn = ActTurn(session_id=7, status="running", user_message="test")
         db.add_all([session, turn])
         db.commit()
-        token = AgentPolicyService(db).issue("act", 7)
+        token = AgentPolicyService(db).issue(agent_id, 7)
         if state == "idle":
             turn.status = "completed"
         elif state == "canceled":

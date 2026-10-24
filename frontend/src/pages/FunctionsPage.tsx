@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { FunctionCatalogEntry, api } from "../api/client";
+import { AppIcon } from "../components/AppIcon";
 import { RunningStatus } from "../components/RunningStateDot";
 import { formatDisplayName } from "../lib/displayName";
 import { usePolling } from "../lib/usePolling";
+import "./catalog.css";
 
 const categorySourceLabels: Record<FunctionCatalogEntry["category"], string> = {
   backend_core: "Backend core",
@@ -37,6 +39,14 @@ export function functionSourceLabel(entry: FunctionCatalogEntry): string {
 }
 
 export default function FunctionsPage() {
+  return (
+    <section className="page stack catalog-page">
+      <FunctionCatalog />
+    </section>
+  );
+}
+
+export function FunctionCatalog({ afterHeader }: { afterHeader?: ReactNode } = {}) {
   const [functions, setFunctions] = useState<FunctionCatalogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -60,22 +70,20 @@ export default function FunctionsPage() {
   }
 
   return (
-    <section className="page stack">
+    <div className="function-catalog stack">
       <header className="page-header">
         <div>
           <h1>Functions</h1>
-          <p className="muted">
-            Backend, user, and integration functions available to application skills.
-          </p>
         </div>
         <button type="button" className="secondary" onClick={() => void loadFunctions({ refresh: true })} disabled={isLoading}>
-          Refresh
+          <AppIcon name="refresh" size={15} />Refresh
         </button>
       </header>
 
+      {afterHeader}
       {error && <p className="error-text">{error}</p>}
       {isLoading ? <p className="muted">Loading functions...</p> : <FunctionTable functions={functions} />}
-    </section>
+    </div>
   );
 }
 
@@ -103,29 +111,30 @@ export function FunctionTable({ functions }: { functions: FunctionCatalogEntry[]
   });
 
   return (
-    <div className="stack">
-      <div className="function-filters">
-        <label>
-          Search
+    <div className="function-catalog catalog-list stack">
+      <div className="catalog-toolbar function-filters">
+        <label className="catalog-search">
+          <AppIcon name="search" size={17} />
           <input
+            aria-label="Search"
             type="search"
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
-            placeholder="Search functions"
+            placeholder="Search functions…"
           />
         </label>
-        <label>
-          Source
-          <select value={source} onChange={(event) => setSource(event.target.value)}>
+        <label className="catalog-select">
+          <span>Source</span>
+          <select aria-label="Source" value={source} onChange={(event) => setSource(event.target.value)}>
             <option value="all">All sources</option>
             {sourceOptions.map(([value, label]) => (
               <option key={value} value={value}>{label}</option>
             ))}
           </select>
         </label>
-        <label>
-          Availability
-          <select value={availability} onChange={(event) => setAvailability(event.target.value)}>
+        <label className="catalog-select">
+          <span>Availability</span>
+          <select aria-label="Availability" value={availability} onChange={(event) => setAvailability(event.target.value)}>
             <option value="all">All availability</option>
             <option value="available">Available</option>
             <option value="disabled">Disabled</option>
@@ -133,9 +142,9 @@ export function FunctionTable({ functions }: { functions: FunctionCatalogEntry[]
             <option value="error">Error</option>
           </select>
         </label>
-        <label>
-          Risk
-          <select value={risk} onChange={(event) => setRisk(event.target.value)}>
+        <label className="catalog-select">
+          <span>Risk</span>
+          <select aria-label="Risk" value={risk} onChange={(event) => setRisk(event.target.value)}>
             <option value="all">All risks</option>
             <option value="low">Low</option>
             <option value="medium">Medium</option>
@@ -144,7 +153,8 @@ export function FunctionTable({ functions }: { functions: FunctionCatalogEntry[]
           </select>
         </label>
       </div>
-      <div className="table-wrap">
+      <div className="catalog-list-heading"><span>Function catalog</span><span className="catalog-result-count" aria-live="polite">{filteredFunctions.length} of {functions.length} functions</span></div>
+      {filteredFunctions.length === 0 ? <div className="catalog-empty"><div className="catalog-empty-icon"><AppIcon name={functions.length === 0 ? "code" : "search"} size={28} /></div><h2>{functions.length === 0 ? "No functions are registered." : "No functions match these filters."}</h2><p>{functions.length === 0 ? "Platform, integration, and installed skill functions will appear here." : "Try a different keyword or clear your filters to see the full catalog."}</p>{functions.length > 0 && <button className="secondary" type="button" onClick={() => { setKeyword(""); setSource("all"); setAvailability("all"); setRisk("all"); }}>Clear filters</button>}</div> : <div className="table-wrap">
         <table>
           <thead>
             <tr>
@@ -166,8 +176,8 @@ export function FunctionTable({ functions }: { functions: FunctionCatalogEntry[]
                       ) : formatDisplayName(entry.title)}
                     </strong>
                   </span>
-                  <span className="table-subtitle">{entry.id}</span>
                   <span className="table-subtitle">{entry.description}</span>
+                  <span className="catalog-function-id">{entry.id}</span>
                 </td>
                 <td>{functionSourceLabel(entry)}</td>
                 <td>
@@ -186,16 +196,9 @@ export function FunctionTable({ functions }: { functions: FunctionCatalogEntry[]
                 <td>{entry.active_version ?? "platform"}</td>
               </tr>
             ))}
-            {filteredFunctions.length === 0 && (
-              <tr>
-                <td colSpan={5} className="muted">
-                  {functions.length === 0 ? "No functions are registered." : "No functions match these filters."}
-                </td>
-              </tr>
-            )}
           </tbody>
         </table>
-      </div>
+      </div>}
     </div>
   );
 }

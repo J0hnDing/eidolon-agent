@@ -12,7 +12,7 @@ from app.services.telegram_provider import (
     TelegramBotApi,
     UrllibTelegramBotApi,
 )
-from app.services.telegram_service import TELEGRAM_ACT_ROLE, TelegramService
+from app.services.telegram_service import TELEGRAM_ACT_ROLE, TELEGRAM_ASSISTANT_ROLE, TelegramService
 
 
 class ActTelegramFileError(RuntimeError):
@@ -30,11 +30,12 @@ class ActTelegramFileCapability:
         secret_store: SecretStore | None = None,
         api_factory: Callable[[str], TelegramBotApi] | None = None,
         telegram_service: TelegramService | None = None,
+        agent_id: str = "act",
     ) -> None:
         self.workspace = workspace or ensure_act_workspace()
         self.telegram = telegram_service or TelegramService(
             db,
-            role=TELEGRAM_ACT_ROLE,
+            role=TELEGRAM_ASSISTANT_ROLE if agent_id == "assistant" else TELEGRAM_ACT_ROLE,
             secret_store=secret_store,
             api_factory=api_factory or UrllibTelegramBotApi,
         )

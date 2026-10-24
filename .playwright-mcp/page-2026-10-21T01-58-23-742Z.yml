@@ -1,0 +1,44 @@
+- generic [ref=f6e3]:
+  - link "Skip to content" [ref=f6e4] [cursor=pointer]:
+    - /url: "#main-content"
+  - complementary [aria-hidden] [ref=f6e5]:
+    - generic [ref=f6e6]:
+      - generic [ref=f6e8]:
+        - strong [ref=f6e9]: Eidolon
+        - generic [ref=f6e10]: Your personal intelligence
+      - button [ref=f6e11] [cursor=pointer]: ×
+    - navigation [ref=f6e12]:
+      - link [ref=f6e13] [cursor=pointer]:
+        - /url: /assistant
+        - generic [ref=f6e16]: Assistant
+      - link [ref=f6e17] [cursor=pointer]:
+        - /url: /agents
+        - generic [ref=f6e20]: Agents
+      - link [ref=f6e21] [cursor=pointer]:
+        - /url: /apps
+        - generic [ref=f6e24]: Applications
+      - link [ref=f6e25] [cursor=pointer]:
+        - /url: /skills
+        - generic [ref=f6e28]: Skills
+      - link [ref=f6e29] [cursor=pointer]:
+        - /url: /automations
+        - generic [ref=f6e32]: Automations
+      - link [ref=f6e33] [cursor=pointer]:
+        - /url: /memory
+        - generic [ref=f6e36]: Memory
+      - link [ref=f6e37] [cursor=pointer]:
+        - /url: /activity
+        - generic [ref=f6e40]: Activity
+    - generic [ref=f6e41]:
+      - navigation [ref=f6e42]:
+        - link [ref=f6e43] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=f6e46]: Settings
+      - generic [ref=f6e49]:
+        - strong [ref=f6e50]: Local-first
+        - generic [ref=f6e51]: Private by design
+  - main [ref=f6e52]:
+    - generic [ref=f6e53]:
+      - button "Open navigation" [ref=f6e54] [cursor=pointer]
+      - strong [ref=f6e58]: Eidolon
+    - status [ref=f6e61]: Loading page…

@@ -159,5 +159,11 @@ describe("FunctionTable", () => {
 
     fireEvent.change(screen.getByLabelText("Risk"), { target: { value: "medium" } });
     expect(screen.getByText("No functions match these filters.")).toBeTruthy();
+    expect(screen.getByText("0 of 3 functions")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getByText("github.repository.get")).toBeTruthy();
+    expect(screen.getByText("github.issue.list")).toBeTruthy();
+    expect(screen.getByText("google_calendar.event.create")).toBeTruthy();
+    expect(screen.getByText("3 of 3 functions")).toBeTruthy();
   });
 });

@@ -15,9 +15,15 @@ from app.integrations import (
 from app.services.integration_registry import OPERATIONS
 
 EXPECTED_OPERATION_IDS = {
+    "valence.describe",
+    "valence.utility.calculate",
     "atlas.describe",
     "atlas.records.search",
     "atlas.records.get",
+    "atlas.records.create",
+    "atlas.records.update",
+    "atlas.links.create",
+    "atlas.links.update",
     "atlas.links.get",
     "atlas.person.completeness.get",
     "atlas.states.get",
@@ -27,6 +33,22 @@ EXPECTED_OPERATION_IDS = {
     "atlas.knowledge.read",
     "atlas.attachments.list",
     "atlas.attachments.read",
+    "atlas.attachments.upload",
+    "atlas.attachments.download",
+    "atlas.attachments.delete",
+    "atlas.records.trash",
+    "atlas.records.restore",
+    "atlas.records.restore_revision",
+    "atlas.links.delete",
+    "atlas.links.restore_revision",
+    "atlas.trash.empty",
+    "atlas.custom_fields.list",
+    "atlas.custom_fields.create",
+    "atlas.custom_fields.update",
+    "atlas.custom_fields.delete",
+    "atlas.states.configuration.update",
+    "atlas.states.events.create",
+    "atlas.states.observations.create",
     "atlas.experience.list",
     "atlas.goal.create",
     "atlas.goal.list",
@@ -68,6 +90,7 @@ EXPECTED_OPERATION_IDS = {
     "huggingface.list_papers",
     "huggingface.search_papers",
     "notion.daily_feed.write",
+    "notion.daily_feed.read",
     "notion.report.create",
     "notion.report.delete",
     "notion.report.get",
@@ -142,6 +165,7 @@ def test_default_registry_lookup_and_order_are_deterministic() -> None:
     assert DEFAULT_INTEGRATION_REGISTRY.get("github.repository.get") is OPERATIONS["github.repository.get"]
     assert [provider.id for provider in DEFAULT_INTEGRATION_REGISTRY.providers()] == sorted(
         {
+            "valence",
             "github",
             "atlas",
             "notion",
@@ -169,6 +193,7 @@ def test_effect_risk_and_compatibility_metadata_are_derived() -> None:
     delete = OPERATIONS["notion.todo.delete"]
     high = OPERATIONS["email.send"]
     daily_feed = OPERATIONS["notion.daily_feed.write"]
+    daily_feed_read = OPERATIONS["notion.daily_feed.read"]
 
     assert read.effects == frozenset({IntegrationEffect.READ})
     assert read.read_only is True
@@ -179,6 +204,11 @@ def test_effect_risk_and_compatibility_metadata_are_derived() -> None:
     assert high.requires_invocation_approval is True
     assert daily_feed.effects == frozenset({IntegrationEffect.UPDATE})
     assert daily_feed.risk is RiskLevel.MEDIUM
+    assert daily_feed_read.effects == frozenset({IntegrationEffect.READ})
+    assert daily_feed_read.risk is RiskLevel.LOW
+    assert daily_feed_read.input_schema["required"] == []
+    assert daily_feed_read.input_schema["additionalProperties"] is False
+    assert daily_feed_read.output_schema["properties"]["markdown"]["maxLength"] == 20_000
 
 
 def test_contract_identity_contains_security_relevant_fields() -> None:

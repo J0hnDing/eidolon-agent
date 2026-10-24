@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.models import ActSession, TelegramBotConnection, TelegramTopicSession
+from app.models import ActSession, ActTurn, TelegramBotConnection, TelegramTopicSession
 from app.services.act_telegram_file_service import (
     ActTelegramFileCapability,
     ActTelegramFileError,
@@ -15,6 +15,7 @@ from app.services.secret_store import FakeSecretStore
 from app.services.telegram_provider import FakeTelegramBotApi
 from app.services.telegram_service import (
     TELEGRAM_ACT_ROLE,
+    TELEGRAM_ASSISTANT_ROLE,
     TelegramService,
     TelegramServiceError,
 )
@@ -137,6 +138,41 @@ def test_send_workspace_file_refuses_paths_outside_workspace_before_delivery(
 
     assert exc_info.value.error_type == "path_outside_workspace"
     assert api.sent_documents == []
+
+
+@pytest.mark.parametrize("provider", [None, "telegram"])
+def test_assistant_file_uses_running_turn_direct_chat_and_rejects_changed_binding(
+    db: Session, tmp_path: Path, provider: str | None,
+) -> None:
+    workspace = _workspace(tmp_path / "assistant")
+    (workspace.workspace / "result.txt").write_bytes(FILE_CONTENT)
+    telegram, api, session_id = _connected_service(db)
+    session = db.get(ActSession, session_id)
+    session.agent_id = "assistant"
+    connection = db.query(TelegramBotConnection).one()
+    connection.role = TELEGRAM_ASSISTANT_ROLE
+    telegram.role = TELEGRAM_ASSISTANT_ROLE
+    db.query(TelegramTopicSession).delete()
+    turn = ActTurn(session_id=session.id, status="running", user_message="Send report", delivery_provider=provider,
+                   delivery_connection_id=connection.id, delivery_chat_id="42",
+                   delivery_status="pending" if provider else None)
+    db.add(turn)
+    db.commit()
+    capability = ActTelegramFileCapability(db, workspace=workspace, telegram_service=telegram, agent_id="assistant")
+    capability.send(session.id, "workspace/result.txt")
+    assert api.sent_documents[0]["message_thread_id"] is None
+    assert api.sent_documents[0]["chat"] == {"id": 42}
+    connection.paired_chat_id = "99"
+    db.commit()
+    with pytest.raises(TelegramServiceError, match="no current paired chat"):
+        capability.send(session.id, "workspace/result.txt")
+    assert len(api.sent_documents) == 1
+    connection.paired_chat_id = "42"
+    turn.delivery_status = "failed"
+    db.commit()
+    with pytest.raises(TelegramServiceError, match="no current paired chat"):
+        capability.send(session.id, "workspace/result.txt")
+    assert len(api.sent_documents) == 1
 
 
 def test_send_workspace_file_requires_current_session_topic(

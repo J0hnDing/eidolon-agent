@@ -1,38 +1,63 @@
 // @vitest-environment jsdom
 
+import { clearManagedSessionCache } from "../features/chat/managedSessionCache";
+
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AgentDefinition, AgentSession, api } from "../api/client";
+import { ActSession, AgentDefinition, AgentSession, api } from "../api/client";
 import AgentsPage from "./AgentsPage";
 
-const agents: AgentDefinition[] = [
-  {
-    id: "act",
-    name: "Act",
-    description: "Works persistently with full function access.",
-    policy: { max_risk: "high", read_only: false, allowed_functions: [], banned_functions: [], model: null, reasoning_effort: null },
-    permissions: { filesystem: "Shared root with workspace writes", web_search: true },
-    functions: [],
-  },
-  {
-    id: "observer",
-    name: "Observer",
-    description: "Reads local context without making changes.",
-    policy: { max_risk: "high", read_only: true, allowed_functions: [], banned_functions: [], model: null, reasoning_effort: null },
-    permissions: { filesystem: "Read-only shared root", web_search: false },
-    functions: [],
-  },
-  {
-    id: "assistant",
-    name: "Assistant",
-    description: "Assesses goals and proposes work for Act.",
-    policy: { max_risk: "medium", read_only: true, allowed_functions: [], banned_functions: [], model: null, reasoning_effort: null },
-    permissions: { filesystem: "Read-only shared root", web_search: true },
-    functions: [],
-  },
-];
+const actAgent: AgentDefinition = {
+  id: "act",
+  name: "Act",
+  description: "Works persistently with full function access.",
+  policy: { max_risk: "high", read_only: false, allowed_functions: [], banned_functions: [], model: null, reasoning_effort: null },
+  permissions: { filesystem: "Shared root with workspace writes", web_search: true },
+  functions: [],
+};
+
+const observerAgent: AgentDefinition = {
+  id: "observer",
+  name: "Observer",
+  description: "Reads local context without making changes.",
+  policy: { max_risk: "high", read_only: true, allowed_functions: [], banned_functions: [], model: null, reasoning_effort: null },
+  permissions: { filesystem: "Read-only shared root", web_search: false },
+  functions: [],
+};
+
+function renderAgents(path = "/agents") {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <Routes>
+        <Route path="/agents" element={<AgentsPage />} />
+        <Route path="/agents/:agentId" element={<AgentsPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+function actSession(overrides: Partial<ActSession> = {}): ActSession {
+  return {
+    id: 4,
+    title: "MarkUs",
+    origin: "web",
+    status: "active",
+    wecom_user_id: null,
+    created_at: "2026-10-09T12:00:00Z",
+    updated_at: "2026-10-09T12:00:00Z",
+    turns: [],
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  localStorage.clear();
+  clearManagedSessionCache();
+  vi.spyOn(api, "listActSessions").mockResolvedValue([]);
+  vi.spyOn(api, "listAgentSessions").mockResolvedValue([]);
+});
 
 afterEach(() => {
   cleanup();
@@ -40,122 +65,132 @@ afterEach(() => {
 });
 
 describe("AgentsPage", () => {
-  it("renders Act notices and submits a reply without starting another running turn", async () => {
-    const session: AgentSession = {
-      id: 4, agent_id: "act", title: "MarkUs", origin: "web", status: "active", wecom_user_id: null,
-      created_at: "2026-10-09T12:00:00Z", updated_at: "2026-10-09T12:00:00Z", turns: [{
-        id: 9, session_id: 4, agent_id: "act", codex_turn_id: null, user_message: "Sign in", assistant_message: null,
-        status: "running", activity_json: [], error_message: null, cancel_requested_at: null,
-        delivery_message_thread_id: null, delivery_status: null, started_at: null, completed_at: null,
-        created_at: "2026-10-09T12:00:00Z", live_messages: [{
-          id: 2, role: "assistant", text: "Enter 123 in Duo Mobile", reply_status: "awaiting",
-          reply_expires_at: new Date(Date.now() + 60000).toISOString(), reply_to_message_id: null,
-          created_at: "2026-10-09T12:00:01Z",
-        }],
-      }],
-    };
-    vi.spyOn(api, "listAgents").mockResolvedValue(agents);
-    vi.spyOn(api, "getAgent").mockResolvedValue(agents[0]);
-    vi.spyOn(api, "listAgentSessions").mockResolvedValue([session]);
-    vi.spyOn(api, "getAgentSession").mockImplementation(async () => structuredClone(session));
-    const run = vi.spyOn(api, "runAgentTurn").mockImplementation(async () => {
-      session.turns[0].live_messages![0].reply_status = "answered";
-      session.turns[0].live_messages!.push({
-        id: 3, role: "user", text: "Done", reply_status: "none", reply_expires_at: null,
-        reply_to_message_id: 2, created_at: "2026-10-09T12:00:02Z",
-      });
-      return structuredClone(session.turns[0]);
-    });
-    render(<MemoryRouter initialEntries={["/agents/act"]}>
-      <Routes><Route path="/agents/:agentId" element={<AgentsPage />} /></Routes>
-    </MemoryRouter>);
-    await screen.findByText("Enter 123 in Duo Mobile");
-    const input = screen.getByRole("textbox", { name: "Message Act" }) as HTMLInputElement;
-    expect(input.disabled).toBe(false);
-    fireEvent.change(input, { target: { value: "Done" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    await screen.findByText("Done");
-    await waitFor(() => expect(input.disabled).toBe(true));
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("act", 4, "Done");
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+  it("opens Act by default with Conversation selected", async () => {
+    renderAgents();
+
+    expect((await screen.findByRole("link", { name: "Act" })).className).toContain("active");
+    expect(screen.getByRole("link", { name: "Act" }).getAttribute("href")).toBe("/agents/act");
+    expect(screen.getByRole("button", { name: "Conversation" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Configuration" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("textbox", { name: "Conversation message" })).toBeTruthy();
+    expect(api.listActSessions).toHaveBeenCalled();
   });
 
-  it("shows Assistant boundaries, proposals, assessment controls, and session retention", async () => {
-    vi.spyOn(api, "listAgents").mockResolvedValue(agents);
-    vi.spyOn(api, "getAgent").mockResolvedValue(agents[2]);
-    vi.spyOn(api, "listAgentSessions").mockResolvedValue([]);
-    vi.spyOn(api, "listAssistantProposals").mockResolvedValue([{ id: 7, title: "Review open goals", rationale: "Several goals can move forward.", instruction: "Review the goals and complete the next safe action.", actions: "Review and implement", references: ["TODO-12"], status: "pending", execution_status: null, act_session_id: null, created_at: "2026-09-04T12:00:00Z", source_session_id: 3 }]);
-    vi.spyOn(api, "getAssistantAssessment").mockResolvedValue({ enabled: true, next_run_at: "2026-09-07T12:00:00Z", last_run_at: null, last_status: null });
+  it("opens Observer from the agent tabs and keeps Conversation as the default view", async () => {
+    renderAgents("/agents/observer");
 
-    render(
-      <MemoryRouter initialEntries={["/agents/assistant"]}>
-        <Routes><Route path="/agents/:agentId" element={<AgentsPage />} /></Routes>
-      </MemoryRouter>,
-    );
-
-    expect(await screen.findByRole("heading", { name: "Assistant" })).toBeTruthy();
-    expect(screen.getByText("Read-only shared root")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Proposed actions" })).toBeTruthy();
-    expect(screen.getByText("Review open goals")).toBeTruthy();
-    expect(screen.getByText(/at most the five most recently created Assistant sessions/i)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Disable" })).toBeTruthy();
+    expect((await screen.findByRole("link", { name: "Observer" })).className).toContain("active");
+    expect(screen.getByRole("link", { name: "Observer" }).getAttribute("href")).toBe("/agents/observer");
+    expect(screen.getByRole("link", { name: "Observer" }).textContent).toBe("Observer");
+    expect(screen.getByRole("button", { name: "Conversation" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("textbox", { name: "Conversation message" })).toBeTruthy();
+    await waitFor(() => expect(api.listAgentSessions).toHaveBeenCalledWith("observer"));
   });
 
-  it("reviews policy edits in an Eidolon modal before saving", async () => {
-    vi.spyOn(api, "listAgents").mockResolvedValue(agents);
-    vi.spyOn(api, "getAgent").mockResolvedValue(agents[1]);
-    vi.spyOn(api, "listAgentSessions").mockResolvedValue([]);
+  it("saves an Act policy only after the user confirms the review", async () => {
+    vi.spyOn(api, "getAgent").mockResolvedValue(actAgent);
     const updatePolicy = vi.spyOn(api, "updateAgentPolicy").mockResolvedValue({
-      ...agents[1],
-      policy: { ...agents[1].policy, max_risk: "low" },
+      ...actAgent,
+      policy: { ...actAgent.policy, max_risk: "low" },
     });
-
-    render(
-      <MemoryRouter initialEntries={["/agents/observer"]}>
-        <Routes><Route path="/agents/:agentId" element={<AgentsPage />} /></Routes>
-      </MemoryRouter>,
-    );
+    renderAgents("/agents/act?view=configuration");
 
     const risk = await screen.findByLabelText("Maximum function risk");
     fireEvent.change(risk, { target: { value: "low" } });
-    fireEvent.click(screen.getByRole("button", { name: "Review policy change" }));
-    expect(screen.getByRole("dialog")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Update Observer policy?" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
+
+    expect(screen.getByRole("dialog", { name: "Update Act policy?" })).toBeTruthy();
+    expect(updatePolicy).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Update policy" }));
 
-    await waitFor(() => expect(updatePolicy).toHaveBeenCalledWith("observer", expect.objectContaining({ max_risk: "low" })));
+    await waitFor(() => expect(updatePolicy).toHaveBeenCalledWith("act", expect.objectContaining({ max_risk: "low" })));
   });
 
-  it("lets the user edit pending deterministic function steps", async () => {
-    vi.spyOn(api, "listAgents").mockResolvedValue(agents);
-    vi.spyOn(api, "getAgent").mockResolvedValue(agents[2]);
-    vi.spyOn(api, "listAgentSessions").mockResolvedValue([]);
-    const proposal = {
-      id: 9, title: "Create a calendar event", rationale: "", instruction: "",
-      actions: "Create a calendar event", references: [], status: "pending",
-      execution_status: null, act_session_id: null, created_at: "2026-09-28T12:00:00Z",
-      source_session_id: 3,
-      action: { type: "functions" as const, description: "Create a calendar event", steps: [
-        { function: "google_calendar.event.create", arguments: { title: "Before" } },
-      ] },
-    };
-    vi.spyOn(api, "listAssistantProposals").mockResolvedValue([proposal]);
-    vi.spyOn(api, "getAssistantAssessment").mockResolvedValue({
-      enabled: false, next_run_at: null, last_run_at: null, last_status: null,
+  it("continues the same Act turn when replying to a live notice", async () => {
+    const session = actSession({
+      turns: [{
+        id: 9,
+        session_id: 4,
+        codex_turn_id: null,
+        user_message: "Sign in",
+        assistant_message: null,
+        status: "running",
+        activity_json: [],
+        error_message: null,
+        cancel_requested_at: null,
+        delivery_message_thread_id: null,
+        delivery_status: null,
+        started_at: null,
+        completed_at: null,
+        created_at: "2026-10-09T12:00:00Z",
+        live_messages: [{
+          id: 2,
+          role: "assistant",
+          text: "Enter 123 in Duo Mobile",
+          reply_status: "awaiting",
+          reply_expires_at: new Date(Date.now() + 60_000).toISOString(),
+          reply_to_message_id: null,
+          created_at: "2026-10-09T12:00:01Z",
+        }],
+      }],
     });
-    const edit = vi.spyOn(api, "editAssistantFunctionProposal").mockResolvedValue(proposal);
-    render(<MemoryRouter initialEntries={["/agents/assistant"]}>
-      <Routes><Route path="/agents/:agentId" element={<AgentsPage />} /></Routes>
-    </MemoryRouter>);
-    const editor = await screen.findByText("Edit function sequence");
-    fireEvent.click(editor);
-    fireEvent.change(screen.getByLabelText("Function sequence JSON"), { target: {
-      value: '[{"function":"google_calendar.event.create","arguments":{"title":"After"}}]',
-    } });
-    fireEvent.click(screen.getByRole("button", { name: "Save sequence" }));
-    await waitFor(() => expect(edit).toHaveBeenCalledWith(9, [
-      { function: "google_calendar.event.create", arguments: { title: "After" } },
-    ]));
+    const summary = (({ turns: _turns, ...value }) => value)(session);
+    vi.mocked(api.listActSessions).mockResolvedValue([summary]);
+    vi.spyOn(api, "getActSession").mockImplementation(async () => structuredClone(session));
+    const run = vi.spyOn(api, "runActTurn").mockImplementation(async () => {
+      session.turns[0].live_messages![0].reply_status = "answered";
+      session.turns[0].live_messages!.push({
+        id: 3,
+        role: "user",
+        text: "Done",
+        reply_status: "none",
+        reply_expires_at: null,
+        reply_to_message_id: 2,
+        created_at: "2026-10-09T12:00:02Z",
+      });
+      return structuredClone(session.turns[0]);
+    });
+    renderAgents();
+
+    fireEvent.click(await screen.findByRole("button", { name: /MarkUs/ }));
+    await screen.findByText("Enter 123 in Duo Mobile");
+    const input = screen.getByRole("textbox", { name: "Conversation message" }) as HTMLTextAreaElement;
+    expect(input.disabled).toBe(false);
+    fireEvent.change(input, { target: { value: "Done" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await screen.findByText("Done");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith(4, "Done");
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+  });
+
+  it("confirms archiving the current conversation before calling the Act API", async () => {
+    const session = actSession();
+    const summary = (({ turns: _turns, ...value }) => value)(session);
+    let sessions = [summary];
+    vi.mocked(api.listActSessions).mockImplementation(async () => sessions);
+    vi.spyOn(api, "getActSession").mockResolvedValue(session);
+    const archive = vi.spyOn(api, "archiveActSession").mockImplementation(async () => { sessions = []; });
+    renderAgents();
+
+    fireEvent.click(await screen.findByRole("button", { name: /MarkUs/ }));
+    await screen.findByRole("button", { name: "Delete conversation" });
+    fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
+
+    expect(screen.getByRole("dialog", { name: "Archive this conversation?" })).toBeTruthy();
+    expect(archive).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Archive conversation" }));
+    await waitFor(() => expect(archive).toHaveBeenCalledWith(4));
+  });
+
+  it("shows policy configuration on demand for Observer", async () => {
+    vi.spyOn(api, "getAgent").mockResolvedValue(observerAgent);
+    renderAgents("/agents/observer");
+
+    fireEvent.click(screen.getByRole("button", { name: "Configuration" }));
+    expect(await screen.findByRole("heading", { name: "Permission policy" })).toBeTruthy();
+    expect(screen.getByText("Read-only shared root")).toBeTruthy();
+    expect(api.getAgent).toHaveBeenCalledWith("observer");
   });
 });

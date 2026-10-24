@@ -1,0 +1,5 @@
+
+> eidolon-frontend@0.1.0 test
+> vitest run --maxWorkers=1 --reporter=json --outputFile=../.playwright-mcp/reference-revision-final-tests.json
+
+JSON report written to C:/Users/John/Projects/Eidolon/.playwright-mcp/reference-revision-final-tests.json

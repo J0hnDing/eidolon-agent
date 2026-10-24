@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import re
@@ -17,10 +19,12 @@ from app.execution.executor import InvocationExecutor
 from app.execution.types import InvocationExecutionError, InvocationTargetRef
 from app.models import CodexMcpSettings, McpAuditRecord
 from app.services.act_runtime_capabilities import act_private_tool_entries
+from app.services.assistant_tools import assistant_private_tool_entries
 from app.services.function_catalog_service import FunctionCatalogService
 
 MAX_MCP_INPUT_BYTES = 256 * 1024
 MAX_MCP_OUTPUT_BYTES = 1024 * 1024
+MAX_INITIALIZATION_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_MCP_ERROR_LENGTH = 512
 
 
@@ -78,6 +82,7 @@ class McpToolSnapshot:
 class McpInvocationResult:
     output: dict[str, Any] | list[Any]
     summary: str
+    image: dict[str, str] | None = None
 
 
 class McpFunctionService:
@@ -104,8 +109,10 @@ class McpFunctionService:
         if self.agent_identity is not None:
             from app.services.agent_policy_service import AgentPolicyService
             entries = [entry for entry in entries if AgentPolicyService(db).decision(self.agent_identity[0], entry)[0]]
-            if self.agent_identity[0] == "act":
+            if self.agent_identity[0] in {"act", "assistant"}:
                 entries.extend(act_private_tool_entries())
+            if self.agent_identity[0] == "assistant":
+                entries.extend(assistant_private_tool_entries())
         self.excluded_ids = sorted(
             str(entry["id"])
             for entry in entries
@@ -206,11 +213,26 @@ class McpFunctionService:
             if not isinstance(outcome.output, (dict, list)):
                 raise McpFunctionError("internal_failure", "Eidolon invocation returned no structured output.")
             output = outcome.output
+            image = None
+            image_size = 0
+            if (
+                self.agent_identity is not None
+                and self.agent_identity[0] == "assistant"
+                and context.principal_kind == "agent"
+                and context.agent_id == "assistant"
+                and snapshot.category == "agent_private"
+                and snapshot.function_id == "assistant.initialization.read"
+                and isinstance(output, dict)
+                and "_initialization_image" in output
+            ):
+                output = dict(output)
+                image, image_size = self._initialization_image(output.pop("_initialization_image"))
             status = outcome.status
             audit.resource = outcome.audit_resource
             response_size = self._json_size(output)
             if response_size > MAX_MCP_OUTPUT_BYTES:
                 raise McpFunctionError("response_too_large", "MCP tool output exceeds the bounded response limit.")
+            response_size += image_size
             audit.status = status
             audit.response_size = response_size
             audit.completed_at = utc_now()
@@ -225,6 +247,7 @@ class McpFunctionService:
             return McpInvocationResult(
                 output=output,
                 summary=f"Eidolon tool completed{qualifier} ({response_size} response bytes).",
+                image=image,
             )
         except McpFunctionError as exc:
             self._fail_audit(audit, exc.error_type)
@@ -333,6 +356,31 @@ class McpFunctionService:
         maximum_normalized_length = 128 - len(prefix) - len(digest) - 2
         normalized = normalized[:maximum_normalized_length].rstrip("_")
         return f"{prefix}_{normalized}_{digest}"
+
+    @staticmethod
+    def _initialization_image(value: Any) -> tuple[dict[str, str], int]:
+        # Only the authenticated private initialization reader may use this
+        # separate, native-Atlas-sized visual channel. Metadata remains subject
+        # to the ordinary JSON limit, and image bytes never enter audit rows.
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"data", "mime_type"}
+            or not isinstance(value.get("mime_type"), str)
+            or value.get("mime_type") not in {"image/png", "image/jpeg", "image/webp", "image/gif"}
+            or not isinstance(value.get("data"), str)
+            or not value["data"]
+        ):
+            raise McpFunctionError("invalid_image", "Initialization image data or MIME type is invalid.")
+        encoded = value["data"]
+        if len(encoded) > 4 * ((MAX_INITIALIZATION_IMAGE_BYTES + 2) // 3):
+            raise McpFunctionError("response_too_large", "Initialization image exceeds the bounded image limit.")
+        try:
+            decoded = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error):
+            raise McpFunctionError("invalid_image", "Initialization image base64 data is invalid.") from None
+        if len(decoded) > MAX_INITIALIZATION_IMAGE_BYTES:
+            raise McpFunctionError("response_too_large", "Initialization image exceeds the bounded image limit.")
+        return {"data": encoded, "mime_type": value["mime_type"]}, len(decoded)
 
     @staticmethod
     def _json_size(value: dict[str, Any] | list[Any]) -> int:

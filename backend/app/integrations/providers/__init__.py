@@ -12,12 +12,14 @@ from .macro import MacroProviderAdapter
 from .notion import NotionProviderAdapter
 from .outlook import OutlookProviderAdapter
 from .telegram import TelegramProviderAdapter
+from .valence import ValenceProviderAdapter
 
 
 def build_provider_adapters(compatibility_service: Any) -> tuple[object, ...]:
     """Deterministic checked-in provider composition for the staged migration."""
 
     return (
+        ValenceProviderAdapter(compatibility_service),
         GitHubProviderAdapter(compatibility_service),
         AtlasProviderAdapter(compatibility_service),
         NotionProviderAdapter(compatibility_service),
@@ -35,6 +37,7 @@ def build_provider_adapters(compatibility_service: Any) -> tuple[object, ...]:
 
 
 __all__ = [
+    "ValenceProviderAdapter",
     "AtlasProviderAdapter",
     "GmailProviderAdapter",
     "GitHubProviderAdapter",

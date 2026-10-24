@@ -1,0 +1,407 @@
+{
+  "engine_version": "8",
+  "action": {
+    "additionalProperties": false,
+    "properties": {
+      "title": {
+        "maxLength": 500,
+        "minLength": 1,
+        "title": "Title",
+        "type": "string"
+      },
+      "duration_minutes": {
+        "minimum": 0,
+        "title": "Duration Minutes",
+        "type": "number"
+      },
+      "net_money_cost": {
+        "title": "Net Money Cost",
+        "type": "number"
+      },
+      "features": {
+        "type": "object",
+        "properties": {
+          "mental_effort": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "mental_rest": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "physical_effort": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "physical_pleasure": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "stimulation_novelty": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "learning_gain": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "curiosity_engagement": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "autonomy_control": {
+            "type": "number",
+            "minimum": -1.0,
+            "maximum": 1.0
+          },
+          "competence_mastery": {
+            "type": "number",
+            "minimum": -1.0,
+            "maximum": 1.0
+          },
+          "goal_progress": {
+            "type": "number",
+            "minimum": -1.0,
+            "maximum": 1.0
+          },
+          "structure_planning": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "outcome_uncertainty": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "social_exposure": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "relatedness_intimacy": {
+            "type": "number",
+            "minimum": -1.0,
+            "maximum": 1.0
+          },
+          "belonging_acceptance": {
+            "type": "number",
+            "minimum": -1.0,
+            "maximum": 1.0
+          },
+          "status_recognition": {
+            "type": "number",
+            "minimum": -1.0,
+            "maximum": 1.0
+          },
+          "influence_power": {
+            "type": "number",
+            "minimum": -1.0,
+            "maximum": 1.0
+          },
+          "contribution_care": {
+            "type": "number",
+            "minimum": -1.0,
+            "maximum": 1.0
+          },
+          "identity_value_alignment": {
+            "type": "number",
+            "minimum": -1.0,
+            "maximum": 1.0
+          }
+        },
+        "required": [
+          "mental_effort",
+          "mental_rest",
+          "physical_effort",
+          "physical_pleasure",
+          "stimulation_novelty",
+          "learning_gain",
+          "curiosity_engagement",
+          "autonomy_control",
+          "competence_mastery",
+          "goal_progress",
+          "structure_planning",
+          "outcome_uncertainty",
+          "social_exposure",
+          "relatedness_intimacy",
+          "belonging_acceptance",
+          "status_recognition",
+          "influence_power",
+          "contribution_care",
+          "identity_value_alignment"
+        ],
+        "additionalProperties": false
+      },
+      "feature_notes": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "mental_effort": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "mental_rest": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "physical_effort": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "physical_pleasure": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "stimulation_novelty": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "learning_gain": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "curiosity_engagement": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "autonomy_control": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "competence_mastery": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "goal_progress": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "structure_planning": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "outcome_uncertainty": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "social_exposure": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "relatedness_intimacy": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "belonging_acceptance": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "status_recognition": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "influence_power": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "contribution_care": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "identity_value_alignment": {
+                "type": "string",
+                "maxLength": 1000
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "feature_duration_minutes": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "mental_effort": {
+                "type": "number",
+                "minimum": 0
+              },
+              "mental_rest": {
+                "type": "number",
+                "minimum": 0
+              },
+              "physical_effort": {
+                "type": "number",
+                "minimum": 0
+              },
+              "physical_pleasure": {
+                "type": "number",
+                "minimum": 0
+              },
+              "stimulation_novelty": {
+                "type": "number",
+                "minimum": 0
+              },
+              "curiosity_engagement": {
+                "type": "number",
+                "minimum": 0
+              },
+              "autonomy_control": {
+                "type": "number",
+                "minimum": 0
+              },
+              "competence_mastery": {
+                "type": "number",
+                "minimum": 0
+              },
+              "structure_planning": {
+                "type": "number",
+                "minimum": 0
+              },
+              "outcome_uncertainty": {
+                "type": "number",
+                "minimum": 0
+              },
+              "social_exposure": {
+                "type": "number",
+                "minimum": 0
+              },
+              "relatedness_intimacy": {
+                "type": "number",
+                "minimum": 0
+              },
+              "belonging_acceptance": {
+                "type": "number",
+                "minimum": 0
+              },
+              "influence_power": {
+                "type": "number",
+                "minimum": 0
+              },
+              "identity_value_alignment": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "required": [
+      "title",
+      "duration_minutes",
+      "net_money_cost",
+      "features"
+    ],
+    "title": "ActionInput",
+    "type": "object"
+  },
+  "state": {
+    "additionalProperties": false,
+    "properties": {
+      "mental_energy": {
+        "anyOf": [
+          {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Mental Energy"
+      },
+      "physical_energy": {
+        "anyOf": [
+          {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Physical Energy"
+      },
+      "acute_stress": {
+        "default": 0,
+        "maximum": 1,
+        "minimum": 0,
+        "title": "Acute Stress",
+        "type": "number"
+      },
+      "need_satisfaction": {
+        "type": "object",
+        "properties": {
+          "physical_activity": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "mental_stimulation": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "social_interaction": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "close_connection": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "goal_progression": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "date": {
+        "format": "date",
+        "title": "Date",
+        "type": "string"
+      },
+      "notes": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "string",
+            "maxLength": 2000
+          }
+        ]
+      }
+    },
+    "title": "TransientState",
+    "type": "object",
+    "required": [
+      "date"
+    ]
+  }
+}

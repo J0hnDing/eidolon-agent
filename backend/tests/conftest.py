@@ -7,6 +7,12 @@ from tests.fakes.codex import DeterministicCodexStub
 
 
 @pytest.fixture(autouse=True)
+def isolate_agent_memory_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # File-backed memory must never read/write the user's real workspace in tests.
+    monkeypatch.setattr("app.services.act_workspace_service.ACT_ROOT", tmp_path / "agents")
+
+
+@pytest.fixture(autouse=True)
 def inject_test_codex_adapters(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "app.services.codex_service.default_codex_adapter",

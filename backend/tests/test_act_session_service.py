@@ -12,6 +12,8 @@ from app.models import ActSession, ActTurn
 from app.services.act_app_server_service import agent_app_servers
 from app.services.act_session_service import ActSessionError, ActSessionService
 from app.services.act_turn_dispatcher import ActTurnDispatcher
+from app.services.agent_memory_service import AgentMemoryService
+from app.services.assistant_turn_dispatcher import AssistantTurnDispatcher
 
 
 @pytest.fixture()
@@ -101,7 +103,7 @@ def test_running_turn_cancellation_interrupts_the_live_codex_turn(session_factor
 
 class FakeRuntimeSessions(FakeThreadSessions):
     def run_structured_turn(self, thread_id: str, message: str, _schema, **kwargs):
-        assert kwargs["timeout_seconds"] == 7200
+        assert kwargs["timeout_seconds"] in (7200, 900)
         assert thread_id == "thread-act"
         assert message.startswith("<eidolon_session_metadata>")
         assert message.split("\n\n", 1)[1] == "Use Eidolon"
@@ -177,7 +179,8 @@ def test_dispatcher_resumes_and_completes_queued_turn(
         assert turn.codex_turn_id == "turn-codex"
         assert turn.status == "succeeded"
         assert turn.started_at is not None
-        assert turn.assistant_message == "Done"
+        assert turn.assistant_message is None and turn.user_message == ""
+        assert AgentMemoryService(verify).read_turn_content(turn)["assistant_message"] == "Done"
         assert turn.activity_json == [{"kind": "mcpToolCall", "label": "Used atlas.goals.list"}]
     finally:
         verify.close()
@@ -209,7 +212,13 @@ def test_dispatcher_uses_the_agent_specific_model_route(
         ),
     )
 
-    assert ActTurnDispatcher(agent_id).process_next() is True
+    dispatcher = AssistantTurnDispatcher() if agent_id == "assistant" else ActTurnDispatcher(agent_id)
+    # This test isolates routing; daily continuity and context have their own
+    # runtime tests with complete App Server fakes.
+    monkeypatch.setattr(dispatcher, "_prepare_thread", lambda *_: False)
+    monkeypatch.setattr(dispatcher, "_turn_input", lambda _db, turn, **_kw: turn.user_message)
+    monkeypatch.setattr(dispatcher, "_after_turn", lambda *_: None)
+    assert dispatcher.process_next() is True
     assert routes == [(expected_route, expected_route)]
 
 
@@ -258,7 +267,8 @@ def test_dispatcher_replaces_missing_rollout_without_replaying_completed_turns(
         assert "Current user request: What is my goal?" in runtime.sessions.inputs[0][1]
         assert turns[0].status == "succeeded"
         assert turns[1].status == "succeeded"
-        assert turns[1].assistant_message == "Recovered"
+        assert turns[1].assistant_message is None
+        assert AgentMemoryService(verify).read_turn_content(turns[1])["assistant_message"] == "Recovered"
         assert turns[1].activity_json[0] == {
             "kind": "threadRecovery",
             "label": "Recovered the Act session",
@@ -289,7 +299,8 @@ def test_dispatcher_recovery_marks_only_running_turns_interrupted(
 
     verify: Session = session_factory()
     try:
-        statuses = {turn.user_message: turn.status for turn in verify.query(ActTurn).all()}
+        statuses = {AgentMemoryService(verify).read_turn_content(turn)["user_message"]: turn.status
+                    for turn in verify.query(ActTurn).all()}
         assert statuses == {"running": "interrupted", "queued": "queued"}
     finally:
         verify.close()

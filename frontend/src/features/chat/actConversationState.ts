@@ -21,22 +21,27 @@ export function actSessionMessages(session: ActSession, agentId: AgentId): ChatM
     ...initialMessagesForMode(agentId),
     ...session.turns.flatMap((turn) => {
       const active = isActiveActTurn(turn);
-      const result = active
+      const background = Boolean(turn.backend_message_kind?.startsWith("assistant_") || turn.assistant_context_json);
+      const result = background
+        ? turn.assistant_message?.trim() || turn.error_message || ""
+        : active
         ? "Eidolon is thinking..."
         : turn.assistant_message ?? turn.error_message ?? `${agentId} did not return a response.`;
       return [
-        { id: turn.id * 10 + 2, role: "user" as const, content: turn.user_message, actTurnId: turn.id },
+        ...(!turn.backend_message_kind && !turn.assistant_context_json && turn.user_message ? [{ id: turn.id * 10 + 2, role: "user" as const, content: turn.user_message, actTurnId: turn.id, createdAt: turn.created_at }] : []),
         ...(turn.live_messages ?? []).map((message) => ({
           id: -message.id,
           role: message.role,
           content: message.text,
+          createdAt: message.created_at,
           actTurnId: turn.id,
         })),
-        {
+        ...(!background || result ? [{
           id: turn.id * 10 + 3,
           role: "assistant" as const,
           content: result,
-          kind: active ? "thinking" as const : "text" as const,
+          createdAt: turn.completed_at ?? turn.started_at ?? turn.created_at,
+          kind: active && !background ? "thinking" as const : "text" as const,
           actTurnId: turn.id,
           actWork: {
             status: turn.status,
@@ -44,7 +49,7 @@ export function actSessionMessages(session: ActSession, agentId: AgentId): ChatM
             startedAt: turn.started_at ?? turn.created_at,
             completedAt: turn.completed_at,
           },
-        },
+        }] : []),
       ];
     }),
   ];

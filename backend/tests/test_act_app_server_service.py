@@ -10,7 +10,6 @@ from app.services.act_app_server_service import (
     ActAppServerService,
     render_agent_instructions,
 )
-from app.services.act_runtime_capabilities import act_runtime_capability_catalog
 from app.services.act_workspace_service import ActWorkspace
 from app.services.function_catalog_service import FunctionCatalogError, FunctionCatalogService
 
@@ -71,12 +70,15 @@ class FakeClient:
         self.requests: list[tuple[str, object]] = []
         self.started = 0
         self.stopped = 0
+        self.is_running = False
 
     def start(self) -> None:
         self.started += 1
+        self.is_running = True
 
     def stop(self) -> None:
         self.stopped += 1
+        self.is_running = False
 
     def request(self, method: str, params: object, *, timeout: float = 30):
         self.requests.append((method, params))
@@ -232,36 +234,80 @@ def test_agent_thread_has_private_mcp_credential_and_named_permissions(monkeypat
         assert any("unsafe-plugin" in item for item in client.extra_args)
         assert client.started == 2
         assert ("mcpServerStatus/list", {"threadId": "thread-act"}) in client.requests
-        assert params["developerInstructions"] == OBSERVER_INSTRUCTIONS
+        service.resume_thread(db, "thread-act", model="gpt-act", reasoning_effort="high", session_id=session.id)
+        requests = [params for method, params in client.requests if method in {"thread/start", "thread/resume"}]
+        assert len(requests) == 2
+        for request in requests:
+            assert request["baseInstructions"] == OBSERVER_INSTRUCTIONS
+            assert request["developerInstructions"] == ""
+            assert request["permissions"] == "eidolon_agent"
+            assert "sandbox" not in request
+            assert request["config"]["memories.use_memories"] is False
+            assert request["config"]["memories.generate_memories"] is False
+
+
+def test_live_thread_requires_its_current_unrevoked_credential(monkeypatch, tmp_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from app.db import Base
+    from app.models import ActSession
+    from app.services.agent_policy_service import AgentPermissionError, AgentPolicyService
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    workspace = ActWorkspace(root=tmp_path, memory=tmp_path / "memory", knowledge=tmp_path / "knowledge",
+                             quercus=tmp_path / "knowledge" / "quercus", workspace=tmp_path / "workspace",
+                             downloads=tmp_path / "workspace" / "downloads")
+    monkeypatch.setattr("app.services.act_app_server_service.ensure_act_workspace", lambda: workspace)
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        session = ActSession(agent_id="observer", codex_thread_id="pending:test")
+        db.add(session)
+        db.commit()
+        client = FakeClient()
+        service = ActAppServerService(client, agent_id="observer")
+        thread_id = service.start_thread(db, model=None, reasoning_effort=None, session_id=session.id)
+        params = next(params for method, params in client.requests if method == "thread/start")
+        original = params["config"]["mcp_servers.eidolon"]["env"]["EIDOLON_AGENT_TOKEN"]
+        assert service.has_live_thread(db, thread_id, session.id)
+        assert not service.has_live_thread(db, "other-thread", session.id)
+        assert not service.has_live_thread(db, thread_id, session.id + 1)
+
+        # Another connection can revoke/replace the credential while this process lives.
+        # A valid replacement does not make the original MCP child valid again.
+        with Session(engine) as other:
+            AgentPolicyService(other).issue("observer", session.id)
+        assert not service.has_live_thread(db, thread_id, session.id)
+        with pytest.raises(AgentPermissionError, match="invalid or revoked"):
+            AgentPolicyService(db).authenticate(original)
+
+        service.resume_thread(db, thread_id, model=None, reasoning_effort=None, session_id=session.id)
+        assert service.has_live_thread(db, thread_id, session.id)
+        resumed = next(params for method, params in client.requests if method == "thread/resume")
+        replacement = resumed["config"]["mcp_servers.eidolon"]["env"]["EIDOLON_AGENT_TOKEN"]
+        assert replacement != original
+        assert AgentPolicyService(db).authenticate(replacement) == ("observer", session.id)
+        session.status = "archived"
+        db.commit()
+        assert not service.has_live_thread(db, thread_id, session.id)
+        service.stop()
+        assert not service.has_live_thread(db, thread_id, session.id)
+    engine.dispose()
 
 
 def test_managed_agents_receive_only_their_role_specific_instructions() -> None:
     assert render_agent_instructions("act", []) == ACT_INSTRUCTIONS
     assert render_agent_instructions("observer", []) == OBSERVER_INSTRUCTIONS
     assistant = render_agent_instructions("assistant", [])
-    assert "[ACT_CAPABILITY_CATALOG]" not in assistant
-    assert ASSISTANT_INSTRUCTIONS_TEMPLATE.count("[ACT_CAPABILITY_CATALOG]") == 1
-    rendered = render_agent_instructions("assistant", [{"id": "example.read"}])
-    assert '[{"id": "example.read"}]' in rendered
-    with_functions = render_agent_instructions(
-        "assistant", [], [{"id": "example.write", "input_schema": {"type": "object"}}],
-    )
-    assert '"id": "example.write"' in with_functions
-    runtime_rendered = render_agent_instructions(
-        "assistant",
-        act_runtime_capability_catalog(),
-    )
-    assert '"id": "browser.playwright"' in runtime_rendered
-    assert '"id": "browser.authenticate"' in runtime_rendered
-    assert '"id": "telegram.send_file"' in runtime_rendered
-    assert "## 1. Todo Doer" in assistant
-    assert "## 2. Goal Doer" in assistant
-    assert "## 3. Opportunity Scout" in assistant
-    assert "[DETERMINISTIC_FUNCTION_CATALOG]" not in assistant
-    assert ASSISTANT_INSTRUCTIONS_TEMPLATE.count("[DETERMINISTIC_FUNCTION_CATALOG]") == 1
+    assert assistant == ASSISTANT_INSTRUCTIONS_TEMPLATE
+    assert "Todo Doer" not in assistant
+    assert "Goal Doer" not in assistant
+    assert "Opportunity Scout" not in assistant
 
 
-def test_act_thread_receives_required_playwright_config(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("agent_id", ["act", "assistant"])
+def test_action_capable_thread_receives_required_playwright_config(monkeypatch, tmp_path, agent_id) -> None:
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
 
@@ -290,17 +336,30 @@ def test_act_thread_receives_required_playwright_config(monkeypatch, tmp_path) -
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
     with Session(engine) as db:
-        session = ActSession(agent_id="act", codex_thread_id="pending:test")
+        session = ActSession(agent_id=agent_id, codex_thread_id="pending:test")
         db.add(session)
         db.commit()
         client = FakeClient(include_playwright=True)
 
-        ActAppServerService(client, agent_id="act").start_thread(
+        service = ActAppServerService(client, agent_id=agent_id)
+        service.start_thread(
             db,
             model="gpt-act",
             reasoning_effort="high",
             session_id=session.id,
         )
+        service.resume_thread(db, "thread-act", model="gpt-act", reasoning_effort="high", session_id=session.id)
+
+        requests = [params for method, params in client.requests if method in {"thread/start", "thread/resume"}]
+        assert len(requests) == 2
+        for request in requests:
+            expected = ACT_INSTRUCTIONS if agent_id == "act" else ASSISTANT_INSTRUCTIONS_TEMPLATE
+            assert request["baseInstructions"] == expected
+            assert request["developerInstructions"] == ""
+            assert request["config"]["memories.use_memories"] is False
+            assert request["config"]["memories.generate_memories"] is False
+        assert "memories.use_memories=false" in client.extra_args
+        assert "memories.generate_memories=false" in client.extra_args
 
         params = next(params for method, params in client.requests if method == "thread/start")
         playwright = params["config"]["mcp_servers.playwright"]
@@ -317,9 +376,11 @@ def test_act_thread_receives_required_playwright_config(monkeypatch, tmp_path) -
         assert bridge_env["EIDOLON_BROWSER_AUTH_TOKEN"]
         assert bridge_env["EIDOLON_AGENT_TOKEN"] == params["config"]["mcp_servers.eidolon"]["env"]["EIDOLON_AGENT_TOKEN"]
         assert bridge_env["EIDOLON_BROWSER_AUTH_TOKEN"] not in params["developerInstructions"]
-        assert "@oai/sky" in params["developerInstructions"]
-        assert "Browser authenticate" in params["developerInstructions"]
-        assert "Do not assume that graded coursework is prohibited" in params["developerInstructions"]
+        assert bridge_env["EIDOLON_BROWSER_AUTH_TOKEN"] not in params["baseInstructions"]
+        if agent_id == "act":
+            assert "@oai/sky" in params["baseInstructions"]
+            assert "Browser authenticate" in params["baseInstructions"]
+            assert "Do not assume that graded coursework is prohibited" in params["baseInstructions"]
 
 
 def test_act_sessions_share_browser_owner_and_keep_separate_credentials(monkeypatch, tmp_path, browser_runtime) -> None:
@@ -586,6 +647,22 @@ def test_agent_start_error_does_not_disclose_private_credential(
         assert str(raised.value).endswith("RuntimeError")
 
 
+@pytest.mark.parametrize("agent_id", ["assistant", "act", "observer"])
+def test_managed_agents_disable_codex_memory_without_changing_global_config(monkeypatch, tmp_path, agent_id):
+    from app.services.act_app_server_service import managed_config
+
+    original = '[features]\nmemories=true\n[memories]\nuse_memories=true\ngenerate_memories=true\n'
+    path = tmp_path / "config.toml"
+    path.write_text(original, encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+
+    config = managed_config(agent_id, tmp_path / "agents")
+
+    assert config["memories.use_memories"] is False
+    assert config["memories.generate_memories"] is False
+    assert path.read_text(encoding="utf-8") == original
+
+
 def test_agent_process_config_restricts_paths_and_inherited_tools(monkeypatch, tmp_path):
     from app.services.act_app_server_service import managed_config
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
@@ -627,14 +704,6 @@ def test_agent_process_config_restricts_paths_and_inherited_tools(monkeypatch, t
         role_config = managed_config(agent_id, root)
         assert role_config["mcp_servers"]["openaiDeveloperDocs"]["enabled"] is True
 
-    assistant = managed_config("assistant", root)["permissions.eidolon_agent"]
-    assert assistant["filesystem"] == {
-        ":root": "read",
-        ":minimal": "read",
-        str(root): "read",
-    }
-    assert assistant["network"]["enabled"] is False
-
     act = managed_config("act", root)["permissions.eidolon_agent"]
     assert act["filesystem"] == {
         ":root": "read",
@@ -644,6 +713,8 @@ def test_agent_process_config_restricts_paths_and_inherited_tools(monkeypatch, t
         str(root / "memory"): "write",
     }
     assert act["network"]["enabled"] is True
+    assert managed_config("assistant", root)["permissions.eidolon_agent"] == act
+    assert managed_config("assistant", root)["web_search"] == managed_config("act", root)["web_search"]
     assert str(root / "knowledge") not in act["filesystem"]
 
     act_config = managed_config("act", root)
@@ -664,8 +735,9 @@ def test_managed_process_rejects_non_official_docs_mcp_endpoint(monkeypatch, tmp
         managed_config("observer", tmp_path / "root")
 
 
-def test_only_act_accepts_playwright_mcp_tools() -> None:
-    service = ActAppServerService(FakeClient(), agent_id="act")
+@pytest.mark.parametrize("agent_id", ["act", "assistant"])
+def test_action_capable_agents_accept_playwright_while_observer_rejects(agent_id) -> None:
+    service = ActAppServerService(FakeClient(), agent_id=agent_id)
     service._mcp_inventory = lambda **_kwargs: [  # type: ignore[method-assign]
         {
             "name": "playwright",
@@ -683,8 +755,9 @@ def test_only_act_accepts_playwright_mcp_tools() -> None:
         observer._verify_mcp_inventory(require_private_eidolon=False)
 
 
-def test_act_requires_ready_playwright_tools() -> None:
-    service = ActAppServerService(FakeClient(), agent_id="act")
+@pytest.mark.parametrize("agent_id", ["act", "assistant"])
+def test_action_capable_agent_requires_ready_playwright_tools(agent_id) -> None:
+    service = ActAppServerService(FakeClient(), agent_id=agent_id)
     service._mcp_inventory = lambda **_kwargs: [  # type: ignore[method-assign]
         {
             "name": "playwright",

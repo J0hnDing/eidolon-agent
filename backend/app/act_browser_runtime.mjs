@@ -10,6 +10,8 @@ export const SUPPORTED_MCP_VERSION = "0.0.83";
 export const SUPPORTED_CORE_VERSION = "1.64.0-alpha-1790635538000";
 const unavailable = () => ({ status: "browser_unavailable" });
 const toolError = () => ({ isError: true, content: [{ type: "text", text: "Browser operation unavailable." }] });
+const browserReset = () => ({ isError: true, content: [{ type: "text", text: "The browser was reopened using its saved profile. Previous tabs and page references were lost. No previous action was replayed. Open the required page and inspect its current state before continuing or retrying an action." }] });
+const browserInterrupted = () => ({ isError: true, content: [{ type: "text", text: "The browser closed during this operation. Its outcome is uncertain; the operation was not retried. The next browser call will reopen it using the saved profile. Inspect the destination state before repeating any action." }] });
 
 function sameToken(left, right) {
   if (typeof left !== "string" || typeof right !== "string" || !left || !right) return false;
@@ -22,6 +24,7 @@ function sameToken(left, right) {
 export class SessionPages {
   constructor(context) {
     this.context = context;
+    this.closed = false;
     this.owners = new WeakMap();
     this.sessions = new Map();
     context.on("page", (page) => {
@@ -31,8 +34,10 @@ export class SessionPages {
       }).catch(() => {});
     });
     context.on("close", () => {
+      this.closed = true;
       for (const session of this.sessions.values()) session.events.emit("close");
     });
+    context.browser()?.once("disconnected", () => { this.closed = true; });
   }
 
   claim(session, page) {
@@ -123,12 +128,15 @@ export class SessionPages {
 }
 
 export class BrowserOwner {
-  constructor({ masterToken, context, makeBackend, metadata, shutdown, privateValues = [] }) {
+  constructor({ masterToken, context, makeBackend, metadata, shutdown, reopen, privateValues = [] }) {
     this.masterToken = masterToken;
     this.pages = new SessionPages(context);
     this.makeBackend = makeBackend;
     this.metadata = metadata;
     this.shutdownBrowser = shutdown;
+    this.reopenBrowser = reopen;
+    this.generation = 0;
+    this.reopening = null;
     this.sessions = new Map();
     this.closed = false;
     this.privateValues = privateValues;
@@ -149,6 +157,41 @@ export class BrowserOwner {
     return promise;
   }
 
+  async ensureBrowser() {
+    if (this.closed) throw new Error("Browser owner is closed.");
+    if (!this.pages.closed && this.pages.context.browser()?.isConnected?.() !== false) return;
+    if (!this.reopening) {
+      this.reopening = (async () => {
+        for (const session of this.sessions.values()) session.active?.abort();
+        const context = await this.reopenBrowser();
+        if (this.closed) {
+          await this.shutdownBrowser();
+          throw new Error("Browser owner is closed.");
+        }
+        this.pages = new SessionPages(context);
+        this.generation++;
+        for (const session of this.sessions.values()) session.browserReset = true;
+      })().finally(() => { this.reopening = null; });
+    }
+    await this.reopening;
+  }
+
+  async ensureBackend(session) {
+    await this.ensureBrowser();
+    if (session.backend && session.generation === this.generation) return;
+    await session.backend?.dispose().catch(() => {});
+    session.backend = null;
+    const pages = this.pages, generation = this.generation;
+    const backend = await this.makeBackend(pages.create(session.sessionId).context);
+    if (this.closed || pages.closed || generation !== this.generation) {
+      await backend.dispose().catch(() => {});
+      throw new Error("Browser changed during initialization.");
+    }
+    session.backend = backend;
+    session.generation = generation;
+    session.auth = createPageAuthentication(() => backend._context?.currentTab()?.page);
+  }
+
   async handle(request) {
     if (this.closed || !request || typeof request !== "object") return unavailable();
     const { action, sessionId } = request;
@@ -159,17 +202,13 @@ export class BrowserOwner {
         if (typeof request.sessionToken !== "string" || !request.sessionToken) return unavailable();
         let session = this.sessions.get(sessionId);
         if (!session) {
-          // Publish before awaiting backend creation to coalesce simultaneous registration.
+          // Keep tokens and per-session queues stable when the browser restarts.
           session = { sessionId, token: request.sessionToken, pending: Promise.resolve() };
           this.sessions.set(sessionId, session);
-          session.ready = this.makeBackend(this.pages.create(sessionId).context).then((backend) => {
-            session.backend = backend;
-            session.auth = createPageAuthentication(() => backend._context?.currentTab()?.page);
-          });
         }
         if (!sameToken(session.token, request.sessionToken)) session.active?.abort();
         session.token = request.sessionToken;
-        await session.ready;
+        await this.serialize(session, () => this.ensureBackend(session));
         return { ok: true };
       }
       const session = this.sessions.get(sessionId);
@@ -182,8 +221,7 @@ export class BrowserOwner {
           session.token = null;
           session.active?.abort();
           await this.serialize(session, async () => {
-            await session.ready;
-            await session.backend.dispose();
+            await session.backend?.dispose().catch(() => {});
             await this.pages.close(sessionId);
           });
           this.sessions.delete(sessionId);
@@ -199,10 +237,13 @@ export class BrowserOwner {
     return this.serialize(session, async () => {
       // A queued request cannot execute after its turn capability was revoked.
       if (!sameToken(request.token, session.token)) return unavailable();
-      await session.ready;
+      await this.ensureBackend(session);
+      // Launching a replacement browser can outlive a cancellation or archive.
+      if (this.closed || !sameToken(request.token, session.token)) return unavailable();
       if (action === "mcp_list") return { tools: [...this.metadata, ...session.backend.dynamicTools()] };
-      if (action === "status" || action === "authenticate") return session.auth(request);
+      if (action === "status" || action === "authenticate") return session.browserReset ? unavailable() : session.auth(request);
       if (action !== "mcp_call" || typeof request.name !== "string") return unavailable();
+      if (session.browserReset) { session.browserReset = false; return browserReset(); }
       if (request.name === "browser_close") {
         await this.pages.closePages(this.pages.sessions.get(session.sessionId));
         return { content: [{ type: "text", text: "No open tabs. Navigate to a URL to create one." }] };
@@ -211,8 +252,13 @@ export class BrowserOwner {
       if (request.name === "browser_get_config") return toolError();
       const controller = new AbortController();
       session.active = controller;
+      const pages = this.pages, generation = this.generation;
       try {
-        return await session.backend.callTool(request.name, request.arguments ?? {}, controller.signal);
+        const result = await session.backend.callTool(request.name, request.arguments ?? {}, controller.signal);
+        return pages.closed || generation !== this.generation ? browserInterrupted() : result;
+      } catch (error) {
+        if (pages.closed || generation !== this.generation) return browserInterrupted();
+        throw error;
       } finally {
         if (session.active === controller) session.active = null;
       }
@@ -223,9 +269,9 @@ export class BrowserOwner {
     if (this.closed) return;
     this.closed = true;
     for (const session of this.sessions.values()) { session.token = null; session.active?.abort(); }
+    await this.reopening?.catch(() => {});
     await Promise.all([...this.sessions.values()].map(async (session) => {
       await session.pending;
-      await session.ready.catch(() => {});
       await session.backend?.dispose().catch(() => {});
     }));
     this.sessions.clear();
@@ -269,9 +315,15 @@ export async function loadAdapter(modulePath, env = process.env) {
   config.browser.initScript = [];
   config.saveSession = false;
   const clientInfo = { clientName: "Eidolon Act", clientVersion: "1", cwd: env.EIDOLON_BROWSER_WORKSPACE, roots: [{ uri: pathToFileURL(env.EIDOLON_BROWSER_WORKSPACE).href }] };
-  const info = await tools.createBrowserWithInfo(config, clientInfo, {}, { title: "Eidolon Act", workspaceDir: clientInfo.cwd });
-  const context = info.browser.contexts()[0];
-  if (!context || typeof context.newPage !== "function") { await info.browser.close(); throw new Error("Unsupported browser adapter."); }
+  let info;
+  const openBrowser = async () => {
+    await info?.browser.close().catch(() => {});
+    info = await tools.createBrowserWithInfo(config, clientInfo, {}, { title: "Eidolon Act", workspaceDir: clientInfo.cwd });
+    const context = info.browser.contexts()[0];
+    if (!context || typeof context.newPage !== "function") { await info.browser.close(); throw new Error("Unsupported browser adapter."); }
+    return context;
+  };
+  const context = await openBrowser();
   const selected = tools.filteredTools(config).filter((tool) => tool.schema.name !== "browser_get_config").map(inlineSnapshotTool);
   const metadata = selected.map(({ schema }) => {
     const readOnly = ["readOnly", "assertion"].includes(schema.type);
@@ -287,6 +339,7 @@ export async function loadAdapter(modulePath, env = process.env) {
       return backend;
     },
     shutdown: () => info.browser.close(),
+    reopen: openBrowser,
   });
 }
 

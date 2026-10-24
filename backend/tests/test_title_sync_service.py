@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base
 from app.models import ActSession, ActTurn, TelegramBotConnection, TelegramTopicSession
-from app.schemas.assistant_assessment import ASSESSMENT_RESPONSE_SCHEMA
+from app.schemas.agent_chat import SESSION_TITLE_SCHEMA
 from app.services.act_session_service import ActSessionService
 from app.services.act_turn_dispatcher import ACT_RESPONSE_SCHEMA, ActTurnDispatcher
 from app.services.agent_policy_service import AgentPolicyService
@@ -17,7 +17,7 @@ from app.services.codex_routing_service import CodexRoutingService
 from app.services.product_manager_session_service import ProductManagerSessionService
 from app.services.secret_store import FakeSecretStore
 from app.services.telegram_provider import FakeTelegramBotApi, TelegramProviderError
-from app.services.telegram_service import TELEGRAM_ACT_ROLE, TelegramService
+from app.services.telegram_service import TELEGRAM_ACT_ROLE, TELEGRAM_ASSISTANT_ROLE, TelegramService
 from app.services.title_sync_service import TitleSyncService
 
 
@@ -62,15 +62,7 @@ class _FakeRuntimeSessions(_FakeCodexSessions):
         on_turn_started = kwargs.get("on_turn_started")
         if on_turn_started is not None:
             on_turn_started("codex-turn-1")
-        if _schema is ASSESSMENT_RESPONSE_SCHEMA:
-            payload = {
-                "title": self.generated_title,
-                "todo_doer": {"proposals": []},
-                "goal_doer": {"questions": [], "proposals": []},
-                "opportunity_scout": {"opportunities": []},
-            }
-        else:
-            payload = {"response": "completed", "title": self.generated_title}
+        payload = {"response": "completed", "title": self.generated_title}
         Draft202012Validator(_schema).validate(payload)
         return SimpleNamespace(output_text=json.dumps(payload), items=[])
 
@@ -84,6 +76,22 @@ class _FakeAppServer:
 
     def resume_thread(self, _db: Session, _thread_id: str, **_kwargs: object) -> None:
         return None
+
+
+def test_assistant_title_ignores_legacy_topic_mapping(db: Session) -> None:
+    session = _make_session(db, agent_id="assistant")
+    api = FakeTelegramBotApi()
+    store, connection, mapping = _make_telegram_binding(
+        db, session, api, topic_name="Old topic", role=TELEGRAM_ASSISTANT_ROLE,
+    )
+    codex = _FakeCodexSessions("Assistant name")
+    sync = TitleSyncService(db, telegram_secret_store=store, telegram_api_factory=lambda _token: api)
+    assert sync.sync_from_codex(session, codex)
+    assert session.title == "Assistant name"
+    assert mapping.topic_name == "Old topic"
+    assert not sync.sync_from_telegram_identity(connection.id, "123", 77, "Topic rename")
+    assert session.title == "Assistant name"
+    assert api.calls == []
 
 
 def _make_session(
@@ -402,8 +410,9 @@ def test_generated_title_names_native_thread_and_existing_telegram_topic(
     ) is True
 
     assert codex.sets == [(session.codex_thread_id, "Review course syllabus")]
-    assert session.title == mapping.topic_name == "Review course syllabus"
-    assert [call[0] for call in api.calls] == ["editForumTopic"]
+    assert session.title == "Review course syllabus"
+    assert mapping.topic_name == ("New Chat" if agent_id == "assistant" else "Review course syllabus")
+    assert [call[0] for call in api.calls] == ([] if agent_id == "assistant" else ["editForumTopic"])
     assert _title_sync(db, codex, store=store, api=api).sync_from_codex(session, codex, "Another title") is False
     assert len(codex.sets) == 1
 
@@ -517,11 +526,6 @@ def test_dispatcher_generates_title_in_one_turn_for_every_chat_path(
         effective_model=None, effective_reasoning_effort=None,
     ))
     monkeypatch.setattr(AgentPolicyService, "policy", lambda *_: SimpleNamespace(model=None, reasoning_effort=None))
-    monkeypatch.setattr("app.services.assistant_assessment_result_service.AssistantAssessmentResultService.accept",
-                        lambda *_: None)
-    monkeypatch.setattr("app.services.assistant_assessment_service.AssistantAssessmentService.notify_completed",
-                        lambda *_: None)
-    monkeypatch.setattr("app.services.act_session_service.ActSessionService.prune_assistant_sessions", lambda *_: None)
 
     dispatcher = ActTurnDispatcher(agent_id)
     original_sync = TitleSyncService.sync_from_codex
@@ -534,11 +538,10 @@ def test_dispatcher_generates_title_in_one_turn_for_every_chat_path(
     dispatcher._execute(db, turn.id)
 
     assert turn.status == "succeeded"
-    assert turn.assistant_message == ("Assessment complete." if origin == "assessment" else "completed")
     assert session.title == "Review course syllabus"
     assert len(sessions.turn_inputs) == 1
     assert '"needsTitle": true' in sessions.turn_inputs[0]
-    assert sessions.schemas == [ASSESSMENT_RESPONSE_SCHEMA if origin == "assessment" else ACT_RESPONSE_SCHEMA]
+    assert sessions.schemas == [ACT_RESPONSE_SCHEMA]
     assert sessions.sets == [(session.codex_thread_id, "Review course syllabus")]
 
     # A later answer cannot overwrite the generated or manually renamed title.
@@ -549,5 +552,9 @@ def test_dispatcher_generates_title_in_one_turn_for_every_chat_path(
     monkeypatch.setattr(TitleSyncService, "sync_from_codex", original_sync)
     dispatcher._execute(db, second.id)
     assert second.status == "succeeded"
-    assert '"needsTitle": false' in sessions.turn_inputs[1]
+    assert "eidolon_session_metadata" not in sessions.turn_inputs[1]
+    assert sessions.schemas[0] == ACT_RESPONSE_SCHEMA
+    assert sessions.schemas[0]["properties"]["title"] == SESSION_TITLE_SCHEMA
+    assert sessions.schemas[1]["properties"]["title"] == {"type": "null"}
+    assert ACT_RESPONSE_SCHEMA["properties"]["title"] == SESSION_TITLE_SCHEMA
     assert len(sessions.sets) == 1

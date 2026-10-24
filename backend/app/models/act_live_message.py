@@ -15,6 +15,8 @@ class ActLiveMessage(Base):
     turn_id: Mapped[int] = mapped_column(ForeignKey("act_turns.id", ondelete="CASCADE"), index=True)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Keep the receipt if an agenda item is deleted; deletion must not reset its daily quota.
+    agenda_question_id: Mapped[int | None] = mapped_column(Integer)
     reply_to_message_id: Mapped[int | None] = mapped_column(
         ForeignKey("act_live_messages.id", ondelete="CASCADE"), unique=True,
     )

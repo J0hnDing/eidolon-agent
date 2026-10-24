@@ -84,7 +84,7 @@ class TitleSyncService:
             except Exception as exc:  # noqa: BLE001 - retry naming on a later turn.
                 self._log_failure("Codex title update", session, exc)
                 return False
-        mapping = self._mapping_for_session(session.id)
+        mapping = None if session.agent_id == "assistant" else self._mapping_for_session(session.id)
         session_changed = normalize_title(session.title) != normalized
         topic_title = normalize_title(normalized, maximum=TELEGRAM_TOPIC_TITLE_MAX_CHARS)
         topic_changed = (
@@ -122,7 +122,7 @@ class TitleSyncService:
     ) -> bool:
         """Persist a Telegram rename and best-effort update the Codex thread."""
 
-        if session.status != "active":
+        if session.status != "active" or session.agent_id == "assistant":
             return False
         normalized = normalize_title(name, maximum=TELEGRAM_TOPIC_TITLE_MAX_CHARS)
         if not normalized:
@@ -166,6 +166,9 @@ class TitleSyncService:
         update_session: bool = True,
     ) -> bool:
         """Apply a known Telegram topic name without changing Codex."""
+
+        if session.agent_id == "assistant":
+            return False
 
         normalized = normalize_title(name, maximum=TELEGRAM_TOPIC_TITLE_MAX_CHARS)
         if not normalized:

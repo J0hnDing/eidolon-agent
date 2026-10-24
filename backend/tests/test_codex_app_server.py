@@ -316,6 +316,24 @@ def _event(method: str, params: dict[str, Any]) -> dict[str, Any]:
     return {"method": method, "params": params}
 
 
+def test_thread_start_and_resume_preserve_explicit_base_prompt_and_clear_developer_slot() -> None:
+    client = _FakeSessionClient()
+    service = ProductManagerSessionService(client, agent_name="Assistant")  # type: ignore[arg-type]
+    base = "Existing Assistant instructions"
+    options = {"base_instructions": base, "developer_instructions": "",
+               "config": {"memories.use_memories": False, "memories.generate_memories": False}}
+
+    thread_id = service.start_thread(**options)
+    service.resume_thread(thread_id, **options)
+
+    assert [method for method, _ in client.requests] == ["thread/start", "thread/resume"]
+    for _, params in client.requests:
+        assert params["baseInstructions"] == base
+        assert params["developerInstructions"] == ""
+        assert params["config"]["memories.use_memories"] is False
+        assert params["config"]["memories.generate_memories"] is False
+
+
 def test_product_manager_turn_extracts_final_message_and_per_turn_usage() -> None:
     usage = {
         "last": {

@@ -100,6 +100,15 @@ class CodexAppServerClient:
         with self._lifecycle_lock:
             self._ensure_started_locked()
 
+    @property
+    def is_running(self) -> bool:
+        with self._lifecycle_lock:
+            return (
+                self._process is not None and self._process.poll() is None
+                and self._reader is not None and self._reader.is_alive()
+                and self._reader_error is None
+            )
+
     def stop(self) -> None:
         with self._lifecycle_lock:
             process, self._process = self._process, None

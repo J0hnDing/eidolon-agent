@@ -53,10 +53,29 @@ describe("Integration navigation", () => {
       expect(screen.getByRole("link", { name: integration.title }).getAttribute("href")).toBe(`/settings/integrations/${integration.id}`);
     }
     await waitFor(() => expect(screen.queryByText(/Loading integrations/)).toBeNull());
-    expect(container.querySelector("input")).toBeNull();
+    expect(screen.getByRole("searchbox", { name: "Search integrations" })).toBeTruthy();
+    expect(container.querySelector('input[type="password"]')).toBeNull();
     expect(github).toHaveBeenCalledTimes(1);
     expect(google).not.toHaveBeenCalled();
     expect(quercus).not.toHaveBeenCalled();
+  });
+
+  it("combines directory search and connection filters and clears an empty result", async () => {
+    vi.spyOn(api, "getGitHubConnection").mockResolvedValue({ ...githubStatus, connected: true, status: "connected" });
+    renderIntegrations();
+    await waitFor(() => expect(screen.getByRole("link", { name: "GitHub" }).querySelector(".integration-connection-state")?.textContent).toContain("Connected"));
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search integrations" }), { target: { value: "repositories" } });
+    expect(screen.getByRole("link", { name: "GitHub" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Google" })).toBeNull();
+    fireEvent.change(screen.getByRole("combobox", { name: "Connection status" }), { target: { value: "disconnected" } });
+    expect(screen.getByRole("heading", { name: "No integrations found" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "GitHub" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getByRole("link", { name: "GitHub" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Google" })).toBeTruthy();
+    expect((screen.getByRole("searchbox", { name: "Search integrations" }) as HTMLInputElement).value).toBe("");
   });
 
   it("opens a focused provider page, keeps Integrations selected, and returns to the directory", async () => {

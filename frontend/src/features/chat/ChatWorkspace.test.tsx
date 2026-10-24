@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatWorkspace } from "./ChatWorkspace";
+import { ComponentProps } from "react";
 
 const conversation = {
   id: "project-1",
@@ -18,7 +19,49 @@ const conversation = {
 
 afterEach(cleanup);
 
+function workspaceProps(overrides: Partial<ComponentProps<typeof ChatWorkspace>> = {}): ComponentProps<typeof ChatWorkspace> {
+  return {
+    conversations: [conversation], activeConversationId: conversation.id, messages: conversation.messages,
+    draft: "", mode: "project", isBusy: false, isSending: false, isGenerating: false, error: null,
+    activeActTurnId: null, onNewConversation: vi.fn(), onSelectConversation: vi.fn(),
+    onDeleteConversation: vi.fn(), onCancelAct: vi.fn(), onDraftChange: vi.fn(), onSubmit: vi.fn(),
+    onApproveBuild: vi.fn(), onDenyBuild: vi.fn(), onApproveRuntime: vi.fn(), onDenyRuntime: vi.fn(),
+    ...overrides,
+  };
+}
+
 describe("ChatWorkspace", () => {
+  it("renders quiet timestamps between conversation groups instead of on every turn", () => {
+    const { container } = render(<MemoryRouter><ChatWorkspace {...workspaceProps({ messages: [
+      { id: 1, role: "user", content: "First", createdAt: "2026-10-22T12:00:00" },
+      { id: 2, role: "assistant", content: "Reply", createdAt: "2026-10-22T12:01:00Z" },
+      { id: 3, role: "user", content: "Later", createdAt: "2026-10-22T15:01:00Z" },
+    ] })} /></MemoryRouter>);
+    const log = screen.getByRole("log", { name: "Conversation messages" });
+    const timestamps = log.querySelectorAll(".chat-timestamp-separator time");
+    expect(timestamps).toHaveLength(2);
+    expect(timestamps[0].getAttribute("datetime")).toBe("2026-10-22T12:00:00.000Z");
+    expect(timestamps[1].getAttribute("datetime")).toBe("2026-10-22T15:01:00.000Z");
+    expect(container.querySelector("article time")).toBeNull();
+  });
+
+  it("uses a welcome suggestion to fill a draft without starting work", () => {
+    const props = workspaceProps({ mode: "assistant", hideSidebar: true, messages: [] });
+    render(<MemoryRouter><ChatWorkspace {...props} /></MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: "Plan my day" }));
+    expect(props.onDraftChange).toHaveBeenCalledWith("Help me plan my day based on what needs my attention.");
+    expect(props.onSubmit).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Conversation message" }));
+  });
+
+  it("filters conversation history and selects the matching conversation", () => {
+    const props = workspaceProps({ conversations: [{ ...conversation, title: "Plan a report" }, { ...conversation, id: "second", title: "Organize notes" }] });
+    render(<MemoryRouter><ChatWorkspace {...props} /></MemoryRouter>);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search conversations" }), { target: { value: "report" } });
+    expect(screen.queryByRole("button", { name: /Organize notes/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Plan a report/ }));
+    expect(props.onSelectConversation).toHaveBeenCalledWith(conversation.id);
+  });
   it("shows an offset-free UTC session timestamp on the correct local day", () => {
     vi.stubEnv("TZ", "America/Toronto");
     try {
@@ -99,7 +142,45 @@ describe("ChatWorkspace", () => {
 
     expect(screen.getByText(/^Created /)).toBeTruthy();
     expect(screen.getByText("WeCom user user-7")).toBeTruthy();
+    expect(screen.getByText("WeCom user user-7").closest("details")).toBeNull();
+    expect(screen.queryByText("Details")).toBeNull();
     expect(screen.queryByText("Reads local context without making changes.")).toBeNull();
+  });
+
+  it("hides delete for the permanent Assistant chat while retaining it for other modes", () => {
+    const onDeleteConversation = vi.fn();
+    const renderWorkspace = (mode: "assistant" | "project") => (
+      <MemoryRouter>
+        <ChatWorkspace
+          conversations={[{ ...conversation, mode }]}
+          activeConversationId={conversation.id}
+          messages={conversation.messages}
+          draft=""
+          mode={mode}
+          isBusy={false}
+          isSending={false}
+          isGenerating={false}
+          error={null}
+          onNewConversation={vi.fn()}
+          onSelectConversation={vi.fn()}
+          onDeleteConversation={onDeleteConversation}
+          activeActTurnId={null}
+          onCancelAct={vi.fn()}
+          onDraftChange={vi.fn()}
+          onSubmit={vi.fn()}
+          onApproveBuild={vi.fn()}
+          onDenyBuild={vi.fn()}
+          onApproveRuntime={vi.fn()}
+          onDenyRuntime={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    const { rerender } = render(renderWorkspace("assistant"));
+    expect(screen.queryByRole("button", { name: "Delete conversation" })).toBeNull();
+    rerender(renderWorkspace("project"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
+    expect(onDeleteConversation).toHaveBeenCalledWith(conversation.id);
   });
 
   it("opens the new-chat popover at the bottom of the sidebar and creates each conversation mode", () => {
@@ -155,14 +236,14 @@ describe("ChatWorkspace", () => {
     expect(screen.getByRole("button", { name: "Create Project" }).classList.contains("project")).toBe(true);
     expect(screen.getByRole("button", { name: "Create Act" }).classList.contains("act")).toBe(true);
     expect(screen.getByRole("button", { name: "Create Observer" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Create Assistant" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open Assistant" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
     fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
     fireEvent.click(screen.getByRole("button", { name: "Create Act" }));
     fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
     fireEvent.click(screen.getByRole("button", { name: "Create Observer" }));
     fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
-    fireEvent.click(screen.getByRole("button", { name: "Create Assistant" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Assistant" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
     fireEvent.change(screen.getByLabelText("Conversation message"), { target: { value: "changed" } });
     expect(onNewConversation).toHaveBeenNthCalledWith(1, "project");

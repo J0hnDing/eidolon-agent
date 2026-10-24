@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -13,7 +14,7 @@ MAX_DAILY_FEED_MARKDOWN = 20_000
 
 
 class NotionDailyFeedProvider(NotionTodoProvider):
-    """Bounded writer for one configured standalone Notion page."""
+    """Bounded reader and writer for one configured standalone Notion page."""
 
     def validate_connection(self) -> dict[str, str | None]:
         identity = self.validate_identity()
@@ -25,6 +26,29 @@ class NotionDailyFeedProvider(NotionTodoProvider):
         )
         self._validate_page(page)
         return identity
+
+    def read(self) -> dict[str, object]:
+        page_path = f"/v1/pages/{quote(self.data_source_id, safe='')}"
+        page = self._request(
+            "GET",
+            page_path,
+            timeout=10,
+            max_bytes=MAX_PROVIDER_RESPONSE_BYTES,
+        )
+        self._validate_page(page)
+        last_edited_time = self._last_edited_time(page)
+        response = self._request(
+            "GET",
+            f"{page_path}/markdown",
+            timeout=20,
+            max_bytes=MAX_PROVIDER_RESPONSE_BYTES,
+        )
+        markdown = self._validate_read_response(response)
+        if len(markdown) > MAX_DAILY_FEED_MARKDOWN:
+            raise IntegrationProviderError(
+                "response_too_large", "Notion Daily Feed content exceeded 20000 characters"
+            )
+        return {"markdown": markdown, "last_edited_time": last_edited_time}
 
     def write(self, markdown: str) -> dict[str, object]:
         bounded = self._bounded_markdown(markdown)
@@ -86,6 +110,49 @@ class NotionDailyFeedProvider(NotionTodoProvider):
             raise IntegrationProviderError(
                 "provider_unavailable", "Notion did not return the complete Daily Feed update"
             )
+
+    def _validate_read_response(self, response: dict[str, Any]) -> str:
+        page_id = response.get("id")
+        markdown = response.get("markdown")
+        truncated = response.get("truncated")
+        unknown_block_ids = response.get("unknown_block_ids")
+        if (
+            response.get("object") != "page_markdown"
+            or not isinstance(page_id, str)
+            or self._normalized_id(page_id) != self._normalized_id(self.data_source_id)
+            or not isinstance(markdown, str)
+            or not isinstance(truncated, bool)
+            or not isinstance(unknown_block_ids, list)
+            or len(unknown_block_ids) > 100
+            or any(not isinstance(block_id, str) for block_id in unknown_block_ids)
+        ):
+            raise IntegrationProviderError(
+                "provider_unavailable", "Notion returned an invalid Daily Feed read"
+            )
+        if truncated or unknown_block_ids or "<unknown" in markdown.lower():
+            raise IntegrationProviderError(
+                "provider_unavailable", "Notion did not return the complete Daily Feed content"
+            )
+        return markdown
+
+    @staticmethod
+    def _last_edited_time(page: dict[str, Any]) -> str:
+        value = page.get("last_edited_time")
+        if not isinstance(value, str):
+            raise IntegrationProviderError(
+                "schema_mismatch", "The configured Notion Daily Feed page has no edit timestamp"
+            )
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            raise IntegrationProviderError(
+                "schema_mismatch", "The configured Notion Daily Feed page has an invalid edit timestamp"
+            ) from None
+        if parsed.tzinfo is None:
+            raise IntegrationProviderError(
+                "schema_mismatch", "The configured Notion Daily Feed page has an invalid edit timestamp"
+            )
+        return value
 
     @staticmethod
     def _bounded_markdown(value: Any) -> str:

@@ -1,16 +1,16 @@
 # Data Model
 
-The backend uses SQLite through SQLAlchemy models in `backend/app/models/entities.py`. The application engine enables SQLite foreign-key enforcement on every connection. The database is local development state; schema compatibility is handled in `backend/app/db.py` with lightweight local schema updates rather than a full migration system.
+The backend uses SQLite through SQLAlchemy models in `backend/app/models/entities.py`. The application engine enables foreign-key enforcement and secure deletion on every SQLite connection. The database is local development state; schema compatibility is handled in `backend/app/db.py` with lightweight local schema updates rather than a full migration system.
 
 ## Core Tables
 
 ### messages
 
-Compatibility storage for chat messages with role, content, optional conversation id, and creation time. Current chat history is frontend-local; the backend table remains only for older rows and memory-source cleanup. Deleting a frontend conversation asks the backend to remove matching compatibility rows and clear memory source links. The long-term ownership decision is tracked in `docs/todo.md`.
+Compatibility storage for chat messages with role, content, optional conversation id, and creation time. Project chat history remains frontend-local; this compatibility table is not a managed Assistant/Act/Observer history store and remains only for older rows and memory-source cleanup. Deleting a frontend conversation asks the backend to remove matching compatibility rows and clear memory source links. The long-term ownership decision is tracked in `docs/todo.md`.
 
 ### codex_routing_settings
 
-Stores the single-user Codex invocation routing document. It contains independent Act, Observer, and Assistant assessment settings, ProductManager action settings, Builder default/difficulty/repair/update settings, and Tester task/final/update settings. Model ids and reasoning efforts are user-owned settings; ProductManager task DAG output does not contain them. Legacy stored `chat` routing values are ignored.
+Stores the single-user Codex invocation routing document. It contains independent Act, Observer, and primary Assistant settings (the Assistant route retains the internal `assessment` compatibility key), ProductManager action settings, Builder default/difficulty/repair/update settings, and Tester task/final/update settings. Model ids and reasoning efforts are user-owned settings; ProductManager task DAG output does not contain them. Legacy stored `chat` routing values are ignored.
 
 ### skill_model_catalog
 
@@ -22,7 +22,7 @@ Stores the single host registration state: whether running MCP processes may inv
 
 ### act_sessions and act_turns
 
-`act_sessions` stores each durable Codex thread id, title, origin, lifecycle status, and timestamps. New agent sessions begin as `New Chat`; after a successful turn, the native Codex App Server thread name is the canonical generated title and is projected to the session, with an existing Telegram topic updated on a best-effort basis. `act_turns` stores the user message, queued/running/terminal state, execution start/completion timestamps, live Codex turn id, concise activity, final answer or bounded failure, cancellation request, and optional transport-neutral delivery provider/target/status. Only queued turns are safe to retain across restart; running rows are recovered as interrupted.
+`act_sessions` stores each durable Codex thread id, title, origin, lifecycle status, and timestamps. New agent sessions begin as `New Chat`; after a successful turn, the native Codex App Server thread name is the canonical generated title and is projected to the session, with an existing Telegram topic updated on a best-effort basis. `act_turns` stores active user/agent text, queued/running/terminal state, execution timestamps, live Codex turn id, concise activity, bounded failure, cancellation and transport metadata. Completed visible message content is archived durably under `memory/chat-history/{assistant,act,observer}/`, then `user_message` becomes empty, `assistant_message` becomes null, related `act_live_messages.text` becomes empty and `history_archived_at` records the handoff. Metadata rows remain for recovery, approvals, question receipts and delivery; `assistant_review_json.chat_history.has_assistant_response` distinguishes silent background completion from an expired reply. These metadata rows are not a transcript fallback. API projections and runtime consumers read completed text only from retained files; pruning therefore removes it from Chat and recovery. Startup compacts freed database pages after migration; active operation reuses freed space. Only queued turns are safe to retain across restart; running rows are recovered as interrupted.
 
 ### act_telegram_bindings
 
@@ -30,7 +30,7 @@ Stores each conversational Telegram bot connection's selected canonical session 
 
 ### memory_facts
 
-Stores explicit user-editable memory facts. Typical categories include interests, goals, preferences, routines, trusted sources, blocked sources, writing style, and risk tolerance.
+Legacy migration-only table. Startup moves its rows into editable `~/.eidolon/agents/memory/facts-outside-atlas/<id>.json`, preserving IDs, provenance and timestamps, then removes verified migrated rows. Active fact CRUD reads and writes these files. No working-preference or convention categories have been defined. Optional `provenance_json` records stated/observed/inferred attribution and evidence; Assistant corrections compare the current value, while user edits mark attribution stated. Concise daily reflection notes and complete retained chats live in sibling `daily-summaries/` and `chat-history/{assistant,act,observer}/` folders.
 
 ### skills
 
@@ -101,7 +101,7 @@ Stores role/default selection for the independent notification/approval and conv
 
 ### telegram_topic_sessions and telegram_deleted_topics
 
-`telegram_topic_sessions` stores the unique `(connection_id, telegram_chat_id, message_thread_id) -> session_id` binding and synchronized topic name. Each active Telegram topic has one session. `telegram_deleted_topics` is a tombstone for deleted topic identities, preventing late or duplicate updates from creating a new routable session for a deleted topic. Re-pairing or disconnecting a bot removes its mappings and tombstones while retaining session history.
+`telegram_topic_sessions` stores the unique `(connection_id, telegram_chat_id, message_thread_id) -> session_id` binding and synchronized topic name. Each active Act/Observer Telegram topic has one session. Assistant instead uses `assistant_state.primary_session_id` with its paired direct private chat; it requires no topic mapping. `telegram_deleted_topics` is a tombstone for deleted topic identities, preventing late or duplicate updates from creating a new routable session for a deleted topic. Re-pairing or disconnecting a bot removes its mappings and tombstones while retaining session history.
 
 ### wecom_observer_bindings, wecom_observer_user_bindings, and wecom_inbound_messages
 
@@ -235,6 +235,20 @@ pending, ready, building, testing, fixing, done, failed, blocked
 
 ## Persistent agent state
 
-`act_sessions.agent_id` attributes existing sessions to Act and new sessions to their immutable agent. `agent_policies` holds editable function policies/model overrides; `agent_credentials` holds revocable session credential hashes. `agent_proposals` stores canonical action, provenance, optional follow-up, fingerprint, Telegram metadata, approval, and execution state. `assistant_follow_ups` stores durable due times and delivery prerequisites. Backend-authored Goal questions and follow-ups are `act_turns` rows tagged with `backend_message_kind`; these rows have no Codex turn ID. `assistant_assessment_state` holds the paused/enabled 72-hour anchor and next/last state; occurrences reuse `schedule_occurrences`. MCP audits carry agent/session/turn attribution without storing tool arguments.
+`act_sessions.agent_id` attributes existing sessions to Act and new sessions to their immutable agent. `agent_policies` holds editable function policies/model overrides; `agent_credentials` holds revocable session credential hashes. `agent_proposals` stores concrete reviewed actions, provenance, fingerprints, Telegram metadata, approval, and execution state. MCP audits carry agent/session/turn attribution without storing tool arguments.
+
+`assistant_state` holds the single user's proactive enabled state, Assistant timezone, permanent primary chat, daily Codex `thread_started_at`, deferred `refresh_pending` flag, and `agenda_schedules_migrated` marker. Legacy daily/reflection times, last-run timestamps and reflection retry fields remain inert migration-only compatibility columns. The one-time migration seeds ordinary Morning planning and Evening reflection tasks from the old schedule and successful-run state, and maps queued legacy turns to occurrences. The marker preserves subsequent task edits and deletions. The old `summary` column is migration-only: startup preserves it as `memory/daily-summaries/legacy-continuity.md` and clears the database value. The permanent `act_sessions` row changes its Codex thread ID on local-04:00 or explicit refresh while retaining its visible `act_turns`; historical turns are not replayed into the new thread.
+
+`assistant_source_states` holds backend-owned compact snapshots, collection scopes and availability; `assistant_changes` holds detected changes and turn-specific review receipts. The old model-managed checkpoint column is removed on upgrade. `assistant_agenda` holds task/question responsibilities independently of conversations, with title/notes, status, optional activation time, source session/last turn references, timestamps, and an optimistic revision. Tasks may additionally hold `recurrence_json`, `recurrence_start_at` and `schedule_version`. Recurrence defines daily/weekly/monthly local calendar timing and an IANA timezone; recurring `due_at` is backend-managed. Waiting pauses a recurring task; done/dismissed stops it. Questions do not recur.
+
+`assistant_agenda_occurrences` stores durable recurring claims with a unique `(agenda_item_id, schedule_version, scheduled_at)` identity, status (`queued`, `succeeded`, `failed`, `skipped`), turn reference, attempts, retry and completion times. Calendar recovery selects only each active task's latest missed instant; older calendar dates are not materialized as a backlog, and older failed claims become skipped. Each selected recurring task runs in its own turn. `act_turns.assistant_context_json` records its occurrence, intended timezone and previous attempt separately from user messages; `assistant_review_json` freezes per-turn collection preparation and eligible source identities without classifying ordinary conversational reviews as background messages. The runtime and API contract is documented in [Primary Assistant](../runtime/assistant.md).
+
+`assistant_state.initialization_json` stores the finite initial Atlas reading queue, source identity, discovered reference keys, completed batch count and retry/error state. Queue entries contain operation identifiers, source references and pagination/slice positions or content digests; Atlas record bodies, resume text and image bytes are not copied into this state. `act_turns.assistant_review_json.initialization` records the batch supplied to that turn and whether the delivered batch was explicitly acknowledged after review. Only a successful turn with both receipts advances the queue. The final queued batch synthesizes the accumulated understanding before the pass becomes complete. Runtime status projects pending/reading/blocked/complete, reviewed batch count and currently remaining reads. Restart and failure retain progress; a different Atlas identity starts a new pass. Meaningful unresolved questions use the existing agenda, with no initialization-specific question table or creation quota.
+
+Legacy `assistant_follow_ups`, `assistant_assessment_state`, and proposal follow-up fields remain for stored-data compatibility. Initialization converts outstanding follow-ups into agenda questions and retires the old sender. No active assessment workflow reads or schedules the old assessment state. Historical backend-authored question/follow-up turns remain tagged with `backend_message_kind`; new agenda evaluations are ordinary Codex-backed turns with separate activation context.
 
 `ActLiveMessage` stores explicit assistant notices and user replies within an existing `ActTurn`. Its role/text, parent turn, optional unique reply-to message, wait status, and reply deadline preserve ordering and one-time reply consumption. A partial unique index allows only one awaiting prompt per turn. The capability leaves the parent turn running; live messages are not new Codex turns or memory facts.
+
+`AssistantAgendaItem.question_category` distinguishes common, important and temporal questions, defaulting existing items to common on schema upgrade. It is meaningful only for question items. Questions use the ordinary agenda `due_at`; open important/temporal questions without a time become due immediately, while explicit future times are preserved. There is no expiry field or daily slot allocation.
+
+`ActLiveMessage.agenda_question_id` links a proactive question send to its agenda item. Receipts preserve retry idempotency across day boundaries and intentionally survive agenda deletion. Asked items become waiting until answered, dismissed or deliberately reopened. Daily counts are descriptive attention context; there is no enforced quota or spacing and no separate question schedule or counter table.

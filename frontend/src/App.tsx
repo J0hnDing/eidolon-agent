@@ -1,174 +1,144 @@
-import { useLayoutEffect, useRef } from "react";
-import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { NavLink, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 
-import ApprovalRequestsPage from "./pages/ApprovalRequestsPage";
-import AgentRunDetailPage from "./pages/AgentRunDetailPage";
-import AgentRunsPage from "./pages/AgentRunsPage";
-import AgentsPage from "./pages/AgentsPage";
-import ChatPage from "./pages/ChatPage";
-import FunctionsPage from "./pages/FunctionsPage";
-import IntegrationsPage from "./pages/IntegrationsPage";
-import MemoryPage from "./pages/MemoryPage";
-import SkillDetailPage from "./pages/SkillDetailPage";
-import SkillsPage from "./pages/SkillsPage";
-import SchedulesPage from "./pages/SchedulesPage";
-import UsageSettingsPage from "./pages/UsageSettingsPage";
-import WebAppPage from "./pages/WebAppPage";
-import WebAppsPage from "./pages/WebAppsPage";
-import eidolonLogo from "../resource/logo/eidolon_logo_exact.svg";
+import AssistantPage, { AssistantDetailsPage } from "./pages/AssistantPage";
+import { loadActiveConversationId, loadStoredConversations } from "./lib/chatStore";
+import { usePendingApprovalCount } from "./lib/usePendingApprovalCount";
+import { PageErrorBoundary } from "./components/PageErrorBoundary";
+import { AppIcon } from "./components/AppIcon";
+import { CommandMenu } from "./components/CommandMenu";
+import eidolonLogo from "../resource/logo/eidolon-mark.svg";
+import "./product-shell.css";
 
-type NavIcon =
-  | "chat"
-  | "agents"
-  | "memory"
-  | "skills"
-  | "functions"
-  | "apps"
-  | "schedules"
-  | "runs"
-  | "approvals"
-  | "settings";
+const ActivityPage = lazy(() => import("./pages/ActivityPage"));
+const AgentsPage = lazy(() => import("./pages/AgentsPage"));
+const FunctionsSettingsPage = lazy(() => import("./pages/FunctionsSettingsPage"));
+const IntegrationsPage = lazy(() => import("./pages/IntegrationsPage"));
+const MemoryPage = lazy(() => import("./pages/MemoryPage"));
+const SkillBuildPage = lazy(() => import("./pages/SkillBuildPage"));
+const SkillDetailPage = lazy(() => import("./pages/SkillDetailPage"));
+const SkillsPage = lazy(() => import("./pages/SkillsPage"));
+const SchedulesPage = lazy(() => import("./pages/SchedulesPage"));
+const UsageSettingsPage = lazy(() => import("./pages/UsageSettingsPage"));
+const WebAppPage = lazy(() => import("./pages/WebAppPage"));
+const WebAppsPage = lazy(() => import("./pages/WebAppsPage"));
 
-const navGroups: Array<{
-  label: string;
-  items: Array<{ to: string; label: string; icon: NavIcon }>;
-}> = [
-  {
-    label: "Workspace",
-    items: [
-      { to: "/chat", label: "Chat", icon: "chat" },
-      { to: "/agents", label: "Agents", icon: "agents" },
-      { to: "/memory", label: "Memory", icon: "memory" },
-    ],
-  },
-  {
-    label: "Capabilities",
-    items: [
-      { to: "/skills", label: "Skills", icon: "skills" },
-      { to: "/functions", label: "Functions", icon: "functions" },
-      { to: "/apps", label: "Applications", icon: "apps" },
-      { to: "/schedules", label: "Schedules", icon: "schedules" },
-    ],
-  },
-  {
-    label: "Control",
-    items: [
-      { to: "/agent-runs", label: "Agent Runs", icon: "runs" },
-      { to: "/approval-requests", label: "Approvals", icon: "approvals" },
-      { to: "/settings", label: "Settings", icon: "settings" },
-    ],
-  },
+type NavIcon = "chat" | "agents" | "memory" | "skills" | "functions" | "apps" | "schedules" | "runs" | "approvals" | "settings";
+const destinations: Array<{ to: string; label: string; icon: NavIcon }> = [
+  { to: "/assistant", label: "Assistant", icon: "chat" },
+  { to: "/agents", label: "Agents", icon: "agents" },
+  { to: "/apps", label: "Applications", icon: "apps" },
+  { to: "/skills", label: "Skills", icon: "skills" },
+  { to: "/automations", label: "Automations", icon: "schedules" },
+  { to: "/memory", label: "Memory", icon: "memory" },
+  { to: "/activity", label: "Activity", icon: "runs" },
 ];
 
 export default function App() {
   const location = useLocation();
-  const navigationRef = useRef<HTMLElement>(null);
+  const [navOpen, setNavOpen] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [compactNav, setCompactNav] = useState(() => window.matchMedia?.("(max-width: 800px)").matches ?? false);
+  const sidebar = useRef<HTMLElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
+  const pendingCount = usePendingApprovalCount();
 
-  useLayoutEffect(() => {
-    const navigation = navigationRef.current;
-    const activeLink = navigation?.querySelector<HTMLElement>(".nav-link.active");
-    if (!navigation || !activeLink) return;
+  useEffect(() => {
+    function onShortcut(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setNavOpen(false); setCommandOpen((open) => !open); }
+    }
+    window.addEventListener("keydown", onShortcut);
+    return () => window.removeEventListener("keydown", onShortcut);
+  }, []);
 
-    const positionIndicator = () => {
-      const x = activeLink.offsetLeft + activeLink.offsetWidth - 10;
-      const y = activeLink.offsetTop + (activeLink.offsetHeight - 16) / 2;
-      navigation.style.setProperty("--nav-indicator-x", `${x}px`);
-      navigation.style.setProperty("--nav-indicator-y", `${y}px`);
-      navigation.dataset.indicatorReady = "true";
-    };
+  useEffect(() => { setNavOpen(false); }, [location.pathname]);
+  useEffect(() => {
+    const media = window.matchMedia?.("(min-width: 801px)");
+    const onResize = () => { setCompactNav(!media?.matches); if (media?.matches) setNavOpen(false); };
+    media?.addEventListener("change", onResize);
+    return () => media?.removeEventListener("change", onResize);
+  }, []);
+  useEffect(() => {
+    if (!navOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    sidebar.current?.querySelector<HTMLElement>("a")?.focus();
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") { event.preventDefault(); setNavOpen(false); }
+      if (event.key !== "Tab") return;
+      const links = Array.from(sidebar.current?.querySelectorAll<HTMLElement>("a, button") ?? []);
+      const first = links[0], last = links[links.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => { document.body.style.overflow = previousOverflow; window.removeEventListener("keydown", onKeyDown); toggle.current?.focus(); };
+  }, [navOpen]);
 
-    positionIndicator();
-    window.addEventListener("resize", positionIndicator);
-
-    const resizeObserver = typeof ResizeObserver === "undefined"
-      ? null
-      : new ResizeObserver(positionIndicator);
-    resizeObserver?.observe(navigation);
-    resizeObserver?.observe(activeLink);
-
-    return () => {
-      window.removeEventListener("resize", positionIndicator);
-      resizeObserver?.disconnect();
-    };
-  }, [location.pathname]);
-
-  return (
-    <div className="app-shell">
-      <a className="skip-link" href="#main-content">Skip to content</a>
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true">
-            <img src={eidolonLogo} alt="" />
-          </span>
-          <div>
-            <strong>Eidolon</strong>
-            <span>Local intelligence</span>
-          </div>
-        </div>
-
-        <nav ref={navigationRef} className="nav-list" aria-label="Primary navigation">
-          {navGroups.map((group) => (
-            <div className="nav-group" key={group.label}>
-              <p className="nav-group-label">{group.label}</p>
-              <div className="nav-group-items">
-                {group.items.map((item) => (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
-                  >
-                    <NavigationIcon name={item.icon} />
-                    <span>{item.label}</span>
-                  </NavLink>
-                ))}
-              </div>
-            </div>
-          ))}
-          <span className="nav-active-indicator" aria-hidden="true" />
-        </nav>
-
-        <div className="sidebar-foot">
-          <span className="local-status-dot" aria-hidden="true" />
-          <span>
-            <strong>Local-first</strong>
-            <small>Your data stays under your control</small>
-          </span>
-        </div>
-      </aside>
-
-      <main className="main-content" id="main-content">
-        <div className="route-stage" key={location.pathname}>
-          <Routes>
-            <Route path="/" element={<Navigate to="/chat" replace />} />
-            <Route path="/chat" element={<ChatPage />} />
-            <Route path="/act" element={<Navigate to="/chat" replace />} />
-            <Route path="/agents" element={<AgentsPage />} />
-            <Route path="/agents/:agentId" element={<AgentsPage />} />
-            <Route path="/memory" element={<MemoryPage />} />
-            <Route path="/skills" element={<SkillsPage />} />
-            <Route path="/functions" element={<FunctionsPage />} />
-            <Route path="/apps" element={<WebAppsPage />} />
-            <Route path="/apps/:skillId" element={<WebAppPage />} />
-            <Route path="/skills/:skillId" element={<SkillDetailPage />} />
-            <Route path="/schedules" element={<SchedulesPage />} />
-            <Route path="/agent-runs" element={<AgentRunsPage />} />
-            <Route path="/agent-runs/:agentRunId" element={<AgentRunDetailPage />} />
-            <Route path="/approval-requests" element={<ApprovalRequestsPage />} />
-            <Route path="/settings" element={<Navigate to="/settings/usage" replace />} />
-            <Route path="/settings/appearance" element={<UsageSettingsPage section="appearance" />} />
-            <Route path="/settings/usage" element={<UsageSettingsPage />} />
-            <Route path="/settings/project" element={<UsageSettingsPage section="project" />} />
-            <Route path="/settings/models" element={<UsageSettingsPage section="models" />} />
-            <Route path="/settings/integrations" element={<IntegrationsPage />} />
-            <Route path="/settings/integrations/:integrationId" element={<IntegrationsPage />} />
-            <Route path="/settings/permissions" element={<UsageSettingsPage section="permissions" />} />
-          </Routes>
-        </div>
-      </main>
-    </div>
-  );
+  return <div className={`app-shell ${navOpen ? "nav-open" : ""}`}>
+    <a className="skip-link" href="#main-content">Skip to content</a>
+    {navOpen && <button type="button" className="sidebar-backdrop" aria-label="Close navigation" tabIndex={-1} onClick={() => setNavOpen(false)} />}
+    <aside ref={sidebar} id="app-navigation" className={`sidebar ${navOpen ? "is-open" : ""}`} aria-hidden={compactNav && !navOpen ? true : undefined} {...(compactNav && !navOpen ? { inert: "" } : {})}>
+      <div className="sidebar-brand-row"><NavLink to="/assistant" className="brand" aria-label="Eidolon home"><span className="brand-mark" aria-hidden="true"><img src={eidolonLogo} alt="" /></span><strong>Eidolon</strong></NavLink><div className="sidebar-brand-actions"><button className="sidebar-search ghost" type="button" aria-label="Go to…" title="Go to… (Ctrl K)" onClick={() => { setNavOpen(false); setCommandOpen(true); }}><AppIcon name="search" size={16} /></button><button type="button" className="mobile-nav-toggle ghost" onClick={() => setNavOpen(false)} aria-label="Close navigation"><AppIcon name="close" size={18} /></button></div></div>
+      <nav className="nav-list" aria-label="Primary navigation">{[
+        { title: "Personal", items: [destinations[0], destinations[1], destinations[5]] },
+        { title: "Workspace", items: [destinations[2], destinations[3], destinations[4], destinations[6]] },
+      ].map((group) => <div className="nav-group" key={group.title}>{group.title === "Workspace" && <p className="nav-group-label">Workspace</p>}<div className="nav-group-items">{group.items.map((item) => <NavLink key={item.to} to={item.to} className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
+        <AppIcon name={item.to === "/activity" ? "activity" : item.icon} size={18} /><span>{item.label}</span>{item.to === "/activity" && pendingCount !== null && pendingCount > 0 && <span className="nav-badge" aria-label={`${pendingCount} pending approvals`}>{pendingCount > 99 ? "99+" : pendingCount}</span>}
+      </NavLink>)}</div></div>)}</nav>
+      <div className="sidebar-bottom"><nav className="nav-settings" aria-label="Settings navigation"><NavLink to="/settings" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}><NavigationIcon name="settings" /><span>Settings</span></NavLink></nav>
+      </div>
+    </aside>
+    <main className="main-content" id="main-content" tabIndex={-1} aria-hidden={navOpen ? true : undefined} {...(navOpen ? { inert: "" } : {})}>
+      <div className="app-content-header"><button ref={toggle} type="button" className="mobile-nav-toggle ghost" aria-label="Open navigation" title="Open navigation" aria-expanded={navOpen} aria-controls="app-navigation" onClick={() => setNavOpen((open) => !open)}><AppIcon name="panel" /></button></div>
+      <div className="route-stage" key={location.pathname}>
+        <PageErrorBoundary><Suspense fallback={<section className="page"><p className="muted" role="status">Loading page…</p></section>}><Routes>
+          <Route path="/" element={<Navigate to="/assistant" replace />} />
+          <Route path="/assistant" element={<AssistantPage />} />
+          <Route path="/assistant/details" element={<AssistantDetailsPage />} />
+          <Route path="/chat" element={<LegacyChatRedirect />} />
+          <Route path="/act" element={<Navigate to="/agents/act" replace />} />
+          <Route path="/agents" element={<AgentsPage />} />
+          <Route path="/agents/assistant" element={<Navigate to="/assistant" replace />} />
+          <Route path="/agents/:agentId" element={<AgentsPage />} />
+          <Route path="/memory" element={<MemoryPage />} />
+          <Route path="/skills" element={<SkillsPage />} />
+          <Route path="/skills/build" element={<SkillBuildPage />} />
+          <Route path="/skills/:skillId" element={<SkillDetailPage />} />
+          <Route path="/apps" element={<WebAppsPage />} />
+          <Route path="/apps/:skillId" element={<WebAppPage />} />
+          <Route path="/automations" element={<SchedulesPage />} />
+          <Route path="/schedules" element={<Navigate to="/automations" replace />} />
+          <Route path="/activity/*" element={<ActivityPage />} />
+          <Route path="/agent-runs" element={<Navigate to="/activity/runs" replace />} />
+          <Route path="/agent-runs/:agentRunId" element={<LegacyRunRedirect />} />
+          <Route path="/approval-requests" element={<Navigate to="/activity/approvals" replace />} />
+          <Route path="/functions" element={<Navigate to="/settings/functions" replace />} />
+          <Route path="/settings" element={<Navigate to="/settings/appearance" replace />} />
+          <Route path="/settings/appearance" element={<UsageSettingsPage section="appearance" />} />
+          <Route path="/settings/usage" element={<UsageSettingsPage />} />
+          <Route path="/settings/project" element={<UsageSettingsPage section="project" />} />
+          <Route path="/settings/models" element={<UsageSettingsPage section="models" />} />
+          <Route path="/settings/integrations" element={<IntegrationsPage />} />
+          <Route path="/settings/integrations/:integrationId" element={<IntegrationsPage />} />
+          <Route path="/settings/permissions" element={<UsageSettingsPage section="permissions" />} />
+          <Route path="/settings/functions" element={<FunctionsSettingsPage />} />
+          <Route path="*" element={<section className="page stack"><h1>Page not found</h1><p className="muted">This page may have moved.</p><NavLink className="button-link" to="/assistant">Return to Assistant</NavLink></section>} />
+        </Routes></Suspense></PageErrorBoundary>
+      </div>
+    </main>
+    {commandOpen && <CommandMenu onClose={() => setCommandOpen(false)} />}
+  </div>;
 }
 
+function LegacyChatRedirect() {
+  const conversations = loadStoredConversations();
+  const active = conversations.find((item) => item.id === loadActiveConversationId(conversations));
+  const target = active?.mode === "project" ? "/skills/build" : active?.mode === "act" || active?.mode === "observer"
+    ? `/agents/${active.mode}${active.actSessionId ? `?session=${active.actSessionId}` : ""}` : "/assistant";
+  return <Navigate to={target} replace />;
+}
+function LegacyRunRedirect() { const { agentRunId } = useParams(); return <Navigate to={`/activity/runs/${agentRunId}`} replace />; }
 function NavigationIcon({ name }: { name: NavIcon }) {
   const paths: Record<NavIcon, React.ReactNode> = {
     chat: <path d="M5 6.75A2.75 2.75 0 0 1 7.75 4h8.5A2.75 2.75 0 0 1 19 6.75v5.5A2.75 2.75 0 0 1 16.25 15H11l-4.5 3v-3.29A2.75 2.75 0 0 1 5 12.25v-5.5Z" />,

@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import ActLiveMessage, ActSession, ActTurn
-from app.services.telegram_service import TELEGRAM_ACT_ROLE, TelegramService
+from app.services.telegram_service import TELEGRAM_ACT_ROLE, TELEGRAM_ASSISTANT_ROLE, TelegramService
 
 
 class ActChatMessageError(RuntimeError):
@@ -60,10 +60,11 @@ def attach_live_messages(db: Session, turns: list[ActTurn]) -> None:
 class ActChatMessageCapability:
     def __init__(self, db: Session, *, telegram_service: TelegramService | None = None) -> None:
         self.db = db
-        self.telegram = telegram_service or TelegramService(db, role=TELEGRAM_ACT_ROLE)
+        self.telegram = telegram_service
 
     def send(
         self, session_id: int, text: str, wait_for_reply: bool = False, timeout_seconds: int = 120,
+        *, agenda_question_id: int | None = None,
     ) -> dict:
         if (not isinstance(text, str) or not text.strip() or len(text) > 4000
                 or not isinstance(wait_for_reply, bool)
@@ -75,13 +76,14 @@ class ActChatMessageCapability:
             ActTurn.session_id == session_id, ActTurn.status == "running",
             ActTurn.cancel_requested_at.is_(None),
         ))
-        if session is None or session.agent_id != "act" or session.status != "active" or turn is None:
+        if session is None or session.agent_id not in {"act", "assistant"} or session.status != "active" or turn is None:
             raise ActChatMessageError("act_turn_unavailable", "Messaging requires the current running Act turn")
         if turn.delivery_provider not in {None, "telegram"}:
             raise ActChatMessageError("unsupported_transport", "This Act conversation has no supported message transport")
         # Publish the prompt before sending remotely so a quick reply cannot be lost.
         message = ActLiveMessage(
             turn_id=turn.id, role="assistant", text=text,
+            agenda_question_id=agenda_question_id,
             reply_status="awaiting" if wait_for_reply else "none",
             reply_expires_at=datetime.now(UTC) + timedelta(seconds=timeout_seconds) if wait_for_reply else None,
         )
@@ -92,10 +94,14 @@ class ActChatMessageCapability:
             self.db.rollback()
             raise ActChatMessageError("reply_wait_active", "This Act turn is already waiting for a reply") from None
         message_id, turn_id = message.id, turn.id
+        from app.services.agent_memory_service import sync_chat_history_after_commit
+        sync_chat_history_after_commit(self.db)
         telegram_message_id = None
         if turn.delivery_provider == "telegram":
             try:
-                telegram_message_id = self.telegram.send_act_chat_message(turn, text)
+                telegram = self.telegram or TelegramService(self.db,
+                    role=TELEGRAM_ASSISTANT_ROLE if session.agent_id == "assistant" else TELEGRAM_ACT_ROLE)
+                telegram_message_id = telegram.send_act_chat_message(turn, text)
             except Exception:
                 self.db.rollback()
                 self.db.execute(update(ActLiveMessage).where(

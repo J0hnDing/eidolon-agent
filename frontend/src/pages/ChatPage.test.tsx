@@ -1,14 +1,19 @@
 // @vitest-environment jsdom
+
+import { clearManagedSessionCache } from "../features/chat/managedSessionCache";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ActSession, AgentSession, api } from "../api/client";
+import { ACTIVE_CONVERSATION_KEY, CHAT_STORAGE_KEY, createConversation } from "../lib/chatStore";
 import ChatPage from "./ChatPage";
 
 beforeEach(() => {
   localStorage.clear();
+  clearManagedSessionCache();
   vi.spyOn(api, "listActSessions").mockResolvedValue([]);
   vi.spyOn(api, "getProjectConversationState").mockResolvedValue(null);
+  vi.spyOn(api, "getAssistantRuntime").mockResolvedValue({ enabled: true, timezone: "America/Toronto", primary_session_id: null, summary: "", change_tracking: { pending_count: 0, sources: [] }, initialization: { status: "pending", reviewed_batches: 0, remaining: null, error: null }, question_asking: { asked_today: 0, timezone: "America/Toronto" } });
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -79,6 +84,51 @@ it.each(["observer", "assistant"] as const)("loads and continues the shared %s s
   expect(run).toHaveBeenCalledWith(agentId, 42, "Hello");
 });
 
+it("opens the primary Assistant conversation from New Chat and accepts its live reply", async () => {
+  const session: AgentSession = {
+    id: 42, agent_id: "assistant", title: "Primary Assistant", origin: "web", status: "active", wecom_user_id: null,
+    created_at: "2026-10-16T12:00:00Z", updated_at: "2026-10-16T12:00:00Z", turns: [{
+      id: 8, session_id: 42, agent_id: "assistant", codex_turn_id: null, user_message: "Internal review prompt", assistant_message: null,
+      backend_message_kind: "assistant_daily", status: "running", activity_json: [], error_message: null, cancel_requested_at: null,
+      delivery_message_thread_id: null, delivery_status: null, started_at: null, completed_at: null, created_at: "2026-10-16T12:00:00Z",
+      live_messages: [{ id: 12, role: "assistant", text: "Enter 456 in Duo Mobile", reply_status: "awaiting", reply_expires_at: new Date(Date.now() + 60000).toISOString(), reply_to_message_id: null, created_at: "2026-10-16T12:00:01Z" }],
+    }],
+  };
+  vi.mocked(api.getAssistantRuntime).mockResolvedValue({ enabled: true, timezone: "America/Toronto", primary_session_id: 42, summary: "", change_tracking: { pending_count: 0, sources: [] }, initialization: { status: "pending", reviewed_batches: 0, remaining: null, error: null }, question_asking: { asked_today: 0, timezone: "America/Toronto" } });
+  vi.spyOn(api, "listAgentSessions").mockImplementation(async (id) => id === "assistant" ? [session] : []);
+  vi.spyOn(api, "getAgentSession").mockImplementation(async () => structuredClone(session));
+  const create = vi.spyOn(api, "createAgentSession");
+  const run = vi.spyOn(api, "runAgentTurn").mockImplementation(async () => {
+    session.turns[0].live_messages![0].reply_status = "answered";
+    return structuredClone(session.turns[0]);
+  });
+  render(<MemoryRouter><ChatPage /></MemoryRouter>);
+  fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open Assistant" }));
+  await screen.findByText("Enter 456 in Duo Mobile");
+  expect(create).not.toHaveBeenCalled();
+  expect(screen.queryByText("Internal review prompt")).toBeNull();
+  expect(screen.getByRole("button", { name: "Send message" })).toHaveProperty("disabled", false);
+  fireEvent.change(screen.getByRole("textbox", { name: "Conversation message" }), { target: { value: "Done" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => expect(run).toHaveBeenCalledWith("assistant", 42, "Done"));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).toHaveProperty("disabled", true));
+});
+
+it("reopens a previously bound Assistant chat without losing its local draft", async () => {
+  const existing = { ...createConversation("assistant", { id: "local-assistant-chat", actSessionId: 42, title: "Existing Assistant" }), draft: "My unfinished question" };
+  localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify([existing, createConversation("project", { id: "project-chat" })]));
+  localStorage.setItem(ACTIVE_CONVERSATION_KEY, "project-chat");
+  const session: AgentSession = { id: 42, agent_id: "assistant", title: "Existing Assistant", origin: "web", status: "active", wecom_user_id: null, turns: [], created_at: existing.createdAt, updated_at: existing.updatedAt };
+  vi.spyOn(api, "listAgentSessions").mockImplementation(async (id) => id === "assistant" ? [session] : []);
+  vi.spyOn(api, "getAgentSession").mockResolvedValue(session);
+  render(<MemoryRouter><ChatPage /></MemoryRouter>);
+  fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open Assistant" }));
+  await waitFor(() => expect(screen.getByRole("textbox", { name: "Conversation message" })).toHaveProperty("value", "My unfinished question"));
+  expect(localStorage.getItem(ACTIVE_CONVERSATION_KEY)).toBe("local-assistant-chat");
+});
+
 it.each(["observer", "assistant"] as const)("creates a backend %s session from New Chat", async (agentId) => {
   vi.spyOn(api, "listAgentSessions").mockResolvedValue([]);
   const session: AgentSession = {
@@ -90,7 +140,7 @@ it.each(["observer", "assistant"] as const)("creates a backend %s session from N
   render(<MemoryRouter><ChatPage /></MemoryRouter>);
   await waitFor(() => expect(api.listAgentSessions).toHaveBeenCalledWith(agentId));
   fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
-  fireEvent.click(screen.getByRole("button", { name: new RegExp(agentId, "i") }));
+  fireEvent.click(screen.getByRole("button", { name: new RegExp(`^(Open|Create) ${agentId}$`, "i") }));
   await screen.findByText("Created session");
   expect(api.createAgentSession).toHaveBeenCalledWith(agentId);
   await waitFor(() => expect(api.getAgentSession).toHaveBeenCalledWith(agentId, 99));

@@ -112,7 +112,7 @@ def test_assistant_allows_read_only_new_email(context):
 
 
 def test_integration_agent_read_only_uses_canonical_effects_not_mcp_hint(context):
-    db, _entries = context
+    db, entries = context
     policy = AgentPolicyService(db)
     lying_entry = {
         "id": "write",
@@ -196,36 +196,29 @@ def test_obsolete_assistant_private_ids_are_filtered_from_saved_policy(context):
     assert policy.banned_functions == []
 
 
-def test_browser_authentication_is_private_to_act(context):
+@pytest.mark.parametrize("capability_id", ["browser.authenticate", "telegram.send_file", "chat.send_message"])
+def test_execution_runtime_tools_are_shared_by_assistant_and_act_only(context, capability_id):
     db, _entries = context
-    private = McpFunctionService.tool_name("agent_private", "browser.authenticate")
+    private = McpFunctionService.tool_name("agent_private", capability_id)
     assert private not in {tool.name for tool in McpFunctionService(db).list_tools()}
     assert private not in {
         tool.name for tool in McpFunctionService(db, agent_token=credential(db, "observer")).list_tools()
     }
-    assert private not in {
-        tool.name for tool in McpFunctionService(db, agent_token=credential(db, "assistant")).list_tools()
-    }
-    act_tools = {
-        tool.name: tool
-        for tool in McpFunctionService(db, agent_token=credential(db, "act")).list_tools()
-    }
-    assert private in act_tools
-    assert "credentials without revealing them" in act_tools[private].description
+    for agent_id in ("assistant", "act"):
+        tools = {tool.name: tool for tool in McpFunctionService(db, agent_token=credential(db, agent_id)).list_tools()}
+        assert private in tools
+        if capability_id == "browser.authenticate":
+            assert "credentials without revealing them" in tools[private].description
 
 
-def test_telegram_file_delivery_is_private_to_act_but_described_to_assistant(context):
-    db, _entries = context
-    private = McpFunctionService.tool_name("agent_private", "telegram.send_file")
-    assert private not in {
-        tool.name for tool in McpFunctionService(db, agent_token=credential(db, "assistant")).list_tools()
-    }
-    act_tools = {
-        tool.name: tool
-        for tool in McpFunctionService(db, agent_token=credential(db, "act")).list_tools()
-    }
-    assert private in act_tools
-    catalog = AgentPolicyService(db).act_catalog()
+def test_assistant_and_act_have_same_function_defaults_and_runtime_catalog(context):
+    db, entries = context
+    policy = AgentPolicyService(db)
+    assert policy.policy("assistant").read_only is False
+    assert policy.policy("act").read_only is False
+    assert policy.policy("observer").read_only is True
+    assert all(policy.decision("assistant", entry) == policy.decision("act", entry) for entry in entries)
+    catalog = policy.act_catalog()
     runtime_ids = {entry["id"] for entry in catalog if entry.get("kind") == "runtime_capability"}
     assert runtime_ids == {"browser.playwright", "browser.authenticate", "telegram.send_file", "chat.send_message"}
     assert all("input_schema" not in entry for entry in catalog if entry.get("kind") == "runtime_capability")

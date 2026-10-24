@@ -25,12 +25,13 @@ class ActBrowserMcpProxy:
         try:
             with SessionLocal() as db:
                 agent_id, session_id = AgentPolicyService(db).authenticate(self.agent_token)
-                if agent_id != "act" or str(session_id) != self.session_id:
+                if agent_id not in {"act", "assistant"} or str(session_id) != self.session_id:
                     raise ValueError("wrong session")
-                if require_turn and db.scalar(select(ActTurn.id).where(
+                turn = db.scalar(select(ActTurn).where(
                     ActTurn.session_id == session_id, ActTurn.status == "running",
                     ActTurn.cancel_requested_at.is_(None),
-                ).limit(1)) is None:
+                ).limit(1)) if require_turn else None
+                if require_turn and turn is None:
                     raise ValueError("inactive turn")
         except Exception:
             raise ActBrowserRuntimeError("Act browser authorization is unavailable") from None

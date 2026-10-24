@@ -1,23 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.schemas.act import ActSessionCreate, ActSessionRead, ActSessionSummary, ActTurnCreate, ActTurnRead
 from app.schemas.agents import AgentPolicyUpdate
-from app.schemas.assistant_assessment import FunctionStep
+from app.schemas.assistant import AgendaCreate, AgendaRun, AgendaUpdate, AssistantSettingsUpdate
+from app.schemas.assistant_actions import FunctionStep
 from app.services.act_session_service import ActSessionError, ActSessionService
+from app.services.agent_chat_history import project_session, project_turn
 from app.services.agent_policy_service import AGENTS, AgentPermissionError, AgentPolicyService
 from app.services.agent_proposal_service import AgentProposalService
-from app.services.assistant_assessment_service import AssistantAssessmentError
-from app.services.scheduler_service import SchedulerService
+from app.services.assistant_activation_service import AssistantActivationService
+from app.services.assistant_service import AssistantService
 
 router = APIRouter(prefix="/agents", tags=["agents"])
-
-
-class AssessmentUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    enabled: bool
 
 
 class FunctionSequenceUpdate(BaseModel):
@@ -29,13 +26,6 @@ def service(agent_id: str, db: Session) -> ActSessionService:
     if agent_id not in AGENTS:
         raise HTTPException(404, "Agent not found")
     return ActSessionService(db, agent_id=agent_id)
-
-
-def scheduler(request: Request, db: Session) -> SchedulerService:
-    shared = request.app.state.scheduler_service
-    return SchedulerService(
-        db, scheduler=shared.scheduler, session_factory=shared.session_factory, project_root=shared.project_root
-    )
 
 
 @router.get("")
@@ -68,23 +58,72 @@ def edit_function_proposal(proposal_id: int, payload: FunctionSequenceUpdate, db
         raise HTTPException(409, str(exc)) from None
 
 
-@router.get("/assistant/assessment")
-def assessment(request: Request, db: Session = Depends(get_db)):
-    return scheduler(request, db).assistant_assessment_status()
+@router.get("/assistant/runtime")
+def assistant_runtime(db: Session = Depends(get_db)):
+    return AssistantActivationService(db).status()
 
 
-@router.put("/assistant/assessment")
-def configure_assessment(payload: AssessmentUpdate, request: Request, db: Session = Depends(get_db)):
-    return scheduler(request, db).configure_assistant_assessment(payload.enabled)
-
-
-@router.post("/assistant/assessment/run")
-def run_assessment(request: Request, db: Session = Depends(get_db)):
+@router.put("/assistant/runtime")
+def configure_assistant(payload: AssistantSettingsUpdate, db: Session = Depends(get_db)):
     try:
-        runner = scheduler(request, db)
-        result = runner.run_assistant_assessment_now()
-        return {**runner.assistant_assessment_status(), **result}
-    except (ValueError, AssistantAssessmentError) as exc:
+        return AssistantActivationService(db).configure(payload.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@router.post("/assistant/agenda/{item_id}/run")
+def run_agenda_item(item_id: int, payload: AgendaRun, db: Session = Depends(get_db)):
+    try:
+        runner = AssistantActivationService(db)
+        return runner.run_now(item_id, payload.expected_revision)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@router.get("/assistant/agenda/{item_id}/occurrences")
+def agenda_occurrences(item_id: int, db: Session = Depends(get_db)):
+    from sqlalchemy import select
+
+    from app.models import AssistantAgendaItem, AssistantAgendaOccurrence
+    from app.services.assistant_recurrence import serialize_occurrence
+
+    if db.get(AssistantAgendaItem, item_id) is None:
+        raise HTTPException(404, "Agenda item not found")
+    return [serialize_occurrence(row) for row in db.scalars(select(AssistantAgendaOccurrence).where(
+        AssistantAgendaOccurrence.agenda_item_id == item_id,
+    ).order_by(AssistantAgendaOccurrence.scheduled_at.desc()).limit(100))]
+
+
+@router.post("/assistant/runtime/refresh")
+def refresh_assistant(db: Session = Depends(get_db)):
+    result = AssistantService(db).request_refresh()
+    return {**AssistantActivationService(db).status(), **result}
+
+
+@router.get("/assistant/agenda")
+def assistant_agenda(db: Session = Depends(get_db)):
+    return AssistantService(db).agenda()
+
+
+@router.post("/assistant/agenda", status_code=201)
+def create_agenda_item(payload: AgendaCreate, db: Session = Depends(get_db)):
+    return AssistantService(db).create_item(payload)
+
+
+@router.patch("/assistant/agenda/{item_id}")
+def update_agenda_item(item_id: int, payload: AgendaUpdate, db: Session = Depends(get_db)):
+    try:
+        return AssistantService(db).update_item(item_id, payload)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@router.delete("/assistant/agenda/{item_id}", status_code=204)
+def delete_agenda_item(item_id: int, expected_revision: int, db: Session = Depends(get_db)):
+    try:
+        AssistantService(db).delete_item(item_id, expected_revision)
+        return Response(status_code=204)
+    except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
 
 
@@ -111,7 +150,7 @@ def sessions(agent_id: str, db: Session = Depends(get_db)):
 @router.post("/{agent_id}/sessions", response_model=ActSessionRead, status_code=201)
 def create_session(agent_id: str, payload: ActSessionCreate, db: Session = Depends(get_db)):
     try:
-        return service(agent_id, db).create_session(origin=payload.origin)
+        return project_session(db, service(agent_id, db).create_session(origin=payload.origin))
     except ActSessionError as exc:
         raise HTTPException(409, str(exc)) from None
 
@@ -119,7 +158,7 @@ def create_session(agent_id: str, payload: ActSessionCreate, db: Session = Depen
 @router.get("/{agent_id}/sessions/{session_id}", response_model=ActSessionRead)
 def read_session(agent_id: str, session_id: int, db: Session = Depends(get_db)):
     try:
-        return service(agent_id, db).read_session(session_id)
+        return project_session(db, service(agent_id, db).read_session(session_id))
     except ActSessionError as exc:
         raise HTTPException(404, str(exc)) from None
 
@@ -127,7 +166,7 @@ def read_session(agent_id: str, session_id: int, db: Session = Depends(get_db)):
 @router.post("/{agent_id}/sessions/{session_id}/turns", response_model=ActTurnRead, status_code=202)
 def enqueue(agent_id: str, session_id: int, payload: ActTurnCreate, db: Session = Depends(get_db)):
     try:
-        return service(agent_id, db).enqueue_turn(session_id, payload.message)
+        return project_turn(db, service(agent_id, db).enqueue_turn(session_id, payload.message), agent_id=agent_id)
     except ActSessionError as exc:
         raise HTTPException(409, str(exc)) from None
 
@@ -135,7 +174,7 @@ def enqueue(agent_id: str, session_id: int, payload: ActTurnCreate, db: Session 
 @router.post("/{agent_id}/sessions/{session_id}/turns/{turn_id}/cancel", response_model=ActTurnRead)
 def cancel(agent_id: str, session_id: int, turn_id: int, db: Session = Depends(get_db)):
     try:
-        return service(agent_id, db).cancel_turn(session_id, turn_id)
+        return project_turn(db, service(agent_id, db).cancel_turn(session_id, turn_id), agent_id=agent_id)
     except ActSessionError as exc:
         raise HTTPException(409, str(exc)) from None
 

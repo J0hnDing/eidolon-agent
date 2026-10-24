@@ -228,7 +228,9 @@ class AtlasReadProvider:
             "guidance": "Discover schema; search compact records; fetch details only when relevant. "
                         "Native data and custom fields retain all fields and precision, including sensitive Person fields. "
                         "Completeness uses Atlas's UI definition. Follow cursors; stale_revision means restart the read. "
-                        "Attachment text/bytes are explicit. No write, setup, unlock, export, or arbitrary HTTP operation is provided.",
+                        "Attachment text/bytes are explicit. Named record/link, lifecycle, custom-field, States and "
+                        "attachment write operations have separate authorization. No setup, unlock, export, "
+                        "Personality import or arbitrary HTTP operation is provided.",
         }
 
     def _attachment(self, requested: dict) -> dict:

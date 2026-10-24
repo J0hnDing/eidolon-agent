@@ -73,6 +73,33 @@ function renderSettings(section: SettingsSection, integration?: IntegrationId) {
 }
 
 describe("Settings subpages", () => {
+  it("explains each build workflow and saves the selected override without loading model choices", async () => {
+    const choice = { model: null, reasoning_effort: null };
+    const routing = {
+      project_build_workflow_override: null,
+      act: choice,
+      observer: choice,
+      assessment: choice,
+      product_manager: { default: choice, blueprint_and_permissions: choice, task_dag: choice, repair: choice, update: choice },
+      builder: { default: choice, single_codex: choice, easy: choice, medium: choice, hard: choice, repair: choice, update: choice },
+      tester: { default: choice, task: choice, final_e2e: choice, update: choice },
+      updated_at: null,
+    } as unknown as Awaited<ReturnType<typeof api.getCodexRoutingSettings>>;
+    vi.spyOn(api, "getCodexRoutingSettings").mockResolvedValue(routing);
+    const modelChoices = vi.spyOn(api, "getCodexModels");
+    const update = vi.spyOn(api, "updateCodexRoutingSettings").mockImplementation(async (payload) => ({ ...payload, updated_at: "2026-10-21T12:00:00Z" }));
+
+    renderSettings("project");
+    const automatic = await screen.findByRole("radio", { name: /Automatic/ });
+    expect((automatic as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole("radio", { name: /Task DAG/ }));
+    expect(screen.getByText("Unsaved Codex routing changes.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save project workflow" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith(expect.objectContaining({ project_build_workflow_override: "task_dag", builder: routing.builder })));
+    expect(await screen.findByText("Project workflow saved.")).toBeTruthy();
+    expect(modelChoices).not.toHaveBeenCalled();
+  });
+
   it("shows focused navigation and loads only the selected section", async () => {
     const usageRequest = vi.spyOn(api, "getCodexUsage");
     vi.spyOn(api, "getPermissionPolicy").mockResolvedValue(permissionPolicy);
@@ -82,6 +109,7 @@ describe("Settings subpages", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Permissions" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Permissions" }).getAttribute("aria-current")).toBe("page");
     expect(screen.getByRole("link", { name: "Integrations" }).getAttribute("href")).toBe("/settings/integrations");
+    expect(screen.getByRole("link", { name: "Functions" }).getAttribute("href")).toBe("/settings/functions");
     expect(await screen.findByRole("heading", { name: "Permission policy" })).toBeTruthy();
     expect(screen.getByText("Shell, subprocess, and arbitrary command execution.")).toBeTruthy();
     expect(document.body.textContent).toContain("python_standard_library");
@@ -425,6 +453,7 @@ describe("Quercus Settings", () => {
 
     renderSettings("integrations", "quercus");
 
+    fireEvent.click(await screen.findByRole("button", { name: "File processing" }));
     await screen.findByRole("heading", { name: "File processing" });
     expect(processing).toHaveBeenCalledTimes(1);
     expect(interval).not.toHaveBeenCalledWith(expect.any(Function), 3000);
@@ -498,16 +527,13 @@ describe("Quercus Settings", () => {
     ]);
     const remove = vi.spyOn(api, "deleteQuercusCourse").mockResolvedValue(undefined);
 
-    const { container } = renderSettings("integrations", "quercus");
-
-    const coursesHeading = await screen.findByRole("heading", { name: "Courses" });
+    renderSettings("integrations", "quercus");
+    fireEvent.click(await screen.findByRole("button", { name: "Courses" }));
+    expect(screen.getByRole("heading", { name: "Courses" })).toBeTruthy();
     expect(discover).not.toHaveBeenCalled();
-    const disclosure = coursesHeading.closest("details");
-    expect(disclosure?.hasAttribute("open")).toBe(false);
-    expect(disclosure?.querySelector(".disclosure-chevron")).toBeTruthy();
-    fireEvent.click(coursesHeading.closest("summary")!);
-    expect(disclosure?.hasAttribute("open")).toBe(true);
-    expect(container.querySelector(".quercus-course-disclosure[open] .disclosure-chevron")).toBeTruthy();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search courses" }), { target: { value: "unmatched" } });
+    expect(screen.getByText("No courses match your search and filter.")).toBeTruthy();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search courses" }), { target: { value: "CSC400" } });
     const checkbox = screen.getByRole("checkbox", { name: /Distributed Systems/ });
     expect(screen.getByText(/2 files skipped/)).toBeTruthy();
     expect(screen.getByText(/Processing: partial/)).toBeTruthy();
@@ -554,9 +580,8 @@ describe("Quercus Settings", () => {
     const remove = vi.spyOn(api, "deleteQuercusCourse").mockReturnValue(deletion);
 
     renderSettings("integrations", "quercus");
-    const coursesHeading = await screen.findByRole("heading", { name: "Courses" });
+    fireEvent.click(await screen.findByRole("button", { name: "Courses" }));
     expect(discover).not.toHaveBeenCalled();
-    fireEvent.click(coursesHeading.closest("summary")!);
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(discover).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole("button", { name: "Delete Compilers" }));
@@ -592,6 +617,7 @@ describe("Quercus Settings", () => {
     });
 
     renderSettings("integrations", "quercus");
+    fireEvent.click(await screen.findByRole("button", { name: "File processing" }));
     const selector = await screen.findByRole("combobox", { name: "Processing method" });
     fireEvent.change(selector, { target: { value: "marker_surya_llamacpp" } });
     fireEvent.click(screen.getByRole("button", { name: "Save file processing" }));
@@ -629,6 +655,7 @@ describe("Quercus Settings", () => {
     });
 
     renderSettings("integrations", "quercus");
+    fireEvent.click(await screen.findByRole("button", { name: "File processing" }));
     const button = await screen.findByRole("button", { name: "Reprocess failed files" });
     expect((button as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(button);
@@ -809,16 +836,22 @@ describe("Notion Settings connection", () => {
     await waitFor(() => expect(put).toHaveBeenCalledWith(sentinel));
     await waitFor(() => expect(screen.getByText("Private workspace")).toBeTruthy());
     expect((screen.getByLabelText("Replacement Notion token") as HTMLInputElement).value).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "Todo & reports" }));
     fireEvent.change(screen.getByLabelText("Notion Todo data-source ID"), {
       target: { value: "source-id" },
     });
     fireEvent.change(screen.getByLabelText("Notion Reports data-source ID"), {
       target: { value: "report-source-id" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Connection" }));
+    expect(screen.queryByRole("button", { name: "Save data-source IDs" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Todo & reports" }));
+    expect((screen.getByLabelText("Notion Todo data-source ID") as HTMLInputElement).value).toBe("source-id");
     fireEvent.click(screen.getByRole("button", { name: "Save data-source IDs" }));
     await waitFor(() => expect(putDataSources).toHaveBeenCalledWith("source-id", "report-source-id"));
     fireEvent.click(screen.getByRole("button", { name: "Delete data-source IDs" }));
     await waitFor(() => expect(removeDataSources).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Daily Feed" }));
     fireEvent.change(screen.getByLabelText("Notion Daily Feed page ID"), {
       target: { value: "daily-page-id" },
     });
@@ -915,8 +948,8 @@ describe("Google Calendar OAuth connection", () => {
     renderSettings("integrations", "google");
 
     expect(await screen.findByRole("heading", { name: "Google connection" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Google Calendar" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Gmail" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Google Calendar" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Gmail" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Notification / Approval bot" })).toBeNull();
     expect(screen.getByText("person@example.com")).toBeTruthy();
     expect(screen.getByText("mail@example.com")).toBeTruthy();
@@ -931,7 +964,12 @@ describe("Google Calendar OAuth connection", () => {
       (screen.getByLabelText("Replacement Google OAuth client secret") as HTMLInputElement).type,
     ).toBe("password");
     expect(screen.queryByLabelText("Gmail OAuth client ID")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Calendar" }));
+    expect(screen.getByRole("heading", { name: "Google Calendar" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Choose another Calendar account" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Gmail" }));
+    expect(screen.getByRole("heading", { name: "Gmail" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Google Calendar" })).toBeNull();
     expect(screen.getByRole("button", { name: "Choose another Gmail account" })).toBeTruthy();
 
     cleanup();
@@ -939,9 +977,17 @@ describe("Google Calendar OAuth connection", () => {
     await screen.findByRole("heading", { level: 2, name: "Telegram" });
     expect(screen.getByRole("heading", { level: 2, name: "Telegram" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Notification / Approval bot" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Act" }));
     expect(screen.getByRole("heading", { name: "Act Agent bot" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Observer" }));
     expect(screen.getByRole("heading", { name: "Observer Agent bot" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Assistant" }));
     expect(screen.getByRole("heading", { name: "Assistant Agent bot" })).toBeTruthy();
+    const assistantBotSection = screen.getByRole("heading", { name: "Assistant Agent bot" }).closest(".settings-subsection");
+    expect(assistantBotSection?.textContent).toContain("one direct private Telegram chat");
+    expect(assistantBotSection?.textContent).not.toMatch(/topics?|threaded mode/i);
+    expect(screen.getByText(/Each private Telegram topic is one independent Act session/)).toBeTruthy();
+    expect(screen.getByText(/Each private Telegram topic is one independent read-only Observer session/)).toBeTruthy();
     expect(screen.getByLabelText("Replacement Notification/Approval bot token")).toBeTruthy();
     expect(screen.getByLabelText("Act Agent bot token")).toBeTruthy();
     expect(screen.getByLabelText("Observer Agent bot token")).toBeTruthy();
@@ -949,11 +995,12 @@ describe("Google Calendar OAuth connection", () => {
 
     vi.spyOn(api, "listPermissionRequests").mockResolvedValue([]);
     vi.spyOn(api, "listInvocationApprovals").mockResolvedValue([]);
+    vi.spyOn(api, "listAssistantProposals").mockResolvedValue([]);
     cleanup();
     render(<ApprovalRequestsPage />);
     fireEvent.click(await screen.findByRole("tab", { name: "Invocation approvals" }));
-    expect(screen.getByRole("heading", { name: "Actions" })).toBeTruthy();
-    expect(screen.getByText("No invocation approvals yet.")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Invocation approvals" }).getAttribute("aria-selected")).toBe("true");
+    expect(await screen.findByRole("heading", { name: "No requests here" })).toBeTruthy();
   });
 });
 
@@ -1109,7 +1156,7 @@ describe("Codex model routing", () => {
     renderSettings("models");
     expect(await screen.findByRole("heading", { name: "Agent Routing" })).toBeTruthy();
     expect(screen.getByLabelText("Observer model")).toBeTruthy();
-    expect(screen.getByLabelText("Assessment model")).toBeTruthy();
+    expect(screen.getByLabelText("Assistant model")).toBeTruthy();
     expect(await screen.findByLabelText("Project planning and clarification model")).toBeTruthy();
     expect(screen.queryByText("Plausibility review")).toBeNull();
     fireEvent.change(await screen.findByLabelText("Single Codex model"), {

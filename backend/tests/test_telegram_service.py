@@ -505,7 +505,7 @@ def test_connected_bot_projects_existing_and_new_non_wecom_sessions_to_topics() 
         assert len(api.topics) == 2
 
 
-def test_observer_and_assistant_bots_keep_topic_sessions_independent() -> None:
+def test_observer_topics_and_assistant_direct_chat_stay_independent() -> None:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -515,7 +515,8 @@ def test_observer_and_assistant_bots_keep_topic_sessions_independent() -> None:
     with Session(engine) as db:
         store = FakeSecretStore()
         observer_api = FakeTelegramBotApi(bot_id=101, username="observer_bot")
-        assistant_api = FakeTelegramBotApi(bot_id=202, username="assistant_bot")
+        assistant_api = FakeTelegramBotApi(bot_id=202, username="assistant_bot",
+                                           has_topics_enabled=False, allows_users_to_create_topics=False)
         observer = TelegramService(
             db,
             secret_store=store,
@@ -577,12 +578,11 @@ def test_observer_and_assistant_bots_keep_topic_sessions_independent() -> None:
             select(TelegramTopicSession).where(TelegramTopicSession.connection_id == assistant_connection.id)
         )
         assert observer_mapping is not None
-        assert assistant_mapping is not None
-        assert observer_mapping.session_id != assistant_mapping.session_id
+        assert assistant_mapping is None
         assert db.get(ActSession, observer_mapping.session_id).agent_id == "observer"
-        assert db.get(ActSession, assistant_mapping.session_id).agent_id == "assistant"
+        assert db.scalar(select(ActSession).where(ActSession.agent_id == "assistant")) is not None
         assert observer_api.sent_messages[-1]["message_thread_id"] == 7
-        assert assistant_api.sent_messages[-1]["message_thread_id"] == 7
+        assert assistant_api.sent_messages[-1]["message_thread_id"] is None
 
         observer._handle_message(
             observer_connection.id,
@@ -596,10 +596,64 @@ def test_observer_and_assistant_bots_keep_topic_sessions_independent() -> None:
         )
 
         assert "no session switcher" in observer_api.sent_messages[-1]["text"]
-        assert "no session switcher" in assistant_api.sent_messages[-1]["text"]
+        assert "permanent Assistant conversation" in assistant_api.sent_messages[-1]["text"]
         assert observer_api.sent_messages[-1]["message_thread_id"] == 7
-        assert assistant_api.sent_messages[-1]["message_thread_id"] == 7
+        assert assistant_api.sent_messages[-1]["message_thread_id"] is None
+        assert assistant.connection_status().connected
+        assert assistant.refresh_connection_status().connected
+        assert assistant_api.topics == {}
+        assistant_connection.status = "invalid"
+        db.commit()
+        assert assistant.connection_status().connected
+        assert assistant_connection.status == "connected"
+        assistant_connection.status = "invalid"
+        db.commit()
+        assistant_api.bot["id"] = 999
+        assert not assistant.connection_status().connected
+        assert assistant_connection.status == "invalid"
+        assistant_api.bot["id"] = 202
+        assistant_api.webhook_url = "https://example.com/telegram-webhook"
+        assert not assistant.connection_status().connected
+        assert assistant_connection.status == "invalid"
         assert observer_connection.id != assistant_connection.id
+
+
+def test_assistant_refresh_and_messages_share_one_permanent_direct_chat(monkeypatch) -> None:
+    from app.models import AssistantState
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    monkeypatch.setattr(ActSessionService, "synchronize_telegram", lambda *_: None)
+    with Session(engine) as db:
+        api = FakeTelegramBotApi()
+        service = TelegramService(db, secret_store=FakeSecretStore(),
+                                  api_factory=lambda _token: api, role=TELEGRAM_ASSISTANT_ROLE)
+        pairing = service.start_pairing("123:telegram-token")
+        connection = db.query(TelegramBotConnection).one()
+        service._handle_pairing(connection.id, connection.bot_id,
+                                PairingMessage(update_id=1, code=pairing.pairing_code, chat_id=33, user_id=44))
+        message = {"chat_id": 33, "user_id": 44, "connection_id": connection.id}
+        session = service.resolve_session(message)
+        running = ActTurn(session_id=session.id, user_message="Work", status="running")
+        db.add(running)
+        db.commit()
+        service._handle_message(connection.id, connection.bot_id, {**message, "text": "/refresh"})
+        assert db.get(AssistantState, 1).refresh_pending
+        assert list(db.scalars(select(ActTurn.id))) == [running.id]
+        assert api.sent_messages[-1]["message_thread_id"] is None
+        assert "refresh before the next turn" in api.sent_messages[-1]["text"]
+        assert service.resolve_session({**message, "message_thread_id": 8}).id == session.id
+        assert len(list(db.scalars(select(ActSession)))) == 1
+        assert len(list(db.scalars(select(TelegramTopicSession)))) == 0
+        running.status = "succeeded"
+        db.commit()
+        service._handle_message(connection.id, connection.bot_id, {**message, "text": "Hello"})
+        queued = db.scalar(select(ActTurn).where(ActTurn.status == "queued"))
+        assert queued.session_id == session.id
+        assert queued.delivery_message_thread_id is None
+        assert queued.delivery_chat_id == "33"
+        assert [payload for name, payload in api.calls if name == "sendRichMessageDraft"][-1]["message_thread_id"] is None
+    engine.dispose()
 
 
 def test_telegram_topic_rename_and_missing_topic_delivery_reconcile_mapping() -> None:
@@ -679,6 +733,82 @@ def test_telegram_topic_rename_and_missing_topic_delivery_reconcile_mapping() ->
         assert db.query(TelegramDeletedTopic).count() == 1
 
 
+def test_assistant_legacy_topic_is_inert_and_pending_delivery_is_direct(monkeypatch) -> None:
+    from app.services.agent_turn_delivery import _deliver_telegram
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        api = FakeTelegramBotApi(has_topics_enabled=False, allows_users_to_create_topics=False)
+        service = TelegramService(db, secret_store=FakeSecretStore(), api_factory=lambda _token: api,
+                                  role=TELEGRAM_ASSISTANT_ROLE)
+        pairing = service.start_pairing("123:token")
+        connection = db.query(TelegramBotConnection).one()
+        service._handle_pairing(connection.id, connection.bot_id,
+                                PairingMessage(update_id=1, code=pairing.pairing_code, chat_id=33, user_id=44))
+        session = service.resolve_session({"chat_id": 33})
+        session.title = "Permanent Assistant"
+        db.add(TelegramTopicSession(connection_id=connection.id, telegram_chat_id="33",
+                                     message_thread_id=7, session_id=session.id, topic_name="Legacy topic"))
+        turn = ActTurn(session_id=session.id, user_message="Hello", status="succeeded", assistant_message="Done",
+                       delivery_provider="telegram", delivery_connection_id=connection.id, delivery_chat_id="33",
+                       delivery_message_thread_id=7, delivery_status="pending")
+        db.add(turn)
+        db.commit()
+        service._handle_message(connection.id, connection.bot_id, {
+            "chat_id": 33, "user_id": 44, "message_thread_id": 7,
+            "forum_topic_edited": {"name": "Must not rename"},
+        })
+        service.delete_topic_session(33, 7)
+        service.edit_topic_session(33, 7, "Must not rename")
+        db.refresh(session)
+        assert session.title == "Permanent Assistant"
+        assert session.status == "active"
+        assert synchronize_session_to_telegram(db, session, api_factory=lambda _token: api) is None
+        monkeypatch.setattr("app.services.agent_turn_delivery.TelegramService", lambda *_args, **_kwargs: service)
+        _deliver_telegram(db, turn, session, "Done")
+        assert turn.delivery_status == "delivered"
+        assert api.sent_messages[-1]["text"] == "Done"
+        assert api.sent_messages[-1]["message_thread_id"] is None
+        assert not any(name in {"createForumTopic", "deleteForumTopic", "editForumTopic"} for name, _ in api.calls)
+
+
+@pytest.mark.parametrize("replace", ["pair", "disconnect"])
+@pytest.mark.parametrize("provider", [None, "telegram"])
+def test_assistant_pairing_changes_retire_old_pending_deliveries(replace, provider) -> None:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        api = FakeTelegramBotApi()
+        service = TelegramService(db, secret_store=FakeSecretStore(), api_factory=lambda _token: api,
+                                  role=TELEGRAM_ASSISTANT_ROLE)
+        pairing = service.start_pairing("123:token")
+        connection = db.query(TelegramBotConnection).one()
+        service._handle_pairing(connection.id, connection.bot_id,
+                                PairingMessage(update_id=1, code=pairing.pairing_code, chat_id=33, user_id=44))
+        session = service.resolve_session({"chat_id": 33})
+        turn = ActTurn(session_id=session.id, user_message="Hello", status="queued", delivery_provider=provider,
+                       delivery_connection_id=connection.id, delivery_chat_id="33",
+                       delivery_status="pending" if provider else None)
+        db.add(turn)
+        proposal = AgentProposal(source_session_id=session.id, title="Approval", rationale="Confirm action",
+                                 instruction="Do it", actions="Action", fingerprint="b" * 64,
+                                 telegram_connection_id=connection.id, telegram_message_ids_json=[12],
+                                 nonce_hash="c" * 64)
+        db.add(proposal)
+        db.commit()
+        if replace == "pair":
+            service.start_pairing("456:replacement")
+        else:
+            service.remove()
+        db.refresh(turn)
+        assert turn.delivery_status == "failed"
+        db.refresh(proposal)
+        assert proposal.telegram_connection_id is None
+        assert proposal.telegram_message_ids_json == []
+        assert proposal.nonce_hash is None
+
+
 def test_telegram_bot_created_topic_claim_is_idempotent() -> None:
     engine = create_engine(
         "sqlite://",
@@ -693,7 +823,7 @@ def test_telegram_bot_created_topic_claim_is_idempotent() -> None:
             db,
             secret_store=store,
             api_factory=lambda _token: api,
-            role=TELEGRAM_ASSISTANT_ROLE,
+            role=TELEGRAM_ACT_ROLE,
         )
         pairing = service.start_pairing("123:telegram-token")
         connection = db.query(TelegramBotConnection).one()
@@ -702,7 +832,7 @@ def test_telegram_bot_created_topic_claim_is_idempotent() -> None:
             connection.bot_id,
             PairingMessage(update_id=1, code=pairing.pairing_code, chat_id=11, user_id=22),
         )
-        session = ActSession(agent_id="assistant", codex_thread_id="assistant-topic-thread")
+        session = ActSession(agent_id="act", codex_thread_id="act-topic-thread")
         db.add(session)
         db.commit()
 
@@ -812,6 +942,8 @@ def test_assistant_proposal_uses_assistant_bot_and_denial_is_idempotent() -> Non
         assert proposal.telegram_connection_id == connection.id
         assert proposal.telegram_message_ids_json == [1]
         assert proposal.nonce_hash is not None
+        assert api.sent_messages[0]["message_thread_id"] is None
+        assert api.topics == {}
         callback_data = api.sent_messages[0]["reply_markup"]["inline_keyboard"][0][1]["callback_data"]
         api.updates.append(
             {

@@ -16,7 +16,6 @@ from app.models import (
 from app.services.act_session_service import (
     ActSessionError,
     ActSessionService,
-    AssistantSessionCapacityError,
 )
 from app.services.agent_proposal_service import AgentProposalService
 
@@ -58,7 +57,7 @@ def isolate_proposal_side_effects(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.services.act_turn_dispatcher.act_turn_dispatcher.notify", lambda: None)
 
 
-def test_assistant_retains_five_most_recent_sessions_across_all_origins(db: Session) -> None:
+def test_assistant_reuses_one_permanent_session_across_all_origins(db: Session) -> None:
     service = ActSessionService(db, app_server=FakeAppServer(), agent_id="assistant")  # type: ignore[arg-type]
     origins = ["web", "telegram", "assessment", "web", "telegram", "assessment", "web"]
     created_ids = [service.create_session(origin=origin).id for origin in origins]
@@ -71,11 +70,12 @@ def test_assistant_retains_five_most_recent_sessions_across_all_origins(db: Sess
         )
     )
 
-    assert [session.id for session in retained] == created_ids[-5:]
-    assert [session.origin for session in retained] == origins[-5:]
+    assert len(set(created_ids)) == 1
+    assert [session.id for session in retained] == [created_ids[0]]
+    assert retained[0].origin == origins[0]
 
 
-def test_concurrent_assistant_creation_cannot_exceed_five(db: Session) -> None:
+def test_concurrent_assistant_creation_preserves_history(db: Session) -> None:
     service = ActSessionService(db, app_server=FakeAppServer(), agent_id="assistant")
     for _ in range(4):
         service.create_session()
@@ -89,20 +89,19 @@ def test_concurrent_assistant_creation_cannot_exceed_five(db: Session) -> None:
         created = list(pool.map(lambda _: create(), range(2)))
     db.expire_all()
     retained = list(db.scalars(select(ActSession.id).where(ActSession.agent_id == "assistant")))
-    assert len(retained) == 5
+    assert len(retained) == 1
     assert all(session_id in retained for session_id in created)
 
 
-def test_assistant_rejects_sixth_session_when_oldest_is_busy(db: Session) -> None:
+def test_assistant_can_create_session_while_oldest_is_busy(db: Session) -> None:
     service = ActSessionService(db, app_server=FakeAppServer(), agent_id="assistant")  # type: ignore[arg-type]
     sessions = [service.create_session() for _ in range(5)]
     db.add(ActTurn(session_id=sessions[0].id, user_message="Still working", status="running"))
     db.commit()
 
-    with pytest.raises(AssistantSessionCapacityError, match="oldest session is busy"):
-        service.create_session(origin="assessment")
+    service.create_session(origin="assistant")
 
-    assert db.scalar(select(func.count()).select_from(ActSession).where(ActSession.agent_id == "assistant")) == 5
+    assert db.scalar(select(func.count()).select_from(ActSession).where(ActSession.agent_id == "assistant")) == 1
     assert db.get(ActSession, sessions[0].id) is not None
 
 
@@ -119,7 +118,7 @@ def test_proposal_history_survives_source_session_retention(db: Session) -> None
     for _ in range(5):
         service.create_session(origin="web")
     db.expire_all()
-    assert db.get(ActSession, source.id) is None
+    assert db.get(ActSession, source.id) is not None
     assert db.get(AgentProposal, proposal.id).instruction == "Complete the report."
 
 

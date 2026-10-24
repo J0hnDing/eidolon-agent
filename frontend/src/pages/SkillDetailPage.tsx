@@ -2,10 +2,15 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import PermissionRequestModal from "../components/PermissionRequestModal";
+import { AppIcon } from "../components/AppIcon";
+import { Modal } from "../components/Modal";
+import { RunningStatus } from "../components/RunningStateDot";
 import {
   RunHistory,
   RunOutput,
   SkillFilesDisclosure,
+  SkillDetailView,
+  SkillDetailViews,
   UpdateChatMessage,
   UpdateSuggestionChat,
   ValidationResult,
@@ -25,6 +30,8 @@ import {
 import { runnerBadgeLabel, sandboxStatusLabel } from "../features/skill-detail/runnerStatus";
 import { formatDisplayName } from "../lib/displayName";
 import { usePolling } from "../lib/usePolling";
+import { formatSystemDateTime } from "../lib/dateTime";
+import "../features/skill-detail/skill-detail.css";
 import {
   AgentRun,
   ApprovalRequest,
@@ -76,6 +83,8 @@ export default function SkillDetailPage() {
   const [isRunning, setIsRunning] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<SkillDetailView>("overview");
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const runOutput = runs[0] ?? null;
 
   useEffect(() => {
@@ -164,6 +173,7 @@ export default function SkillDetailPage() {
 
   async function handleRun() {
     if (!skill) return;
+    setActiveView("overview");
     if (!runtimePermissionsApproved(runtimePermission)) {
       await handleReviewRuntimePermissions(true);
       return;
@@ -191,6 +201,7 @@ export default function SkillDetailPage() {
 
   async function handleValidate() {
     if (!skill) return;
+    setActiveView("overview");
     setIsWorking(true);
     setError(null);
     try {
@@ -272,6 +283,7 @@ export default function SkillDetailPage() {
 
   async function handleRepair() {
     if (!skill) return;
+    setActiveView("runs");
     setIsWorking(true);
     setError(null);
     try {
@@ -523,7 +535,7 @@ export default function SkillDetailPage() {
     return <p className="muted">Loading skill...</p>;
   }
 
-  if (error || !skill) {
+  if (!skill) {
     return (
       <section className="page stack">
         <Link className="skill-back-button" to="/skills" aria-label="Back to skills" title="Back to skills">
@@ -558,447 +570,93 @@ export default function SkillDetailPage() {
     selectedReasoningEffort && effortOptions.includes(selectedReasoningEffort),
   );
 
+  const activeVersion = versions.find((version) => version.id === skill.active_version_id)?.version ?? skill.active_version_id ?? "Not initialized";
+  const runtimeLabel = isWebApp ? "Application" : isService ? "Service" : "Function";
+
   return (
     <section className="page stack skill-detail-page">
+      <nav className="skill-breadcrumb" aria-label="Breadcrumb">
+        <Link to="/skills"><AppIcon name="back" size={15} />Skills</Link>
+        <AppIcon name="chevron" size={12} /><span>{displayName}</span>
+      </nav>
       <header className="skill-detail-header">
-        <div className="skill-detail-title">
-          <Link className="skill-back-button" to="/skills" aria-label="Back to skills" title="Back to skills">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="m14 6-6 6 6 6M8 12h10" />
-            </svg>
-          </Link>
-          <h1>{displayName}</h1>
+        <div className="skill-detail-identity">
+          <span className="skill-identity-icon"><AppIcon name={isWebApp ? "apps" : isService ? "clock" : "code"} size={26} /></span>
+          <div><h1>{displayName}</h1><p>{skill.description}</p></div>
         </div>
-        <button
-          type="button"
-          className="danger"
-          onClick={isProposed ? handleReject : handleDelete}
-          disabled={isWorking}
-        >
-          Delete Skill
-        </button>
+        <div className="button-row skill-title-actions">
+          {isProposed ? <>
+            <button type="button" className="secondary" onClick={handleValidate} disabled={isWorking}>Validate/Test</button>
+            <button type="button" onClick={handleInstall} disabled={isWorking}>Install</button>
+          </> : <>
+            {isWebApp && isInstalled && skill.enabled && runtimeApproved && <Link className="button-link" to={`/apps/${skill.id}`}>Open Application<AppIcon name="arrow" size={15} /></Link>}
+            {isFunction && isInstalled && skill.enabled && runtimeApproved && <button type="button" onClick={handleRun} disabled={!canRun || isRunning}><AppIcon name="play" size={15} />{isRunning ? "Running..." : "Run Function"}</button>}
+            {isService && isInstalled && <Link className="button-link" to="/automations">Manage automation<AppIcon name="arrow" size={15} /></Link>}
+            {isInstalled && skill.enabled && !runtimeApproved && <button type="button" onClick={() => handleReviewRuntimePermissions(true)} disabled={isWorking}>{isService ? "Review Before Activation" : "Review Before Run"}</button>}
+            {isInstalled && !skill.enabled && !isService && <button type="button" disabled>Run Disabled</button>}
+            <button type="button" className="secondary" onClick={handleToggleEnabled} disabled={isWorking}>{skill.enabled ? "Disable" : "Enable"}</button>
+          </>}
+          <button type="button" className="secondary skill-delete-action" onClick={() => setShowDeleteModal(true)} disabled={isWorking}>Delete Skill</button>
+        </div>
       </header>
 
-      <section className="detail-panel">
-        <p>{skill.description}</p>
-        <dl className="detail-grid">
-          <div>
-            <dt>Runtime</dt>
-            <dd>{skill.runtime}</dd>
-          </div>
-          <div>
-            <dt>Status</dt>
-            <dd>{skill.status}</dd>
-          </div>
-          <div>
-            <dt>Risk Level</dt>
-            <dd>{skill.risk_level}</dd>
-          </div>
-          <div>
-            <dt>Enabled</dt>
-            <dd>{skill.enabled ? "enabled" : "disabled"}</dd>
-          </div>
-          <div>
-            <dt>Manifest Path</dt>
-            <dd>{skill.manifest_path}</dd>
-          </div>
-          <div>
-            <dt>Instructions Path</dt>
-            <dd>{skill.instructions_path ?? "none"}</dd>
-          </div>
-          <div>
-            <dt>Installed Path</dt>
-            <dd>{skill.installed_path ?? "not installed"}</dd>
-          </div>
-          <div>
-            <dt>Active Version</dt>
-            <dd>{versions.find((version) => version.id === skill.active_version_id)?.version ?? skill.active_version_id ?? "none"}</dd>
-          </div>
-          <div>
-            <dt>Input Schema</dt>
-            <dd>{skill.input_schema_json ? "declared" : "none"}</dd>
-          </div>
-          <div>
-            <dt>Output Schema</dt>
-            <dd>{skill.output_schema_json ? "declared" : "none"}</dd>
-          </div>
-        </dl>
-        {isProposed ? (
-          <div className="button-row skill-primary-actions">
-            <button type="button" onClick={handleValidate} disabled={isWorking}>
-              Validate/Test
-            </button>
-            <button type="button" onClick={handleInstall} disabled={isWorking}>
-              Install
-            </button>
-            <button type="button" className="secondary" onClick={handleRepair} disabled={isWorking}>
-              Ask Agents to Repair
-            </button>
-          </div>
-        ) : (
-          <div className="button-row skill-primary-actions">
-            {isWebApp && isInstalled && skill.enabled && runtimeApproved && (
-              <Link className="button-link" to={`/apps/${skill.id}`}>Open Application</Link>
-            )}
-            {isInstalled && skill.enabled && !runtimeApproved && (
-              <button type="button" onClick={() => handleReviewRuntimePermissions(true)} disabled={isWorking}>
-                {isService ? "Review Before Activation" : "Review Before Run"}
-              </button>
-            )}
-            {isInstalled && !skill.enabled && !isService && (
-              <button type="button" disabled>
-                Run Disabled
-              </button>
-            )}
-            <button type="button" onClick={handleToggleEnabled} disabled={isWorking}>
-              {skill.enabled ? "Disable" : "Enable"}
-            </button>
-          </div>
-        )}
-      </section>
+      <dl className="skill-property-bar">
+        <div><dt>Status</dt><dd>{skill.is_running ? <RunningStatus /> : <span className={`badge status-${skill.status}`}>{skill.status}</span>}</dd></div>
+        <div><dt>Runtime</dt><dd>{runtimeLabel}</dd></div>
+        <div><dt>Availability</dt><dd>{skill.enabled ? "Enabled" : "Disabled"}</dd></div>
+        <div><dt>Risk</dt><dd><span className={`badge risk-${skill.risk_level}`}>{skill.risk_level}</span></dd></div>
+        <div><dt>Active version</dt><dd>{activeVersion}</dd></div>
+      </dl>
+      {error && <p className="error-text" role="alert">{error}</p>}
+      {isInstalled && !runtimeApproved && <div className="skill-attention"><AppIcon name="shield" size={18} /><div><strong>Runtime permissions need your review</strong><p>Review the generated manifest before this skill can run.</p></div><button className="secondary compact" type="button" onClick={() => setActiveView("permissions")}>View permissions</button></div>}
 
-      <section className="detail-panel stack">
-        <header className="page-header">
-          <div>
-            <h2>Codex Model</h2>
-            <p className="muted">
-              Choose the model and reasoning effort used by this skill&apos;s backend Codex calls. Leaving these at their defaults uses the existing global/request defaults.
-            </p>
-          </div>
-          {(selectedModel !== savedModel || selectedReasoningEffort !== savedReasoningEffort) && <span className="badge">unsaved</span>}
-        </header>
-        <form onSubmit={handleSaveModel}>
-          <label>
-            Model
-            <select
-              aria-label="Codex model"
-              value={selectedModel}
-              onChange={(event) => {
-                setSelectedModel(event.target.value);
-                setSelectedReasoningEffort("");
-              }}
-              disabled={isWorking || !skillModel}
-            >
-              <option value="">Use global default</option>
-              {savedModel && !savedModelIsListed && <option value={savedModel}>{savedModel} (unavailable)</option>}
-              {modelOptions.map((option) => (
-                <option key={option.id || option.model} value={option.model}>
-                  {option.display_name || option.model}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Reasoning effort
-            <select
-              aria-label="Codex reasoning effort"
-              value={selectedReasoningEffort}
-              onChange={(event) => setSelectedReasoningEffort(event.target.value)}
-              disabled={isWorking || !skillModel || !selectedModel}
-            >
-              <option value="">Use model/global default</option>
-              {selectedReasoningEffort && !selectedEffortIsListed && (
-                <option value={selectedReasoningEffort}>{selectedReasoningEffort} (unavailable)</option>
-              )}
-              {effortOptions.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
-            </select>
-          </label>
-          <div className="button-row">
-            <button
-              type="submit"
-              disabled={
-                isWorking
-                || !skillModel
-                || (selectedModel === savedModel && selectedReasoningEffort === savedReasoningEffort)
-              }
-            >
-              {isWorking ? "Saving..." : "Save model"}
-            </button>
-            {modelCatalog && !modelCatalog.available && (
-              <span className="muted">Model choices are unavailable until Codex is connected.</span>
-            )}
-          </div>
-        </form>
-      </section>
+      <SkillDetailViews activeView={activeView} onViewChange={setActiveView}>
+        {{
+          overview: <div className="stack">
+            {isProposed && <section className="detail-panel skill-overview-intro"><AppIcon name="skills" size={24} /><div><h2>Ready for review</h2><p className="muted">Validate the package and its tests, review runtime permissions, then install when you’re ready.</p><div className="button-row"><button type="button" className="secondary" onClick={handleRepair} disabled={isWorking}>Ask Agents to Repair</button><button type="button" className="secondary" onClick={() => setActiveView("files")}>Inspect package</button></div></div></section>}
+            {validation && <ValidationResult validation={validation} />}
+            {isInstalled && isFunction && <div className="skill-run-workbench">
+              <section className="detail-panel stack">
+                <header className="page-header"><div><h2>Run Input</h2><p className="muted">Provide the input for a single function run.</p></div><button type="button" className="secondary compact" onClick={() => setRunInput('{\n  "hello": "world"\n}')}>Reset Example</button></header>
+                <label className="skill-input-label">Input JSON<textarea value={runInput} onChange={(event) => setRunInput(event.target.value)} rows={12} aria-label="Run input JSON" spellCheck={false} /></label>
+                <p className="skill-field-hint">Use valid JSON with double-quoted property names.</p>
+                <div className="button-row"><button type="button" onClick={handleRun} disabled={!canRun || isRunning}><AppIcon name="play" size={15} />{isRunning ? "Running..." : "Run with this input"}</button></div>
+              </section>
+              <section className="detail-panel stack skill-output-panel"><header className="page-header"><div><h2>Output</h2><p className="muted">The latest result from this function.</p></div><button type="button" className="secondary compact" onClick={() => setActiveView("runs")}>Run history</button></header>{pendingApproval ? <div className="skill-output-empty"><AppIcon name="shield" size={26} /><p>Waiting for per-call approval #{pendingApproval.approval_id}.</p><Link className="button-link secondary" to="/activity/approvals">Open Invocation Approvals</Link></div> : <RunOutput run={runOutput} />}</section>
+            </div>}
+            {isService && <section className="detail-panel stack"><header className="page-header"><div><h2>Service Schedule</h2><p className="muted">This service runs on its required schedule. Manage timing, input, and activation in Automations.</p></div><Link className="button-link secondary" to="/automations">Manage automation<AppIcon name="arrow" size={15} /></Link></header>{serviceSchedule ? <dl className="detail-grid skill-schedule-properties"><div><dt>Name</dt><dd>{formatDisplayName(serviceSchedule.name)}</dd></div><div><dt>Status</dt><dd>{serviceSchedule.status}</dd></div><div><dt>Recurrence</dt><dd>{serviceSchedule.schedule_type === "daily" ? `Daily at ${serviceSchedule.schedule_json.time}` : serviceSchedule.schedule_type === "weekly" ? `Every ${serviceSchedule.schedule_json.day} at ${serviceSchedule.schedule_json.time}` : `Every ${serviceSchedule.schedule_json.every} ${serviceSchedule.schedule_json.unit}`}</dd></div><div><dt>Timezone</dt><dd>{serviceSchedule.timezone}</dd></div><div><dt>Next Run</dt><dd>{formatSystemDateTime(serviceSchedule.next_run_at, "Not scheduled")}</dd></div><div><dt>Last Result</dt><dd>{serviceSchedule.last_run_status ?? "Never run"}</dd></div></dl> : <p className="error-text">This service is missing its required schedule.</p>}</section>}
+            {isWebApp && <section className="detail-panel skill-overview-intro"><span className="skill-launch-icon"><AppIcon name="apps" size={30} /></span><div><h2>Your application workspace</h2><p className="muted">Open this skill in Applications to use its interface. Eidolon keeps its controls and runtime permissions outside the application.</p><div className="button-row">{isInstalled && skill.enabled && runtimeApproved && <Link className="button-link" to={`/apps/${skill.id}`}>Open Application<AppIcon name="arrow" size={15} /></Link>}<button className="secondary" type="button" onClick={() => setActiveView("permissions")}>Review access</button></div></div></section>}
+            {!isInstalled && !isProposed && !isWebApp && !isService && <section className="detail-panel skill-overview-intro"><AppIcon name="skills" size={28} /><div><h2>{skill.status === "building" ? "Your skill is being built" : "Inspect this skill"}</h2><p className="muted">Follow build and repair progress in Runs, or inspect its package in Files.</p><div className="button-row"><button type="button" className="secondary" onClick={() => setActiveView("runs")}>View runs</button><button type="button" className="secondary" onClick={() => setActiveView("files")}>Inspect files</button></div></div></section>}
+          </div>,
+          versions: <section className="detail-panel stack">
+            <header className="page-header"><div><h2>Versions</h2><p className="muted">Review an update before activating it. The current version stays available while a new one is built.</p></div><span className="skill-section-meta">{versions.length} of 3 versions</span></header>
+            {versions.length >= 3 && <p className="error-text">Maximum 3 versions reached. Discard a draft or proposed update before creating another.</p>}
+            <VersionList versions={versions} activeVersionId={skill.active_version_id} isWorking={isWorking} onCompare={handleCompareVersion} onActivate={handleActivateVersion} onDiscard={handleDiscardVersion} />
+            {versionComparison && <VersionComparisonPanel comparison={versionComparison} onClose={() => setVersionComparison(null)} />}
+            {isInstalled && <form className="skill-improvement-form" onSubmit={handleSuggestUpdate}><div><h3>Suggest an improvement</h3><p className="muted">Describe a focused change. Agents create a separate draft for your review.</p></div><label>What should change?<textarea value={updateSuggestion} onChange={(event) => setUpdateSuggestion(event.target.value)} placeholder="Describe a specific improvement to this skill" rows={4} required /></label><div className="button-row"><button type="submit" disabled={isWorking || versions.length >= 3}>Start Update Workflow</button><button type="button" className="secondary" onClick={handleRepair} disabled={isWorking}>Ask Agents to Repair</button></div></form>}
+            <UpdateSuggestionChat messages={updateMessages} isWorking={isWorking} latestResponse={updateResponse} onApprove={handleApproveUpdatePermission} onDeny={handleDenyUpdatePermission} />
+          </section>,
+          permissions: <div className="stack">
+            <section className="detail-panel stack"><header className="page-header"><div><h2>Runtime Permissions</h2><p className="muted">{runtimePermission ? runtimePermission.user_explanation || runtimePermission.reason : "Runtime permissions have not been analyzed yet."}</p></div><span className={`badge status-${runtimeStatus}`}>{runtimeStatus.replace(/_/g, " ")}</span></header>
+              {isNonEmptyObject(runtimePermission?.reason_json?.permission_expansion) && <p className="error-text">Permission expansion detected. Review the generated manifest before approving.</p>}
+              <p className="muted">Runtime approval uses the generated manifest. Approval to build or install does not authorize automatic execution.</p>
+              {!runtimeApproved && <div className="button-row"><button type="button" onClick={() => handleReviewRuntimePermissions(true)} disabled={isWorking}>Review Runtime Permissions</button></div>}
+            </section>
+            <section className="detail-panel stack"><header className="page-header"><div><h2>Runner / Sandbox</h2><p className="muted">{runnerStatus?.detail ?? "Runner status is not available."}</p></div><span className={`badge ${runnerStatus?.available ? "run-succeeded" : "run-blocked"}`}>{runnerBadgeLabel(runnerStatus)}</span></header><dl className="detail-grid"><div><dt>Configured Mode</dt><dd>{runnerStatus?.mode ?? "unknown"}</dd></div><div><dt>Selected Runner</dt><dd>{runnerStatus?.selected_mode ?? "unknown"}</dd></div><div><dt>Docker Daemon</dt><dd>{runnerStatus?.docker_daemon_available ? "available" : "unavailable"}</dd></div><div><dt>Sandbox Status</dt><dd>{sandboxStatusLabel(runnerStatus)}</dd></div></dl>
+              <details className="skill-technical-disclosure"><summary>Image and build details</summary><dl className="detail-grid"><div><dt>Image</dt><dd>{runnerStatus?.image ?? "not applicable"}</dd></div><div><dt>Image Status</dt><dd>{runnerStatus?.image_status ?? "unknown"}</dd></div><div><dt>Image Ready</dt><dd>{runnerStatus?.image_ready ? "yes" : "no"}</dd></div><div><dt>Last Build Attempt</dt><dd>{runnerStatus?.last_build_attempt ?? "none recorded"}</dd></div></dl>{runnerStatus?.image_detail && <p className="muted">{runnerStatus.image_detail}</p>}{runnerStatus?.image_error && <div className="run-detail"><h3>Last Image Build Error</h3><pre>{runnerStatus.image_error}</pre></div>}{runnerStatus?.image_build_log && <details className="run-detail"><summary>Image Build Log</summary><pre>{runnerStatus.image_build_log}</pre></details>}</details>
+            </section>
+          </div>,
+          runs: <div className="stack">
+            {isInstalled && (isService || isFunction) && <section className="detail-panel stack"><header className="page-header"><div><h2>Run History</h2><p className="muted">Inspect individual executions, output, and any reported failures.</p></div><span className="skill-section-meta">{runs.length} runs</span></header><RunHistory runs={runs} /></section>}
+            <section className="detail-panel stack"><header className="page-header"><div><h2>Agent Runs</h2><p className="muted">Build, update, and repair work linked to this skill.</p>{agentRuns.some((run) => run.status === "succeeded") && <p className="muted">Completed build usage: {new Intl.NumberFormat().format(agentRuns.filter((run) => run.status === "succeeded").reduce((total, run) => total + run.total_tokens, 0))} tokens</p>}</div><Link className="button-link secondary compact" to="/activity/runs">All executions<AppIcon name="arrow" size={14} /></Link></header>{agentRuns.length > 0 ? <div className="run-list">{agentRuns.map((agentRun) => <article key={agentRun.id} className="run-row skill-agent-run"><div><Link className="skill-run-link" to={`/activity/runs/${agentRun.id}`}>Agent Run #{agentRun.id}<AppIcon name="arrow" size={14} /></Link><span>{formatDisplayName(agentRun.run_type)} · {agentRun.current_step ?? "No current step"}</span><span>{new Intl.NumberFormat().format(agentRun.total_tokens)} Codex tokens</span>{agentRun.summary && <span>{agentRun.summary}</span>}</div><span className={`badge status-${agentRun.status}`}>{agentRun.status}</span></article>)}</div> : <p className="muted skill-simple-empty">No agent runs are linked to this skill yet.</p>}</section>
+          </div>,
+          files: <div className="stack"><SkillFilesDisclosure files={files} /><section className="detail-panel stack"><header className="page-header"><div><h2>Package details</h2><p className="muted">The current skill package and its declared input and output.</p></div></header><dl className="detail-grid"><div><dt>Manifest Path</dt><dd><code>{skill.manifest_path}</code></dd></div><div><dt>Instructions Path</dt><dd><code>{skill.instructions_path ?? "none"}</code></dd></div><div><dt>Installed Path</dt><dd><code>{skill.installed_path ?? "not installed"}</code></dd></div></dl><div className="skill-schema-grid"><details className="skill-technical-disclosure"><summary>Input Schema · {skill.input_schema_json ? "declared" : "none"}</summary><pre>{JSON.stringify(skill.input_schema_json, null, 2)}</pre></details><details className="skill-technical-disclosure"><summary>Output Schema · {skill.output_schema_json ? "declared" : "none"}</summary><pre>{JSON.stringify(skill.output_schema_json, null, 2)}</pre></details></div></section></div>,
+          settings: <section className="detail-panel stack skill-model-settings"><header className="page-header"><div><h2>Codex Model</h2><p className="muted">Choose the model and reasoning effort for this skill’s backend Codex calls. Leave either at its default to follow the existing global or request settings.</p></div>{(selectedModel !== savedModel || selectedReasoningEffort !== savedReasoningEffort) && <span className="badge">unsaved</span>}</header><form className="stack" onSubmit={handleSaveModel}><div className="form-grid"><label>Model<select aria-label="Codex model" value={selectedModel} onChange={(event) => { setSelectedModel(event.target.value); setSelectedReasoningEffort(""); }} disabled={isWorking || !skillModel}><option value="">Use global default</option>{savedModel && !savedModelIsListed && <option value={savedModel}>{savedModel} (unavailable)</option>}{modelOptions.map((option) => <option key={option.id || option.model} value={option.model}>{option.display_name || option.model}</option>)}</select></label><label>Reasoning effort<select aria-label="Codex reasoning effort" value={selectedReasoningEffort} onChange={(event) => setSelectedReasoningEffort(event.target.value)} disabled={isWorking || !skillModel || !selectedModel}><option value="">Use model/global default</option>{selectedReasoningEffort && !selectedEffortIsListed && <option value={selectedReasoningEffort}>{selectedReasoningEffort} (unavailable)</option>}{effortOptions.map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select></label></div><div className="button-row"><button type="submit" disabled={isWorking || !skillModel || (selectedModel === savedModel && selectedReasoningEffort === savedReasoningEffort)}>{isWorking ? "Saving..." : "Save model"}</button>{modelCatalog && !modelCatalog.available && <span className="muted">Model choices are unavailable until Codex is connected.</span>}</div></form></section>,
+        }}
+      </SkillDetailViews>
 
-      <section className="detail-panel">
-        <header className="page-header">
-          <div>
-            <h2>Versions</h2>
-            <p className="muted">
-              Updates are built in copied version folders. Activating a version switches the active pointer only after validation and permission checks.
-            </p>
-          </div>
-          <span className="badge">{versions.length}/3 versions</span>
-        </header>
-        {versions.length >= 3 && (
-          <p className="error-text">Maximum 3 versions reached. Discard a draft or proposed update before creating another.</p>
-        )}
-        <VersionList
-          versions={versions}
-          activeVersionId={skill.active_version_id}
-          isWorking={isWorking}
-          onCompare={handleCompareVersion}
-          onActivate={handleActivateVersion}
-          onDiscard={handleDiscardVersion}
-        />
-        {versionComparison && <VersionComparisonPanel comparison={versionComparison} />}
-        {skill.status === "installed" && (
-          <form className="skill-improvement-form" onSubmit={handleSuggestUpdate}>
-            <div>
-              <h3>Suggest an Improvement</h3>
-              <p className="muted">Describe a focused change, or ask the agents to repair the current skill.</p>
-            </div>
-            <textarea
-              value={updateSuggestion}
-              onChange={(event) => setUpdateSuggestion(event.target.value)}
-              placeholder="Describe a specific improvement to this skill"
-              rows={4}
-              required
-            />
-            <div className="button-row">
-              <button type="submit" disabled={isWorking || versions.length >= 3}>
-                Start Update Workflow
-              </button>
-              <button type="button" className="secondary" onClick={handleRepair} disabled={isWorking}>
-                Ask Agents to Repair
-              </button>
-            </div>
-          </form>
-        )}
-        <UpdateSuggestionChat
-          messages={updateMessages}
-          isWorking={isWorking}
-          latestResponse={updateResponse}
-          onApprove={handleApproveUpdatePermission}
-          onDeny={handleDenyUpdatePermission}
-        />
-      </section>
-
-      <section className="detail-panel">
-        <header className="page-header">
-          <div>
-            <h2>Runtime Permissions</h2>
-            <p className="muted">
-              {runtimePermission
-                ? runtimePermission.user_explanation || runtimePermission.reason
-                : "Runtime permissions have not been analyzed yet."}
-            </p>
-          </div>
-          <span className={`badge status-${runtimeStatus}`}>
-            {runtimeStatus.replace("_", " ")}
-          </span>
-        </header>
-        {isNonEmptyObject(runtimePermission?.reason_json?.permission_expansion) && (
-          <p className="error-text">Permission expansion detected. Review the generated manifest before approving.</p>
-        )}
-        {!runtimeApproved && (
-          <div className="button-row">
-            <button type="button" className="secondary" onClick={() => handleReviewRuntimePermissions(true)} disabled={isWorking}>
-              Review Runtime Permissions
-            </button>
-          </div>
-        )}
-      </section>
-
-      <section className="detail-panel">
-        <header className="page-header">
-          <div>
-            <h2>Runner / Sandbox</h2>
-            <p className="muted">
-              {runnerStatus?.detail ?? "Runner status is not available."}
-            </p>
-          </div>
-          <span className={`badge ${runnerStatus?.available ? "run-succeeded" : "run-blocked"}`}>
-            {runnerBadgeLabel(runnerStatus)}
-          </span>
-        </header>
-        <dl className="detail-grid">
-          <div>
-            <dt>Configured Mode</dt>
-            <dd>{runnerStatus?.mode ?? "unknown"}</dd>
-          </div>
-          <div>
-            <dt>Selected Runner</dt>
-            <dd>{runnerStatus?.selected_mode ?? "unknown"}</dd>
-          </div>
-          <div>
-            <dt>Docker Daemon</dt>
-            <dd>{runnerStatus?.docker_daemon_available ? "available" : "unavailable"}</dd>
-          </div>
-          <div>
-            <dt>Image</dt>
-            <dd>{runnerStatus?.image ?? "not applicable"}</dd>
-          </div>
-          <div>
-            <dt>Image Status</dt>
-            <dd>{runnerStatus?.image_status ?? "unknown"}</dd>
-          </div>
-          <div>
-            <dt>Image Ready</dt>
-            <dd>{runnerStatus?.image_ready ? "yes" : "no"}</dd>
-          </div>
-          <div>
-            <dt>Last Build Attempt</dt>
-            <dd>{runnerStatus?.last_build_attempt ?? "none recorded"}</dd>
-          </div>
-          <div>
-            <dt>Sandbox Status</dt>
-            <dd>{sandboxStatusLabel(runnerStatus)}</dd>
-          </div>
-        </dl>
-        {runnerStatus?.image_detail && <p className="muted">{runnerStatus.image_detail}</p>}
-        {runnerStatus?.image_error && (
-          <div className="run-detail">
-            <h3>Last Image Build Error</h3>
-            <pre>{runnerStatus.image_error}</pre>
-          </div>
-        )}
-        {runnerStatus?.image_build_log && (
-          <details className="run-detail">
-            <summary>Image Build Log</summary>
-            <pre>{runnerStatus.image_build_log}</pre>
-          </details>
-        )}
-      </section>
-
-      {error && <p className="error-text">{error}</p>}
-
-      {runtimePermission && showRuntimeModal && (
-        <PermissionRequestModal
-          request={runtimePermission}
-          title={`${displayName} runtime permissions`}
-          subject="Approve these manifest permissions before installing or running this skill."
-          isWorking={isWorking}
-          approveLabel="Approve Runtime Permissions"
-          denyLabel="Deny"
-          onApprove={handleApproveRuntimePermissions}
-          onDeny={handleDenyRuntimePermissions}
-        />
-      )}
-
-      {validation && <ValidationResult validation={validation} />}
-
-      <section className="detail-panel">
-        <header className="page-header">
-          <div>
-            <h2>Agent Runs</h2>
-            <p className="muted">Build and repair workflows are tracked as bounded, observable agent runs.</p>
-            {agentRuns.some((run) => run.status === "succeeded") && (
-              <p className="muted">
-                Completed build usage: {new Intl.NumberFormat().format(
-                  agentRuns.filter((run) => run.status === "succeeded").reduce((total, run) => total + run.total_tokens, 0),
-                )} tokens
-              </p>
-            )}
-          </div>
-          <Link className="button-link secondary compact" to="/agent-runs">All Agent Runs</Link>
-        </header>
-        {agentRuns.length > 0 ? (
-          <div className="run-list">
-            {agentRuns.map((agentRun) => (
-              <article key={agentRun.id} className="run-row">
-                <div>
-                  <strong>
-                    <Link className="button-link secondary compact" to={`/agent-runs/${agentRun.id}`}>
-                      Agent Run #{agentRun.id}
-                    </Link>
-                  </strong>
-                  <span>{agentRun.run_type} / {agentRun.current_step ?? "none"}</span>
-                  <span>{new Intl.NumberFormat().format(agentRun.total_tokens)} Codex tokens</span>
-                  {agentRun.summary && <span>{agentRun.summary}</span>}
-                </div>
-                <span className={`badge status-${agentRun.status}`}>{agentRun.status}</span>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <p className="muted">No agent runs are linked to this skill yet.</p>
-        )}
-      </section>
-
-      {isService && <section className="detail-panel">
-        <header className="page-header">
-          <div>
-            <h2>Service Schedule</h2>
-            <p className="muted">This service runs only through its required schedule. Manage timing, input, activation, and Run Now from Schedules.</p>
-          </div>
-          <Link className="button-link secondary compact" to="/schedules">Manage Schedule</Link>
-        </header>
-        {serviceSchedule ? (
-          <dl className="detail-grid">
-            <div><dt>Name</dt><dd>{formatDisplayName(serviceSchedule.name)}</dd></div>
-            <div><dt>Status</dt><dd>{serviceSchedule.status}</dd></div>
-            <div><dt>Type</dt><dd>{serviceSchedule.schedule_type}</dd></div>
-            <div><dt>Timezone</dt><dd>{serviceSchedule.timezone}</dd></div>
-            <div><dt>Next Run</dt><dd>{serviceSchedule.next_run_at ?? "not scheduled"}</dd></div>
-            <div><dt>Last Result</dt><dd>{serviceSchedule.last_run_status ?? "never run"}</dd></div>
-          </dl>
-        ) : (
-          <p className="error-text">This service is missing its required schedule.</p>
-        )}
-      </section>}
-
-      {isInstalled && isService && (
-        <section className="detail-panel">
-          <h2>Run History</h2>
-          <RunHistory runs={runs} />
-        </section>
-      )}
-
-      <SkillFilesDisclosure files={files} />
-
-      {isInstalled && isFunction && (
-        <section className="detail-panel">
-          <header className="page-header">
-            <div>
-              <h2>Run Input</h2>
-              <p className="muted">Use valid JSON with double-quoted property names.</p>
-            </div>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => setRunInput('{\n  "hello": "world"\n}')}
-            >
-              Reset Example
-            </button>
-          </header>
-          <textarea
-            value={runInput}
-            onChange={(event) => setRunInput(event.target.value)}
-            rows={8}
-            aria-label="Run input JSON"
-          />
-          <div className="button-row">
-            <button type="button" onClick={handleRun} disabled={!canRun || isRunning}>
-              {isRunning ? "Running..." : "Run Function"}
-            </button>
-          </div>
-        </section>
-      )}
-
-      {isInstalled && isFunction && (
-        <>
-          <section className="detail-panel">
-            <h2>Output</h2>
-            {pendingApproval ? (
-              <div className="stack compact-action-stack">
-                <p>Waiting for per-call approval #{pendingApproval.approval_id}.</p>
-                <div className="button-row">
-                  <Link className="button-link secondary compact" to="/approval-requests">
-                    Open Invocation Approvals
-                  </Link>
-                </div>
-              </div>
-            ) : <RunOutput run={runOutput} />}
-          </section>
-
-          <section className="detail-panel">
-            <h2>Run History</h2>
-            <RunHistory runs={runs} />
-          </section>
-        </>
-      )}
+      {runtimePermission && showRuntimeModal && <PermissionRequestModal request={runtimePermission} title={`${displayName} runtime permissions`} subject="Approve these manifest permissions before installing or running this skill." isWorking={isWorking} approveLabel="Approve Runtime Permissions" denyLabel="Deny" onApprove={handleApproveRuntimePermissions} onDeny={handleDenyRuntimePermissions} />}
+      {showDeleteModal && <Modal title="Delete skill" onClose={() => { if (!isWorking) setShowDeleteModal(false); }} className="skill-delete-dialog"><p>Delete <strong>{displayName}</strong> from your skills? This action cannot be undone.</p><div className="button-row"><button className="secondary" type="button" onClick={() => setShowDeleteModal(false)} disabled={isWorking}>Cancel</button><button className="danger" type="button" onClick={isProposed ? handleReject : handleDelete} disabled={isWorking}>{isWorking ? "Deleting..." : "Delete Skill"}</button></div></Modal>}
     </section>
   );
 }

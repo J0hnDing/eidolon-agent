@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 
 import {
@@ -40,42 +40,87 @@ import {
   readAppearanceTheme,
   saveAppearanceTheme,
 } from "../lib/theme";
+import "./settings.css";
 
 export type SettingsSection = "appearance" | "usage" | "project" | "models" | "integrations" | "permissions";
 
-const settingsSections: Array<{ section: SettingsSection; label: string; to: string }> = [
-  { section: "appearance", label: "Appearance", to: "/settings/appearance" },
-  { section: "usage", label: "Usage & CLI", to: "/settings/usage" },
-  { section: "project", label: "Project builds", to: "/settings/project" },
-  { section: "models", label: "Model routing", to: "/settings/models" },
-  { section: "integrations", label: "Integrations", to: "/settings/integrations" },
-  { section: "permissions", label: "Permissions", to: "/settings/permissions" },
+const settingsGroups = [
+  { title: "General", links: [
+    { label: "Appearance", to: "/settings/appearance", icon: "appearance" },
+    { label: "Usage & CLI", to: "/settings/usage", icon: "usage" },
+  ] },
+  { title: "Intelligence", links: [
+    { label: "Model routing", to: "/settings/models", icon: "models" },
+    { label: "Project builds", to: "/settings/project", icon: "project" },
+  ] },
+  { title: "Connections & tools", links: [
+    { label: "Integrations", to: "/settings/integrations", icon: "integrations" },
+    { label: "Functions", to: "/settings/functions", icon: "functions" },
+    { label: "Permissions", to: "/settings/permissions", icon: "permissions" },
+  ] },
 ];
 
-const settingsPageCopy: Record<SettingsSection, { title: string; description: string }> = {
+function SettingsIcon({ name }: { name: string }) {
+  const paths: Record<string, ReactNode> = {
+    appearance: <><circle cx="12" cy="12" r="8" /><path d="M12 4v16a8 8 0 0 0 0-16Z" fill="currentColor" stroke="none" /></>,
+    usage: <><path d="M4 19V5m0 14h16M8 15v-4m5 4V7m5 8v-6" /></>,
+    models: <><rect x="7" y="7" width="10" height="10" rx="2" /><path d="M9 3v4m6-4v4M9 17v4m6-4v4M3 9h4m-4 6h4m10-6h4m-4 6h4" /></>,
+    project: <><rect x="3" y="5" width="18" height="15" rx="2" /><path d="M8 5V3h8v2M3 11h18m-11 0v3h4v-3" /></>,
+    integrations: <><path d="m8 3 4 4m2-4 4 4M5 8l7-3 7 7-3 7-7-7-4-4Zm9 9-4 4m-4-8-4 4" /></>,
+    functions: <><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-14-2 18" /></>,
+    permissions: <><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z" /><path d="m8 12 3 3 5-6" /></>,
+  };
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
+}
+
+export function SettingsNavigation() {
+  return (
+    <nav className="settings-nav" aria-label="Settings sections">
+      {settingsGroups.map((group) => (
+        <div className="settings-nav-group" key={group.title}>
+          <span className="settings-nav-group-title">{group.title}</span>
+          {group.links.map((item) => (
+            <NavLink key={item.to} to={item.to} className={({ isActive }) => isActive ? "settings-nav-link active" : "settings-nav-link"}>
+              <SettingsIcon name={item.icon} />
+              {item.label}
+            </NavLink>
+          ))}
+        </div>
+      ))}
+    </nav>
+  );
+}
+
+export function SettingsLayout({ children, wide = false }: { children: ReactNode; wide?: boolean }) {
+  return (
+    <section className={`page settings-workspace${wide ? " settings-workspace-wide" : ""}`}>
+      <aside className="settings-sidebar">
+        <div className="settings-sidebar-heading">Settings</div>
+        <SettingsNavigation />
+      </aside>
+      <div className="settings-content stack">{children}</div>
+    </section>
+  );
+}
+
+const settingsPageCopy: Record<SettingsSection, { title: string }> = {
   appearance: {
     title: "Appearance",
-    description: "Choose how Eidolon looks on this device.",
   },
   usage: {
     title: "Usage & CLI",
-    description: "Review the local Codex CLI and current account allowance windows.",
   },
   project: {
     title: "Project builds",
-    description: "Choose how new Project builds select their workflow.",
   },
   models: {
     title: "Model routing",
-    description: "Set the model and reasoning effort used by each bounded Codex action.",
   },
   integrations: {
     title: "Integrations",
-    description: "Manage trusted connections and local companion services.",
   },
   permissions: {
     title: "Permissions",
-    description: "Inspect the backend-owned policy applied to generated skills.",
   },
 };
 
@@ -96,10 +141,26 @@ function normalizeRoutingSettings(settings: CodexRoutingSettings): CodexRoutingS
   };
 }
 
+function SettingsViews({ label, options, value, onChange }: { label: string; options: Array<{ id: string; label: string }>; value: string; onChange: (value: string) => void }) {
+  return (
+    <nav className="settings-view-switcher" aria-label={label}>
+      {options.map((option) => (
+        <button key={option.id} type="button" className="secondary" aria-pressed={value === option.id} onClick={() => onChange(option.id)}>
+          {option.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
 export default function UsageSettingsPage({ section = "usage", integration }: { section?: SettingsSection; integration?: IntegrationId }) {
   const selectedIntegration = section === "integrations" ? integrations.find((item) => item.id === integration) : undefined;
   const integrationOverview = section === "integrations" && !integration;
   const connectionStatuses = useIntegrationStatuses(integrationOverview);
+  const [integrationView, setIntegrationView] = useState(integration === "macro-data" ? "fred" : integration === "telegram" ? "notification" : "connection");
+  const [routingView, setRoutingView] = useState("agents");
+  const [courseSearch, setCourseSearch] = useState("");
+  const [courseFilter, setCourseFilter] = useState("all");
   const [appearanceTheme, setAppearanceTheme] = useState<AppearanceTheme>(() => readAppearanceTheme());
   const [usage, setUsage] = useState<CodexAccountUsage | null>(null);
   const [cliStatus, setCliStatus] = useState<CodexCliStatus | null>(null);
@@ -1232,34 +1293,14 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
     || (googleDrive && googleDrive.status !== "disconnected"),
   );
   const microsoftServiceGrantPresent = Boolean(outlook && outlook.status !== "disconnected");
+  const visibleQuercusCourses = quercusCourses.filter((course) => {
+    const matchesSearch = `${course.name} ${course.course_code ?? ""} ${course.term_name ?? ""}`.toLowerCase().includes(courseSearch.trim().toLowerCase());
+    const selected = selectedQuercusCourseIds.includes(course.course_id);
+    return matchesSearch && (courseFilter === "all" || (courseFilter === "selected" ? selected : !selected));
+  });
 
   return (
-    <section className="page stack">
-      <header className="page-header">
-        <div>
-          <h1 className={selectedIntegration ? "integration-detail-title" : undefined}>
-            {selectedIntegration && <IntegrationIcon id={selectedIntegration.id} />}
-            {selectedIntegration?.title ?? settingsPageCopy[section].title}
-          </h1>
-          <p className="muted">{selectedIntegration?.description ?? settingsPageCopy[section].description}</p>
-        </div>
-        {section !== "appearance" && (
-          <button type="button" className="secondary" onClick={() => integrationOverview ? void connectionStatuses.refresh() : void loadSettings(true)} disabled={integrationOverview ? connectionStatuses.refreshing : loading}>
-            Refresh
-          </button>
-        )}
-      </header>
-      <nav className="settings-nav" aria-label="Settings sections">
-        {settingsSections.map((item) => (
-          <NavLink
-            key={item.section}
-            to={item.to}
-            className={({ isActive }) => (isActive ? "settings-nav-link active" : "settings-nav-link")}
-          >
-            {item.label}
-          </NavLink>
-        ))}
-      </nav>
+    <SettingsLayout wide={integrationOverview}>
       {selectedIntegration && (
         <nav className="integration-breadcrumb" aria-label="Integration navigation">
           <Link to="/settings/integrations"><span aria-hidden="true">←</span> All integrations</Link>
@@ -1267,6 +1308,19 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
           <span aria-current="page">{selectedIntegration.title}</span>
         </nav>
       )}
+      <header className="page-header">
+        <div>
+          <h1 className={selectedIntegration ? "integration-detail-title" : undefined}>
+            {selectedIntegration && <IntegrationIcon id={selectedIntegration.id} />}
+            {selectedIntegration?.title ?? settingsPageCopy[section].title}
+          </h1>
+        </div>
+        {section !== "appearance" && (
+          <button type="button" className="secondary" onClick={() => integrationOverview ? void connectionStatuses.refresh() : void loadSettings(true)} disabled={integrationOverview ? connectionStatuses.refreshing : loading}>
+            Refresh
+          </button>
+        )}
+      </header>
       {integrationOverview && <IntegrationsDirectory statuses={connectionStatuses.statuses} />}
       {error && <p className="error-text">{error}</p>}
       {saved && <p className="success-text">{saved}</p>}
@@ -1275,7 +1329,7 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
         <section className="appearance-settings" aria-labelledby="appearance-theme-heading">
           <div className="section-heading">
             <div>
-              <h2 id="appearance-theme-heading">Color appearance</h2>
+              <h2 id="appearance-theme-heading">Theme</h2>
             </div>
             <p className="muted">Your choice is stored locally and applied immediately.</p>
           </div>
@@ -1283,14 +1337,14 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
             <AppearanceOption
               theme="dark"
               title="Dark"
-              description="Graphite surfaces with restrained blue interaction states."
+              description="Charcoal surfaces and a quiet lavender accent."
               selected={appearanceTheme === "dark"}
               onSelect={chooseAppearance}
             />
             <AppearanceOption
               theme="light"
               title="Light"
-              description="Warm neutral surfaces with the same quiet hierarchy."
+              description="Clean neutral surfaces, soft borders, and clear contrast."
               selected={appearanceTheme === "light"}
               onSelect={chooseAppearance}
             />
@@ -1305,23 +1359,26 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
               Read-only current policy loaded from <code>{permissionPolicy.source}</code>. Agent instructions do not duplicate these classifications.
             </p>
           </div>
-          <div className="section-grid">
-            <div>
+          <div className="section-grid settings-policy-grid">
+            <div className="settings-policy-group">
               <h3>Default allowed</h3>
+              <p className="muted">Capabilities the backend permits without an additional approval.</p>
               <pre>{JSON.stringify(permissionPolicy.default_allowed, null, 2)}</pre>
             </div>
-            <div>
+            <div className="settings-policy-group">
               <h3>Requires approval</h3>
+              <p className="muted">Capabilities that must pass the runtime approval boundary.</p>
               <pre>{JSON.stringify(permissionPolicy.requires_approval, null, 2)}</pre>
             </div>
           </div>
-          <div>
+          <div className="settings-policy-group">
             <h3>Blocked</h3>
+            <p className="muted">These capabilities are unavailable to generated skills.</p>
             <ul>
               {permissionPolicy.blocked.map((capability) => <li key={capability}>{capability}</li>)}
             </ul>
           </div>
-          <div>
+          <div className="settings-policy-group">
             <h3>Web application policy</h3>
             <pre>{JSON.stringify(permissionPolicy.web_app, null, 2)}</pre>
           </div>
@@ -1433,10 +1490,11 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
               Keys are stored in Windows Credential Manager and are used only by the trusted backend source adapters. They are never returned after submission. BLS can be used without a key.
             </p>
           </div>
+          <SettingsViews label="Macro data providers" options={[{ id: "fred", label: "FRED" }, { id: "bls", label: "BLS" }, { id: "bea", label: "BEA" }, { id: "eia", label: "EIA" }]} value={integrationView} onChange={setIntegrationView} />
           {macroDataProviders.map((provider) => {
             const status = macroStatuses[provider.id];
             return (
-              <div className="settings-subsection stack" key={provider.id}>
+              <div className="settings-subsection stack settings-view" hidden={integrationView !== provider.id} key={provider.id}>
                 <div>
                   <h3>{provider.label}</h3>
                   <p className="muted">{provider.description}</p>
@@ -1489,7 +1547,8 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
             <div><dt>Updated</dt><dd>{formatDate(googleOAuth.updated_at)}</dd></div>
           </dl>
           {googleOAuth.error_type && <p className="error-text">OAuth client status: {googleOAuth.error_type.replace(/_/g, " ")}</p>}
-          <div className="settings-subsection stack">
+          <SettingsViews label="Google services" options={[{ id: "connection", label: "OAuth client" }, { id: "calendar", label: "Calendar" }, { id: "gmail", label: "Gmail" }, { id: "drive", label: "Drive" }]} value={integrationView} onChange={setIntegrationView} />
+          <div className="settings-subsection stack settings-view" hidden={integrationView !== "connection"}>
             <div>
               <h3>Shared OAuth client</h3>
               <p className="muted">
@@ -1534,20 +1593,20 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
             {googleServiceGrantPresent && <p className="muted">Disconnect all Google services before replacing or removing the shared OAuth client.</p>}
           </div>
 
-          <div className="settings-subsection stack">
+          <div className="settings-subsection stack settings-view" hidden={integrationView !== "calendar"}>
             <div><h3>Google Calendar</h3><p className="muted">Uses the Calendar scope and the selected account's primary calendar. It does not share its grant or account identity with Gmail.</p></div>
             <dl className="detail-grid"><div><dt>Status</dt><dd>{googleCalendar.connected ? "Connected" : googleCalendar.status}</dd></div><div><dt>Account</dt><dd>{googleCalendar.account_email ?? "None"}</dd></div><div><dt>Last validated</dt><dd>{formatDate(googleCalendar.last_validated_at)}</dd></div></dl>
             {googleCalendar.error_type && <p className="error-text">Calendar status: {googleCalendar.error_type.replace(/_/g, " ")}</p>}
             <div className="button-row"><button type="button" onClick={() => void startGoogleCalendarOAuth()} disabled={loading || !googleOAuth.configured}>{googleCalendar.connected ? "Choose another Calendar account" : "Connect Calendar"}</button>{googleCalendar.status !== "disconnected" && <button type="button" className="secondary" onClick={() => void removeGoogleCalendarConnection()} disabled={loading}>Disconnect Calendar</button>}</div>
           </div>
 
-          <div className="settings-subsection stack">
+          <div className="settings-subsection stack settings-view" hidden={integrationView !== "gmail"}>
             <div><h3>Gmail</h3><p className="muted">Uses the Gmail scope and its own selected account. It does not replace or alter the Calendar authorization.</p></div>
             <dl className="detail-grid"><div><dt>Status</dt><dd>{gmail.connected ? "Connected" : gmail.status}</dd></div><div><dt>Account</dt><dd>{gmail.account_email ?? "None"}</dd></div><div><dt>Last validated</dt><dd>{formatDate(gmail.last_validated_at)}</dd></div></dl>
             {gmail.error_type && <p className="error-text">Gmail status: {gmail.error_type.replace(/_/g, " ")}</p>}
             <div className="button-row"><button type="button" onClick={() => void startGmailOAuth()} disabled={loading || !googleOAuth.configured}>{gmail.connected ? "Choose another Gmail account" : "Connect Gmail"}</button>{gmail.status !== "disconnected" && <button type="button" className="secondary" onClick={() => void removeGmailConnection()} disabled={loading}>Disconnect Gmail</button>}</div>
           </div>
-          <div className="settings-subsection stack">
+          <div className="settings-subsection stack settings-view" hidden={integrationView !== "drive"}>
             <div><h3>Google Drive</h3><p className="muted">Uses a separate full Drive scope and saves downloads to knowledge/google_drive_download. Google's restricted scope may require OAuth verification outside test users.</p></div>
             <dl className="detail-grid"><div><dt>Status</dt><dd>{googleDrive.connected ? "Connected" : googleDrive.status}</dd></div><div><dt>Account</dt><dd>{googleDrive.account_email ?? "None"}</dd></div><div><dt>Last validated</dt><dd>{formatDate(googleDrive.last_validated_at)}</dd></div></dl>
             {googleDrive.error_type && <p className="error-text">Drive status: {googleDrive.error_type.replace(/_/g, " ")}</p>}
@@ -1611,7 +1670,8 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
             <p className="muted">Configure independent private bots for approvals, Act, Observer, and Assistant. Tokens are write-only and stay in the operating-system secret store.</p>
           </div>
 
-          <div className="settings-subsection stack">
+          <SettingsViews label="Telegram bots" options={[{ id: "notification", label: "Notifications & approvals" }, { id: "act", label: "Act" }, { id: "observer", label: "Observer" }, { id: "assistant", label: "Assistant" }]} value={integrationView} onChange={setIntegrationView} />
+          <div className="settings-subsection stack settings-view" hidden={integrationView !== "notification"}>
             <div><h3>Notification / Approval bot</h3><p className="muted">Sends notifications and presents bounded per-call decisions in its paired private chat.</p></div>
             <dl className="detail-grid"><div><dt>Status</dt><dd>{telegramStatusLabel(telegram)}</dd></div><div><dt>Bot</dt><dd>{telegram.bot_username ? `@${telegram.bot_username}` : "None"}</dd></div><div><dt>Private chat</dt><dd>{telegram.paired_chat_id ?? "Not paired"}</dd></div><div><dt>User</dt><dd>{telegram.paired_user_id ?? "Not paired"}</dd></div>{telegram.pairing_expires_at && <div><dt>Pairing expires</dt><dd>{formatDate(telegram.pairing_expires_at)}</dd></div>}</dl>
             {telegram.error_type && <p className="error-text">Connection status: {telegram.error_type.replace(/_/g, " ")}</p>}
@@ -1623,7 +1683,7 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
             <p className="muted">Approval previews intentionally send complete bounded action input—including email bodies—to Telegram. Telegram is a cloud privacy boundary.</p>
           </div>
 
-          <div className="settings-subsection stack">
+          <div className="settings-subsection stack settings-view" hidden={integrationView !== "act"}>
             <div><h3>Act Agent bot</h3><p className="muted">Each private Telegram topic is one independent Act session. Enable Threaded mode and Allow users to create topics for this bot in BotFather, then create topics in the paired private chat.</p></div>
             <dl className="detail-grid"><div><dt>Status</dt><dd>{telegramStatusLabel(telegramAgent)}</dd></div><div><dt>Bot</dt><dd>{telegramAgent.bot_username ? `@${telegramAgent.bot_username}` : "None"}</dd></div><div><dt>Private chat</dt><dd>{telegramAgent.paired_chat_id ?? "Not paired"}</dd></div><div><dt>User</dt><dd>{telegramAgent.paired_user_id ?? "Not paired"}</dd></div></dl>
             {telegramAgent.error_type && <p className="error-text">Connection status: {telegramAgent.error_type.replace(/_/g, " ")}</p>}
@@ -1633,7 +1693,7 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
             <div className="button-row"><button type="button" onClick={() => void startTelegramAgentPairing()} disabled={loading || !telegramAgentToken}>{telegramAgent.connected ? "Replace Act Agent bot" : "Pair Act Agent bot"}</button>{telegramAgent.connected && <button type="button" className="secondary" onClick={() => void removeTelegramAgentConnection()} disabled={loading}>Disconnect Act Agent bot</button>}</div>
           </div>
 
-          <div className="settings-subsection stack">
+          <div className="settings-subsection stack settings-view" hidden={integrationView !== "observer"}>
             <div><h3>Observer Agent bot</h3><p className="muted">Each private Telegram topic is one independent read-only Observer session. Enable Threaded mode and Allow users to create topics for this bot in BotFather, then create topics in the paired private chat.</p></div>
             <dl className="detail-grid"><div><dt>Status</dt><dd>{telegramStatusLabel(telegramObserverAgent)}</dd></div><div><dt>Bot</dt><dd>{telegramObserverAgent.bot_username ? `@${telegramObserverAgent.bot_username}` : "None"}</dd></div><div><dt>Private chat</dt><dd>{telegramObserverAgent.paired_chat_id ?? "Not paired"}</dd></div><div><dt>User</dt><dd>{telegramObserverAgent.paired_user_id ?? "Not paired"}</dd></div></dl>
             {telegramObserverAgent.error_type && <p className="error-text">Connection status: {telegramObserverAgent.error_type.replace(/_/g, " ")}</p>}
@@ -1643,8 +1703,8 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
             <div className="button-row"><button type="button" onClick={() => void startTelegramObserverAgentPairing()} disabled={loading || !telegramObserverAgentToken}>{telegramObserverAgent.connected ? "Replace Observer Agent bot" : "Pair Observer Agent bot"}</button>{telegramObserverAgent.connected && <button type="button" className="secondary" onClick={() => void removeTelegramObserverAgentConnection()} disabled={loading}>Disconnect Observer Agent bot</button>}</div>
           </div>
 
-          <div className="settings-subsection stack">
-            <div><h3>Assistant Agent bot</h3><p className="muted">Each private Telegram topic is one independent Assistant session. Enable Threaded mode and Allow users to create topics for this bot in BotFather, then create topics in the paired private chat. Assistant retains at most five sessions across Telegram, the UI, and scheduled assessments.</p></div>
+          <div className="settings-subsection stack settings-view" hidden={integrationView !== "assistant"}>
+            <div><h3>Assistant Agent bot</h3><p className="muted">Pair one direct private Telegram chat for the Assistant conversation. Its session refreshes daily at 4:00 AM in the configured timezone, and the same chat also receives useful updates from daily reviews, reflection, and its agenda.</p></div>
             <dl className="detail-grid"><div><dt>Status</dt><dd>{telegramStatusLabel(telegramAssistantAgent)}</dd></div><div><dt>Bot</dt><dd>{telegramAssistantAgent.bot_username ? `@${telegramAssistantAgent.bot_username}` : "None"}</dd></div><div><dt>Private chat</dt><dd>{telegramAssistantAgent.paired_chat_id ?? "Not paired"}</dd></div><div><dt>User</dt><dd>{telegramAssistantAgent.paired_user_id ?? "Not paired"}</dd></div></dl>
             {telegramAssistantAgent.error_type && <p className="error-text">Connection status: {telegramAssistantAgent.error_type.replace(/_/g, " ")}</p>}
             {telegramAssistantAgentPairingCode && <div><h4>Finish pairing</h4><p>Open the Assistant Agent bot in Telegram and send <code>/start {telegramAssistantAgentPairingCode}</code>.</p><button type="button" className="secondary" onClick={() => void refreshTelegramAssistantAgentPairing()}>Check Assistant Agent pairing</button></div>}
@@ -1743,6 +1803,8 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
             <p className="muted">Selected courses are mirrored daily at 10:00 Toronto time under <code>knowledge/quercus/</code> for Act to inspect only when needed. Quercus content is never injected into agent context automatically.</p>
             <p className="muted">The token stays in Windows Credential Manager. Files larger than 8 GiB, or without a known size, are recorded by the backend but not downloaded.</p>
           </div>
+          <SettingsViews label="Quercus settings" options={[{ id: "connection", label: "Connection" }, { id: "courses", label: "Courses" }, { id: "processing", label: "File processing" }]} value={integrationView} onChange={setIntegrationView} />
+          <div className="settings-view stack" hidden={integrationView !== "connection"}>
           <dl className="detail-grid">
             <div><dt>Status</dt><dd>{quercus.connected ? "Connected" : quercus.status}</dd></div>
             <div><dt>Account</dt><dd>{quercus.account_name ?? "None"}</dd></div>
@@ -1758,8 +1820,9 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
             <button type="button" onClick={() => void saveQuercusConnection()} disabled={loading || !quercusToken.trim()}>{quercus.connected ? "Replace connection" : "Connect Quercus"}</button>
             {quercus.connected && <button type="button" className="secondary" onClick={() => void removeQuercusConnection()} disabled={loading}>Disconnect</button>}
           </div>
+          </div>
           {quercusProcessing && (
-            <div className="settings-subsection stack">
+            <div className="settings-subsection stack settings-view" hidden={integrationView !== "processing"}>
               <div>
                 <h3>File processing</h3>
                 <p className="muted">Originals stay in <code>files/raw/</code>. Marker output is written to the matching <code>files/processed/</code> tree. Select an existing llama.cpp installation; the backend starts its server on demand.</p>
@@ -1802,18 +1865,21 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
               </div>
             </div>
           )}
-          {(quercus.connected || quercusCourses.length > 0) && (
-            <details className="settings-subsection quercus-course-disclosure">
-              <summary>
-                <h3>Courses</h3>
-                <svg className="disclosure-chevron" viewBox="0 0 20 20" aria-hidden="true">
-                  <path d="m7 4 6 6-6 6" />
-                </svg>
-              </summary>
-              <div className="stack quercus-course-content">
+          <div className="settings-subsection stack settings-view" hidden={integrationView !== "courses"}>
+              <h3>Courses</h3>
               <p className="muted">Deselecting stops updates but retains the existing local copy. The trash button permanently removes any course from this list and deletes its synchronized content, if present.</p>
               {quercusCourses.length === 0 && <p className="muted">No accessible courses were returned.</p>}
-              {quercusCourses.map((course) => (
+              <div className="settings-list-toolbar">
+                <input type="search" aria-label="Search courses" placeholder="Search courses" value={courseSearch} onChange={(event) => setCourseSearch(event.target.value)} />
+                <select aria-label="Course selection" value={courseFilter} onChange={(event) => setCourseFilter(event.target.value)}>
+                  <option value="all">All courses</option>
+                  <option value="selected">Selected</option>
+                  <option value="unselected">Not selected</option>
+                </select>
+              </div>
+              <p className="muted" role="status">{visibleQuercusCourses.length} of {quercusCourses.length} courses</p>
+              {quercusCourses.length > 0 && visibleQuercusCourses.length === 0 && <p className="muted">No courses match your search and filter.</p>}
+              {visibleQuercusCourses.map((course) => (
                 <div className="settings-choice-row" key={course.course_id}>
                   <label>
                     <input type="checkbox" checked={selectedQuercusCourseIds.includes(course.course_id)} onChange={() => toggleQuercusCourse(course.course_id)} disabled={loading || !quercus.connected} />
@@ -1830,9 +1896,7 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
                 </div>
               ))}
               {quercus.connected && <div className="button-row"><button type="button" onClick={() => void saveQuercusCourses()} disabled={loading}>Save course selection</button></div>}
-              </div>
-            </details>
-          )}
+          </div>
         </section>
       )}
       {section === "integrations" && integration === "notion" && notion && (
@@ -1850,13 +1914,11 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
             <div><dt>Status</dt><dd>{notion.connected ? "Connected" : notion.status}</dd></div>
             <div><dt>Workspace</dt><dd>{notion.workspace_name ?? "None"}</dd></div>
             <div><dt>Connection bot</dt><dd>{notion.bot_name ?? "None"}</dd></div>
-            <div><dt>Todo data-source ID</dt><dd><code>{notion.data_source_id ?? "None"}</code></dd></div>
-            <div><dt>Reports data-source ID</dt><dd><code>{notion.report_data_source_id ?? "None"}</code></dd></div>
-            <div><dt>Daily Feed page ID</dt><dd><code>{notion.daily_feed_page_id ?? "None"}</code></dd></div>
             <div><dt>Last validated</dt><dd>{formatDate(notion.last_validated_at)}</dd></div>
           </dl>
           {notion.error_type && <p className="error-text">Connection status: {notion.error_type.replace(/_/g, " ")}</p>}
-          <div className="settings-subsection stack">
+          <SettingsViews label="Notion settings" options={[{ id: "connection", label: "Connection" }, { id: "sources", label: "Todo & reports" }, { id: "feed", label: "Daily Feed" }]} value={integrationView} onChange={setIntegrationView} />
+          <div className="settings-subsection stack settings-view" hidden={integrationView !== "connection"}>
             <h3>Notion credential</h3>
             <label>
               {notion.connected ? "Replacement Notion token" : "Notion token"}
@@ -1883,11 +1945,13 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
               )}
             </div>
           </div>
-          <div className="settings-subsection stack">
+          <div className="settings-subsection stack settings-view" hidden={integrationView !== "sources"}>
             <div>
               <h3>Notion data sources</h3>
               <p className="muted">Save or delete the Todo and Reports IDs together.</p>
             </div>
+            <p className="muted">Reports data-source ID: <code>{notion.report_data_source_id ?? "None"}</code></p>
+            <p className="muted">Todo data-source ID: <code>{notion.data_source_id ?? "None"}</code></p>
             <label>
               Notion Todo data-source ID
               <input
@@ -1932,13 +1996,14 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
               />
             </div>
           </div>
-          <div className="settings-subsection stack">
+          <div className="settings-subsection stack settings-view" hidden={integrationView !== "feed"}>
             <div>
               <h3>Notion Daily Feed page</h3>
               <p className="muted">
                 Configure a standalone page shared with the connection. Daily Feed writes replace that page&apos;s ordinary content in place.
               </p>
             </div>
+            <p className="muted">Daily Feed page ID: <code>{notion.daily_feed_page_id ?? "None"}</code></p>
             <label>
               Notion Daily Feed page ID
               <input
@@ -2042,25 +2107,29 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
             <h2>Project build workflow</h2>
             <p className="muted">Override ProductManager workflow selection for every new Project build.</p>
           </div>
-          <label>
-            Workflow selection
-            <select
-              value={routing.project_build_workflow_override ?? ""}
-              onChange={(event) => {
-                setSaved(null);
-                setRoutingDirty(true);
-                setRouting({
-                  ...routing,
-                  project_build_workflow_override:
-                    (event.target.value || null) as CodexRoutingSettingsPayload["project_build_workflow_override"],
-                });
-              }}
-            >
-              <option value="">Automatic (ProductManager chooses)</option>
-              <option value="single_codex">Simple (single Codex)</option>
-              <option value="task_dag">Task DAG</option>
-            </select>
-          </label>
+          <fieldset className="settings-workflow-options">
+            <legend>Workflow selection</legend>
+            {[
+              { value: "", title: "Automatic", description: "Let ProductManager choose the right workflow for each build." },
+              { value: "single_codex", title: "Simple", description: "Use one Codex session to build and test the complete skill." },
+              { value: "task_dag", title: "Task DAG", description: "Split the build into a dependency graph of implementation tasks." },
+            ].map((option) => (
+              <label className={`settings-workflow-option${(routing.project_build_workflow_override ?? "") === option.value ? " selected" : ""}`} key={option.value}>
+                <input
+                  type="radio"
+                  name="project-build-workflow"
+                  value={option.value}
+                  checked={(routing.project_build_workflow_override ?? "") === option.value}
+                  onChange={() => {
+                    setSaved(null);
+                    setRoutingDirty(true);
+                    setRouting({ ...routing, project_build_workflow_override: (option.value || null) as CodexRoutingSettingsPayload["project_build_workflow_override"] });
+                  }}
+                />
+                <span><strong>{option.title}</strong><small>{option.description}</small></span>
+              </label>
+            ))}
+          </fieldset>
           <p className="muted">
             Simple and Task DAG are hard overrides. Automatic preserves ProductManager selection.
           </p>
@@ -2072,17 +2141,22 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
       )}
       {section === "models" && routing && catalog?.available && (
         <>
-          <section className="detail-panel stack">
+          <div className="settings-savebar">
+            <RoutingSaveStatus routing={routing} dirty={routingDirty} />
+            <button type="button" onClick={() => void saveRouting("Model routing saved.")} disabled={loading}>Save model routing</button>
+          </div>
+          <SettingsViews label="Model routing sections" options={[{ id: "agents", label: "Agents" }, { id: "product-manager", label: "ProductManager" }, { id: "builder", label: "Builder" }, { id: "tester", label: "Tester" }]} value={routingView} onChange={setRoutingView} />
+          <section id="agent-routing" hidden={routingView !== "agents"} className="detail-panel stack settings-routing-section">
             <div>
               <h2>Agent Routing</h2>
-              <p className="muted">Act, Observer, and the scheduled Assistant assessment use independent model and reasoning-effort routes.</p>
+              <p className="muted">Act, Observer, and Assistant use independent model and reasoning-effort routes.</p>
             </div>
             <RoutingRow label="Act" choice={routing.act} models={catalog.models} onChange={(choice) => updateChoice("act", "act", choice)} />
             <RoutingRow label="Observer" choice={routing.observer ?? EMPTY_INVOCATION_CHOICE} models={catalog.models} onChange={(choice) => updateChoice("observer", "observer", choice)} />
-            <RoutingRow label="Assessment" choice={routing.assessment ?? EMPTY_INVOCATION_CHOICE} models={catalog.models} onChange={(choice) => updateChoice("assessment", "assessment", choice)} />
+            <RoutingRow label="Assistant" choice={routing.assessment ?? EMPTY_INVOCATION_CHOICE} models={catalog.models} onChange={(choice) => updateChoice("assessment", "assessment", choice)} />
           </section>
 
-          <section className="detail-panel stack">
+          <section id="product-manager-routing" hidden={routingView !== "product-manager"} className="detail-panel stack settings-routing-section">
             <div>
               <h2>ProductManager routing</h2>
               <p className="muted">Action settings inherit any model or effort left blank from the ProductManager default.</p>
@@ -2094,7 +2168,7 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
             <RoutingRow label="Update review" choice={routing.product_manager.update} fallback={routing.product_manager.default} models={catalog.models} onChange={(choice) => updateChoice("product_manager", "update", choice)} />
           </section>
 
-          <section className="detail-panel stack">
+          <section id="builder-routing" hidden={routingView !== "builder"} className="detail-panel stack settings-routing-section">
             <div>
               <h2>Builder routing</h2>
               <p className="muted">Single Codex has its own route. Task DAG builds route by each backend-validated node difficulty. ProductManager does not choose model IDs.</p>
@@ -2108,7 +2182,7 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
             <RoutingRow label="Update" choice={routing.builder.update} fallback={routing.builder.default} models={catalog.models} onChange={(choice) => updateChoice("builder", "update", choice)} />
           </section>
 
-          <section className="detail-panel stack">
+          <section id="tester-routing" hidden={routingView !== "tester"} className="detail-panel stack settings-routing-section">
             <div>
               <h2>Tester routing</h2>
               <p className="muted">Task tests, final end-to-end tests, and update tests may use separate settings.</p>
@@ -2117,30 +2191,14 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
             <RoutingRow label="Task tests" choice={routing.tester.task} fallback={routing.tester.default} models={catalog.models} onChange={(choice) => updateChoice("tester", "task", choice)} />
             <RoutingRow label="Final end-to-end" choice={routing.tester.final_e2e} fallback={routing.tester.default} models={catalog.models} onChange={(choice) => updateChoice("tester", "final_e2e", choice)} />
             <RoutingRow label="Update tests" choice={routing.tester.update} fallback={routing.tester.default} models={catalog.models} onChange={(choice) => updateChoice("tester", "update", choice)} />
-            <div className="button-row">
-              <button type="button" onClick={() => void saveRouting("Model routing saved.")} disabled={loading}>Save model routing</button>
-            </div>
-            <RoutingSaveStatus routing={routing} dirty={routingDirty} />
           </section>
         </>
-      )}
-      {section === "usage" && cliStatus && (
-        <section className="detail-panel">
-          <h2>Codex CLI</h2>
-          <dl className="detail-grid">
-            <div><dt>Status</dt><dd>{cliStatus.compatible ? "Compatible" : "Action required"}</dd></div>
-            <div><dt>Version</dt><dd>{cliStatus.version ?? "unknown"}</dd></div>
-            <div><dt>Source</dt><dd>{formatCliSource(cliStatus.source)}</dd></div>
-            <div><dt>Minimum</dt><dd>{cliStatus.minimum_version ?? "not constrained"}</dd></div>
-          </dl>
-          <p className="muted"><strong>Executable:</strong> {cliStatus.resolved_path ?? "Not found"}</p>
-          {cliStatus.error && <p className="error-text">{cliStatus.error}</p>}
-        </section>
       )}
       {section === "usage" && usage && !usage.available && <p className="error-text">{usage.error ?? "Codex usage is unavailable."}</p>}
       {section === "usage" && usage?.available && (
         <>
-          <section className="detail-panel">
+          <section className="detail-panel stack">
+            <h2>Account & allowances</h2>
             <dl className="detail-grid">
               <div><dt>Plan</dt><dd>{usage.plan_type ?? "unknown"}</dd></div>
               <div><dt>Limit</dt><dd>{usage.limit_id}</dd></div>
@@ -2157,6 +2215,19 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
         <p className="muted">
           DAG builds pause before the next ready batch when either allowance window has less than 5% remaining. Skill runtime calls are intentionally excluded from build token accounting.
         </p>
+      )}
+      {section === "usage" && cliStatus && (
+        <section className="detail-panel stack">
+          <div><h2>Codex CLI</h2><p className="muted">The local installation used to run Eidolon's agents.</p></div>
+          <dl className="detail-grid">
+            <div><dt>Status</dt><dd>{cliStatus.compatible ? "Compatible" : "Action required"}</dd></div>
+            <div><dt>Version</dt><dd>{cliStatus.version ?? "unknown"}</dd></div>
+            <div><dt>Source</dt><dd>{formatCliSource(cliStatus.source)}</dd></div>
+            <div><dt>Minimum</dt><dd>{cliStatus.minimum_version ?? "not constrained"}</dd></div>
+          </dl>
+          <p className="muted"><strong>Executable:</strong> {cliStatus.resolved_path ?? "Not found"}</p>
+          {cliStatus.error && <p className="error-text">{cliStatus.error}</p>}
+        </section>
       )}
       {pendingQuercusCourseDelete && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="quercus-course-delete-title">
@@ -2247,7 +2318,7 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
           </section>
         </div>
       )}
-    </section>
+    </SettingsLayout>
   );
 }
 
@@ -2510,10 +2581,15 @@ function RoutingRow({
   const selectedModel = models.find((model) => model.model === selectedModelName || model.id === selectedModelName);
   const efforts = selectedModel?.supported_reasoning_efforts ?? [];
   return (
-    <div className="form-grid">
+    <div className="settings-routing-row">
+      <div className="settings-routing-label">
+        <strong>{label}</strong>
+        <span>{fallback ? "Inherits the role default unless changed." : "Choose a model and its reasoning effort."}</span>
+      </div>
       <label>
-        {label} model
+        Model
         <select
+          aria-label={`${label} model`}
           value={choice.model ?? ""}
           onChange={(event) => onChange({ model: event.target.value || null, reasoning_effort: null })}
         >
@@ -2524,8 +2600,9 @@ function RoutingRow({
         </select>
       </label>
       <label>
-        {label} effort
+        Reasoning effort
         <select
+          aria-label={`${label} effort`}
           value={choice.reasoning_effort ?? ""}
           onChange={(event) => onChange({ ...choice, reasoning_effort: event.target.value || null })}
         >
@@ -2566,9 +2643,9 @@ function AppearanceOption({
       onClick={() => onSelect(theme)}
     >
       <span className={`appearance-preview ${theme}`} aria-hidden="true">
-        <span />
-        <span />
-        <span />
+        <span className="appearance-preview-sidebar"><i /><i /><i /><i /></span>
+        <span className="appearance-preview-topbar"><i /></span>
+        <span className="appearance-preview-page"><i /><i /><i /><i /></span>
       </span>
       <span className="appearance-option-copy">
         <strong>{title}</strong>
@@ -2592,9 +2669,9 @@ function formatCliSource(source: string | null): string {
 function UsageCard({ title, window }: { title: string; window: CodexUsageWindow | null }) {
   if (!window) return <section className="detail-panel"><h2>{title}</h2><p className="muted">Unavailable</p></section>;
   return (
-    <section className="detail-panel">
+    <section className="detail-panel settings-allowance-card">
       <h2>{title}</h2>
-      <p><strong>{window.remaining_percent}% remaining</strong></p>
+      <p className="settings-allowance-number"><strong>{window.remaining_percent}%</strong> <span>remaining</span></p>
       <progress max={100} value={window.remaining_percent} aria-label={`${title} remaining`} />
       <p className="muted">{window.used_percent}% used · resets {formatDate(window.resets_at)}</p>
     </section>

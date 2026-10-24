@@ -206,8 +206,9 @@ def test_agent_private_telegram_file_uses_authenticated_act_context(
     seen = []
 
     class Capability:
-        def __init__(self, supplied_db):  # noqa: ANN001
+        def __init__(self, supplied_db, *, agent_id):  # noqa: ANN001
             seen.append(supplied_db)
+            assert agent_id == context.agent_id
 
         def send(self, session_id, path, caption):  # noqa: ANN001, ANN201
             seen.append((session_id, path, caption))
@@ -274,7 +275,7 @@ def test_production_adapters_have_no_competing_direct_dispatch() -> None:
         *(app_root / "routers").glob("*.py"),
         app_root / "services" / "mcp_function_service.py",
         app_root / "services" / "platform_service.py",
-        app_root / "services" / "assistant_assessment_service.py",
+        app_root / "services" / "assistant_service.py",
         app_root / "services" / "invocation_approval_service.py",
     ]
 

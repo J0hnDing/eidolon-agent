@@ -1115,3 +1115,341 @@ Replaced required per-event significance, previous-report delta, and watch-next 
 ### Limitations
 
 Applies to future reports; existing Notion reports were not rewritten. Semantic story deduplication remains model-based.
+
+## 2026-09-19 20:41 — Act Telegram workspace-file delivery and runtime capability awareness
+
+- Category: feature
+- Area: Act runtime and Telegram
+
+### Summary
+
+Added the Act-private telegram.send_file capability with workspace confinement, 25 MiB bounds, current-session Telegram topic routing, multipart Bot API delivery, metadata-only results, and tests. Added a separate descriptive Act runtime capability catalog so Assistant knows Playwright, browser authentication, and Telegram file delivery without gaining invocation authority.
+
+### Limitations
+
+Live Telegram delivery was not performed; the running Eidolon backend must be restarted before the new capability is available.
+
+## 2026-09-23 01:46 — Macro / Geopolitical News Scout
+
+- Category: feature
+- Area: Skills and integrations
+
+### Summary
+
+Added an initially disabled daily macro and geopolitical scout service with official feeds, four secure API-key settings and bounded backend source operations, one Codex evaluation call, selective Notion Macro reports, Atlas context, and cache history. Added focused backend, skill, and Settings tests and updated documentation.
+
+### Limitations
+
+Runtime and integration approvals remain required before enabling. FRED, BEA, and EIA keyed API calls need user keys; no live Codex-to-Notion run was performed.
+
+## 2026-10-02 00:45 — Integration directory and provider detail pages
+
+- Category: feature
+- Area: Frontend settings
+
+### Summary
+
+Replaced the long Integrations settings screen with a grouped responsive directory of eleven integrations, local brand icons, and dedicated provider URLs. Detail pages load and refresh only their own settings, retain existing credential and confirmation controls, and discard unsaved credentials on navigation. Existing Google and Microsoft OAuth return markers route to the corresponding detail page. Updated UI documentation. All 26 focused frontend tests, production build, and diff checks passed; live GitHub navigation and desktop/phone layouts were visually checked.
+
+### Limitations
+
+Live OAuth consent and external credential mutations were not exercised; callback routing and existing control behavior were covered by focused tests.
+
+## 2026-10-05 09:58 — Generate session titles within existing agent chat responses
+
+- Category: bugfix
+- Area: agent-chat-titles
+
+### Summary
+
+Act, Observer, and Assistant now return bounded nullable title metadata in the existing model response, including Assistant assessments. The shared sync service initializes missing native names with thread/name/set and projects them to Eidolon and Telegram while preserving existing/manual titles. Title sync finishes before terminal success so the final UI poll sees the name. Verified 114 focused chat, assessment, concurrency, Telegram, and WeCom tests, Ruff, and diff checks.
+
+### Limitations
+
+Existing unnamed sessions receive titles on their next successful turn. The running backend has auto-reload disabled and needs restart to activate the changes; live model and Telegram delivery were not exercised.
+
+## 2026-10-09 14:00 — Recognize integration authentication failures in skill run history
+
+- Category: bugfix
+- Area: skill-runtime-and-run-history
+
+### Summary
+
+Classify terminal integration capability errors in local and Docker runner error messages, preserve normalized error types in helper tracebacks, and show historical integration/auth failures ahead of generic exit-code wrappers. Verified Daily Feed run 74 failed because Google Calendar authorization is invalid or revoked. Added focused helper, runner, and frontend regression coverage; 49 backend tests and 13 frontend tests passed, Ruff passed, and frontend build passed.
+
+### Limitations
+
+The already-running backend needs a restart to load the new runner recording behavior. The frontend recognizes historical failures without changing stored run records; Google Calendar still requires reconnection.
+
+## 2026-10-09 17:48 — Act live chat delivery and same-turn reply capability
+
+- Category: feature
+- Area: Act runtime and Telegram conversations
+
+### Summary
+
+Added Act-only private chat.send_message with immediate Chat/Telegram delivery and optional bounded waiting. The capability consumes only the next reply atomically and returns it to the same running Codex turn, preserving the browser and avoiding a second dispatcher run. Added durable in-turn notices/replies, immutable Telegram destination checks, timeout/cancellation/overlap handling, Act Duo instructions, and Chat/Agents composer support. Full Ruff passed; 39 new backend cases and 66 focused backend regression cases passed; all 97 frontend tests and production build passed. Restarted the idle backend and verified live health, schema, and preserved session history.
+
+### Limitations
+
+Reply waits are bounded to 120 seconds by the current private MCP timeout. No live Duo/Telegram authentication challenge was exercised. The broader backend suite is not green: ProductManager deterministic fixtures conflict with the current planning schema, recorded as a separate test TODO. Ordinary commentary streaming and browser persistence across completed turn boundaries remain outside this change.
+
+## 2026-10-09 18:15 — Shared persistent Act browser and authentication
+
+- Category: bugfix
+- Area: Act browser runtime
+
+### Summary
+
+Moved Playwright ownership into a backend-owned persistent browser with one shared profile/context across Act conversations. Each conversation retains its selected tab, owned pages, popup ownership, and upstream tool state across App Server/MCP restarts; per-turn credentials rotate and revoke without closing pages. Archive closes only the selected conversation pages; shutdown closes the owner. Trusted authentication now targets the conversation selected page. Added pinned adapter compatibility checks and inline automatic snapshots. Validation: 105 focused Python tests passed, 7 Node tests passed, Ruff clean, scoped git diff --check clean. Real browser/stdio smoke passed shared HttpOnly cookies, concurrent page ownership, token rotation/revocation, popup isolation, selected-tab authentication bridge, and cookie persistence after owner restart. Six actual Act App Server model turns passed shared login and concurrent preserved-page followups. Restarted backend gracefully and two actual /act API turns passed existing-page continuity; test sessions 68, 69, and 70 archived.
+
+### Limitations
+
+New shared profile does not automatically merge older per-conversation cookies. Adapter is pinned to installed Playwright MCP 0.0.83 and Core 1.64.0-alpha-1790635538000; package upgrades require revalidation. Live authentication used local synthetic cookies/challenge pages, not real credentials or Duo MFA. Backend shutdown closes live tabs; websites may expire sessions and logout is shared.
+
+## 2026-10-15 13:51 — Update Eidolon Atlas integrations for reconstructed person model
+
+- Category: refactor
+- Area: integrations-atlas
+
+### Summary
+
+Implemented a backend-owned Atlas read capability through 12 canonical integration operations: schema/catalog discovery, paged record search and complete detail/custom data, links, current States/configuration/history, Personality and imported Valence, motivational graphs, native Knowledge, revisions and explicit image/resume bytes or extracted resume text. Added shared Atlas UI/server completeness calculation and GET /api/person/completeness. Reconciled Person, numeric Interests, flat blueprint Goals, Experience/Project/Relationship operations and contract versions; updated Assistant cleanup and weekly-summary callers. Verified real HTTP contracts against an isolated in-memory Atlas with synthetic data, plus focused provider, authorization, catalog, MCP and caller checks; Atlas npm run check passed 225 tests. Updated integration and weekly-summary documentation.
+
+### Limitations
+
+Eidolon and Atlas were stopped; changes load on the next application startup and new MCP session. Expanded or changed Atlas contracts require ordinary runtime permission review for existing installed callers. Reads remain explicitly bounded and oversized results fail without silent truncation.
+
+## 2026-10-16 21:20 — Add explicit stateless Valence utility integration
+
+- Category: feature
+- Area: integrations
+
+### Summary
+
+Added valence.describe and valence.utility.calculate to the canonical integration registry, provider composition, catalog and MCP paths with ordinary authorization and audit enforcement. Added a stateless Valence POST /api/utility/calculate endpoint for bounded inline actions, exact saved model/state snapshots, ranked native totals and optional detailed traces. Kept Valence separate from Assistant initialization, source collection and assessment. Verified 161 focused Eidolon tests, the full 304-test Valence backend suite, Ruff, and five real-loopback calls against an isolated temporary database with every Valence table unchanged.
+
+### Limitations
+
+Requires the local Valence engine-v8 backend at 127.0.0.1:8010 with the new endpoint. Restart Eidolon and Valence and refresh catalog/MCP snapshots to expose the integration. Caller supplies action encodings and current state; the integration does not infer them or automatically start Valence.
+
+## 2026-10-17 03:18 — Unify Assistant daily runtime and shared folder memory
+
+- Category: feature
+- Area: Assistant runtime and agent memory
+
+### Summary
+
+Separated the single permanent Assistant chat from Act dispatch, retaining one daily Codex thread with local 04:00 and manual refresh plus missed-startup recovery. Consolidated editable facts outside Atlas, concise mandatory nightly summaries, and bounded complete Assistant/Act/Observer chat archives under the shared workspace memory folder. Reflection only writes the daily summary, completes after a durable file receipt, retries failures, and reconciles crash gaps without overwriting user edits. Replaced initialization continuity writes with explicit batch acknowledgement, updated Memory/Assistant controls and workspace AGENTS.md, and preserved legacy memory through idempotent file migration. Validation: 240 backend regression tests passed with one skipped, 49 focused tests passed with one skipped, three final edge-case tests passed, 19 UI tests passed, Ruff and frontend build passed.
+
+### Limitations
+
+Backend restart is required to apply schema/memory migrations and new managed-agent instructions. Retained chat archive is limited to 30 days and 50 MiB across all agents; pruning removes oldest whole messages and leaves operational chat records intact. End-to-end model reflection was not invoked against the live account.
+
+## 2026-10-20 16:05 — Atlas editable-content CRUD for Assistant
+
+- Category: feature
+- Area: integrations-atlas
+
+### Summary
+
+Added 16 typed Atlas operations for record trash/recovery and revision restoration, link removal/recovery, custom-field definitions, States configuration/activity/manual estimates, and original-byte image/resume upload/download/deletion. Added Cash currency-change confirmation support, canonical risk/approval and audit integration, bounded workspace file references with SHA-256 checks, native error normalization, and Assistant guidance/docs. Verified 290 focused backend tests, including all ten record categories against an isolated unlocked native Atlas and authenticated MCP approval/authorization paths. Changed backend Ruff and diff checks passed.
+
+### Limitations
+
+Knowledge expansion, Personality file import and whole-vault administration were excluded by the user. States history remains native append-only. Backend and existing MCP sessions must reload to publish the new contracts; live personal data was not mutated. Expanded full-suite testing was stopped after unrelated existing memory-layout and ProductManager planning-stub failures; the latter reproduced with new Atlas operations disabled.
+
+## 2026-10-20 18:56 — Structured Memory Browser
+
+- Category: feature
+- Area: memory-ui
+
+### Summary
+
+Organized Memory into Overview, Agenda, Questions, Daily summaries, Facts outside Atlas, and Chat history. Reused the shared revision-aware agenda editor; added read-only paginated summary and retained archive APIs, UTC date and agent filtering, provenance/source disclosures, loading/error/retry states, and responsive layouts. Updated UI/runtime/API documentation. Validated 24 frontend tests, 31 backend tests (1 skipped), frontend production build, Ruff, diff checks, and live desktop/mobile browsing after restarting the idle backend.
+
+### Limitations
+
+none
+
+## 2026-10-23 21:33 — Make Assistant conversation casual and render Telegram replies
+
+- Category: bugfix
+- Area: assistant-and-telegram
+
+### Summary
+
+Updated the canonical Assistant communication instructions to use a casual first-person voice, brief routine acknowledgments, and detail or formatting only when useful. Added safe Markdown-to-Telegram HTML rendering for final replies, live messages and draft previews, with readable plain-text fallback, balanced message splitting and preserved web-chat Markdown. Added markdown-it-py as a backend dependency, updated topic documentation, and passed 110 focused tests plus Ruff. Restarted the idle backend and completed an Assistant runtime refresh.
+
+### Limitations
+
+Existing Telegram messages retain their original presentation.
+
+## 2026-10-23 15:32 — Add individual Atlas satisfaction states and Assistant follow-through
+
+- Category: feature
+- Area: Atlas States and Assistant planning
+
+### Summary
+
+Implemented per-Goal, Interest and personal Relationship satisfaction with independent decay, confidence, evidence and positive-outcome recency in Eidolon-Atlas; inferred equal-mean summaries, searchable editors, immutable history and encrypted backup compatibility. Extended Eidolon typed integration contracts and Morning planning to consider current States alongside context, actively update evidenced outcomes/feedback and resolve uncertainty, while ignoring physical activity and mental stimulation. Preserved customized agenda notes and refreshed both running apps. Validation: Atlas full check 253 passing; Eidolon focused suites 288 passing; changed Python Ruff, scoped whitespace checks and live API/UI verification passed.
+
+### Limitations
+
+State maintenance is model-directed through authorized tools. Existing unobserved entries retain zero-confidence priors; historical target aggregates use current record membership/status. Changed integration contracts require affected installed skills/services to refresh authorization.
+
+## 2026-10-23 02:08 — Assistant and memory detail navigation and lists
+
+- Category: refactor
+- Area: frontend-assistant-memory
+
+### Summary
+
+Reorganized Assistant details into focused URL-addressable Agenda, Actions, Settings, and Tool access views while retaining drafts. Agenda/questions, proposed actions, facts, and daily summaries use searchable/filterable lists and dedicated record dialogs with full notes, evidence, schedules, and existing actions. Added summary month filtering across the archive and explicitly scoped chat-page search; tightened spacing within the existing visual style. Preserved shared agenda storage, revision checks, approval confirmations, and memory save failure behavior. Updated frontend documentation. All 219 frontend tests and production build passed; live desktop checks at 1440x900 covered navigation, search/filter combinations, detail/edit dialogs, Escape and focus restoration, settings draft retention, and overflow without executing saved-data mutations.
+
+### Limitations
+
+Live validation was desktop-only as requested. Chat-history search filters only the current date, agent, and page; daily-summary search fetches all saved summary pages on first filter use.
+
+## 2026-10-22 14:46 — Make Assistant planning produce agenda work and daily interaction
+
+- Category: bugfix
+- Area: Assistant planning, agenda, and frontend
+
+### Summary
+
+Strengthened the existing Assistant base prompt and editable Morning planning instructions to consider the full personal context, plan before/after-event follow-through, and save work for agenda execution. Added backend-verified agenda_planned and interaction_today outcomes, daily interaction context, an ordinary 21:00 Daily check-in fallback, migration safeguards, and Current/Past agenda views with recurring history. Restarted and refreshed the backend, then reran Morning planning through the normal API: turn 238 succeeded, created four tasks and a temporal CSC336 exam follow-up for October 22 at 21:30 America/Toronto, and scheduled three existing questions. Planning produced no final briefing; a later agenda activation separately completed the exam-logistics research. Validation: Assistant/history regression run 317 passed, 1 skipped; final focused planning/schema/service checks 40 passed; frontend agenda tests 14 passed and production build passed; Ruff and diff checks passed. Verified live UI Past occurrence history and saved runtime/diagnostics/assistant-planning-live-20261022.json.
+
+### Limitations
+
+Relevance and breadth remain model judgments; backend verifies saved agenda work and actual visible output. Daily interaction requires the backend running and contact permissions. Recurring history UI uses the existing latest-100 occurrence endpoint. Existing mail-source errors were outside this change.
+
+## 2026-10-22 14:38 — Add daily Assistant feed briefing and a bounded Notion feed reader
+
+- Category: feature
+- Area: Assistant agenda and Notion integration
+
+### Summary
+
+Added the low-risk notion.daily_feed.read operation for the configured standalone page, with complete Markdown, an edit timestamp, response bounds, typed authorization, audit routing, discovery and availability. Created ordinary editable recurring Assistant agenda item 15, Daily feed, at 09:05 America/Toronto. Its notes require report-date freshness checks, concise weather and notable-today highlights, and an actual work/research summary excluding questions and all recurring routines. Updated the Assistant, Notion and frontend contract docs. Provider, registry, manifest, integration and Assistant catalog checks passed; Ruff and diff checks passed. A real Notion read succeeded and the running backend exposes the reader as available, allowed and read-only.
+
+### Limitations
+
+The Daily Feed producer remains disabled with its 08:30 schedule paused, pending the user preference requested in this conversation; the current source report is dated 2026-10-06. Briefing instructions disclose unavailable or stale data. A scheduled model turn and Telegram delivery were not triggered during verification.
+
+## 2026-10-22 11:52 — Group chat timestamps after three-hour gaps
+
+- Category: feature
+- Area: frontend/chat
+
+### Summary
+
+Added centered local date/time markers before the first timestamped message, after gaps of at least three hours, and at local date changes across shared conversation surfaces. Preserved backend request/live-message/completion timestamps and local Project message times. Updated UI documentation. Validation: 37 focused frontend tests passed, production frontend build passed, and scoped git diff --check passed.
+
+### Limitations
+
+Legacy Project messages without saved timestamps remain undated.
+
+## 2026-10-22 00:29 — Prevent completed agent replies from being lost during history synchronization
+
+- Category: bugfix
+- Area: backend-agent-chat-history
+
+### Summary
+
+Refreshed ORM snapshots during chat-history scans and terminal cleanup so concurrent dispatcher completion is archived before SQL text is erased, including the initial migration pass. Added four regression cases for completion before/during synchronization and previously seen/unseen turns. Recovered the exact missing Codex response for Act session 74 turn 224, restarted the idle backend, and verified the restored reply through the live API. Focused history/session validation passed 65 tests with one skip; Ruff passed.
+
+### Limitations
+
+The recovered Act reply reports that calendar creation was blocked by a closed browser session; no calendar event was created or retried.
+
+## 2026-10-21 23:48 — Polish Assistant details, chat loading, and agent configuration
+
+- Category: bugfix
+- Area: frontend-assistant-agents-automations
+
+### Summary
+
+Prevented managed-chat welcome flashes during session discovery and initial history loading, with recoverable retry states. Moved Assistant agenda, questions, actions, runtime status and settings to /assistant/details. Removed Observer read-only tagline, displayed conversation metadata directly, stabilized Agents view scrolling, reorganized configuration and added searchable function visibility. Increased last-run status/date spacing in Automations. Updated UI documentation. Validation: 194 frontend tests passed, production build passed, desktop and 320/390px browser checks passed.
+
+### Limitations
+
+none
+
+## 2026-10-21 15:36 — Use Assistant instructions as Codex base and isolate managed memory
+
+- Category: bugfix
+- Area: assistant-runtime
+
+### Summary
+
+Assistant now supplies the existing assistant.txt directly as baseInstructions on thread start and resume, with an empty developerInstructions slot. Assistant, Act and Observer processes and thread overrides disable Codex memory injection and generation without modifying global Codex settings. Updated prompt/runtime documentation and transport/configuration tests. Validation: 63 focused tests passed, changed Python files passed Ruff, and the installed CLI schema confirms baseInstructions support for start and resume.
+
+### Limitations
+
+The running backend still uses its previous code. Automatic approval review blocked the backend restart with blocked by policy; activation requires a backend restart and Assistant refresh. Existing history is preserved. Conversational style rules and examples were not changed.
+
+## 2026-10-21 13:04 — Consolidate Assistant task prompts and compact runtime context
+
+- Category: refactor
+- Area: Assistant prompts and runtime context
+
+### Summary
+
+Made editable recurring agenda notes the sole task procedure, removed recurring wrappers and duplicate selected-task notes, retained generic recurrence rules in standing instructions, moved operation contracts to tool descriptions, compacted agenda/source/action context, and made title guidance conditional with a per-turn null-title schema. Queued task edits are read at execution, with retry metadata and backend approvals/receipts preserved. Updated focused tests and documentation; 268 distinct focused backend tests passed after updating the obsolete retry-wrapper expectation, and changed backend files passed Ruff.
+
+### Limitations
+
+The live backend was not restarted. Restart the backend and refresh Assistant to load the new standing instructions, tool descriptions and prompt assembly.
+
+## 2026-10-21 10:28 — Restore resumable Assistant Atlas initialization
+
+- Category: bugfix
+- Area: Assistant / Atlas initialization / agent credentials
+
+### Summary
+
+Check the exact managed MCP credential before reusing a live Assistant process; revoked or replaced credentials reconnect and resume the same daily thread with fresh authorization. Initialization now reads native current States and ignores obsolete timestamps in saved current-State tasks, preserving completed batches. Updated the affected initialization/image test fixtures and runtime documentation. Validation: 161 focused backend tests passed, Ruff passed on all changed Python files, and targeted diff checks passed. Reloaded the local backend and verified successful authenticated reads and acknowledgements advanced live initialization from 9 to 11 reviewed batches without an error.
+
+### Limitations
+
+Full Atlas initialization remains in progress; live verification covered resumed batches, not completion of the full reading pass.
+
+## 2026-10-21 03:22 — Redesign Eidolon with Linear styling and focused page organization
+
+- Category: feature
+- Area: frontend
+
+### Summary
+
+Rebuilt the shared design system from the supplied Linear reference with locally bundled Inter, charcoal surfaces, lavender accents, a new geometric Eidolon mark and favicon, grouped navigation, and a keyboard page switcher. Reworked Assistant and agent conversations, searchable catalogs and mobile record cards, Memory collections and modal editing, Activity approval inbox and execution timeline, grouped Settings and integration directory, six focused Skill Detail views with preserved drafts, and embedded app host chrome. Updated UI documentation and interaction regression coverage. Validation passed 187 frontend tests, the production TypeScript/Vite build, whitespace checks, and desktop/mobile browser review across main routes, integration details, skill views, keyboard navigation, and both themes.
+
+### Limitations
+
+none
+
+## 2026-10-21 02:47 — Unified recurring Assistant agenda tasks and latest missed recovery
+
+- Category: feature
+- Area: Assistant agenda and scheduling
+
+### Summary
+
+Replaced dedicated morning review and reflection scheduling with ordinary editable recurring agenda tasks. Added daily, weekly and monthly local-calendar recurrences, durable per-occurrence claims and execution history, latest-only missed-occurrence recovery, retries preserving prior-attempt context, and cancellation of outdated or edited queued work. Added generic authenticated chat-history read and daily-summary write tools so reflection uses normal Assistant execution. Migrates legacy times, timezone, completed runs and current queued work once without recreating edited or deleted tasks. Added agenda schedule editing, run/pause/resume/end controls and removed separate daily/reflection settings. Updated runtime, API, data-model and UI documentation. Validation passed: 82 final scheduling/activation/reflection tests; broader focused backend regressions; frontend suite and final 10 agenda tests; production frontend build; Ruff across app/tests; git diff --check.
+
+### Limitations
+
+Live Codex execution and Telegram delivery were not exercised. The backend must restart to load the new scheduler and apply the migration.
+
+## 2026-10-20 22:13 — Reorganize Eidolon around Assistant and unify the frontend
+
+- Category: feature
+- Area: Frontend UI and navigation
+
+### Summary
+
+Made Assistant the default home with its permanent conversation, collapsible agenda/actions, mobile drawer, and settings dialog. Moved Act/Observer conversations into Agents with separate configuration, and Project builds into Skills > Build a skill. Consolidated approvals, Assistant proposals, and build executions into Activity with pending counts; renamed Schedules to Automations and moved the function catalog into Settings. Unified dark/light styling, navigation, tables, controls, confirmations, Markdown replies, mobile composer layouts, and deferred route loading. Preserved existing session/build history and scoped drafts; guarded against out-of-order session reads. Validation: 157 frontend tests across 32 files, TypeScript/Vite production build, whitespace checks, 13 routes in desktop/mobile browsers, 320/390/768/1440 conversation layouts, dark/light themes, reduced motion, keyboard focus/Escape, and archive cancellation.
+
+### Limitations
+
+Existing major dependency upgrades remain tracked separately: React Router in TODO-021 and Vitest/mocker/tinypool in TODO-027. Browser checks exercised safe UI interactions and existing backend reads; no live agent turn or approval was executed as part of visual QA.

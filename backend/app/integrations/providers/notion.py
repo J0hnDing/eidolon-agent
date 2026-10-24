@@ -23,7 +23,7 @@ class NotionProviderAdapter:
         operation_id = invocation.operation.id
         input_json = dict(invocation.input)
         try:
-            if operation_id == "notion.daily_feed.write":
+            if operation_id.startswith("notion.daily_feed."):
                 page_id = row.configured_daily_feed_page_id
                 factory = self.compatibility_service.notion_daily_feed_provider_factory
                 if not page_id or factory is None:

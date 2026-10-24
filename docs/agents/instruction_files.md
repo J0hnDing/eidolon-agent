@@ -29,6 +29,7 @@ Instructions for update and standalone repair actions remain grouped by agent ro
 
 ```text
 backend/app/agent_instructions/
+  assistant.txt             shared persistent Assistant behavior
   product_manager/
     repair.md
     update.md
@@ -59,6 +60,8 @@ Instruction files define role behavior and how to consume supplied permission co
 `workflows/common/instructions/plan_build.md` is the combined planning prompt for `pm_plan_build`. Its first turn receives the available function catalog and complete config-derived permission policy; resumed turns receive the latest user clarification and reuse the same Codex App Server thread. It returns the decision contract and, only for `proceed_to_approval`, the complete blueprint and permission plan.
 
 `workflows/task_dag/instructions/product_manager.md` is used only after build-time approval for `pm_write_task_dag`.
+
+Managed Act, Observer and Assistant use their existing role instructions directly as Codex base instructions, replacing the built-in coding-agent prompt. Act and Observer use `ACT_INSTRUCTIONS` and `OBSERVER_INSTRUCTIONS` in `services/act_app_server_service.py`; Assistant loads `agent_instructions/assistant.txt`. No second role prompt or duplicate developer instruction is created; start and resume explicitly clear the former developer-instruction slot. This file owns shared behavior and authority; editable recurring agenda notes own task procedures and private tool descriptions own operation contracts. Recurring task turns use their current notes directly, with occurrence metadata supplied separately and no task wrapper. See [Assistant prompt ownership](../runtime/assistant.md#prompt-ownership-and-context).
 
 The common ProductManager blueprint instruction receives the concise available-only unified function-catalog index. Task-DAG Builder/Tester instructions consume full catalog context only for function ids assigned to the current node. The single-Codex instruction receives full context for every blueprint-selected function. Update and repair role instructions preserve the same selected-only boundary.
 

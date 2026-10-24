@@ -1,0 +1,47 @@
+- generic [ref=f4e3]:
+  - link "Skip to content" [ref=f4e4] [cursor=pointer]:
+    - /url: "#main-content"
+  - complementary [ref=f4e5]:
+    - generic [ref=f4e6]:
+      - link "Eidolon home" [ref=f4e7] [cursor=pointer]:
+        - /url: /assistant
+        - strong [ref=f4e9]: Eidolon
+      - button "Go to…" [ref=f4e11] [cursor=pointer]
+    - navigation "Primary navigation" [ref=f4e15]:
+      - generic [ref=f4e17]:
+        - link "Assistant" [ref=f4e18] [cursor=pointer]:
+          - /url: /assistant
+        - link "Agents" [ref=f4e22] [cursor=pointer]:
+          - /url: /agents
+        - link "Memory" [ref=f4e26] [cursor=pointer]:
+          - /url: /memory
+      - generic [ref=f4e30]:
+        - paragraph [ref=f4e31]: Workspace
+        - generic [ref=f4e32]:
+          - link "Applications" [ref=f4e33] [cursor=pointer]:
+            - /url: /apps
+          - link "Skills" [ref=f4e40] [cursor=pointer]:
+            - /url: /skills
+          - link "Automations" [ref=f4e44] [cursor=pointer]:
+            - /url: /automations
+          - link "Activity" [ref=f4e49] [cursor=pointer]:
+            - /url: /activity
+    - navigation "Settings navigation" [ref=f4e54]:
+      - link "Settings" [ref=f4e55] [cursor=pointer]:
+        - /url: /settings
+  - main [ref=f4e59]:
+    - generic [ref=f4e61]:
+      - generic [ref=f4e62]:
+        - heading "Assistant details" [level=1] [ref=f4e63]
+        - link "Back to conversation" [ref=f4e64] [cursor=pointer]:
+          - /url: /assistant
+      - navigation "Assistant details sections" [ref=f4e67]:
+        - link "Agenda & questions" [ref=f4e68] [cursor=pointer]:
+          - /url: /assistant/details?view=agenda
+        - link "Actions" [ref=f4e69] [cursor=pointer]:
+          - /url: /assistant/details?view=actions
+        - link "Settings" [ref=f4e70] [cursor=pointer]:
+          - /url: /assistant/details?view=settings
+        - link "Tool access" [ref=f4e71] [cursor=pointer]:
+          - /url: /assistant/details?view=access
+      - status [ref=f4e72]: Loading Assistant details…

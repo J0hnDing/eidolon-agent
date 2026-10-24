@@ -1,0 +1,163 @@
+- generic [ref=f5e3]:
+  - link "Skip to content" [ref=f5e4] [cursor=pointer]:
+    - /url: "#main-content"
+  - button "Close navigation" [ref=f5e5] [cursor=pointer]
+  - complementary [ref=f5e6]:
+    - generic [ref=f5e7]:
+      - generic [ref=f5e9]:
+        - strong [ref=f5e10]: Eidolon
+        - generic [ref=f5e11]: Your personal intelligence
+      - button "Close navigation" [ref=f5e12] [cursor=pointer]: ×
+    - navigation "Primary navigation" [ref=f5e13]:
+      - link "Assistant" [active] [ref=f5e14] [cursor=pointer]:
+        - /url: /assistant
+      - link "Agents" [ref=f5e18] [cursor=pointer]:
+        - /url: /agents
+      - link "Applications" [ref=f5e22] [cursor=pointer]:
+        - /url: /apps
+      - link "Skills" [ref=f5e26] [cursor=pointer]:
+        - /url: /skills
+      - link "Automations" [ref=f5e30] [cursor=pointer]:
+        - /url: /automations
+      - link "Memory" [ref=f5e34] [cursor=pointer]:
+        - /url: /memory
+      - link "Activity 12 pending approvals" [ref=f5e38] [cursor=pointer]:
+        - /url: /activity
+        - generic [ref=f5e41]: Activity
+        - generic "12 pending approvals" [ref=f5e42]: "12"
+    - generic [ref=f5e43]:
+      - navigation "Settings navigation" [ref=f5e44]:
+        - link "Settings" [ref=f5e45] [cursor=pointer]:
+          - /url: /settings
+      - generic [ref=f5e51]:
+        - strong [ref=f5e52]: Local-first
+        - generic [ref=f5e53]: Private by design
+  - main [aria-hidden] [ref=f5e54]:
+    - generic [ref=f5e55]:
+      - button [expanded] [ref=f5e56] [cursor=pointer]
+      - strong [ref=f5e60]: Eidolon
+    - generic [ref=f5e62]:
+      - generic [ref=f5e63]:
+        - generic [ref=f5e64]:
+          - heading [level=1] [ref=f5e65]: Assistant
+          - paragraph [ref=f5e66]: Think things through. Make room for what matters.
+        - generic [ref=f5e67]:
+          - button [ref=f5e68] [cursor=pointer]: Assistant settings
+          - button [ref=f5e69] [cursor=pointer]:
+            - text: Agenda & actions
+            - generic [ref=f5e70]: "4"
+      - region [ref=f5e73]:
+        - generic [ref=f5e75]:
+          - generic [ref=f5e76]:
+            - generic [ref=f5e77]:
+              - generic [ref=f5e78]:
+                - generic [aria-hidden] [ref=f5e79]: ✦
+                - generic [ref=f5e80]: Assistant
+              - strong [ref=f5e81]: Your ongoing conversation
+            - generic [ref=f5e82]: Created Oct 6, 2026, 6:42 PM
+          - log [ref=f5e84]:
+            - article [ref=f5e85]:
+              - generic [ref=f5e86]: Eidolon
+              - paragraph [ref=f5e89]: Hi, what can I do for you?
+            - article [ref=f5e90]:
+              - generic [ref=f5e91]: You
+              - paragraph [ref=f5e93]: Do an assessment now.
+            - article [ref=f5e94]:
+              - generic [ref=f5e95]: Eidolon
+              - generic [ref=f5e96]:
+                - paragraph [ref=f5e98]: Assessment complete.
+                - group [ref=f5e99]:
+                  - generic [ref=f5e100] [cursor=pointer]: › Worked for 3m 11s · 12 tools used
+            - article [ref=f5e101]:
+              - generic [ref=f5e102]: Eidolon
+              - generic [ref=f5e103]:
+                - paragraph [ref=f5e105]: "Goal: Define focused research interests and faculty fit Which research direction should your application brief focus on: proactive personal agents, NLP/deep learning, or another topic? Share any working question you already have."
+                - group [ref=f5e106]:
+                  - generic [ref=f5e107] [cursor=pointer]: › Worked for 0s
+            - article [ref=f5e108]:
+              - generic [ref=f5e109]: Eidolon
+              - generic [ref=f5e110]:
+                - paragraph [ref=f5e112]: "Goal: Confirm three strong referees and arrange letter submissions Who has agreed to write your references, and which requests are still awaiting a reply? Names and the courses or projects they know you through are enough to prepare tailored supporting packets."
+                - group [ref=f5e113]:
+                  - generic [ref=f5e114] [cursor=pointer]: › Worked for 0s
+            - article [ref=f5e115]:
+              - generic [ref=f5e116]: You
+              - paragraph [ref=f5e118]: This is an explicitly requested live diagnostic of the Assistant. Do not modify Atlas, facts, agenda or files, except the backend automatically records this chat. Do not send live or remote messages, browse or perform external actions. Call the private assistant.agenda.list tool with active_only=true and limit=1 to verify tools work; do not reveal agenda content. After that tool succeeds, reply exactly EIDOLON_LIVE_OK_aef20e5bac3c with no additional text. This diagnostic is not a new preference or fact to remember.
+            - article [ref=f5e119]:
+              - generic [ref=f5e120]: Eidolon
+              - generic [ref=f5e121]:
+                - paragraph [ref=f5e123]: EIDOLON_LIVE_OK_aef20e5bac3c
+                - group [ref=f5e124]:
+                  - generic [ref=f5e125] [cursor=pointer]: › Worked for 8s · 1 tool used
+            - article [ref=f5e126]:
+              - generic [ref=f5e127]: You
+              - paragraph [ref=f5e129]: Continue the live diagnostic. Without calling any tools, reading files or searching memory, repeat exactly the diagnostic marker you returned in the previous Assistant turn. Add no explanation and perform no other action.
+            - article [ref=f5e130]:
+              - generic [ref=f5e131]: Eidolon
+              - generic [ref=f5e132]:
+                - paragraph [ref=f5e134]: EIDOLON_LIVE_OK_aef20e5bac3c
+                - group [ref=f5e135]:
+                  - generic [ref=f5e136] [cursor=pointer]: › Worked for 2s
+            - article [ref=f5e137]:
+              - generic [ref=f5e138]: Eidolon
+              - generic [ref=f5e139]:
+                - paragraph [ref=f5e141]: Assistant session will refresh before the next turn.
+                - group [ref=f5e142]:
+                  - generic [ref=f5e143] [cursor=pointer]: › Worked for 0s
+            - article [ref=f5e144]:
+              - generic [ref=f5e145]: You
+              - paragraph [ref=f5e147]: This is the next live diagnostic after a session refresh. Do not call tools, read files, search memory or perform any other action. If the exact EIDOLON_LIVE_OK diagnostic marker from the previous session is present in your current conversation context, reply with that exact marker. If it is not present, reply exactly NO_PRIOR_CONTEXT. Never guess or reconstruct a marker.
+            - article [ref=f5e148]:
+              - generic [ref=f5e149]: Eidolon
+              - generic [ref=f5e150]:
+                - paragraph [ref=f5e152]: NO_PRIOR_CONTEXT
+                - group [ref=f5e153]:
+                  - generic [ref=f5e154] [cursor=pointer]: › Worked for 4s
+            - article [ref=f5e155]:
+              - generic [ref=f5e156]: Eidolon
+              - generic [ref=f5e157]:
+                - paragraph [ref=f5e159]: The master’s-shortlist research timed out, and I found no completed report. I’ve scheduled continuation of the approved research for 4:15 p.m. today.
+                - group [ref=f5e160]:
+                  - generic [ref=f5e161] [cursor=pointer]: › Worked for 1m 40s · 15 tools used
+            - article [ref=f5e162]:
+              - generic [ref=f5e163]: Eidolon
+              - generic [ref=f5e164]:
+                - generic [ref=f5e165]:
+                  - paragraph [ref=f5e166]:
+                    - text: Completed the
+                    - link [ref=f5e167] [cursor=pointer]:
+                      - /url: https://www.notion.so/3fcd7af6c4a581599d9bee2c52502e66
+                      - text: seven-program master’s shortlist
+                    - text: ", with deadlines, costs, funding, references and faculty fit."
+                  - paragraph [ref=f5e168]: I’d prioritize Toronto MSc, Waterloo MMath and UBC MSc. PKU and SJTU remain provisional; I’ve scheduled a 2027 admissions recheck for October 22.
+                - group [ref=f5e169]:
+                  - generic [ref=f5e170] [cursor=pointer]: › Worked for 1m 41s · 10 tools used
+            - article [ref=f5e171]:
+              - generic [ref=f5e172]: Eidolon
+              - paragraph [ref=f5e175]: Which master’s programs have you chosen or applied to so far?
+            - article [ref=f5e176]:
+              - generic [ref=f5e177]: Eidolon
+              - generic [ref=f5e178]:
+                - generic [ref=f5e179]:
+                  - paragraph [ref=f5e180]:
+                    - text: CSC336’s midterm is
+                    - strong [ref=f5e181]: Thursday, October 22 at 6 p.m.
+                    - text: Office hours tomorrow are
+                    - strong [ref=f5e182]: 1:30–2:30 p.m.
+                    - text: Toronto time. I added these details to your existing review task.
+                    - link [ref=f5e183] [cursor=pointer]:
+                      - /url: https://www.cs.toronto.edu/~ccc/Courses/336.html
+                      - text: Course announcement
+                  - paragraph [ref=f5e184]:
+                    - text: CSC413 H6 is nominally due tomorrow, but homework has
+                    - strong [ref=f5e185]: no late penalty until December 9 at 11:59 p.m.
+                    - text: I’d prioritize CSC336 preparation.
+                    - link [ref=f5e186] [cursor=pointer]:
+                      - /url: https://github.com/craffel/csc413-2516-deep-learning-fall-2026
+                      - text: Syllabus
+                - group [ref=f5e187]:
+                  - generic [ref=f5e188] [cursor=pointer]: › Worked for 1m 48s · 9 tools used
+          - generic [ref=f5e189]:
+            - textbox [ref=f5e190]:
+              - /placeholder: Ask Assistant for help or talk things through
+            - button [ref=f5e191] [cursor=pointer]

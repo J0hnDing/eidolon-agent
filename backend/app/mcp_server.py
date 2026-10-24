@@ -18,7 +18,8 @@ def build_server(service: McpFunctionService) -> Server:
         version="1.0.0",
         instructions=(
             "Eidolon exposes the local user's currently available integration and installed-function catalog. "
-            "Use each typed tool only for the user's explicit request. Tool contracts are snapshotted at startup; "
+            "Authenticated agents follow user requests and their standing autonomy rules. "
+            "Public callers use typed tools only for explicit user requests. Tool contracts are snapshotted at startup; "
             "restart the Codex session after catalog changes."
         ),
     )
@@ -31,8 +32,12 @@ def build_server(service: McpFunctionService) -> Server:
     async def call_tool(name: str, arguments: dict):
         try:
             result = service.invoke(name, arguments)
+            content: list[types.TextContent | types.ImageContent] = [types.TextContent(type="text", text=result.summary)]
+            if result.image is not None:
+                content.append(types.ImageContent(type="image", data=result.image["data"],
+                                                  mimeType=result.image["mime_type"]))
             return types.CallToolResult(
-                content=[types.TextContent(type="text", text=result.summary)],
+                content=content,
                 # MCP structuredContent is an object even when the native
                 # integration result is an array; match the projected schema.
                 structuredContent={"result": result.output} if isinstance(result.output, list) else result.output,

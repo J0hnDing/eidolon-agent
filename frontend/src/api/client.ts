@@ -1,14 +1,6 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
-export type MemoryCategory =
-  | "interests"
-  | "goals"
-  | "preferences"
-  | "routines"
-  | "trusted_sources"
-  | "blocked_sources"
-  | "writing_style"
-  | "risk_tolerance";
+export type MemoryCategory = "facts";
 
 export type RiskLevel = "low" | "medium" | "high" | "blocked";
 export type SkillRuntime = "function" | "web_app" | "service";
@@ -49,11 +41,37 @@ export interface MemoryFact {
   sensitivity: string;
   expires_at: string | null;
   user_editable: boolean;
+  provenance_json?: { attribution: "stated" | "observed" | "inferred"; evidence: string; updated_at: string } | null;
   created_at: string;
   updated_at: string;
 }
 
-export type MemoryFactInput = Omit<MemoryFact, "id" | "created_at" | "updated_at">;
+export type MemoryFactInput = Omit<MemoryFact, "id" | "created_at" | "updated_at" | "provenance_json">;
+
+export interface MemoryPageResult<T> {
+  items: T[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface DailyMemorySummary {
+  day: string;
+  summary: string;
+  path: string;
+  source_turn_id: number | null;
+}
+
+export interface MemoryChatMessage {
+  agent: "assistant" | "act" | "observer";
+  role: "user" | "assistant";
+  text: string;
+  timestamp: string;
+  session_id: number;
+  turn_id: number;
+  source: string;
+  source_id: number;
+}
 
 export interface Skill {
   id: number;
@@ -400,6 +418,7 @@ export interface ActTurn {
   assistant_message: string | null;
   live_messages?: ActLiveMessage[];
   backend_message_kind?: string | null;
+  assistant_context_json?: Record<string, unknown> | null;
   activity_json: Array<{ kind: string; label: string }>;
   status: string;
   error_message: string | null;
@@ -486,12 +505,66 @@ export interface AssistantProposal {
   source_session_id: number;
 }
 
-export interface AssistantAssessment {
+export interface AssistantRuntime {
+  initialization: { status: "pending" | "reading" | "blocked" | "complete"; reviewed_batches: number; remaining: number | null; error: string | null };
+  question_asking: { asked_today: number; last_asked_at?: string | null; timezone: string };
   enabled: boolean;
-  next_run_at: string | null;
-  last_run_at: string | null;
-  last_status: string | null;
+  memory_root?: string;
+  timezone: string;
+  primary_session_id: number | null;
+  thread_started_at?: string | null;
+  refresh_time?: string;
+  next_refresh_at?: string | null;
+  refresh_pending?: boolean;
+  /** Retained only for compatibility with older runtime responses. */
+  summary?: string;
+  change_tracking: {
+    pending_count: number;
+    sources: { source: string; checked_at: string | null; succeeded_at: string | null; error: string | null; pending_count: number }[];
+  };
 }
+
+export type AssistantRuntimeUpdate = Partial<Pick<AssistantRuntime, "enabled" | "timezone">>;
+
+export interface AssistantAgendaRecurrence {
+  frequency: "daily" | "weekly" | "monthly";
+  time: string;
+  timezone: string;
+  weekdays?: number[];
+  day_of_month?: number;
+}
+
+export interface AssistantAgendaOccurrence {
+  id: number;
+  scheduled_at: string;
+  status: "queued" | "succeeded" | "failed" | "skipped";
+  turn_id: number | null;
+  attempts: number;
+  retry_at: string | null;
+  completed_at: string | null;
+}
+
+export interface AssistantAgendaItem {
+  id: number;
+  kind: "task" | "question";
+  question_category: AssistantQuestionCategory;
+  completion_requirement?: "interaction_today" | null;
+  recurrence?: AssistantAgendaRecurrence | null;
+  last_occurrence?: AssistantAgendaOccurrence | null;
+  title: string;
+  notes: string;
+  status: "open" | "waiting" | "done" | "dismissed";
+  due_at: string | null;
+  revision: number;
+  source_session_id: number | null;
+  last_turn_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type AssistantQuestionCategory = "common" | "important" | "temporal";
+
+export type AssistantAgendaInput = Pick<AssistantAgendaItem, "kind" | "question_category" | "title" | "notes" | "status" | "completion_requirement"> & { due_at?: string | null; recurrence?: AssistantAgendaRecurrence | null };
 
 export interface PermissionPolicy {
   source: string;
@@ -1095,14 +1168,20 @@ export const api = {
     request<AssistantProposal>(`/agents/assistant/proposals/${proposalId}/approve`, { method: "POST" }),
   denyAssistantProposal: (proposalId: number) =>
     request<AssistantProposal>(`/agents/assistant/proposals/${proposalId}/deny`, { method: "POST" }),
-  getAssistantAssessment: () => request<AssistantAssessment>("/agents/assistant/assessment"),
-  updateAssistantAssessment: (enabled: boolean) =>
-    request<AssistantAssessment>("/agents/assistant/assessment", {
+  getAssistantRuntime: () => request<AssistantRuntime>("/agents/assistant/runtime"),
+  updateAssistantRuntime: (payload: AssistantRuntimeUpdate) =>
+    request<AssistantRuntime>("/agents/assistant/runtime", {
       method: "PUT",
-      body: JSON.stringify({ enabled }),
+      body: JSON.stringify(payload),
     }),
-  runAssistantAssessment: () =>
-    request<AssistantAssessment>("/agents/assistant/assessment/run", { method: "POST" }),
+  refreshAssistantRuntime: () =>
+    request<AssistantRuntime & { status: "refresh_pending"; session_id: number }>("/agents/assistant/runtime/refresh", { method: "POST" }),
+  listAssistantAgenda: () => request<AssistantAgendaItem[]>("/agents/assistant/agenda"),
+  createAssistantAgendaItem: (payload: AssistantAgendaInput) => request<AssistantAgendaItem>("/agents/assistant/agenda", { method: "POST", body: JSON.stringify(payload) }),
+  updateAssistantAgendaItem: (id: number, payload: Partial<AssistantAgendaInput> & { expected_revision: number }) => request<AssistantAgendaItem>(`/agents/assistant/agenda/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  runAssistantAgendaItem: (id: number, expectedRevision: number) => request<{ status: string; turn_id?: number; session_id?: number }>(`/agents/assistant/agenda/${id}/run`, { method: "POST", body: JSON.stringify({ expected_revision: expectedRevision }) }),
+  listAssistantAgendaOccurrences: (id: number) => request<AssistantAgendaOccurrence[]>(`/agents/assistant/agenda/${id}/occurrences`),
+  deleteAssistantAgendaItem: (id: number, expectedRevision: number) => request<void>(`/agents/assistant/agenda/${id}?expected_revision=${expectedRevision}`, { method: "DELETE" }),
   approveSkillGeneration: (id: number) =>
     request<SkillGenerationApprovalResponse>(`/skill-generation-requests/${id}/approve-generation`, {
       method: "POST",
@@ -1153,6 +1232,12 @@ export const api = {
       body: JSON.stringify({}),
     }),
   listMemoryFacts: () => request<MemoryFact[]>("/memory-facts"),
+  listDailyMemorySummaries: (offset = 0, limit = 20) =>
+    request<MemoryPageResult<DailyMemorySummary>>(`/memory/daily-summaries?offset=${offset}&limit=${limit}`),
+  listMemoryChatDays: (offset = 0, limit = 30) =>
+    request<MemoryPageResult<string>>(`/memory/chat-history/days?offset=${offset}&limit=${limit}`),
+  listMemoryChatHistory: (day: string, agent = "", offset = 0, limit = 50) =>
+    request<MemoryPageResult<MemoryChatMessage>>(`/memory/chat-history?day=${encodeURIComponent(day)}&offset=${offset}&limit=${limit}${agent ? `&agent=${encodeURIComponent(agent)}` : ""}`),
   createMemoryFact: (payload: MemoryFactInput) =>
     request<MemoryFact>("/memory-facts", {
       method: "POST",

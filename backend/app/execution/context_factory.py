@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.execution.context import InvocationContext
 from app.models import ActTurn, InvocationApproval, Skill, SkillRun, WebAppInstance
-from app.services.agent_policy_service import AgentPolicyService
+from app.services.agent_policy_service import AgentPermissionError, AgentPolicyService
 from app.services.function_registry_service import FunctionRegistryError
 from app.services.permission_service import PermissionService
 from app.services.web_app_runtime_service import WebAppRuntimeService
@@ -26,6 +26,10 @@ class InvocationContextFactory:
             .where(ActTurn.session_id == session_id, ActTurn.status == "running")
             .order_by(ActTurn.id.desc())
         )
+        if agent_id == "assistant" and (
+            turn_id is None or self.db.get(ActTurn, turn_id).cancel_requested_at is not None
+        ):
+            raise AgentPermissionError("Assistant tool execution requires a running turn")
         return InvocationContext(
             principal_kind="agent",
             origin="agent_mcp",

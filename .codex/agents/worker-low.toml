@@ -1,6 +1,6 @@
 name = "worker_low"
 description = "Handles small, mechanical, low-risk implementation tasks with clear requirements."
-model = "gpt-6.1-luna"
+model = "gpt-6-luna"
 model_reasoning_effort = "xhigh"
 sandbox_mode = "workspace-write"
 developer_instructions = """

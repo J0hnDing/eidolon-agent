@@ -9,6 +9,8 @@ class DailyFeedPageProvider(Protocol):
 
     def validate_connection(self) -> dict[str, str | None]: ...
 
+    def read(self) -> dict[str, object]: ...
+
     def write(self, markdown: str) -> dict[str, object]: ...
 
 
@@ -17,6 +19,8 @@ class DailyFeedPageService:
     provider: DailyFeedPageProvider
 
     def invoke(self, operation_id: str, input_json: dict[str, object]) -> dict[str, object]:
+        if operation_id == "notion.daily_feed.read":
+            return self.provider.read()
         if operation_id == "notion.daily_feed.write":
             return self.provider.write(str(input_json["markdown"]))
         raise ValueError("Daily Feed page operation is unsupported")
@@ -34,6 +38,7 @@ class FakeDailyFeedPageProvider:
     ) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.markdown = ""
+        self.last_edited_time = "2026-10-22T12:00:00Z"
         self.bot_id = bot_id
         self.bot_name = bot_name
         self.workspace_name = workspace_name
@@ -52,6 +57,10 @@ class FakeDailyFeedPageProvider:
             "bot_name": self.bot_name,
             "workspace_name": self.workspace_name,
         }
+
+    def read(self) -> dict[str, object]:
+        self.calls.append(("read", {}))
+        return {"markdown": self.markdown, "last_edited_time": self.last_edited_time}
 
     def write(self, markdown: str) -> dict[str, object]:
         self.calls.append(("write", {"markdown": markdown}))

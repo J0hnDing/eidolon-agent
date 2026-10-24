@@ -1,11 +1,46 @@
 // @vitest-environment jsdom
 
-import { render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Skill } from "../api/client";
-import { SkillTable } from "./SkillsPage";
+import { Skill, api } from "../api/client";
+import SkillsPage, { SkillTable } from "./SkillsPage";
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+describe("SkillsPage", () => {
+  it("offers a direct entry to the skill-building flow", async () => {
+    vi.spyOn(api, "listSkills").mockResolvedValue([]);
+
+    render(<MemoryRouter><SkillsPage /></MemoryRouter>);
+
+    const buildLink = await screen.findByRole("link", { name: "Build a skill" });
+    expect(buildLink.getAttribute("href")).toBe("/skills/build");
+    expect(screen.getByText("No skills yet. Build one to add a reusable capability.")).toBeTruthy();
+  });
+
+  it("combines runtime, search, and availability and can clear an empty result", async () => {
+    vi.spyOn(api, "listSkills").mockResolvedValue([
+      { id: 1, name: "daily_brief", description: "Morning report", runtime: "service", status: "installed", risk_level: "low", enabled: true, is_running: false } as Skill,
+      { id: 2, name: "brief_editor", description: "Edit reports", runtime: "web_app", status: "installed", risk_level: "low", enabled: false, is_running: false } as Skill,
+    ]);
+    render(<MemoryRouter><SkillsPage /></MemoryRouter>);
+    expect(await screen.findByRole("link", { name: "Open Daily Brief skill details" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Services 1" }));
+    expect(screen.queryByRole("link", { name: "Open Brief Editor skill details" })).toBeNull();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search skills" }), { target: { value: "daily brief" } });
+    expect(screen.getByRole("link", { name: "Open Daily Brief skill details" })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Availability"), { target: { value: "disabled" } });
+    expect(screen.getByRole("heading", { name: "No skills match these filters" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getByRole("link", { name: "Open Daily Brief skill details" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open Brief Editor skill details" })).toBeTruthy();
+  });
+});
 
 describe("SkillTable", () => {
   it("shows the shared running indicator only for active skills", () => {

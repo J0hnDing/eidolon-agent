@@ -42,7 +42,7 @@ Custom skills are created deliberately through Project mode. Their inputs, analy
 
 The control plane provides the context and infrastructure for these workflows:
 
-- **Persistent agents.** Act carries out work, Observer helps inspect and understand existing information, and Assistant reviews priorities and proposes useful next actions. Each has resumable conversations and a distinct permission policy.
+- **Persistent agents.** Act carries out work, Observer helps inspect and understand existing information, and Assistant is the primary personal agent, with a durable agenda, curiosity, morning review and mandatory nightly summary reflection. Each has resumable conversations and a distinct permission policy.
 - **User-defined personal context.** [Eidolon-Atlas](docs/integrations/atlas.md) holds explicit goals, projects, interests, experiences, relationships, and knowledge. Agents and skills can consult this editable context without having to infer a profile from conversation history.
 - **Workspace and memory.** Agents share a local workspace with dedicated memory and knowledge areas. Act can keep explicit memories you request or approve; Eidolon also provides editable, deletable memory facts.
 - **Integrations.** Connect supported operations from tools such as Notion, Google Calendar, Google Drive, Gmail, Outlook, GitHub, and Atlas. Telegram supports agent conversations, notifications, and approvals; WeCom provides an Observer conversation channel.
@@ -69,7 +69,7 @@ The isolation model is still evolving: approved server-side network domains are 
 
 Eidolon is under active development as a local, single-user system. The skill lifecycle, persistent agents, integrations, scheduling, explicit memory, and credential management are implemented.
 
-**Self-assessment and improvement are planned for later.** The direction is to evaluate outcomes and propose evidence-backed changes to skills and behavior, with review before adoption. Assistant's current assessments concern your todos, goals, and opportunities; they do not mean Eidolon evaluates or improves itself. Automatic selection of stored memory facts for agent workflows is also unfinished.
+**Self-assessment and improvement are planned for later.** The direction is to evaluate outcomes and propose evidence-backed changes to skills and behavior, with review before adoption. Assistant evaluates personal-task outcomes and adjusts its agenda and understanding; it does not autonomously rewrite application code or skill implementations. Shared workspace `memory/` holds facts outside Atlas, concise daily summaries from mandatory nightly reflection, and complete retained chats with all three agents. Completed chat content lives only in that archive; SQLite retains active text and runtime metadata, and browser storage retains agent-chat metadata only. The archive retains 30 days and 50 MiB, discarding oldest whole messages from Chat and recovery too. The agenda stays in its existing tools/database.
 
 See the [roadmap](docs/todo.md) for confirmed unfinished work and the [working history](docs/working_history.md) for completed milestones.
 

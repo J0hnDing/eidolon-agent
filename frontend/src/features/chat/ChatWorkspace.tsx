@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, Fragment, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -8,16 +8,29 @@ import {
   ProposedSkillValidation,
 } from "../../api/client";
 import { DeleteIconButton } from "../../components/DeleteIconButton";
+import { MessageMarkdown } from "../../components/MessageMarkdown";
+import { AppIcon } from "../../components/AppIcon";
+import eidolonMark from "../../../resource/logo/eidolon-mark.svg";
+import "./conversations.css";
 import { ChatConversation, ChatMessage } from "../../lib/chatStore";
 import { parseBackendDateTime } from "../../lib/dateTime";
+import { messageTimestampSeparators } from "./messageTimeline";
 
 type ChatWorkspaceProps = {
+  embedded?: boolean;
+  hideSidebar?: boolean;
+  title?: string;
+  description?: string;
+  allowedModes?: ConversationMode[];
   conversations: ChatConversation[];
   activeConversationId: string;
   messages: ChatMessage[];
   draft: string;
   mode: ConversationMode;
   isBusy: boolean;
+  historyLoading?: boolean;
+  historyError?: boolean;
+  onRetryHistory?: () => void;
   canReplyToAct?: boolean;
   isSending: boolean;
   isGenerating: boolean;
@@ -36,12 +49,20 @@ type ChatWorkspaceProps = {
 };
 
 export function ChatWorkspace({
+  embedded = false,
+  hideSidebar = false,
+  title = "Chat",
+  description,
+  allowedModes,
   conversations,
   activeConversationId,
   messages,
   draft,
   mode,
   isBusy,
+  historyLoading = false,
+  historyError = false,
+  onRetryHistory,
   canReplyToAct = false,
   isSending,
   isGenerating,
@@ -60,29 +81,37 @@ export function ChatWorkspace({
 }: ChatWorkspaceProps) {
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
   return (
-    <section className="page stack">
-      <header className="page-header">
+    <section className={embedded ? "chat-page embedded-chat" : "page stack chat-page"} aria-label={`${title} conversation`}>
+      {!embedded && <header className="page-header">
         <div>
-          <h1>Chat</h1>
+          <h1>{title}</h1>
+          {description && <p className="muted">{description}</p>}
         </div>
-      </header>
+      </header>}
 
-      <div className="chat-workspace">
-        <ChatSidebar
+      <div className={`chat-workspace ${hideSidebar ? "single-conversation" : ""}`}>
+        {!hideSidebar && <ChatSidebar
           conversations={conversations}
           activeConversationId={activeConversationId}
           onNewConversation={onNewConversation}
           onSelectConversation={onSelectConversation}
-        />
+          allowedModes={allowedModes}
+        />}
         <div className="chat-panel">
           <ConversationModeBar
             conversation={activeConversation}
             isBusy={isBusy}
             onDeleteConversation={onDeleteConversation}
+            showTitle={Boolean(allowedModes)}
           />
           <MessageList
             key={activeConversationId}
+            mode={mode}
+            onDraftChange={onDraftChange}
             messages={messages}
+            historyLoading={historyLoading}
+            historyError={historyError}
+            onRetryHistory={onRetryHistory}
             isSending={isSending}
             isGenerating={isGenerating}
             onApproveBuild={onApproveBuild}
@@ -94,6 +123,7 @@ export function ChatWorkspace({
             draft={draft}
             mode={mode}
             isBusy={isBusy}
+            historyLoading={historyLoading || historyError}
             canReplyToAct={canReplyToAct}
             isSending={isSending}
             onDraftChange={onDraftChange}
@@ -103,7 +133,7 @@ export function ChatWorkspace({
           />
         </div>
       </div>
-      {error && <p className="error-text">{error}</p>}
+      {error && <p className="error-text" role="alert">{error}</p>}
     </section>
   );
 }
@@ -113,14 +143,27 @@ function ChatSidebar({
   activeConversationId,
   onNewConversation,
   onSelectConversation,
+  allowedModes,
 }: Pick<
   ChatWorkspaceProps,
   | "conversations"
   | "activeConversationId"
   | "onNewConversation"
   | "onSelectConversation"
+  | "allowedModes"
 >) {
   const [isCreatePopoverOpen, setIsCreatePopoverOpen] = useState(false);
+  const [compact, setCompact] = useState(() => window.matchMedia?.("(max-width: 640px)").matches ?? false);
+  const [threadsOpen, setThreadsOpen] = useState(false);
+  const [threadSearch, setThreadSearch] = useState("");
+  const threadsId = useId();
+  useEffect(() => {
+    const media = window.matchMedia?.("(max-width: 640px)");
+    const update = () => setCompact(media?.matches ?? false);
+    media?.addEventListener("change", update);
+    return () => media?.removeEventListener("change", update);
+  }, []);
+  const threadsCollapsed = Boolean(allowedModes) && compact && !threadsOpen;
   const createButtonRef = useRef<HTMLButtonElement>(null);
   const firstCreateOptionRef = useRef<HTMLButtonElement>(null);
   const createPopoverRef = useRef<HTMLElement>(null);
@@ -175,9 +218,11 @@ function ChatSidebar({
   }
 
   return (
-    <aside className="chat-sidebar" aria-label="Chats">
-      <div className="chat-thread-list">
-        {conversations.map((conversation) => (
+    <aside className={`chat-sidebar ${threadsCollapsed ? "threads-collapsed" : ""}`} aria-label={allowedModes?.[0] === "project" ? "Skill builds" : "Chats"}>
+      {allowedModes && <div className="chat-sidebar-heading"><strong>{allowedModes[0] === "project" ? "Your builds" : "Conversations"}</strong><span className="muted">{conversations.length}</span><button type="button" className="secondary compact chat-thread-toggle" aria-label={threadsOpen ? "Hide conversations" : "Show conversations"} aria-expanded={threadsOpen} aria-controls={threadsId} onClick={() => setThreadsOpen((open) => !open)}>{threadsOpen ? "−" : "⌄"}</button></div>}
+      <div className="thread-search" hidden={threadsCollapsed}><AppIcon name="search" size={15} /><input type="search" aria-label="Search conversations" placeholder="Search conversations…" value={threadSearch} onChange={(event) => setThreadSearch(event.target.value)} /></div>
+      <div id={threadsId} className="chat-thread-list" hidden={threadsCollapsed}>
+        {conversations.filter((conversation) => conversation.title.toLowerCase().includes(threadSearch.toLowerCase().trim())).map((conversation) => (
           <div
             key={conversation.id}
             className={`chat-thread-row ${conversation.id === activeConversationId ? "active" : ""}`}
@@ -185,7 +230,8 @@ function ChatSidebar({
             <button
               type="button"
               className="chat-thread-select"
-              onClick={() => onSelectConversation(conversation.id)}
+              onClick={() => { onSelectConversation(conversation.id); setThreadsOpen(false); }}
+              aria-pressed={conversation.id === activeConversationId}
             >
               <span className="chat-thread-heading">
                 <span className={`chat-thread-title ${conversation.mode}`}>
@@ -197,9 +243,12 @@ function ChatSidebar({
             </button>
           </div>
         ))}
+        {threadSearch && !conversations.some((conversation) => conversation.title.toLowerCase().includes(threadSearch.toLowerCase().trim())) && <p className="thread-empty muted">No matching conversations.</p>}
       </div>
       <div className="chat-create-actions" aria-label="Create conversation">
-        <button
+        {allowedModes?.length === 1 ? <button type="button" onClick={() => { onNewConversation(allowedModes[0]); setThreadsOpen(false); }}>
+          <span aria-hidden="true">＋</span> {allowedModes[0] === "project" ? "New build" : "New conversation"}
+        </button> : <button
           ref={createButtonRef}
           type="button"
           aria-haspopup="dialog"
@@ -209,7 +258,7 @@ function ChatSidebar({
         >
           <span className="conversation-mode-symbol" aria-hidden="true">＋</span>
           <span>New Chat</span>
-        </button>
+        </button>}
         {isCreatePopoverOpen && (
           <div className="chat-create-popover-layer">
             <aside
@@ -221,13 +270,13 @@ function ChatSidebar({
               aria-label="Create conversation"
             >
               <div className="chat-create-options">
-                {conversationModeOptions.map((option, index) => (
+                {conversationModeOptions.filter((option) => !allowedModes || allowedModes.includes(option.mode)).map((option, index) => (
                   <button
                     key={option.mode}
                     ref={index === 0 ? firstCreateOptionRef : undefined}
                     type="button"
                     className={`chat-create-option ${option.mode}`}
-                    aria-label={`Create ${option.label}`}
+                    aria-label={`${option.mode === "assistant" ? "Open" : "Create"} ${option.label}`}
                     onClick={() => {
                       onNewConversation(option.mode);
                       closeCreatePopover();
@@ -235,7 +284,7 @@ function ChatSidebar({
                   >
                     <span className="conversation-mode-symbol" aria-hidden="true">{modeSymbol(option.mode)}</span>
                     <span>
-                      <strong>Create {option.label}</strong>
+                      <strong>{option.mode === "assistant" ? "Open" : "Create"} {option.label}</strong>
                     </span>
                   </button>
                 ))}
@@ -252,36 +301,37 @@ function ConversationModeBar({
   conversation,
   isBusy,
   onDeleteConversation,
+  showTitle,
 }: {
   conversation: ChatConversation | undefined;
   isBusy: boolean;
   onDeleteConversation: (conversationId: string) => void;
+  showTitle: boolean;
 }) {
   if (!conversation) return null;
   return (
     <div className="chat-mode-bar">
-      <ConversationModeMarker mode={conversation.mode} />
+      <span className="chat-conversation-heading"><ConversationModeMarker mode={conversation.mode} />{showTitle && <strong>{conversation.mode === "assistant" ? "Your ongoing conversation" : conversation.title}</strong>}</span>
       <span className="chat-session-metadata">
         <span>Created {formatSessionTimestamp(conversation.createdAt)}</span>
-        {conversation.mode !== "project" && (
-          <span>
-            {conversation.origin === "wecom"
-              ? `WeCom user ${conversation.wecomUserId ?? "unknown"}`
-              : "Not a WeCom session"}
-          </span>
-        )}
+        {conversation.origin === "wecom" && <span>WeCom user {conversation.wecomUserId ?? "unknown"}</span>}
       </span>
-      <DeleteIconButton
+      {conversation.mode !== "assistant" && <DeleteIconButton
         onClick={() => onDeleteConversation(conversation.id)}
         disabled={isBusy}
         label="Delete conversation"
-      />
+      />}
     </div>
   );
 }
 
 function MessageList({
+  mode,
+  onDraftChange,
   messages,
+  historyLoading,
+  historyError,
+  onRetryHistory,
   isSending,
   isGenerating,
   onApproveBuild,
@@ -290,7 +340,12 @@ function MessageList({
   onDenyRuntime,
 }: Pick<
   ChatWorkspaceProps,
+  | "mode"
+  | "onDraftChange"
   | "messages"
+  | "historyLoading"
+  | "historyError"
+  | "onRetryHistory"
   | "isSending"
   | "isGenerating"
   | "onApproveBuild"
@@ -298,11 +353,40 @@ function MessageList({
   | "onApproveRuntime"
   | "onDenyRuntime"
 >) {
+  const list = useRef<HTMLDivElement>(null);
+  const followingLatest = useRef(true);
+  const timestampSeparators = messageTimestampSeparators(messages);
+  const showWelcome = !historyLoading && !historyError && !isSending && !isGenerating && (messages.length === 0 || (messages.length === 1 && /^Hi, what can I (?:do|build) for you/.test(messages[0].content)));
+  const suggestions = mode === "project" ? [
+    ["Start with an idea", "I want to build a skill that "], ["Automate a routine", "Help me design a reusable skill to automate "],
+  ] : mode === "act" ? [
+    ["Work on a task", "Help me complete this task: "], ["Research something", "Research and summarize "],
+  ] : mode === "observer" ? [
+    ["Review my context", "Review my current context and summarize what needs attention."], ["Explore a question", "Help me understand "],
+  ] : [
+    ["Plan my day", "Help me plan my day based on what needs my attention."], ["Think it through", "Help me think through "],
+    ["Catch me up", "What has changed recently that I should know about?"], ["Find the next step", "Help me choose the next useful step on my current goals."],
+  ];
+  useLayoutEffect(() => {
+    if (followingLatest.current && list.current) list.current.scrollTop = list.current.scrollHeight;
+  }, [messages, isSending, isGenerating, historyLoading]);
   return (
-    <div className="message-list" aria-live="polite">
-      {messages.map((message) => (
-        <article key={message.id} className={`message ${message.role}`}>
-          <span>{message.role === "assistant" ? "Eidolon" : "You"}</span>
+    <div ref={list} className="message-list" role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={historyLoading} onScroll={() => {
+      const element = list.current;
+      if (element) followingLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 140;
+    }}>
+      {showWelcome && <div className="conversation-welcome"><img src={eidolonMark} alt="" width="48" height="48" /><h2>{messages[0]?.content ?? (mode === "project" ? "What would you like to build?" : "What can we work on?")}</h2><div className="conversation-suggestions">{suggestions.map(([label, prompt]) => <button type="button" className="secondary" key={label} onClick={() => { onDraftChange(prompt); document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus(); }}><span>{label}</span><AppIcon name="arrow" size={15} /></button>)}</div></div>}
+      {historyLoading && <div className="conversation-history-state" role="status"><span className="thinking-spinner" aria-hidden="true" />Loading conversation…</div>}
+      {historyError && <div className="conversation-history-state"><p role="alert">Could not load this conversation.</p><button type="button" className="secondary compact" onClick={onRetryHistory}>Retry conversation</button></div>}
+      {!showWelcome && !historyLoading && !historyError && messages.map((message) => (
+        <Fragment key={message.id}>
+          {timestampSeparators.has(message.id) && <div className="chat-timestamp-separator">
+            <time dateTime={timestampSeparators.get(message.id)!.toISOString()}>
+              {formatSessionTimestamp(message.createdAt!)}
+            </time>
+          </div>}
+        <article className={`message ${message.role}`}>
+          <span className="message-author">{message.role === "assistant" && <img src={eidolonMark} alt="" width="20" height="20" />}{message.role === "assistant" ? "Eidolon" : "You"}</span>
           <MessageBody
             message={message}
             isWorking={isGenerating}
@@ -312,6 +396,7 @@ function MessageList({
             onDenyRuntime={onDenyRuntime}
           />
         </article>
+        </Fragment>
       ))}
       {(isSending || isGenerating) && !messages.some((message) => message.kind === "thinking") && (
         <article className="message assistant thinking-message" aria-label="Eidolon is thinking">
@@ -330,6 +415,7 @@ function ChatComposer({
   draft,
   mode,
   isBusy,
+  historyLoading,
   canReplyToAct,
   isSending,
   onDraftChange,
@@ -338,28 +424,35 @@ function ChatComposer({
   onCancelAct,
 }: Pick<
   ChatWorkspaceProps,
-  "draft" | "mode" | "isBusy" | "canReplyToAct" | "isSending" | "onDraftChange" | "onSubmit" | "activeActTurnId" | "onCancelAct"
+  "draft" | "mode" | "isBusy" | "historyLoading" | "canReplyToAct" | "isSending" | "onDraftChange" | "onSubmit" | "activeActTurnId" | "onCancelAct"
 >) {
-  const acceptingReply = mode === "act" && canReplyToAct && !isSending;
+  const acceptingReply = (mode === "act" || mode === "assistant") && canReplyToAct && !isSending;
   return (
-    <form className="composer" onSubmit={onSubmit}>
-      <input
+    <div className="composer-dock"><form className="composer" onSubmit={onSubmit}>
+      <textarea
+        rows={1}
         value={draft}
         onChange={(event) => onDraftChange(event.target.value)}
         placeholder={
-          acceptingReply ? "Reply to Act while it waits..." : isBusy
+          acceptingReply ? `Reply to ${modeLabel(mode)} while it waits...` : isBusy
             ? mode === "project" ? "Project build is running..." : `${modeLabel(mode)} is thinking...`
             : mode === "project"
               ? "Describe the skill you want to propose"
-              : `Ask ${modeLabel(mode)} ${mode === "act" ? "to work in its workspace" : mode === "observer" ? "to inspect local context" : "to assess goals and propose work"}`
+              : `Ask ${modeLabel(mode)} ${mode === "act" ? "to work in its workspace" : mode === "observer" ? "to inspect local context" : "for help or talk things through"}`
         }
         aria-label="Conversation message"
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            if (!isBusy || acceptingReply) event.currentTarget.form?.requestSubmit();
+          }
+        }}
         disabled={isBusy && mode === "project"}
       />
       <button
         type="submit"
         className="chat-send-button"
-        disabled={isBusy && !acceptingReply}
+        disabled={historyLoading || (isBusy && !acceptingReply)}
         aria-label={isSending ? "Sending message" : "Send message"}
         title={isSending ? "Sending" : "Send message"}
       >
@@ -367,14 +460,14 @@ function ChatComposer({
           <span className="thinking-spinner" aria-hidden="true" />
         ) : (
           <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M9 7 5 11l4 4M5 11h8a4 4 0 0 0 4-4V5" />
+            <path d="M12 19V5m-6 6 6-6 6 6" />
           </svg>
         )}
       </button>
       {mode !== "project" && activeActTurnId !== null && (
         <button type="button" className="secondary" onClick={onCancelAct}>Cancel</button>
       )}
-    </form>
+    </form></div>
   );
 }
 
@@ -396,10 +489,10 @@ function ConversationModeMarker({ mode, showSymbol = true }: { mode: Conversatio
 }
 
 const conversationModeOptions: Array<{ mode: ConversationMode; label: string; description: string }> = [
+  { mode: "assistant", label: "Assistant", description: "Your primary assistant for conversation and ongoing help." },
   { mode: "project", label: "Project", description: "Creates proposed skills after approval." },
   { mode: "act", label: "Act", description: "Works persistently in the shared workspace with Eidolon tools." },
   { mode: "observer", label: "Observer", description: "Reads local context without making changes." },
-  { mode: "assistant", label: "Assistant", description: "Assesses goals and proposes work for Act." },
 ];
 
 function formatSessionTimestamp(value: string): string {
@@ -480,14 +573,14 @@ function MessageBody({
       <div className="chat-approval-card">
         <p>{message.content}</p>
         {message.skill && <p><Link to={`/skills/${message.skill.id}`}>Open {message.skill.name}</Link></p>}
-        {message.agentRun && <p><Link to={`/agent-runs/${message.agentRun.id}`}>Open Agent Run #{message.agentRun.id}</Link></p>}
+        {message.agentRun && <p><Link to={`/activity/runs/${message.agentRun.id}`}>Open execution #{message.agentRun.id}</Link></p>}
         {message.validation && <p className="muted">Validation {message.validation.ok ? "passed" : "needs attention"}.</p>}
       </div>
     );
   }
   return (
     <div className="message-body">
-      <p>{message.content}</p>
+      {message.role === "assistant" ? <MessageMarkdown content={message.content} /> : <p>{message.content}</p>}
       {message.actWork && <ActWorkDetails work={message.actWork} />}
     </div>
   );

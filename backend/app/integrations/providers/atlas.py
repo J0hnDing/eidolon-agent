@@ -41,4 +41,7 @@ def _audit_resource(invocation: AuthorizedIntegrationInvocation) -> str | None:
     if node_id:
         return f"node:{node_id}"
     goal_id = resource.values.get("id") if invocation.operation.id == "atlas.goal.update" else None
-    return f"goal:{goal_id}" if goal_id else None
+    if goal_id:
+        return f"goal:{goal_id}"
+    identity = resource.values.get("id") or resource.values.get("record_id")
+    return f"{resource.type}:{identity}" if identity else None

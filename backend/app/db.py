@@ -21,6 +21,8 @@ engine = create_engine(
 def enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
+    # Erased completed message bodies must not remain in SQLite free cells.
+    cursor.execute("PRAGMA secure_delete=ON")
     cursor.close()
 
 
@@ -45,6 +47,47 @@ def ensure_local_schema() -> None:
     inspector = inspect(engine)
     table_names = set(inspector.get_table_names())
     with engine.begin() as connection:
+        if "assistant_agenda" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("assistant_agenda")}
+            for column, definition in {
+                "recurrence_json": "JSON", "recurrence_start_at": "DATETIME",
+                "schedule_version": "INTEGER NOT NULL DEFAULT 1",
+                "completion_requirement": "VARCHAR(32)",
+            }.items():
+                if column not in columns:
+                    connection.execute(text(f"ALTER TABLE assistant_agenda ADD COLUMN {column} {definition}"))
+            if "question_category" not in columns:
+                connection.execute(text(
+                    "ALTER TABLE assistant_agenda ADD COLUMN question_category VARCHAR(16) NOT NULL DEFAULT 'common'"
+                ))
+        if "act_live_messages" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("act_live_messages")}
+            if "agenda_question_id" not in columns:
+                connection.execute(text("ALTER TABLE act_live_messages ADD COLUMN agenda_question_id INTEGER"))
+        if "assistant_state" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("assistant_state")}
+            if "agenda_schedules_migrated" not in columns:
+                connection.execute(text(
+                    "ALTER TABLE assistant_state ADD COLUMN agenda_schedules_migrated BOOLEAN NOT NULL DEFAULT 0"
+                ))
+            if "planning_contract_migrated" not in columns:
+                connection.execute(text(
+                    "ALTER TABLE assistant_state ADD COLUMN planning_contract_migrated BOOLEAN NOT NULL DEFAULT 0"
+                ))
+            if "thread_started_at" not in columns:
+                connection.execute(text("ALTER TABLE assistant_state ADD COLUMN thread_started_at DATETIME"))
+            if "refresh_pending" not in columns:
+                connection.execute(text("ALTER TABLE assistant_state ADD COLUMN refresh_pending BOOLEAN NOT NULL DEFAULT 0"))
+            if "reflection_retry_at" not in columns:
+                connection.execute(text("ALTER TABLE assistant_state ADD COLUMN reflection_retry_at DATETIME"))
+            if "initialization_json" not in columns:
+                connection.execute(text("ALTER TABLE assistant_state ADD COLUMN initialization_json JSON NOT NULL DEFAULT '{}'"))
+            if "checkpoints_json" in columns:
+                connection.execute(text("ALTER TABLE assistant_state DROP COLUMN checkpoints_json"))
+        if "memory_facts" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("memory_facts")}
+            if "provenance_json" not in columns:
+                connection.execute(text("ALTER TABLE memory_facts ADD COLUMN provenance_json JSON"))
         if "agent_proposals" in table_names:
             columns = {column["name"] for column in inspector.get_columns("agent_proposals")}
             if "telegram_outcome_fingerprint" not in columns:
@@ -69,10 +112,16 @@ def ensure_local_schema() -> None:
                     ))
         if "act_turns" in table_names:
             columns = {column["name"] for column in inspector.get_columns("act_turns")}
+            if "history_archived_at" not in columns:
+                connection.execute(text("ALTER TABLE act_turns ADD COLUMN history_archived_at DATETIME"))
             if "backend_message_kind" not in columns:
                 connection.execute(text("ALTER TABLE act_turns ADD COLUMN backend_message_kind VARCHAR(32)"))
             if "assessment_report_id" not in columns:
                 connection.execute(text("ALTER TABLE act_turns ADD COLUMN assessment_report_id VARCHAR(128)"))
+            if "assistant_context_json" not in columns:
+                connection.execute(text("ALTER TABLE act_turns ADD COLUMN assistant_context_json JSON"))
+            if "assistant_review_json" not in columns:
+                connection.execute(text("ALTER TABLE act_turns ADD COLUMN assistant_review_json JSON"))
         if "telegram_bot_connections" in table_names:
             columns = {column["name"] for column in inspector.get_columns("telegram_bot_connections")}
             for column, definition in {

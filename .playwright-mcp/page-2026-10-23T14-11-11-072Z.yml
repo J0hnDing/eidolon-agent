@@ -1,0 +1,35 @@
+- generic [ref=f11e3]:
+  - link "Skip to content" [ref=f11e4] [cursor=pointer]:
+    - /url: "#main-content"
+  - complementary [ref=f11e5]:
+    - generic [ref=f11e6]:
+      - link "Eidolon home" [ref=f11e7] [cursor=pointer]:
+        - /url: /assistant
+        - strong [ref=f11e9]: Eidolon
+      - button "Go to…" [ref=f11e11] [cursor=pointer]
+    - navigation "Primary navigation" [ref=f11e15]:
+      - generic [ref=f11e17]:
+        - link "Assistant" [ref=f11e18] [cursor=pointer]:
+          - /url: /assistant
+        - link "Agents" [ref=f11e22] [cursor=pointer]:
+          - /url: /agents
+        - link "Memory" [ref=f11e26] [cursor=pointer]:
+          - /url: /memory
+      - generic [ref=f11e30]:
+        - paragraph [ref=f11e31]: Workspace
+        - generic [ref=f11e32]:
+          - link "Applications" [ref=f11e33] [cursor=pointer]:
+            - /url: /apps
+          - link "Skills" [ref=f11e40] [cursor=pointer]:
+            - /url: /skills
+          - link "Automations" [ref=f11e44] [cursor=pointer]:
+            - /url: /automations
+          - link "Activity 12 pending approvals" [ref=f11e49] [cursor=pointer]:
+            - /url: /activity
+            - generic [ref=f11e52]: Activity
+            - generic "12 pending approvals" [ref=f11e53]: "12"
+    - navigation "Settings navigation" [ref=f11e55]:
+      - link "Settings" [ref=f11e56] [cursor=pointer]:
+        - /url: /settings
+  - main [ref=f11e60]:
+    - status [ref=f11e63]: Loading page…

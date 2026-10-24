@@ -190,11 +190,15 @@ class FunctionCatalogService:
             availability_group = (
                 "report"
                 if operation_id.startswith("notion.report.")
+                else "daily_feed"
+                if operation_id.startswith("notion.daily_feed.")
                 else "todo"
                 if provider_id == "notion"
                 else "provider"
             )
-            availability_key = (operation_id, availability_group)
+            # All other operations use provider_connected; probe each provider
+            # once per snapshot, especially Atlas's loopback health request.
+            availability_key = (provider_id, availability_group)
             if availability_key not in integration_availability:
                 integration_availability[availability_key] = integrations.operation_available(
                     operation_id

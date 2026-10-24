@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -10,7 +9,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import ActTurn, AgentProposal, AssistantFollowUp
+from app.models import ActTurn, AgentProposal
 from app.services.act_workspace_service import ensure_act_workspace
 
 
@@ -51,7 +50,7 @@ class AgentProposalService:
             raise ValueError("Only function sequences can be edited")
         if not steps:
             raise ValueError("A function sequence needs at least one step")
-        from app.services.assistant_assessment_result_service import (
+        from app.services.assistant_actions import (
             deterministic_catalog,
             proposal_fingerprint,
             validate_action,
@@ -90,7 +89,7 @@ class AgentProposalService:
             "type": "act", "description": proposal.actions, "instruction": proposal.instruction,
         }
         if approve and action["type"] == "functions":
-            from app.services.assistant_assessment_result_service import deterministic_catalog, validate_action
+            from app.services.assistant_actions import deterministic_catalog, validate_action
 
             validate_action(action, deterministic_catalog(self.db), proposal.follow_up_json)
         claimed = self.db.execute(
@@ -116,15 +115,6 @@ class AgentProposalService:
                     proposal.act_session_id = session.id
                     proposal.act_turn_id = turn.id
                 proposal.execution_status = "queued"
-                if proposal.follow_up_json is not None:
-                    timing = proposal.follow_up_json["timing"]
-                    due_at = (datetime.fromisoformat(timing["at"].replace("Z", "+00:00"))
-                              if timing["type"] == "absolute" else None)
-                    self.db.add(AssistantFollowUp(
-                        proposal_id=proposal.id, session_id=proposal.source_session_id,
-                        message=proposal.follow_up_json["message"], timing_json=timing,
-                        due_at=due_at, status="waiting",
-                    ))
             self.db.commit()
         except Exception:
             self.db.rollback()
@@ -153,14 +143,6 @@ class AgentProposalService:
             turn = self.db.get(ActTurn, proposal.act_turn_id)
             if turn is not None and proposal.execution_status != turn.status:
                 proposal.execution_status = turn.status
-                follow_up = self.db.scalar(select(AssistantFollowUp).where(
-                    AssistantFollowUp.proposal_id == proposal.id,
-                ))
-                if follow_up is not None:
-                    if turn.status == "succeeded":
-                        follow_up.status = "scheduled"
-                    elif turn.status in {"failed", "cancelled", "interrupted"}:
-                        follow_up.status = "cancelled"
                 self.db.commit()
                 self.mirror(proposal)
                 self._telegram(proposal)

@@ -1,3 +1,4 @@
+import { ReactNode, useId, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -11,8 +12,34 @@ import {
   SkillVersionComparison,
 } from "../../api/client";
 import { DeleteIconButton } from "../../components/DeleteIconButton";
+import { AppIcon } from "../../components/AppIcon";
+import { Modal } from "../../components/Modal";
 import { formatDisplayName } from "../../lib/displayName";
 import { formatSystemDateTime } from "../../lib/dateTime";
+import "./skill-detail.css";
+
+export type SkillDetailView = "overview" | "versions" | "permissions" | "runs" | "files" | "settings";
+
+export function SkillDetailViews({ activeView, onViewChange, children }: {
+  activeView: SkillDetailView;
+  onViewChange: (view: SkillDetailView) => void;
+  children: Record<SkillDetailView, ReactNode>;
+}) {
+  const views: [SkillDetailView, string][] = [["overview", "Overview"], ["versions", "Versions"], ["permissions", "Permissions"], ["runs", "Runs"], ["files", "Files"], ["settings", "Settings"]];
+  return <div className="skill-detail-workspace">
+    <div className="skill-detail-tabs" role="tablist" aria-label="Skill views">
+      {views.map(([view, label], index) => <button key={view} type="button" role="tab" id={`skill-tab-${view}`} aria-controls={`skill-panel-${view}`} aria-selected={view === activeView} tabIndex={view === activeView ? 0 : -1} onClick={() => onViewChange(view)} onKeyDown={(event) => {
+        const direction = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+        if (!direction && event.key !== "Home" && event.key !== "End") return;
+        event.preventDefault();
+        const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? views.length - 1 : (index + direction + views.length) % views.length;
+        onViewChange(views[nextIndex][0]);
+        document.getElementById(`skill-tab-${views[nextIndex][0]}`)?.focus();
+      }}>{label}</button>)}
+    </div>
+    {views.map(([view]) => <div key={view} id={`skill-panel-${view}`} role="tabpanel" aria-labelledby={`skill-tab-${view}`} hidden={view !== activeView} tabIndex={0} className="skill-view-panel">{children[view]}</div>)}
+  </div>;
+}
 
 export type UpdateChatMessage = {
   id: number;
@@ -57,7 +84,7 @@ export function UpdateSuggestionChat({
     <div className="update-chat">
       {messages.map((message) => (
         <article key={message.id} className={`message ${message.role}`}>
-          <span>{message.role}</span>
+          <span>{message.role === "assistant" ? "Eidolon" : "You"}</span>
           {message.kind === "thinking" ? (
             <div className="thinking-row">
               <span className="thinking-spinner" aria-hidden="true" />
@@ -96,7 +123,7 @@ export function UpdateSuggestionChat({
       {latestResponse && (
         <div className="update-response-meta muted">
           <span>Agent Run:</span>
-          <Link className="button-link secondary compact" to={`/agent-runs/${latestResponse.agent_run_id}`}>
+          <Link className="button-link secondary compact" to={`/activity/runs/${latestResponse.agent_run_id}`}>
             #{latestResponse.agent_run_id}
           </Link>
           {latestResponse.version && <span>Draft version: {latestResponse.version.version}</span>}
@@ -202,7 +229,7 @@ export function VersionList({
                 <VersionCheck label="Validation" status={version.validation_status} />
                 <VersionCheck label="Tests" status={version.test_status} />
               </div>
-              <code className="version-path">{version.folder_path}</code>
+              <details className="version-package-details"><summary>Package location</summary><code className="version-path">{version.folder_path}</code></details>
             </div>
             <div className="button-row version-actions">
               <button type="button" className="secondary" onClick={() => onCompare(version.id)} disabled={isWorking}>Compare</button>
@@ -241,50 +268,41 @@ function VersionCheck({ label, status }: { label: string; status: string }) {
 }
 
 export function SkillFilesDisclosure({ files }: { files: SkillFile[] }) {
+  const [query, setQuery] = useState("");
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const selectedFile = files.find((file) => file.path === selectedPath) ?? files[0];
+  const filtered = files.filter((file) => file.path.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   return (
-    <section className="detail-panel skill-files-panel">
+    <section className="detail-panel skill-files-panel stack">
       <header className="page-header">
-        <div>
-          <h2>Skill Files</h2>
-          <p className="muted">Inspect the generated package only when you need its implementation details.</p>
-        </div>
-        <span className="badge">{files.length} {files.length === 1 ? "file" : "files"}</span>
+        <div><h2>Skill Files</h2><p className="muted">Choose a file to inspect its source.</p></div>
+        <span className="skill-section-meta">{files.length} {files.length === 1 ? "file" : "files"}</span>
       </header>
-      {files.length > 0 ? (
-        <div className="file-list">
-          {files.map((file) => (
-            <details key={file.path} className="skill-file-disclosure">
-              <summary>
-                <span>{file.path}</span>
-                <svg className="disclosure-chevron skill-file-chevron" viewBox="0 0 20 20" aria-hidden="true">
-                  <path d="m7 4 6 6-6 6" />
-                </svg>
-              </summary>
-              <pre>{file.content}</pre>
-            </details>
-          ))}
+      {files.length > 0 ? <div className="skill-file-browser">
+        <div className="skill-file-sidebar">
+          <label className="skill-list-search">Find a file<input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search file names" /></label>
+          <nav className="skill-file-navigation" aria-label="Package files">
+            {filtered.map((file) => <button key={file.path} type="button" className="skill-file-option" aria-current={selectedFile?.path === file.path ? "true" : undefined} onClick={() => setSelectedPath(file.path)}><AppIcon name="code" size={15} /><span>{file.path}</span></button>)}
+            {filtered.length === 0 && <p className="muted skill-list-empty">No matching files.</p>}
+          </nav>
         </div>
-      ) : (
-        <p className="muted">No readable skill files found.</p>
-      )}
+        {selectedFile && <section className="skill-file-reader" aria-label="Selected file"><h3>{selectedFile.path}</h3><pre aria-label={`Source of ${selectedFile.path}`}>{selectedFile.content || "This file is empty."}</pre></section>}
+      </div> : <p className="muted">No readable skill files found.</p>}
     </section>
   );
 }
 
-export function VersionComparisonPanel({ comparison }: { comparison: SkillVersionComparison }) {
+export function VersionComparisonPanel({ comparison, onClose }: { comparison: SkillVersionComparison; onClose?: () => void }) {
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const selectedFile = comparison.files.find((file) => file.path === selectedPath) ?? comparison.files[0];
   return (
-    <div className="version-compare">
-      <h3>Compare {comparison.candidate_version.version} with active {comparison.active_version.version}</h3>
-      {comparison.files.map((file) => (
-        <details key={file.path} className="run-detail">
-          <summary>{file.path}</summary>
-          <div className="compare-grid">
-            <section><h4>Active</h4><pre>{file.active ?? "File not present."}</pre></section>
-            <section><h4>Candidate</h4><pre>{file.candidate ?? "File not present."}</pre></section>
-          </div>
-        </details>
-      ))}
-    </div>
+    <section className="version-compare stack" aria-label="Version comparison">
+      <header className="page-header"><div><h3>Compare {comparison.candidate_version.version} with active {comparison.active_version.version}</h3><p className="muted">Choose a file to review both versions.</p></div>{onClose && <button type="button" className="secondary compact" onClick={onClose}>Close comparison</button>}</header>
+      {comparison.files.length > 0 ? <>
+        <label className="skill-compare-select">File<select value={selectedFile?.path ?? ""} onChange={(event) => setSelectedPath(event.target.value)}>{comparison.files.map((file) => <option key={file.path} value={file.path}>{file.path}</option>)}</select></label>
+        {selectedFile && <div className="compare-grid"><section><h4>Active · {comparison.active_version.version}</h4><pre aria-label={`Active source of ${selectedFile.path}`}>{selectedFile.active ?? "File not present."}</pre></section><section><h4>Candidate · {comparison.candidate_version.version}</h4><pre aria-label={`Candidate source of ${selectedFile.path}`}>{selectedFile.candidate ?? "File not present."}</pre></section></div>}
+      </> : <p className="muted">No file differences were recorded.</p>}
+    </section>
   );
 }
 
@@ -313,7 +331,7 @@ export function ValidationResult({ validation }: { validation: ProposedSkillVali
   );
 }
 
-export function RunDetail({ run }: { run: SkillRun }) {
+export function RunDetail({ run, onInspectRun }: { run: SkillRun; onInspectRun?: (run: SkillRun) => void }) {
   const failureSummary = runFailureSummary(run);
 
   return (
@@ -356,7 +374,7 @@ export function RunDetail({ run }: { run: SkillRun }) {
       {(run.child_runs?.length ?? 0) > 0 && (
         <div className="run-nested-history">
           <h3>Called Skill Runs</h3>
-          <RunHistory runs={run.child_runs ?? []} />
+          <RunHistory runs={run.child_runs ?? []} onInspectRun={onInspectRun} />
         </div>
       )}
     </div>
@@ -410,35 +428,47 @@ export function RunOutput({ run }: { run: SkillRun | null }) {
   );
 }
 
-export function RunHistory({ runs }: { runs: SkillRun[] }) {
+export function RunHistory({ runs, onInspectRun }: { runs: SkillRun[]; onInspectRun?: (run: SkillRun) => void }) {
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("all");
+  const [trail, setTrail] = useState<SkillRun[]>([]);
+  const searchId = useId();
+  const filterId = useId();
+  const selectedSnapshot = trail[trail.length - 1];
+  const selectedRun = selectedSnapshot ? findStoredRun(runs, selectedSnapshot.id) ?? selectedSnapshot : undefined;
+  const search = query.trim().toLocaleLowerCase();
+  const statuses = [...new Set(runs.map((run) => run.status))].sort();
+  const filtered = runs.filter((run) => (status === "all" || run.status === status) &&
+    [run.id, run.skill_name, run.status, compactRunFailureSummary(run), run.started_at].join(" ").toLocaleLowerCase().includes(search));
   if (runs.length === 0) return <p className="muted">No run history yet.</p>;
 
-  return (
-    <div className="run-history-list">
-      {runs.map((run) => (
-        <details key={run.id} className="run-history-entry">
-          <summary className="run-history-header">
-            <div>
-              <h3>{run.skill_name ? `${formatDisplayName(run.skill_name)} · ` : ""}Run #{run.id}</h3>
-              <span>{formatTimestamp(run.started_at, "not started")}</span>
-              {compactRunFailureSummary(run) && (
-                <span className="run-history-error-summary">{compactRunFailureSummary(run)}</span>
-              )}
-            </div>
-            <span className="run-history-summary-status">
-              <span className={`badge run-${run.status}`}>{run.status}</span>
-              <svg className="disclosure-chevron run-history-chevron" viewBox="0 0 20 20" aria-hidden="true">
-                <path d="m7 4 6 6-6 6" />
-              </svg>
-            </span>
-          </summary>
-          <div className="run-history-content">
-            <RunDetail run={run} />
-          </div>
-        </details>
-      ))}
+  return <div className="skill-run-history stack">
+    <div className="skill-list-toolbar">
+      <label className="skill-list-search" htmlFor={searchId}>Search runs<input id={searchId} type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Run number, skill, or error" /></label>
+      <label htmlFor={filterId}>Status<select id={filterId} value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option>{statuses.map((value) => <option key={value} value={value}>{formatDisplayName(value)}</option>)}</select></label>
+      <span className="skill-section-meta" role="status">{filtered.length} of {runs.length} runs</span>
     </div>
-  );
+    <div className="run-history-list">
+      {filtered.map((run) => <button type="button" key={run.id} className="run-history-entry run-history-header" aria-label={`Inspect ${run.skill_name ? `${formatDisplayName(run.skill_name)} ` : ""}Run #${run.id}`} onClick={() => onInspectRun ? onInspectRun(run) : setTrail([run])}>
+        <span className="run-history-copy"><strong>{run.skill_name ? `${formatDisplayName(run.skill_name)} · ` : ""}Run #{run.id}</strong><span>{formatTimestamp(run.started_at, "not started")}</span>{compactRunFailureSummary(run) && <span className="run-history-error-summary">{compactRunFailureSummary(run)}</span>}</span>
+        <span className="run-history-summary-status"><span className={`badge run-${run.status}`}>{run.status}</span><AppIcon name="chevron" size={15} /></span>
+      </button>)}
+      {filtered.length === 0 && <div className="skill-list-empty"><p className="muted">No runs match these filters.</p><button type="button" className="secondary compact" onClick={() => { setQuery(""); setStatus("all"); }}>Clear filters</button></div>}
+    </div>
+    {selectedRun && !onInspectRun && <Modal title={`${selectedRun.skill_name ? `${formatDisplayName(selectedRun.skill_name)} · ` : ""}Run #${selectedRun.id}`} onClose={() => setTrail([])} className="skill-run-dialog">
+      {trail.length > 1 && <button type="button" className="secondary compact skill-run-back" onClick={() => setTrail((current) => current.slice(0, -1))}><AppIcon name="back" size={14} />Back to Run #{trail[trail.length - 2].id}</button>}
+      <RunDetail run={selectedRun} onInspectRun={(run) => setTrail((current) => [...current, run])} />
+    </Modal>}
+  </div>;
+}
+
+function findStoredRun(runs: SkillRun[], id: number): SkillRun | undefined {
+  for (const run of runs) {
+    if (run.id === id) return run;
+    const child = findStoredRun(run.child_runs ?? [], id);
+    if (child) return child;
+  }
+  return undefined;
 }
 
 function runFailureSummary(run: SkillRun): string | null {

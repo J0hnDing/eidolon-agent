@@ -11,8 +11,17 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from jsonschema import Draft202012Validator
+
+from app.integrations.atlas_attachments import ATLAS_ATTACHMENT_OPERATIONS
+from app.integrations.atlas_lifecycle import ATLAS_LIFECYCLE_OPERATIONS
+from app.integrations.atlas_state_write import ATLAS_STATE_WRITE_OPERATIONS
+from app.integrations.atlas_write import ATLAS_WRITE_OPERATIONS
 from app.integrations.types import IntegrationOperationSpec
-from app.services.atlas_read_provider import ATLAS_READ_OPERATIONS, AtlasReadProvider, fake_read_output
+from app.services.atlas_attachment_provider import AtlasAttachmentProvider
+from app.services.atlas_mutation_provider import AtlasMutationProvider
+from app.services.atlas_read_provider import ATLAS_READ_OPERATIONS, AtlasReadProvider, _segment, fake_read_output
+from app.services.atlas_state_write_provider import AtlasStateWriteProvider
 from app.services.github_provider import IntegrationProviderError
 
 ATLAS_BASE_URL = "http://127.0.0.1:4817"
@@ -87,6 +96,26 @@ class UrllibAtlasProviderAdapter:
         operation: IntegrationOperationSpec,
         input_json: dict[str, Any],
     ) -> dict[str, Any]:
+        if operation.id in ATLAS_LIFECYCLE_OPERATIONS:
+            return AtlasMutationProvider(self._request).execute(operation.id, input_json)
+        if operation.id in ATLAS_STATE_WRITE_OPERATIONS:
+            return AtlasStateWriteProvider(self._request).execute(operation.id, input_json)
+        if operation.id in ATLAS_ATTACHMENT_OPERATIONS:
+            return AtlasAttachmentProvider(self._request).execute(operation.id, input_json)
+        if operation.id in ATLAS_WRITE_OPERATIONS:
+            if not Draft202012Validator(operation.input_schema).is_valid(input_json):
+                raise IntegrationProviderError("invalid_input", "Atlas write input does not match its schema")
+            kind, action = operation.id.split(".")[1:]
+            payload = {key: value for key, value in input_json.items() if key not in {"id", "expected_revision"}}
+            path = f"/api/{kind}"
+            if action == "update":
+                path += "/" + _segment(input_json["id"])
+                payload["revision"] = input_json["expected_revision"]
+            result = self._request(path, payload, timeout=10, max_bytes=2_000_000,
+                                   method="POST" if action == "create" else "PATCH")
+            if not isinstance(result, dict) or not isinstance(result.get("id"), str):
+                raise IntegrationProviderError("provider_unavailable", "Atlas returned invalid write result")
+            return {"record" if kind == "records" else "link": result}
         if operation.id in ATLAS_READ_OPERATIONS:
             return AtlasReadProvider(self._request).execute(operation.id, input_json)
         operation = _transport_operation(operation)
@@ -476,21 +505,27 @@ class UrllibAtlasProviderAdapter:
     def _request(
         self,
         path: str,
-        payload: dict[str, Any] | None,
+        payload: dict[str, Any] | bytes | None,
         *,
         timeout: float,
         max_bytes: int,
         method: str,
+        headers: dict[str, str] | None = None,
     ) -> Any:
-        raw_input = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        headers = {"Accept": "application/json"}
+        try:
+            raw_input = payload if isinstance(payload, bytes) else (
+                None if payload is None else json.dumps(payload, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+        except (ValueError, TypeError, UnicodeEncodeError):
+            raise IntegrationProviderError("invalid_input", "Atlas input must be finite UTF-8 JSON") from None
+        request_headers = {"Accept": "application/json"}
         if raw_input is not None:
-            headers["Content-Type"] = "application/json"
+            request_headers["Content-Type"] = "application/json"
+        request_headers.update(headers or {})
         request = Request(
             f"{ATLAS_BASE_URL}{path}",
             data=raw_input,
             method=method,
-            headers=headers,
+            headers=request_headers,
         )
         try:
             response = build_opener(_NoRedirect()).open(request, timeout=timeout)
@@ -506,19 +541,15 @@ class UrllibAtlasProviderAdapter:
             elif exc.code == 404:
                 error_type = "not_found"
             elif exc.code == 409:
-                if code in {
-                    "GOAL_HAS_ACTIVE_CHILDREN", "GOAL_DEPENDENCY_CYCLE", "GOAL_DEPENDENCY_EXISTS",
-                    "GOAL_TRASHED", "IDEMPOTENCY_CONFLICT", "MOTIVATIONAL_CYCLE", "VALIDATION_ERROR",
-                    "CUSTOM_FIELD_ARCHIVED", "PARENT_NOT_KNOWN", "CHILDREN_REQUIRE_KNOWN_PARENT",
-                    "KNOWLEDGE_NODE_EXISTS", "RECORD_TRASHED",
-                }:
-                    error_type = "invalid_input"
-                else:
-                    error_type = "node_already_known" if code == "node_already_known" else "stale_revision"
-            elif exc.code == 400:
+                error_type = {"REVISION_CONFLICT": "stale_revision", "EVENT_ID_CONFLICT": "event_id_conflict",
+                              "node_already_known": "node_already_known"}.get(code, "invalid_input")
+            elif exc.code in {400, 415}:
                 error_type = "invalid_input"
+            elif exc.code == 413:
+                error_type = "request_too_large"
             else:
                 error_type = "provider_unavailable"
+            exc.close()
             raise IntegrationProviderError(error_type, "Atlas could not complete the operation") from None
         except TimeoutError:
             raise IntegrationProviderError("provider_timeout", "Atlas did not respond before the timeout") from None
@@ -844,6 +875,40 @@ class FakeAtlasProviderAdapter:
         }
 
     def execute(self, operation: IntegrationOperationSpec, input_json: dict[str, Any]) -> dict[str, Any]:
+        if operation.id in ATLAS_LIFECYCLE_OPERATIONS | ATLAS_STATE_WRITE_OPERATIONS | ATLAS_ATTACHMENT_OPERATIONS:
+            self.calls.append((operation.id, dict(input_json)))
+            if self.error_type:
+                raise IntegrationProviderError(self.error_type, "Fake Atlas operation failed")
+            if not Draft202012Validator(operation.input_schema).is_valid(input_json):
+                raise IntegrationProviderError("invalid_input", "Fake Atlas input is invalid")
+            native = {key: value for key, value in input_json.items() if key not in {"id", "expected_revision"}}
+            if operation.id == "atlas.custom_fields.list":
+                return {"fields": []}
+            if operation.id == "atlas.states.configuration.update":
+                return {"configuration": {"revision": input_json["expected_revision"] + 1, "states": input_json["states"]}}
+            if operation.id in {"atlas.states.events.create", "atlas.states.observations.create"}:
+                return {"event": {"id": "fake-event", **native}, "duplicate": False}
+            if operation.id == "atlas.attachments.download":
+                return {"file": {"path": "workspace/downloads/fake.pdf", "filename": "fake.pdf", "bytes": 1,
+                                 "sha256": "a" * 64, "media_type": "application/pdf"}}
+            if operation.id == "atlas.attachments.upload":
+                return {"attachment": {"id": "fake-image", "recordId": input_json["record_id"]}}
+            if operation.id.endswith((".delete", ".empty")):
+                return {"result": {"deleted": 0 if operation.id == "atlas.trash.empty" else True}}
+            key = ("field" if operation.id.startswith("atlas.custom_fields.") else
+                   "link" if operation.id.startswith("atlas.links.") else "record")
+            return {key: {**native, "id": input_json.get("id", "fake-native-id"),
+                          "revision": input_json.get("expected_revision", 0) + 1}}
+        if operation.id in ATLAS_WRITE_OPERATIONS:
+            self.calls.append((operation.id, dict(input_json)))
+            if self.error_type:
+                raise IntegrationProviderError(self.error_type, "Fake Atlas operation failed")
+            kind = operation.id.split(".")[1]
+            native = {key: value for key, value in input_json.items() if key not in {"id", "expected_revision"}}
+            return {"record" if kind == "records" else "link": {
+                **native, "id": input_json.get("id", "fake-native-id"),
+                "revision": input_json.get("expected_revision", 0) + 1,
+            }}
         if operation.id in ATLAS_READ_OPERATIONS:
             self.calls.append((operation.id, dict(input_json)))
             if self.error_type:

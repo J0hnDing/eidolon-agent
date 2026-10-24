@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html
 import secrets
 import threading
 from collections import defaultdict
@@ -9,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Callable
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -32,6 +31,7 @@ from app.services.invocation_approval_presentation import (
     presentation_snapshot,
 )
 from app.services.secret_store import SecretStore, SecretStoreError, default_secret_store
+from app.services.telegram_message_format import agent_message_plain_text, render_agent_message_chunks
 from app.services.telegram_provider import (
     PairingMessage,
     TelegramApprovalCallback,
@@ -63,6 +63,7 @@ TELEGRAM_AGENT_ROLES = (
     TELEGRAM_OBSERVER_ROLE,
     TELEGRAM_ASSISTANT_ROLE,
 )
+TELEGRAM_TOPIC_ROLES = (TELEGRAM_ACT_ROLE, TELEGRAM_OBSERVER_ROLE)
 TELEGRAM_AGENT_IDS = {
     TELEGRAM_ACT_ROLE: "act",
     TELEGRAM_OBSERVER_ROLE: "observer",
@@ -80,6 +81,11 @@ TELEGRAM_TOPIC_REQUIRED_MESSAGE = (
 TELEGRAM_TOPIC_HELP_MESSAGE = (
     "Each Telegram topic is one independent Eidolon session. "
     "Create, rename, and delete topics in Telegram; there is no session switcher."
+)
+TELEGRAM_ASSISTANT_HELP_MESSAGE = (
+    "This private chat is your permanent Assistant conversation. "
+    "Send a message here, /status to inspect it, or /refresh to start a fresh Assistant session "
+    "before the next turn. Visible chat history stays here."
 )
 
 _telegram_topic_locks: defaultdict[tuple[int, str, int], threading.Lock] = defaultdict(threading.Lock)
@@ -151,7 +157,7 @@ class TelegramService:
         error_type = None if status in {"connected", "pairing"} else status
         if (
             status == "invalid"
-            and self.role in TELEGRAM_AGENT_ROLES
+            and self.role in TELEGRAM_TOPIC_ROLES
             and (row.topics_enabled is not True or row.allows_users_to_create_topics is not True)
         ):
             error_type = "threaded_mode_required"
@@ -223,6 +229,7 @@ class TelegramService:
                 self.db.add(row)
             else:
                 row = previous
+                self._invalidate_assistant_deliveries(row)
                 # Pairing a replacement bot or private chat invalidates every
                 # old topic identity for this connection.  The Eidolon
                 # sessions remain historical, but none may be routed through
@@ -283,11 +290,13 @@ class TelegramService:
         row.bot_username = identity.get("username")
         row.topics_enabled = identity.get("has_topics_enabled")
         row.allows_users_to_create_topics = identity.get("allows_users_to_create_topics")
-        if self.role in TELEGRAM_AGENT_ROLES:
+        if self.role in TELEGRAM_TOPIC_ROLES:
             if row.topics_enabled is not True or row.allows_users_to_create_topics is not True:
                 row.status = "invalid"
             elif was_threaded_mode_invalid:
                 row.status = "connected" if row.paired_chat_id and row.paired_user_id else "pairing"
+        elif self.role == TELEGRAM_ASSISTANT_ROLE and was_threaded_mode_invalid:
+            row.status = "connected" if row.paired_chat_id and row.paired_user_id else "pairing"
         row.updated_at = datetime.now(UTC)
         self.db.commit()
         if row.status == "connected" and self.role in TELEGRAM_AGENT_ROLES:
@@ -307,6 +316,7 @@ class TelegramService:
             raise TelegramServiceError("connection_unavailable", "Operating-system secret storage is unavailable")
         try:
             self.secret_store.delete(row.secret_reference, namespace=TELEGRAM_SECRET_NAMESPACE)
+            self._invalidate_assistant_deliveries(row)
             self.db.query(TelegramTopicSession).filter(
                 TelegramTopicSession.connection_id == row.id
             ).delete(synchronize_session=False)
@@ -384,28 +394,19 @@ class TelegramService:
                 "Assistant proposals can only use the Assistant bot",
             )
         row, token = self._connected_api_credential()
-        mapping = self._topic_mapping_for_session(row.id, proposal.source_session_id)
-        if mapping is None:
-            token = ""
-            mapping = self.create_topic_for_session(proposal.source_session_id, title=proposal.title)
-            row, token = self._connected_api_credential()
         try:
-            title, rationale, actions = self._assessment_proposal_text(proposal)
-            try:
-                delivery = send_agent_proposal_request(
-                    self.api_factory(token),
-                    row.paired_chat_id or "",
-                    message_thread_id=mapping.message_thread_id,
-                    proposal_id=proposal.id,
-                    title=title,
-                    rationale=rationale,
-                    instruction="",
-                    actions=actions,
-                    references=[],
-                )
-            except TelegramProviderError as exc:
-                self._reconcile_missing_topic(row, mapping.message_thread_id, exc)
-                raise
+            title, rationale, actions = self._agent_proposal_text(proposal)
+            delivery = send_agent_proposal_request(
+                self.api_factory(token),
+                row.paired_chat_id or "",
+                message_thread_id=None,
+                proposal_id=proposal.id,
+                title=title,
+                rationale=rationale,
+                instruction="",
+                actions=actions,
+                references=[],
+            )
         finally:
             token = ""
         proposal.telegram_connection_id = row.id
@@ -426,7 +427,7 @@ class TelegramService:
             self.db.commit()
             return
         try:
-            title, rationale, actions = self._assessment_proposal_text(proposal)
+            title, rationale, actions = self._agent_proposal_text(proposal)
             edit_agent_proposal_outcome(
                 self.api_factory(token),
                 row.paired_chat_id or "",
@@ -446,11 +447,11 @@ class TelegramService:
         self.db.commit()
         self.db.refresh(proposal)
 
-    def _assessment_proposal_text(self, proposal: AgentProposal) -> tuple[str, str, str]:
+    def _agent_proposal_text(self, proposal: AgentProposal) -> tuple[str, str, str]:
         provenance = proposal.provenance_json or {}
         kind = provenance.get("kind")
         if kind in {"todo", "goal"}:
-            from app.services.assistant_assessment_result_service import resolve_target_name
+            from app.services.assistant_actions import resolve_target_name
 
             target = ({"type": "todo", "id": provenance.get("todo_id")}
                       if kind == "todo" else provenance.get("target", {}))
@@ -683,12 +684,55 @@ class TelegramService:
                 self.update_agent_proposal(proposal)
 
     def _connection(self) -> TelegramBotConnection | None:
-        return self.db.scalar(
+        connection = self.db.scalar(
             select(TelegramBotConnection)
             .where(TelegramBotConnection.role == self.role)
             .where(TelegramBotConnection.is_default.is_(True))
             .order_by(TelegramBotConnection.id.desc())
         )
+        if (connection is not None and self.role == TELEGRAM_ASSISTANT_ROLE and connection.status == "invalid"
+                and (connection.topics_enabled is not True or connection.allows_users_to_create_topics is not True)
+                and connection.paired_chat_id and connection.paired_user_id
+                and self.secret_store is not None and self.secret_store.implementation_id == connection.secret_store_id):
+            # Older builds disabled otherwise valid Assistant pairings for missing
+            # topic support. Revalidate identity before startup/status restores them.
+            token = ""
+            try:
+                token = self.secret_store.get(connection.secret_reference, namespace=TELEGRAM_SECRET_NAMESPACE)
+                api = self.api_factory(token)
+                identity = api.get_me()
+                webhook = api.get_webhook_info()
+            except (SecretStoreError, TelegramProviderError):
+                return connection
+            finally:
+                token = ""
+            if (str(identity.get("id")) != connection.bot_id
+                    or webhook.get("configured") or webhook.get("url")):
+                return connection
+            connection.status = "connected"
+            connection.topics_enabled = identity.get("has_topics_enabled")
+            connection.allows_users_to_create_topics = identity.get("allows_users_to_create_topics")
+            connection.updated_at = datetime.now(UTC)
+            self.db.commit()
+        return connection
+
+    def _invalidate_assistant_deliveries(self, connection: TelegramBotConnection) -> None:
+        """A replaced pairing must never inherit queued replies from its predecessor."""
+        if self.role == TELEGRAM_ASSISTANT_ROLE:
+            self.db.execute(update(ActTurn).where(
+                or_(ActTurn.delivery_provider == "telegram", ActTurn.delivery_provider.is_(None)),
+                ActTurn.delivery_connection_id == connection.id,
+                or_(ActTurn.delivery_status.in_(("pending", "sending")), and_(
+                    ActTurn.delivery_status.is_(None), ActTurn.status.in_(("queued", "running")),
+                )),
+            ).values(delivery_status="failed"))
+            # Message IDs and callbacks belong to the old pairing as well.
+            # Pending approvals can be presented again after the next pairing;
+            # terminal updates must never edit an unrelated replacement message.
+            self.db.execute(update(AgentProposal).where(
+                AgentProposal.telegram_connection_id == connection.id,
+            ).values(telegram_connection_id=None, telegram_message_ids_json=[],
+                     nonce_hash=None, telegram_outcome_fingerprint=None))
 
     def resolve_session(
         self,
@@ -707,6 +751,15 @@ class TelegramService:
         chat_id = incoming_message.get("chat_id")
         if isinstance(chat_id, bool) or not isinstance(chat_id, (int, str)) or not str(chat_id):
             raise TelegramServiceError("invalid_input", "Telegram chat id is invalid")
+        if self.role == TELEGRAM_ASSISTANT_ROLE:
+            connection = self._connection()
+            if (connection is None or connection.id != connection_id or connection.status != "connected"
+                    or connection.paired_chat_id != str(chat_id) or not connection.paired_user_id):
+                raise TelegramServiceError("authorization_missing_or_stale", "Assistant Telegram chat is unavailable")
+            user_id = incoming_message.get("user_id")
+            if user_id is not None and str(user_id) != connection.paired_user_id:
+                raise TelegramServiceError("authorization_missing_or_stale", "Assistant Telegram user is unavailable")
+            return ActSessionService(self.db, agent_id="assistant").create_session(origin="telegram", commit=commit)
         message_thread_id = self._message_thread_id(incoming_message.get("message_thread_id"))
         topic_name = self._created_topic_name(incoming_message)
         if message_thread_id is None or (
@@ -739,6 +792,10 @@ class TelegramService:
                 raise TelegramServiceError("authorization_missing_or_stale", "This Telegram bot has no chat session")
             session_service = ActSessionService(self.db, agent_id=agent_id)
             session = session_service.create_session(origin="telegram", commit=False)
+            if agent_id == "assistant" and self._topic_mapping_for_session(connection_id, session.id) is not None:
+                raise TelegramServiceError(
+                    "assistant_topic_exists", "The Assistant has one permanent chat. Use its existing Telegram topic.",
+                )
             if topic_name:
                 self._synchronize_topic_name(None, session, topic_name)
             mapping = TelegramTopicSession(
@@ -755,8 +812,9 @@ class TelegramService:
             except IntegrityError:
                 # A second process may have won the unique topic claim. The
                 # losing pending session must never become an unbound session.
-                self.db.delete(session)
-                self.db.flush()
+                if agent_id != "assistant":
+                    self.db.delete(session)
+                    self.db.flush()
                 mapping = self._topic_mapping(connection_id, chat_key, message_thread_id)
                 if mapping is None:
                     raise TelegramServiceError(
@@ -784,6 +842,9 @@ class TelegramService:
         title: str | None = None,
     ) -> TelegramTopicSession:
         """Create and persist a Telegram topic for a known Eidolon session."""
+
+        if self.role == TELEGRAM_ASSISTANT_ROLE:
+            raise TelegramServiceError("topic_not_supported", "Assistant uses its paired private chat directly")
 
         connection, token = self._connected_api_credential()
         agent_id = TELEGRAM_AGENT_IDS.get(self.role)
@@ -875,6 +936,9 @@ class TelegramService:
     def edit_topic_session(self, chat_id: int | str, message_thread_id: int, name: str) -> None:
         """Rename a Telegram topic and synchronize its Eidolon session title."""
 
+        if self.role == TELEGRAM_ASSISTANT_ROLE:
+            return
+
         normalized = normalize_title(name, maximum=128)
         if not normalized:
             raise TelegramServiceError("invalid_input", "Telegram topic name cannot be empty")
@@ -916,6 +980,9 @@ class TelegramService:
         remote: bool = True,
     ) -> None:
         """Remove a topic mapping and retire its session, idempotently."""
+
+        if self.role == TELEGRAM_ASSISTANT_ROLE:
+            return
 
         row = self._connection()
         if row is None:
@@ -987,7 +1054,13 @@ class TelegramService:
         message = {**message, "connection_id": connection_id}
         message_thread_id: int | None = None
         try:
-            message_thread_id = self._message_thread_id(message.get("message_thread_id"))
+            if self.role == TELEGRAM_ASSISTANT_ROLE:
+                if any(message.get(key) is not None for key in (
+                    "forum_topic_created", "forum_topic_edited", "forum_topic_closed", "forum_topic_reopened",
+                )):
+                    return
+            else:
+                message_thread_id = self._message_thread_id(message.get("message_thread_id"))
             if message.get("forum_topic_edited") is not None:
                 edited = message.get("forum_topic_edited")
                 name = edited.get("name") if isinstance(edited, Mapping) else None
@@ -1020,14 +1093,20 @@ class TelegramService:
             service = ActSessionService(self.db, agent_id=agent_id)
             turn = None
             obsolete_command = text.casefold() in {"/new", "/switch", "/sessions", "/delete"}
-            if message_thread_id is None:
+            if message_thread_id is None and agent_id != "assistant":
                 reply = TELEGRAM_TOPIC_HELP_MESSAGE if text.casefold() in {"/help", "help"} else TELEGRAM_TOPIC_REQUIRED_MESSAGE
             else:
                 session = self.resolve_session(message, commit=False)
                 if text.casefold() in {"/help", "help"} or obsolete_command:
-                    reply = TELEGRAM_TOPIC_HELP_MESSAGE
+                    reply = TELEGRAM_ASSISTANT_HELP_MESSAGE if agent_id == "assistant" else TELEGRAM_TOPIC_HELP_MESSAGE
                 elif text.casefold() == "/status":
-                    reply = f"{agent_label} topic session #{session.id}: {session.title}"
+                    label = "chat" if agent_id == "assistant" else "topic session"
+                    reply = f"{agent_label} {label} #{session.id}: {session.title}"
+                elif agent_id == "assistant" and text.casefold() == "/refresh":
+                    from app.services.assistant_service import AssistantService
+
+                    AssistantService(self.db).request_refresh()
+                    reply = "Assistant session will refresh before the next turn. Chat history stays visible."
                 else:
                     turn = service.enqueue_turn(
                         session.id,
@@ -1156,35 +1235,55 @@ class TelegramService:
         row: TelegramBotConnection,
         reply: str,
         *,
-        message_thread_id: int,
+        message_thread_id: int | None,
         draft_id: int | None = None,
     ) -> None:
-        """Deliver a completed agent turn to its originating Telegram topic."""
+        """Deliver a completed agent turn to its originating Telegram destination."""
+        if self.role == TELEGRAM_ASSISTANT_ROLE:
+            message_thread_id = None
         if draft_id is not None:
             self._update_agent_draft(row, draft_id, reply, message_thread_id=message_thread_id)
         self._send_agent_reply(row, reply, message_thread_id=message_thread_id)
 
     def send_act_chat_message(self, turn: ActTurn, text: str) -> int:
         """Deliver live text only to the running turn's immutable Telegram destination."""
-        if self.role != TELEGRAM_ACT_ROLE or turn.delivery_provider != "telegram":
+        session = self.db.get(ActSession, turn.session_id)
+        if (self.role not in {TELEGRAM_ACT_ROLE, TELEGRAM_ASSISTANT_ROLE}
+                or session is None or TELEGRAM_AGENT_IDS.get(self.role) != session.agent_id
+                or turn.delivery_provider != "telegram"):
             raise TelegramServiceError("authorization_missing_or_stale", "Live chat messages require the Act Telegram bot")
         row, token = self._connected_api_credential()
         try:
-            mapping = self._topic_mapping_for_session(row.id, turn.session_id)
-            if (mapping is None or row.id != turn.delivery_connection_id
+            mapping = (None if self.role == TELEGRAM_ASSISTANT_ROLE
+                       else self._topic_mapping_for_session(row.id, turn.session_id))
+            if (row.id != turn.delivery_connection_id
                     or str(row.paired_chat_id or "") != turn.delivery_chat_id
-                    or mapping.telegram_chat_id != turn.delivery_chat_id
-                    or mapping.message_thread_id != turn.delivery_message_thread_id):
+                    or turn.delivery_status == "failed"
+                    or session.status != "active"
+                    or (self.role != TELEGRAM_ASSISTANT_ROLE and (
+                        mapping is None or mapping.telegram_chat_id != turn.delivery_chat_id
+                        or mapping.message_thread_id != turn.delivery_message_thread_id))):
+                if self.role == TELEGRAM_ASSISTANT_ROLE:
+                    raise TelegramServiceError(
+                        "telegram_chat_unavailable", "The current Assistant turn's paired Telegram chat is unavailable",
+                    )
                 raise TelegramServiceError("telegram_topic_unavailable", "The current Act turn's paired Telegram topic is unavailable")
+            message_thread_id = mapping.message_thread_id if mapping else None
             try:
-                result = self.api_factory(token).send_message(
-                    int(mapping.telegram_chat_id), text, message_thread_id=mapping.message_thread_id,
-                )
+                api = self.api_factory(token)
+                message_id = None
+                for chunk in render_agent_message_chunks(text):
+                    result = api.send_message(
+                        int(turn.delivery_chat_id), chunk, message_thread_id=message_thread_id,
+                        parse_mode="HTML",
+                    )
+                    message_id = result.get("message_id")
+                    if isinstance(message_id, bool) or not isinstance(message_id, int) or message_id < 1:
+                        raise TelegramServiceError("provider_unavailable", "Telegram returned an invalid message receipt")
             except TelegramProviderError as exc:
-                self._reconcile_missing_topic(row, mapping.message_thread_id, exc)
+                self._reconcile_missing_topic(row, message_thread_id, exc)
                 raise
-            message_id = result.get("message_id")
-            if isinstance(message_id, bool) or not isinstance(message_id, int) or message_id < 1:
+            if message_id is None:
                 raise TelegramServiceError("provider_unavailable", "Telegram returned an invalid message receipt")
             return message_id
         finally:
@@ -1199,29 +1298,45 @@ class TelegramService:
         caption: str | None = None,
     ) -> int:
         """Send a bounded workspace document to this Act session's paired topic."""
-        if self.role != TELEGRAM_ACT_ROLE:
+        session = self.db.get(ActSession, session_id)
+        if (self.role not in {TELEGRAM_ACT_ROLE, TELEGRAM_ASSISTANT_ROLE}
+                or session is None or TELEGRAM_AGENT_IDS.get(self.role) != session.agent_id):
             raise TelegramServiceError(
                 "authorization_missing_or_stale",
                 "Workspace documents can be sent only through the Act Telegram bot",
             )
         row, token = self._connected_api_credential()
         try:
-            mapping = self._topic_mapping_for_session(row.id, session_id)
-            if mapping is None or mapping.telegram_chat_id != str(row.paired_chat_id or ""):
+            mapping = (None if self.role == TELEGRAM_ASSISTANT_ROLE
+                       else self._topic_mapping_for_session(row.id, session_id))
+            if session.status != "active" or (self.role != TELEGRAM_ASSISTANT_ROLE and (
+                mapping is None or mapping.telegram_chat_id != str(row.paired_chat_id or "")
+            )):
                 raise TelegramServiceError(
                     "telegram_topic_unavailable",
                     "The current Act session has no paired Telegram topic",
                 )
+            if self.role == TELEGRAM_ASSISTANT_ROLE:
+                # Files share the running turn's binding, including background turns.
+                turn = self.db.scalar(select(ActTurn).where(
+                    ActTurn.session_id == session_id, ActTurn.status == "running",
+                    ActTurn.cancel_requested_at.is_(None),
+                ))
+                if (turn is None or turn.delivery_provider not in {None, "telegram"}
+                        or turn.delivery_connection_id != row.id or turn.delivery_chat_id != row.paired_chat_id
+                        or turn.delivery_status == "failed"):
+                    raise TelegramServiceError("telegram_chat_unavailable", "The Assistant turn has no current paired chat")
+            message_thread_id = mapping.message_thread_id if mapping else None
             try:
                 result = self.api_factory(token).send_document(
-                    int(mapping.telegram_chat_id),
+                    int(row.paired_chat_id),
                     filename,
                     content,
-                    message_thread_id=mapping.message_thread_id,
+                    message_thread_id=message_thread_id,
                     caption=caption,
                 )
             except TelegramProviderError as exc:
-                self._reconcile_missing_topic(row, mapping.message_thread_id, exc)
+                self._reconcile_missing_topic(row, message_thread_id, exc)
                 raise
             message_id = result.get("message_id")
             if isinstance(message_id, bool) or not isinstance(message_id, int) or message_id < 1:
@@ -1239,9 +1354,11 @@ class TelegramService:
         draft_id: int,
         agent_label: str,
         *,
-        message_thread_id: int,
+        message_thread_id: int | None,
     ) -> None:
         """Show the active agent through Telegram's native draft UI when possible."""
+        if self.role == TELEGRAM_ASSISTANT_ROLE:
+            message_thread_id = None
         _row, token = self._connected_api_credential()
         try:
             api = self.api_factory(token)
@@ -1289,7 +1406,9 @@ class TelegramService:
         finally:
             token = ""
 
-    def send_agent_typing(self, row: TelegramBotConnection, *, message_thread_id: int) -> None:
+    def send_agent_typing(self, row: TelegramBotConnection, *, message_thread_id: int | None) -> None:
+        if self.role == TELEGRAM_ASSISTANT_ROLE:
+            message_thread_id = None
         _row, token = self._connected_api_credential()
         try:
             try:
@@ -1310,8 +1429,10 @@ class TelegramService:
         draft_id: int,
         text: str,
         *,
-        message_thread_id: int,
+        message_thread_id: int | None,
     ) -> None:
+        if self.role == TELEGRAM_ASSISTANT_ROLE:
+            message_thread_id = None
         _row, token = self._connected_api_credential()
         try:
             try:
@@ -1333,12 +1454,15 @@ class TelegramService:
         draft_id: int,
         reply: str,
         *,
-        message_thread_id: int,
+        message_thread_id: int | None,
     ) -> None:
         if not reply:
             return
         try:
-            preview = chunk_text_for_telegram(reply)[0]
+            previews = render_agent_message_chunks(reply)
+            if not previews:
+                return
+            preview = previews[0]
             _row, token = self._connected_api_credential()
         except (TelegramProviderError, TelegramServiceError):
             return
@@ -1350,7 +1474,7 @@ class TelegramService:
                     rich_sender(
                         int(row.paired_chat_id or "0"),
                         draft_id,
-                        {"html": html.escape(preview)},
+                        {"html": preview},
                         message_thread_id=message_thread_id,
                     )
                     return
@@ -1367,7 +1491,7 @@ class TelegramService:
                 plain_sender(
                     int(row.paired_chat_id or "0"),
                     draft_id,
-                    preview,
+                    chunk_text_for_telegram(agent_message_plain_text(reply))[0],
                     message_thread_id=message_thread_id,
                 )
             except Exception as exc:  # noqa: BLE001 - draft updates are best effort.
@@ -1383,15 +1507,18 @@ class TelegramService:
         *,
         message_thread_id: int | None = None,
     ) -> None:
+        if self.role == TELEGRAM_ASSISTANT_ROLE:
+            message_thread_id = None
         _row, token = self._connected_api_credential()
         try:
             api = self.api_factory(token)
-            for chunk in chunk_text_for_telegram(reply):
+            for chunk in render_agent_message_chunks(reply):
                 try:
                     api.send_message(
                         int(row.paired_chat_id or "0"),
                         chunk,
                         message_thread_id=message_thread_id,
+                        parse_mode="HTML",
                     )
                 except TelegramProviderError as exc:
                     if message_thread_id is not None:
@@ -1403,10 +1530,10 @@ class TelegramService:
     def _reconcile_missing_topic(
         self,
         row: TelegramBotConnection,
-        message_thread_id: int,
+        message_thread_id: int | None,
         error: TelegramProviderError,
     ) -> None:
-        if error.error_type != "topic_not_found":
+        if self.role == TELEGRAM_ASSISTANT_ROLE or message_thread_id is None or error.error_type != "topic_not_found":
             return
         try:
             self.delete_topic_session(
@@ -1420,7 +1547,7 @@ class TelegramService:
             pass
 
     def _require_conversational_topics(self, identity: Mapping[str, Any]) -> None:
-        if self.role not in TELEGRAM_AGENT_ROLES:
+        if self.role not in TELEGRAM_TOPIC_ROLES:
             return
         if identity.get("has_topics_enabled") is not True:
             raise TelegramServiceError(
@@ -1477,7 +1604,8 @@ def synchronize_session_to_telegram(
         (candidate for candidate, agent_id in TELEGRAM_AGENT_IDS.items() if agent_id == session.agent_id),
         None,
     )
-    if role is None or session.origin in {"telegram", "wecom"} or session.status != "active":
+    if (role is None or session.agent_id == "assistant"
+            or session.origin in {"telegram", "wecom"} or session.status != "active"):
         return None
     connection = db.scalar(
         select(TelegramBotConnection).where(

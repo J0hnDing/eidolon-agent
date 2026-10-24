@@ -588,6 +588,57 @@ def test_notion_daily_feed_page_is_separate_contained_and_audited(
     assert service.operation_available("notion.daily_feed.write") is False
 
 
+def test_notion_daily_feed_read_is_low_risk_fixed_to_configured_page_and_audited(
+    db: Session,
+    tmp_path: Path,
+) -> None:
+    requirement = integration_requirement(
+        provider="notion",
+        operations=["notion.daily_feed.read"],
+    )
+    skill, manifest = create_installed_skill(db, tmp_path, requirement=requirement)
+    store = FakeSecretStore()
+    daily_feed = FakeDailyFeedPageProvider(bot_id="shared-bot")
+    page_ids: list[str] = []
+
+    def daily_feed_factory(_token: str, page_id: str) -> FakeDailyFeedPageProvider:
+        page_ids.append(page_id)
+        return daily_feed
+
+    service = IntegrationService(
+        db,
+        project_root=tmp_path,
+        secret_store=store,
+        notion_provider_factory=lambda _token, _source: FakeTodoProvider(bot_id="shared-bot"),
+        notion_report_provider_factory=lambda _token, _source: FakeReportProvider(bot_id="shared-bot"),
+        notion_daily_feed_provider_factory=daily_feed_factory,
+    )
+    service.put_notion_credential(NOTION_SENTINEL)
+    assert service.operation_available("notion.daily_feed.read") is False
+    service.put_notion_daily_feed_page("daily-page")
+    assert service.operation_available("notion.daily_feed.read") is True
+
+    authorization = authorize(service, skill, manifest)
+    assert authorization.approval_request.risk_level == "low"
+    output = invoke(
+        service,
+        "notion.daily_feed.read",
+        {},
+        caller_context(skill),
+    )
+
+    assert output == {
+        "markdown": "",
+        "last_edited_time": "2026-10-22T12:00:00Z",
+    }
+    assert daily_feed.calls[-1] == ("read", {})
+    assert set(page_ids) == {"daily-page"}
+    audit = db.scalar(select(IntegrationAuditRecord))
+    assert audit is not None
+    assert audit.operation_id == "notion.daily_feed.read"
+    assert audit.resource == "notion-page:daily-page"
+
+
 def test_failed_notion_daily_feed_page_validation_preserves_existing_page(
     db: Session,
     tmp_path: Path,

@@ -7,7 +7,11 @@ from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator, SchemaError
 
+from app.integrations.atlas_attachments import ATLAS_ATTACHMENT_SPECS
+from app.integrations.atlas_lifecycle import ATLAS_LIFECYCLE_SPECS
 from app.integrations.atlas_read import ATLAS_READ_SPECS
+from app.integrations.atlas_state_write import ATLAS_STATE_WRITE_SPECS
+from app.integrations.atlas_write import ATLAS_WRITE_SPECS
 from app.integrations.types import (
     IntegrationEffect,
     IntegrationOperationSpec,
@@ -17,6 +21,7 @@ from app.integrations.types import (
     ResourceSpec,
     RiskLevel,
 )
+from app.integrations.valence import VALENCE_SPECS
 
 REPOSITORY_PROPERTIES = {
     "owner": {"type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"},
@@ -606,6 +611,10 @@ _ATLAS_PERSON_INFO = _object_schema(
 )
 _ATLAS_OPERATIONS = (
     *ATLAS_READ_SPECS,
+    *ATLAS_WRITE_SPECS,
+    *ATLAS_LIFECYCLE_SPECS,
+    *ATLAS_STATE_WRITE_SPECS,
+    *ATLAS_ATTACHMENT_SPECS,
     IntegrationOperationSpec(
         id="atlas.person.get",
         title="Get Atlas person",
@@ -1067,6 +1076,31 @@ _NOTION_OPERATIONS = (
         risk=RiskLevel.MEDIUM,
         presentation=OperationPresentation(
             usage_example={"operation": "notion.todo.delete", "input": {"id": "page-id"}},
+            normalized_errors=_NOTION_ERRORS,
+            open_world=True,
+        ),
+    ),
+    IntegrationOperationSpec(
+        id="notion.daily_feed.read",
+        title="Read Notion Daily Feed page",
+        description=(
+            "Read complete enhanced Markdown and its last-edited timestamp from the configured standalone "
+            "Notion Daily Feed page. The page is fixed by trusted configuration; oversized, truncated, or "
+            "otherwise incomplete content is rejected."
+        ),
+        input_schema=_object_schema({}, []),
+        output_schema=_object_schema(
+            {
+                "markdown": {"type": "string", "maxLength": 20_000},
+                "last_edited_time": {"type": "string", "format": "date-time"},
+            },
+            ["markdown", "last_edited_time"],
+        ),
+        effects=frozenset({IntegrationEffect.READ}),
+        resource=ResourceSpec("notion.daily_feed", ()),
+        risk=RiskLevel.LOW,
+        presentation=OperationPresentation(
+            usage_example={"operation": "notion.daily_feed.read", "input": {}},
             normalized_errors=_NOTION_ERRORS,
             open_world=True,
         ),
@@ -1881,6 +1915,11 @@ _GOOGLE_DRIVE_OPERATIONS = (
 
 _PROVIDER_SPECS = (
     ProviderSpec(
+        id="valence",
+        display_name="Valence",
+        supported_operations=frozenset(operation.id for operation in VALENCE_SPECS),
+    ),
+    ProviderSpec(
         id="github",
         display_name="GitHub",
         supported_operations=frozenset(operation.id for operation in _GITHUB_OPERATIONS),
@@ -2129,6 +2168,7 @@ class IntegrationOperationRegistry:
 DEFAULT_INTEGRATION_REGISTRY = IntegrationOperationRegistry(
     _PROVIDER_SPECS,
     (
+        *VALENCE_SPECS,
         *_GITHUB_OPERATIONS,
         *_HUGGINGFACE_OPERATIONS,
         *_ATLAS_OPERATIONS,

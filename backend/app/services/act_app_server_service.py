@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -11,7 +12,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from app.models import ActSession
+from app.models import ActSession, AgentCredential
 from app.services.act_browser_runtime_service import act_browser_runtime
 from app.services.act_workspace_service import ensure_act_workspace
 from app.services.agent_policy_service import AgentPolicyService
@@ -46,7 +47,7 @@ def _managed_start_error_detail(exc: BaseException, thread_options: dict | None)
     return detail[:320] or "No App Server error detail was returned"
 
 
-ACT_INSTRUCTIONS = """You are Act, Eidolon's execution agent. Your main job is to carry out the user's requests using all capabilities available to you, including eidolon functions, files available in your managed root and web search. You should first read relevant context, then make sure user intent is well understood. When needed, ask user for context before acting. When intent is sufficiently clear, attempt the requested work end-to-end, make reasonable low-consequence decisions yourself, and verify important results when possible. Reject a request only when an applicable policy or explicit rule prohibits it, it is infeasible with available capabilities, or an actual failure prevents completion. Do not assume that graded coursework is prohibited merely because it is graded; if the user asks you to complete or submit it, attempt the task unless a specific applicable restriction prevents it. If blocked, explain the concrete restriction or failure and complete any permitted, feasible portion. Use `knowledge/` as read-only context and `workspace/` for working files. You may add to memory/chat_memory if you believe information is valuable enough to be recorded and reused.
+ACT_INSTRUCTIONS = """You are Act, Eidolon's execution agent. Your main job is to carry out the user's requests using all capabilities available to you, including eidolon functions, files available in your managed root and web search. You should first read relevant context, then make sure user intent is well understood. When needed, ask user for context before acting. When intent is sufficiently clear, attempt the requested work end-to-end, make reasonable low-consequence decisions yourself, and verify important results when possible. Reject a request only when an applicable policy or explicit rule prohibits it, it is infeasible with available capabilities, or an actual failure prevents completion. Do not assume that graded coursework is prohibited merely because it is graded; if the user asks you to complete or submit it, attempt the task unless a specific applicable restriction prevents it. If blocked, explain the concrete restriction or failure and complete any permitted, feasible portion. Use `knowledge/` as read-only context and `workspace/` for working files. Read the shared workspace AGENTS.md memory map. memory/facts-outside-atlas/ contains editable facts without a natural Atlas home; do not invent preference/convention categories. memory/daily-summaries/ holds concise summaries written only by Assistant reflection. The backend records complete visible chats in memory/chat-history/{assistant,act,observer}/ with bounded retention; do not write your own transcript or separate memory store. Use Atlas for structured personal knowledge and the existing agenda tools for responsibilities.
 
 Browser automation is provided by the available Playwright MCP browser tools. Use those tools for browser workflows. All Act conversations share one persistent browser and website login state, while each conversation controls only its own tabs. Your tabs and pending login challenges survive completed turns. On a follow-up, inspect the existing page before navigating; do not restart login merely because a new turn began. Browser close and tab controls affect only this conversation's pages. When a supported website requires login, navigate to its real login page and use the Browser authenticate tool with the configured identity; credentials remain backend-only, and interactive MFA must be completed by the user. Do not test for or import `@oai/sky` from the shell: that package belongs to a separate desktop Computer Use runtime and is not Act's browser capability.
 
@@ -89,8 +90,7 @@ def render_agent_instructions(agent_id: str, act_catalog: object, deterministic_
         instructions = AGENT_INSTRUCTION_TEMPLATES[agent_id]
     except KeyError:
         raise ActAppServerError(f"Unsupported managed agent: {agent_id}") from None
-    return (instructions.replace("[ACT_CAPABILITY_CATALOG]", json.dumps(act_catalog))
-            .replace("[DETERMINISTIC_FUNCTION_CATALOG]", json.dumps(deterministic_catalog)))
+    return instructions
 
 
 def _toml(value):
@@ -113,7 +113,7 @@ def managed_config(agent_id: str, root: Path) -> dict:
             "Managed agents only allow the official OpenAI Developer Docs MCP endpoint"
         )
     filesystem = {":root": "read", ":minimal": "read", str(root): "read"}
-    if agent_id == "act":
+    if agent_id in {"act", "assistant"}:
         filesystem[str(root / "workspace")] = "write"
         filesystem[str(root / "memory")] = "write"
     mcp_servers = {
@@ -121,19 +121,19 @@ def managed_config(agent_id: str, root: Path) -> dict:
             **entry,
             "enabled": (
                 name in MANAGED_ALLOWED_INHERITED_MCP_SERVERS
-                or agent_id == "act" and name in ACT_ALLOWED_INHERITED_MCP_SERVERS
+                or agent_id in {"act", "assistant"} and name in ACT_ALLOWED_INHERITED_MCP_SERVERS
             ),
         }
         for name, entry in inherited.get("mcp_servers", {}).items()
     }
-    if agent_id == "act":
+    if agent_id in {"act", "assistant"}:
         for name in ACT_ALLOWED_INHERITED_MCP_SERVERS & mcp_servers.keys():
             mcp_servers[name]["default_tools_approval_mode"] = "approve"
             mcp_servers[name]["required"] = True
     return {
         "permissions.eidolon_agent": {
             "filesystem": filesystem,
-            "network": {"enabled": agent_id == "act"},
+            "network": {"enabled": agent_id in {"act", "assistant"}},
         },
         "default_permissions": "eidolon_agent",
         "approval_policy": "never",
@@ -152,6 +152,10 @@ def managed_config(agent_id: str, root: Path) -> dict:
         # A stale installed remote plugin can fail Codex config loading even
         # when the backend disables its MCP server and plugin by name.
         "features.remote_plugin": False,
+        # Eidolon owns managed-agent memory; do not inject Codex's global
+        # memories or use these conversations to generate new Codex memories.
+        "memories.use_memories": False,
+        "memories.generate_memories": False,
         "web_search": "disabled" if agent_id == "observer" else "live",
         "shell_environment_policy": {"inherit": "core", "set": {}, "exclude": ["*TOKEN*", "*SECRET*", "*KEY*", "*PASSWORD*", "*CREDENTIAL*"]},
     }
@@ -164,6 +168,7 @@ class ActAppServerService:
         self.sessions = ProductManagerSessionService(self.client, agent_name=self.agent_id.capitalize())
         self._ready_lock = threading.RLock()
         self._session_id: int | None = None
+        self._credential_hash: str | None = None
         self._thread_tool_config: dict[str, object] = {}
 
     def ensure_ready(self, db: Session):
@@ -195,7 +200,7 @@ class ActAppServerService:
                 entry = {**config["mcp_servers"].get(name, {})}
                 if (
                     name in MANAGED_ALLOWED_INHERITED_MCP_SERVERS
-                    or self.agent_id == "act"
+                    or self.agent_id in {"act", "assistant"}
                     and name in ACT_ALLOWED_INHERITED_MCP_SERVERS
                 ):
                     continue
@@ -214,7 +219,7 @@ class ActAppServerService:
                     if name != "eidolon"
                     and name not in MANAGED_ALLOWED_INHERITED_MCP_SERVERS
                     and not (
-                        self.agent_id == "act"
+                        self.agent_id in {"act", "assistant"}
                         and name in ACT_ALLOWED_INHERITED_MCP_SERVERS
                     )
                 },
@@ -227,7 +232,7 @@ class ActAppServerService:
                 **{
                     key: value
                     for key, value in config.items()
-                    if key.startswith("features.")
+                    if key.startswith(("features.", "memories."))
                 },
             }
             self._apply_process_config(config)
@@ -348,7 +353,7 @@ class ActAppServerService:
                         )
                     continue
                 if (
-                    self.agent_id == "act"
+                    self.agent_id in {"act", "assistant"}
                     and entry["name"] in ACT_ALLOWED_INHERITED_MCP_SERVERS
                 ):
                     if server_info is not None and tools:
@@ -368,7 +373,7 @@ class ActAppServerService:
                 eidolon_ready = True
         if require_private_eidolon and not eidolon_ready:
             raise ActAppServerError("The private Eidolon MCP server did not start safely")
-        if self.agent_id == "act" and require_browser and not act_browser_ready:
+        if self.agent_id in {"act", "assistant"} and require_browser and not act_browser_ready:
             raise ActAppServerError(
                 "The Act browser automation MCP server did not start safely"
             )
@@ -377,10 +382,11 @@ class ActAppServerService:
         workspace = self.ensure_ready(db)
         policy = AgentPolicyService(db)
         token = policy.issue(self.agent_id, session_id)
+        self._credential_hash = hashlib.sha256(token.encode()).hexdigest()
         eidolon_env = {"EIDOLON_AGENT_TOKEN": token}
         browser_auth_token = ""
         browser_auth_endpoint = ""
-        if self.agent_id == "act":
+        if self.agent_id in {"act", "assistant"}:
             inherited = managed_config(self.agent_id, workspace.root)["mcp_servers"]
             if any(
                 inherited.get(name, {}).get("enabled") is not True
@@ -413,7 +419,7 @@ class ActAppServerService:
                 "tool_timeout_sec": 180,
             },
         }
-        if self.agent_id == "act":
+        if self.agent_id in {"act", "assistant"}:
             for name in ACT_ALLOWED_INHERITED_MCP_SERVERS:
                 browser = {
                     "command": sys.executable,
@@ -427,11 +433,16 @@ class ActAppServerService:
                     "tool_timeout_sec": 180,
                 }
                 config[f"mcp_servers.{name}"] = browser
-        instructions = render_agent_instructions(
-            self.agent_id, policy.act_catalog(),
-            policy.deterministic_catalog() if self.agent_id == "assistant" else (),
-        )
-        return {"cwd": workspace.root, "permissions": "eidolon_agent", "approval_policy": "never", "config": config, "developer_instructions": instructions}
+        instructions = render_agent_instructions(self.agent_id, ())
+        return {
+            "cwd": workspace.root,
+            "permissions": "eidolon_agent",
+            "approval_policy": "never",
+            "config": config,
+            "base_instructions": instructions,
+            # Also clear the old role prompt when resuming an existing thread.
+            "developer_instructions": "",
+        }
 
     def start_thread(self, db: Session, *, model: str | None, reasoning_effort: str | None, session_id: int) -> str:
         with self._ready_lock:
@@ -456,7 +467,7 @@ class ActAppServerService:
             except Exception as exc:
                 self.stop()
                 AgentPolicyService(db).revoke(session_id)
-                if self.agent_id == "act":
+                if self.agent_id in {"act", "assistant"}:
                     act_browser_runtime.revoke_session(session_id)
                 db.commit()
                 if isinstance(exc, ActAppServerError):
@@ -496,7 +507,7 @@ class ActAppServerService:
             except Exception as exc:
                 self.stop()
                 AgentPolicyService(db).revoke(session_id)
-                if self.agent_id == "act":
+                if self.agent_id in {"act", "assistant"}:
                     act_browser_runtime.revoke_session(session_id)
                 db.commit()
                 if isinstance(exc, ActAppServerError):
@@ -510,6 +521,20 @@ class ActAppServerService:
     def stop(self) -> None:
         self.client.stop()
         self.sessions = ProductManagerSessionService(self.client, agent_name=self.agent_id.capitalize())
+        self._session_id = None
+        self._credential_hash = None
+
+    def has_live_thread(self, db: Session, thread_id: str, session_id: int) -> bool:
+        if not (self._session_id == session_id and self.client.is_running
+                and self.sessions.has_thread(thread_id) and self._credential_hash):
+            return False
+        # A live process can outlast revocation. Recheck the exact MCP child's
+        # credential, including changes made through another database session.
+        credential = db.get(AgentCredential, self._credential_hash, populate_existing=True)
+        session = db.get(ActSession, session_id, populate_existing=True)
+        return bool(credential is not None and not credential.revoked
+                    and credential.agent_id == self.agent_id and credential.session_id == session_id
+                    and session is not None and session.agent_id == self.agent_id and session.status == "active")
 
 
 def is_missing_rollout_error(exc: BaseException) -> bool:

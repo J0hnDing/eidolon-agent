@@ -183,6 +183,7 @@ def test_default_adapter_composition_is_exact_and_secret_free() -> None:
     adapters = build_provider_adapters(SimpleNamespace())
 
     assert tuple(adapter.provider_id for adapter in adapters) == (
+        "valence",
         "github",
         "atlas",
         "notion",

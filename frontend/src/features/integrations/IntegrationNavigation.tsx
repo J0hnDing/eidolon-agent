@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import githubIcon from "../../../resource/integrations/github.svg";
@@ -47,13 +48,42 @@ export function IntegrationIcon({ id }: { id: IntegrationId }) {
 }
 
 export function IntegrationsDirectory({ statuses }: { statuses: IntegrationStatuses }) {
+  const [query, setQuery] = useState("");
+  const [connection, setConnection] = useState("all");
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const visibleIntegrations = integrations.filter((item) => (
+    (!normalizedQuery || `${item.title} ${item.description} ${item.group}`.toLocaleLowerCase().includes(normalizedQuery))
+    && (connection === "all" || statuses[item.id]?.state === connection)
+  ));
+
   return (
     <div className="integrations-directory">
-      {["Connected apps", "Messaging", "Local tools & data"].map((group) => (
+      <div className="integration-directory-toolbar">
+        <label className="integration-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></svg>
+          <input type="search" aria-label="Search integrations" placeholder="Search integrations…" value={query} onChange={(event) => setQuery(event.target.value)} />
+        </label>
+        <select aria-label="Connection status" value={connection} onChange={(event) => setConnection(event.target.value)}>
+          <option value="all">All connections</option>
+          <option value="connected">Connected</option>
+          <option value="partial">Partial</option>
+          <option value="disconnected">Disconnected</option>
+          <option value="unavailable">Unavailable</option>
+        </select>
+      </div>
+      <p className="integration-directory-summary" aria-live="polite">{visibleIntegrations.length} {visibleIntegrations.length === 1 ? "integration" : "integrations"}{query || connection !== "all" ? " found" : ""}</p>
+      {visibleIntegrations.length === 0 && (
+        <div className="integration-directory-empty">
+          <h2>No integrations found</h2>
+          <p>Try another name or connection status.</p>
+          <button type="button" className="secondary" onClick={() => { setQuery(""); setConnection("all"); }}>Clear filters</button>
+        </div>
+      )}
+      {["Connected apps", "Messaging", "Local tools & data"].filter((group) => visibleIntegrations.some((item) => item.group === group)).map((group) => (
         <section className="integration-group" key={group} aria-label={group}>
-          <h2>{group}</h2>
+          <div className="integration-group-heading"><h2>{group}</h2><span>{visibleIntegrations.filter((item) => item.group === group).length}</span></div>
           <div className="integration-grid">
-            {integrations.filter((item) => item.group === group).map((item) => (
+            {visibleIntegrations.filter((item) => item.group === group).map((item) => (
               <Link className="integration-tile" to={`/settings/integrations/${item.id}`} key={item.id} aria-label={item.title} aria-describedby={`${item.id}-connection-status`}>
                 <IntegrationIcon id={item.id} />
                 <span className="integration-tile-copy">

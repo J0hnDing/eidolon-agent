@@ -92,6 +92,7 @@ from app.services.proposed_skill_service import ProposedSkillService
 from app.services.report_service import ReportProvider
 from app.services.secret_store import SecretStore, SecretStoreError, default_secret_store
 from app.services.todo_service import TodoProvider
+from app.services.valence_provider import UrllibValenceProviderAdapter, ValenceTransport
 
 
 class IntegrationError(RuntimeError):
@@ -126,6 +127,10 @@ ATLAS_PROVIDER_ERROR_MESSAGES = {
     "response_too_large": "Atlas response exceeded the operation limit",
     "provider_unavailable": "Atlas is unavailable",
     "internal_failure": "Atlas integration failed safely",
+    "invalid_input": "The input violates Atlas's native content or relationship rules",
+    "stale_revision": "The Atlas item or referenced file changed; read it again before updating",
+    "event_id_conflict": "This Atlas event ID already identifies a different States report",
+    "request_too_large": "The upload exceeds Atlas's native size limit",
 }
 NOTION_PROVIDER_ERROR_MESSAGES = {
     "invalid_credential": "The Notion credential is invalid or revoked",
@@ -212,6 +217,7 @@ MACRO_PROVIDER_ERROR_MESSAGES = {
     "internal_failure": "Macro data integration failed safely",
 }
 PROVIDER_DISPLAY_NAMES = {
+    "valence": "Valence",
     "github": "GitHub",
     "atlas": "Atlas",
     "notion": "Notion",
@@ -287,8 +293,11 @@ class IntegrationService:
     bea: MacroDataProviderAdapter | None = None
     eia: MacroDataProviderAdapter | None = None
     codex_adapter: Any | None = None
+    valence: ValenceTransport | None = None
 
     def __post_init__(self) -> None:
+        if self.valence is None:
+            self.valence = UrllibValenceProviderAdapter()
         self.proposed_service = ProposedSkillService(self.db, project_root=self.project_root)
         self.project_root = self.proposed_service.project_root
         if self.github is None:
@@ -2232,6 +2241,8 @@ class IntegrationService:
         )
 
     def provider_connected(self, provider: str) -> bool:
+        if provider == "valence":
+            return self.valence is not None and self.valence.available()
         if provider == "huggingface":
             return True
         if provider == "bls":
@@ -2302,7 +2313,7 @@ class IntegrationService:
                 return False
             if operation_id.startswith("notion.report."):
                 return bool(connection.configured_report_resource_id)
-            if operation_id == "notion.daily_feed.write":
+            if operation_id.startswith("notion.daily_feed."):
                 return bool(connection.configured_daily_feed_page_id)
             return bool(connection.configured_resource_id)
         return any(self.provider_connected(provider) for provider in providers)

@@ -55,9 +55,15 @@ def test_registry_is_authoritative_and_context_is_selected_only() -> None:
     }
     assert {operation_id for operation_id in OPERATIONS if operation_id.startswith("atlas.")} == {
         "atlas.describe", "atlas.records.search", "atlas.records.get", "atlas.links.get",
+        "atlas.records.create", "atlas.records.update", "atlas.links.create", "atlas.links.update",
         "atlas.person.completeness.get", "atlas.states.get", "atlas.personality.get",
         "atlas.history.list", "atlas.graph.get", "atlas.knowledge.read",
         "atlas.attachments.list", "atlas.attachments.read",
+        "atlas.attachments.upload", "atlas.attachments.download", "atlas.attachments.delete",
+        "atlas.records.trash", "atlas.records.restore", "atlas.records.restore_revision",
+        "atlas.links.delete", "atlas.links.restore_revision", "atlas.trash.empty",
+        "atlas.custom_fields.list", "atlas.custom_fields.create", "atlas.custom_fields.update", "atlas.custom_fields.delete",
+        "atlas.states.configuration.update", "atlas.states.events.create", "atlas.states.observations.create",
         "atlas.person.get",
         "atlas.experience.list",
         "atlas.goal.create",
@@ -73,6 +79,7 @@ def test_registry_is_authoritative_and_context_is_selected_only() -> None:
         "atlas.knowledge.node.know",
     }
     assert {operation_id for operation_id in OPERATIONS if operation_id.startswith("notion.")} == {
+        "notion.daily_feed.read",
         "notion.daily_feed.write",
         "notion.todo.list",
         "notion.todo.create",
@@ -212,6 +219,16 @@ def test_manifest_accepts_notion_without_caller_selected_scope() -> None:
         },
         "required": ["markdown"],
         "additionalProperties": False,
+    }
+    assert OPERATIONS["notion.daily_feed.read"].input_schema == {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
+    assert OPERATIONS["notion.daily_feed.read"].output_schema["properties"]["last_edited_time"] == {
+        "type": "string",
+        "format": "date-time",
     }
     assert OPERATIONS["notion.report.create"].input_schema["properties"]["select"]["enum"] == [
         "GitHub Projects",

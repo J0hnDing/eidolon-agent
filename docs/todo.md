@@ -181,19 +181,6 @@ Shared runner lifecycle behavior has one implementation without a reuse-only inh
 -Acceptance Criteria:
 Each extraction has a named owner and narrow contract; Codex adapters are separated from workflow facades; UI resource state is split into focused hooks or panels; generic abstractions require concrete reuse; behavior remains tested.
 
-## TODO-025: Update Eidolon Atlas integrations for reconstructed person model
-
-- Priority: high
-- Category: refactor
-- Area: integrations-atlas
-- Dependencies: none
-- Rationale: Owner explicitly deferred integration changes while Atlas replaces execution Goal tree and standalone Interest with four internal categories, motivational SERVES DAG, provenance and derived grounding. Existing Eidolon Atlas Goal and Interest functions require a later coordinated contract update. Atlas reconstruction is tracked as Eidolon-Atlas TODO-004.
-
--Acceptance Criteria:
-Update Atlas provider, function registry/contracts and docs for reconstructed Atlas categories, provenance and motivational relationships.
-Remove outdated Goal tree/progress/Result and standalone Interest assumptions rather than introduce compatibility adapters.
-Add focused provider, authorization, registry and real unlocked Atlas integration validation.
-
 ## TODO-026: Align ProductManager workflow test stubs with the current planning schema
 
 - Priority: medium
@@ -204,3 +191,14 @@ Add focused provider, authorization, registry and real unlocked Atlas integratio
 
 -Acceptance Criteria:
 Deterministic ProductManager fixtures conform to the current planning transport contract; the affected planning/build workflow tests pass without consuming Codex account quota; remaining backend-suite failures are triaged and corrected or documented.
+
+## TODO-027: Upgrade frontend test tooling past audited advisories
+
+- Priority: high
+- Category: bugfix
+- Area: Frontend dependencies
+- Dependencies: none
+- Rationale: The frontend dependency audit still reports advisories in Vitest 3, @vitest/mocker, and tinypool after compatible updates. The available remediation requires a major test-tool upgrade, so it is separate from the Assistant UI reorganization. React Router has its own existing TODO-021.
+
+-Acceptance Criteria:
+Vitest, @vitest/mocker, and tinypool resolve to unaffected releases; any Node/Vite peer requirements are handled explicitly; the complete frontend test suite and production build pass; the lockfile records the reviewed versions without forced overrides.

@@ -21,6 +21,7 @@ export function mergeProjectConversationState(
         id: recoveredMessageId(generation.id, 1),
         role: "assistant",
         kind: "build_approval",
+        createdAt: state.permission_request.created_at,
         generationRequest: generation,
         permissionRequest: state.permission_request,
         actionStatus: status,
@@ -36,6 +37,7 @@ export function mergeProjectConversationState(
         id: recoveredMessageId(generation.id, 2),
         role: "assistant",
         kind: "generation_result",
+        createdAt: state.agent_run?.completed_at ?? state.proposed_skill.created_at,
         skill: state.proposed_skill,
         agentRun: state.agent_run,
         content: generationResultMessage(state.proposed_skill.name, state.agent_run, null),
@@ -53,6 +55,7 @@ export function mergeProjectConversationState(
         id: recoveredMessageId(state.runtime_permission_request.id, 3),
         role: "assistant",
         kind: "runtime_approval",
+        createdAt: state.runtime_permission_request.created_at,
         skill: state.proposed_skill,
         permissionRequest: state.runtime_permission_request,
         actionStatus: status,
@@ -73,6 +76,7 @@ function upsert(
   const current = messages[index];
   const next = {
     ...current,
+    createdAt: current.createdAt ?? recovered.createdAt,
     generationRequest: recovered.generationRequest ?? current.generationRequest,
     permissionRequest: recovered.permissionRequest ?? current.permissionRequest,
     skill: recovered.skill ?? current.skill,

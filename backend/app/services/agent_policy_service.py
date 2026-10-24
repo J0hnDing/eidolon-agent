@@ -16,17 +16,19 @@ from app.services.act_runtime_capabilities import (
     TELEGRAM_SEND_FILE_CAPABILITY_ID,
     act_runtime_capability_catalog,
 )
+from app.services.assistant_tools import ASSISTANT_TOOL_IDS
 from app.services.function_catalog_service import FunctionCatalogService
 
 AGENTS = {
     "act": ("Act", "A persistent action agent that executes your requests using approved capabilities."),
     "observer": ("Observer", "A conversational observer with read-only access by default."),
-    "assistant": ("Assistant", "Assesses goals and todos, researches useful actions, and proposes plans for approval."),
+    "assistant": ("Assistant", "Your primary personal assistant: understands, plans, acts, and follows through."),
 }
 PRIVATE_TOOL_AGENTS = {
-    CHAT_SEND_MESSAGE_CAPABILITY_ID: "act",
-    BROWSER_AUTHENTICATE_CAPABILITY_ID: "act",
-    TELEGRAM_SEND_FILE_CAPABILITY_ID: "act",
+    CHAT_SEND_MESSAGE_CAPABILITY_ID: {"act", "assistant"},
+    BROWSER_AUTHENTICATE_CAPABILITY_ID: {"act", "assistant"},
+    TELEGRAM_SEND_FILE_CAPABILITY_ID: {"act", "assistant"},
+    **{tool_id: {"assistant"} for tool_id in ASSISTANT_TOOL_IDS},
 }
 RISK = {"low": 0, "medium": 1, "high": 2}
 
@@ -43,7 +45,7 @@ class AgentPolicyService:
         self.require_agent(agent_id)
         row = self.db.get(AgentPolicy, agent_id)
         policy = (
-            AgentPolicyUpdate.model_validate(row.policy_json) if row else AgentPolicyUpdate(read_only=agent_id != "act")
+            AgentPolicyUpdate.model_validate(row.policy_json) if row else AgentPolicyUpdate(read_only=agent_id == "observer")
         )
         if agent_id == "assistant":
             obsolete = {"plan_approval_request", "opportunity_scout_report"}
@@ -65,9 +67,9 @@ class AgentPolicyService:
         for function_id in policy.allowed_functions + policy.banned_functions:
             if function_id not in known:
                 raise AgentPermissionError(f"Unknown function: {function_id}")
-        for function_id, owner in PRIVATE_TOOL_AGENTS.items():
-            if agent_id != owner and function_id in policy.allowed_functions:
-                raise AgentPermissionError(f"{function_id} is private to {owner.title()}")
+        for function_id, owners in PRIVATE_TOOL_AGENTS.items():
+            if agent_id not in owners and function_id in policy.allowed_functions:
+                raise AgentPermissionError(f"{function_id} is private to {', '.join(sorted(owners))}")
         row = self.db.get(AgentPolicy, agent_id)
         if row is None:
             row = AgentPolicy(id=agent_id, policy_json=policy.model_dump())
@@ -85,7 +87,7 @@ class AgentPolicyService:
             return False, "Explicitly banned"
         private_owner = PRIVATE_TOOL_AGENTS.get(function_id)
         if private_owner is not None:
-            return (agent_id == private_owner, f"{private_owner.title()}-only private capability")
+            return (agent_id in private_owner, "Authenticated private capability")
 
         # Catalog entries are a discovery projection. Integration effects and
         # risk must come from the checked-in canonical registry at decision
@@ -159,7 +161,7 @@ class AgentPolicyService:
             "policy": policy.model_dump(),
             "permissions": {
                 "filesystem": "Read shared root; write workspace and explicit memory"
-                if agent_id == "act"
+                if agent_id in {"act", "assistant"}
                 else "Read shared root",
                 "web_search": agent_id != "observer",
             },
@@ -207,20 +209,3 @@ class AgentPolicyService:
             if self.decision("act", entry)[0]
         ]
         return [*function_entries, *act_runtime_capability_catalog()]
-
-    def deterministic_catalog(self) -> list[dict]:
-        return [
-            {
-                "id": entry["id"],
-                "description": entry["description"],
-                "input_schema": entry["input_schema"],
-            }
-            for entry in FunctionCatalogService(self.db).list_entries(refresh=True)
-            if entry.get("availability") == "available"
-            and entry.get("mcp_exposed") is True
-            and entry.get("agent_selectable", True) is not False
-            and entry.get("requires_invocation_approval") is not True
-            and entry.get("uses_codex") is not True
-            and entry.get("category") in {"integration", "user", "backend_core"}
-            and isinstance(entry.get("input_schema"), dict)
-        ]

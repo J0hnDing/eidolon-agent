@@ -235,7 +235,7 @@ def test_wecom_users_have_one_current_session_and_can_clear_it() -> None:
             turn.status = "succeeded"
         db.commit()
         for turn in old_turns:
-            _deliver_wecom(db, turn, db.get(ActSession, first_session_id))
+            _deliver_wecom(db, turn, db.get(ActSession, first_session_id), None)
         assert db.get(ActSession, first_session_id).status == "archived"
         assert all(turn.delivery_status == "failed" for turn in old_turns)
 

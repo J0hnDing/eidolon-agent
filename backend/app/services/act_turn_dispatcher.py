@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import time
+from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
@@ -12,7 +13,6 @@ from sqlalchemy import select, update
 from app.db import SessionLocal
 from app.models import ActLiveMessage, ActSession, ActTurn, AgentCredential
 from app.schemas.agent_chat import SESSION_TITLE_SCHEMA
-from app.schemas.assistant_assessment import ASSESSMENT_RESPONSE_SCHEMA, parse_assessment_response
 from app.services.act_app_server_service import (
     agent_app_servers,
     get_agent_app_server,
@@ -95,15 +95,6 @@ class ActTurnDispatcher:
         db = SessionLocal()
         try:
             db.execute(update(AgentCredential).where(AgentCredential.agent_id == self.agent_id).values(revoked=True))
-            delivery_ids = list(
-                db.scalars(
-                    select(ActTurn.id).join(ActSession).where(
-                        ActSession.agent_id == self.agent_id,
-                        ActTurn.status == "running",
-                        ActTurn.delivery_status == "pending",
-                    )
-                )
-            )
             now = datetime.now(UTC)
             result = db.execute(
                 update(ActTurn)
@@ -117,13 +108,27 @@ class ActTurnDispatcher:
             )
             db.commit()
             recovered = int(result.rowcount or 0)
+            self._recover_agent(db, now)
             db.execute(update(ActLiveMessage).where(
                 ActLiveMessage.reply_status == "awaiting",
                 ActLiveMessage.turn_id.in_(select(ActTurn.id).join(ActSession).where(
                     ActSession.agent_id == self.agent_id, ActTurn.status == "interrupted",
                 )),
             ).values(reply_status="cancelled"))
+            # A provider may have accepted a sending result before the process
+            # stopped. Its outcome is uncertain, so never replay that delivery.
+            db.execute(update(ActTurn).where(
+                ActTurn.session_id.in_(select(ActSession.id).where(ActSession.agent_id == self.agent_id)),
+                ActTurn.delivery_status == "sending",
+            ).values(delivery_status="failed"))
             db.commit()
+            from app.services.agent_memory_service import sync_chat_history_after_commit
+            sync_chat_history_after_commit(db)
+            delivery_ids = list(db.scalars(select(ActTurn.id).join(ActSession).where(
+                ActSession.agent_id == self.agent_id,
+                ActTurn.status.not_in(("queued", "running")),
+                ActTurn.delivery_status == "pending",
+            )))
         finally:
             db.close()
         for turn_id in delivery_ids:
@@ -236,36 +241,13 @@ class ActTurnDispatcher:
             self._fail(db, turn, "Act session is no longer active")
             return
         app_server = get_agent_app_server(self.agent_id, session.id)
-        initial_assessment = False
         try:
-            route = "assessment" if self.agent_id == "assistant" else self.agent_id
+            route = self._model_route()
             routing = CodexRoutingService(db).resolve(role=route, action=route)
             policy = AgentPolicyService(db).policy(self.agent_id)
             model = policy.model or routing.effective_model
             effort = policy.reasoning_effort or routing.effective_reasoning_effort
-            recovered_thread = False
-            try:
-                if session.codex_thread_id.startswith("pending:"):
-                    session.codex_thread_id = app_server.start_thread(
-                        db, model=model, reasoning_effort=effort, session_id=session.id,
-                    )
-                    db.commit()
-                else:
-                    app_server.resume_thread(
-                        db, session.codex_thread_id, model=model,
-                        reasoning_effort=effort, session_id=session.id,
-                    )
-            except Exception as exc:
-                if not is_missing_rollout_error(exc):
-                    raise
-                session.codex_thread_id = app_server.start_thread(
-                    db,
-                    session_id=session.id,
-                    model=model,
-                    reasoning_effort=effort,
-                )
-                db.commit()
-                recovered_thread = True
+            recovered_thread = self._prepare_thread(db, session, app_server, model, effort)
 
             def on_started(codex_turn_id: str) -> None:
                 turn.codex_turn_id = codex_turn_id
@@ -281,20 +263,14 @@ class ActTurnDispatcher:
                         codex_turn_id,
                     )
 
-            input_text = _title_input(session, self._turn_input(db, turn, recovered_thread=recovered_thread))
-            initial_assessment = (
-                self.agent_id == "assistant" and session.origin == "assessment"
-                and turn.id == db.scalar(select(ActTurn.id).where(
-                    ActTurn.session_id == session.id, ActTurn.backend_message_kind.is_(None),
-                ).order_by(ActTurn.id).limit(1))
-            )
-            response_schema = ASSESSMENT_RESPONSE_SCHEMA if initial_assessment else ACT_RESPONSE_SCHEMA
+            input_text = self._format_input(session, turn, self._turn_input(db, turn, recovered_thread=recovered_thread))
+            response_schema = self._response_schema(turn, session)
             try:
                 result = app_server.sessions.run_structured_turn(
                     session.codex_thread_id,
                     input_text,
                     response_schema,
-                    timeout_seconds=7200 if self.agent_id == "act" else 900,
+                    timeout_seconds=7200 if self.agent_id in {"act", "assistant"} else 900,
                     model=model,
                     reasoning_effort=effort,
                     on_turn_started=on_started,
@@ -303,19 +279,13 @@ class ActTurnDispatcher:
                 db.refresh(turn)
                 if recovered_thread or turn.codex_turn_id is not None or not is_missing_rollout_error(exc):
                     raise
-                session.codex_thread_id = app_server.start_thread(
-                    db,
-                    session_id=session.id,
-                    model=model,
-                    reasoning_effort=effort,
-                )
-                db.commit()
+                self._start_thread(db, session, app_server, model, effort)
                 recovered_thread = True
                 result = app_server.sessions.run_structured_turn(
                     session.codex_thread_id,
-                    _title_input(session, self._turn_input(db, turn, recovered_thread=True)),
+                    self._format_input(session, turn, self._turn_input(db, turn, recovered_thread=True)),
                     response_schema,
-                    timeout_seconds=7200 if self.agent_id == "act" else 900,
+                    timeout_seconds=7200 if self.agent_id in {"act", "assistant"} else 900,
                     model=model,
                     reasoning_effort=effort,
                     on_turn_started=on_started,
@@ -324,14 +294,7 @@ class ActTurnDispatcher:
             if turn.cancel_requested_at is not None or self._stop.is_set():
                 self._cancelled(db, turn)
             else:
-                if initial_assessment:
-                    from app.services.assistant_assessment_result_service import AssistantAssessmentResultService
-
-                    parsed = parse_assessment_response(result.output_text)
-                    AssistantAssessmentResultService(db).accept(turn, parsed)
-                    turn.assistant_message = "Assessment complete."
-                else:
-                    turn.assistant_message = _response_text(result.output_text)
+                turn.assistant_message = _response_text(result.output_text)
                 turn.activity_json = (
                     ([{"kind": "threadRecovery", "label": "Recovered the Act session"}]
                     if recovered_thread else [])
@@ -355,6 +318,7 @@ class ActTurnDispatcher:
                 else:
                     turn.status = "succeeded"
                     turn.completed_at = datetime.now(UTC)
+                    self._finish_turn(db, turn)
                     db.commit()
         except Exception as exc:
             db.refresh(turn)
@@ -367,38 +331,33 @@ class ActTurnDispatcher:
                 db.execute(update(ActLiveMessage).where(
                     ActLiveMessage.turn_id == turn.id, ActLiveMessage.reply_status == "awaiting",
                 ).values(reply_status="cancelled"))
-                AgentPolicyService(db).revoke(session.id)
-                db.commit()
-                if self.agent_id == "act":
-                    try:
-                        act_browser_runtime.revoke_session(session.id)
-                    except ActBrowserRuntimeError:
-                        logger.warning("Act browser connection revocation unavailable for session %s", session.id)
+                self._release_runtime(db, session, turn)
                 from app.services.agent_proposal_service import AgentProposalService
                 AgentProposalService(db).refresh_execution(session.id)
-                if self.agent_id == "assistant":
-                    if initial_assessment:
-                        from app.services.assistant_assessment_service import AssistantAssessmentService
-                        AssistantAssessmentService(db).notify_completed(turn)
-                    from app.services.act_session_service import ActSessionError, ActSessionService
-                    try:
-                        ActSessionService(db, agent_id="assistant").prune_assistant_sessions()
-                        db.commit()
-                    except ActSessionError:
-                        db.rollback()
+                from app.services.agent_memory_service import sync_chat_history_after_commit
+                sync_chat_history_after_commit(db)
+                try:
+                    self._after_turn(db, turn)
+                except Exception:
+                    db.rollback()
+                    logger.exception("Assistant activation reconciliation failed after turn %s", turn.id)
             finally:
                 with self._active_lock:
                     self._active.pop(session.id, None)
 
     @staticmethod
     def _turn_input(db, turn: ActTurn, *, recovered_thread: bool) -> str:
+        from app.services.agent_memory_service import AgentMemoryService
+
+        memory = AgentMemoryService(db)
         inserted = list(db.scalars(select(ActTurn).where(
             ActTurn.session_id == turn.session_id,
             ActTurn.id < turn.id,
             ActTurn.backend_message_kind.is_not(None),
         ).order_by(ActTurn.id)))
         inserted_context = "\n\n".join(
-            f"Assistant (backend message): {item.assistant_message or ''}" for item in inserted
+            f"Assistant (backend message): {text}" for item in inserted
+            if (text := memory.read_turn_content(item)["assistant_message"])
         )
         if not recovered_thread:
             return (f"<backend_assistant_messages>\n{inserted_context}\n</backend_assistant_messages>\n\n"
@@ -416,9 +375,10 @@ class ActTurnDispatcher:
         )
         if not completed:
             return (inserted_context + "\n\n" if inserted_context else "") + turn.user_message
+        retained = [(item, memory.read_turn_content(item)) for item in completed if item.backend_message_kind is None]
         history = "\n\n".join(
-            f"User: {item.user_message}\nAct: {item.assistant_message or ''}"
-            for item in [row for row in completed if row.backend_message_kind is None][-20:]
+            f"User: {content['user_message']}\nAgent: {content['assistant_message'] or ''}"
+            for item, content in [entry for entry in retained if entry[1]["available"]][-20:]
         )
         backend_context = (
             f"<backend_assistant_messages>\n{inserted_context}\n</backend_assistant_messages>\n\n"
@@ -431,6 +391,64 @@ class ActTurnDispatcher:
             f"<historical_conversation>\n{history}\n</historical_conversation>\n\n"
             f"{backend_context}Current user request: {turn.user_message}"
         )
+
+    def _model_route(self) -> str:
+        return self.agent_id
+
+    def _format_input(self, session, turn, input_text: str) -> str:
+        return _title_input(session, input_text)
+
+    def _response_schema(self, turn, session) -> dict:
+        response_schema = deepcopy(ACT_RESPONSE_SCHEMA)
+        if not needs_session_title(session):
+            response_schema["properties"]["title"] = {"type": "null"}
+        return response_schema
+
+    def _prepare_thread(self, db, session, app_server, model, effort) -> bool:
+        try:
+            if session.codex_thread_id.startswith("pending:"):
+                self._start_thread(db, session, app_server, model, effort)
+            else:
+                app_server.resume_thread(
+                    db, session.codex_thread_id, model=model,
+                    reasoning_effort=effort, session_id=session.id,
+                )
+            return False
+        except Exception as exc:
+            if not is_missing_rollout_error(exc):
+                raise
+            self._start_thread(db, session, app_server, model, effort)
+            return True
+
+    def _start_thread(self, db, session, app_server, model, effort) -> None:
+        session.codex_thread_id = app_server.start_thread(
+            db, model=model, reasoning_effort=effort, session_id=session.id,
+        )
+        db.commit()
+
+    def _recover_agent(self, db, now) -> None:
+        pass
+
+    def _finish_turn(self, db, turn) -> None:
+        pass
+
+    def _after_turn(self, db, turn) -> None:
+        if self.agent_id == "act":
+            # Outcomes remain pending if the primary conversation is busy.
+            from app.models import AgentProposal
+            from app.services.assistant_activation_service import AssistantActivationService
+
+            if db.scalar(select(AgentProposal.id).where(AgentProposal.act_turn_id == turn.id)):
+                AssistantActivationService(db).tick()
+
+    def _release_runtime(self, db, session, turn) -> None:
+        AgentPolicyService(db).revoke(session.id)
+        db.commit()
+        if self.agent_id == "act":
+            try:
+                act_browser_runtime.revoke_session(session.id)
+            except ActBrowserRuntimeError:
+                logger.warning("Act browser connection revocation unavailable for session %s", session.id)
 
     @staticmethod
     def _cancelled(db, turn: ActTurn) -> None:
@@ -459,7 +477,9 @@ class ActTurnDispatcher:
 
 
 def _title_input(session: ActSession, input_text: str) -> str:
-    metadata = json.dumps({"needsTitle": needs_session_title(session)})
+    if not needs_session_title(session):
+        return input_text
+    metadata = json.dumps({"needsTitle": True})
     return (
         f"<eidolon_session_metadata>{metadata}</eidolon_session_metadata>\n"
         "Include the session title in this response when needsTitle is true; otherwise return title: null. "
@@ -513,5 +533,3 @@ def _activities(items: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 
 act_turn_dispatcher = ActTurnDispatcher()
-
-agent_dispatchers = {"act": act_turn_dispatcher, "observer": ActTurnDispatcher("observer"), "assistant": ActTurnDispatcher("assistant")}

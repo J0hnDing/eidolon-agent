@@ -14,11 +14,12 @@ class Page extends EventEmitter {
   locator() { return { innerText: async () => "Log in" }; }
 }
 class Context extends EventEmitter {
-  constructor() { super(); this.allPages = []; this.realBrowser = new EventEmitter(); this.realBrowser.contexts = () => [this]; this.realBrowser.close = async () => { this.closed = true; }; }
+  constructor() { super(); this.allPages = []; this.realBrowser = new EventEmitter(); this.realBrowser.contexts = () => [this]; this.realBrowser.close = () => this.close(); this.realBrowser.isConnected = () => !this.closed; }
   pages() { return this.allPages.filter((p) => !p.closed); }
   browser() { return this.realBrowser; }
   async newPage() { const page = new Page(this); this.allPages.push(page); this.emit("page", page); return page; }
   popup(opener) { const page = new Page(this, opener); this.allPages.push(page); this.emit("page", page); opener.emit("popup", page); return page; }
+  async close() { this.closed = true; await Promise.all(this.pages().map((p) => p.close())); this.emit("close"); this.realBrowser.emit("disconnected"); }
 }
 
 test("session page discovery, popups, and close stay local to their owner", async () => {
@@ -44,9 +45,9 @@ test("session page discovery, popups, and close stay local to their owner", asyn
   assert.equal(a.context.pages().length, 0); assert.equal(p2.isClosed(), false); assert.equal(context.closed, undefined);
 });
 
-function setupOwner() {
+function setupOwner({ reopen } = {}) {
   const context = new Context(); let backends = 0, disposed = 0;
-  const owner = new BrowserOwner({ masterToken: "master", context, metadata: [{ name: "browser_tabs" }], shutdown: async () => { context.closed = true; }, makeBackend: async (view) => {
+  const owner = new BrowserOwner({ masterToken: "master", context, reopen, metadata: [{ name: "browser_tabs" }], shutdown: async () => { context.closed = true; }, makeBackend: async (view) => {
     backends++;
     let current;
     return { _context: { currentTab: () => current && { page: current } }, dynamicTools: () => [], dispose: async () => { disposed++; }, callTool: async (name, args, signal) => {
@@ -54,6 +55,7 @@ function setupOwner() {
       if (name === "select") current = view.pages()[args.index];
       if (name === "wait") await new Promise((resolve) => setTimeout(resolve, 20));
       if (name === "abortable") await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+      if (name === "closeDuringAction") { await view.realBrowser.close(); throw new Error("Target page, context or browser has been closed"); }
       return { content: [{ type: "text", text: `${view.pages().length}` }] };
     } };
   } });
@@ -61,6 +63,96 @@ function setupOwner() {
 }
 const register = (owner, id, token) => owner.handle({ token: "master", action: "register", sessionId: id, sessionToken: token });
 const call = (owner, id, token, name, args = {}) => owner.handle({ token, sessionId: id, action: "mcp_call", name, arguments: args });
+
+for (const closure of ["context", "disconnected", "connection-state"]) test(`closed browser (${closure}) reopens once for concurrent sessions and reports lost tabs without replay`, async () => {
+  const replacement = new Context(); let launches = 0;
+  const { owner, context, counts } = setupOwner({ reopen: async () => { launches++; await new Promise((r) => setImmediate(r)); return replacement; } });
+  await register(owner, 1, "a"); await register(owner, 2, "b");
+  await call(owner, 1, "a", "new"); await call(owner, 2, "b", "new");
+  if (closure === "context") await context.close();
+  else {
+    context.closed = true;
+    if (closure === "disconnected") context.realBrowser.emit("disconnected");
+  }
+  const results = await Promise.all([call(owner, 1, "a", "new"), call(owner, 2, "b", "new")]);
+  assert.equal(launches, 1);
+  assert.ok(results.every((result) => result.isError && result.content[0].text.includes("Previous tabs")));
+  assert.equal(replacement.pages().length, 0); // Neither requested action was replayed.
+  assert.deepEqual(counts(), { backends: 4, disposed: 2 });
+  assert.equal((await call(owner, 1, "a", "new")).content[0].text, "1");
+  assert.equal((await call(owner, 2, "b", "new")).content[0].text, "1");
+  assert.equal(owner.pages.create(1).context.pages().length, 1);
+  assert.equal(owner.pages.create(2).context.pages().length, 1);
+  await owner.shutdown();
+});
+
+test("browser closure during an action reports uncertain outcome and waits for another call to reopen", async () => {
+  let launches = 0;
+  const { owner } = setupOwner({ reopen: async () => { launches++; return new Context(); } });
+  await register(owner, 1, "a");
+  const result = await call(owner, 1, "a", "closeDuringAction");
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /outcome is uncertain/);
+  assert.equal(launches, 0);
+  assert.equal((await call(owner, 1, "a", "new")).isError, true);
+  assert.equal(launches, 1);
+  assert.equal((await call(owner, 1, "a", "new")).content[0].text, "1");
+  await owner.shutdown();
+});
+
+test("failed relaunch can retry and token revocation during relaunch prevents execution", async () => {
+  let launches = 0, release;
+  const { owner, context } = setupOwner({ reopen: async () => {
+    if (++launches === 1) throw new Error("launch failed");
+    await new Promise((resolve) => { release = resolve; });
+    return new Context();
+  } });
+  await register(owner, 1, "a"); await context.close();
+  await assert.rejects(call(owner, 1, "a", "new"), /launch failed/);
+  const recovering = call(owner, 1, "a", "new");
+  await new Promise((resolve) => setImmediate(resolve));
+  await owner.handle({ token: "master", action: "revoke", sessionId: 1 });
+  release();
+  assert.deepEqual(await recovering, { status: "browser_unavailable" });
+  assert.equal(owner.pages.context.pages().length, 0);
+  await register(owner, 1, "a2");
+  assert.equal((await call(owner, 1, "a2", "new")).isError, true);
+  assert.equal((await call(owner, 1, "a2", "new")).content[0].text, "1");
+  await owner.shutdown();
+});
+
+test("registration recovers a dead browser while discovery and authentication preserve reset notice", async () => {
+  const { owner, context } = setupOwner({ reopen: async () => new Context() });
+  await register(owner, 1, "a"); await call(owner, 1, "a", "new"); await context.close();
+  await register(owner, 1, "a2");
+  assert.deepEqual(await call(owner, 1, "a", "new"), { status: "browser_unavailable" });
+  assert.ok((await owner.handle({ token: "a2", sessionId: 1, action: "mcp_list" })).tools.length);
+  assert.deepEqual(await owner.handle({ token: "a2", sessionId: 1, action: "authenticate" }), { status: "browser_unavailable" });
+  assert.equal((await call(owner, 1, "a2", "new")).isError, true);
+  await call(owner, 1, "a2", "new");
+  assert.equal((await owner.handle({ token: "a2", sessionId: 1, action: "status", loginOrigins: ["https://login.example"] })).status, "login_required");
+  await owner.shutdown();
+});
+
+test("shutdown during recovery closes the replacement and never executes queued actions", async () => {
+  let release, closes = 0;
+  const { owner, context } = setupOwner({ reopen: async () => {
+    await new Promise((resolve) => { release = resolve; });
+    return new Context();
+  } });
+  owner.shutdownBrowser = async () => { closes++; };
+  await register(owner, 1, "a"); await context.close();
+  const recovering = call(owner, 1, "a", "new");
+  // Attach before rejecting to avoid an unhandled rejection in the test runner.
+  const rejected = assert.rejects(recovering, /owner is closed/);
+  await new Promise((resolve) => setImmediate(resolve));
+  const stopping = owner.shutdown();
+  release();
+  await rejected; await stopping;
+  assert.equal(owner.closed, true);
+  assert.ok(closes >= 1);
+  assert.deepEqual(await call(owner, 1, "a", "new"), { status: "browser_unavailable" });
+});
 
 test("token revocation and rotation preserve live pages/backend, close only owns tabs", async () => {
   const { owner, context, counts } = setupOwner();

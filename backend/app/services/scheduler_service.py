@@ -12,9 +12,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import SessionLocal
 from app.models import (
-    ActSession,
-    ActTurn,
-    AssistantAssessmentState,
     ScheduleOccurrence,
     ScheduleRuntimeState,
     Skill,
@@ -23,14 +20,9 @@ from app.models import (
     SkillSchedule,
 )
 from app.schemas.schedule import SchedulePayload, ScheduleUpdate
-from app.services.assistant_assessment_service import (
-    ASSISTANT_ASSESSMENT_SCHEDULE_KEY,
-    AssistantAssessmentService,
-)
 from app.services.permission_service import PermissionError as RuntimePermissionError
 from app.services.permission_service import PermissionService
 from app.services.platform_service import (
-    ASSISTANT_ASSESSMENT_SERVICE_ID,
     NOTION_DONE_CLEANUP_SERVICE_ID,
     PLATFORM_SCHEDULE_BY_ID,
     PLATFORM_SCHEDULES,
@@ -74,7 +66,7 @@ NOTION_DONE_CLEANUP_JOB_ID = PLATFORM_SCHEDULE_BY_ID[NOTION_DONE_CLEANUP_SERVICE
 NOTION_DONE_CLEANUP_SCHEDULE_ID = PLATFORM_SCHEDULE_BY_ID[NOTION_DONE_CLEANUP_SERVICE_ID].schedule_id
 NOTION_DONE_CLEANUP_TIME = PLATFORM_SCHEDULE_BY_ID[NOTION_DONE_CLEANUP_SERVICE_ID].time
 NOTION_DONE_CLEANUP_TIMEZONE = PLATFORM_SCHEDULE_BY_ID[NOTION_DONE_CLEANUP_SERVICE_ID].timezone
-ASSISTANT_ASSESSMENT_JOB_ID = "backend_assistant_assessment_every_three_days"
+ASSISTANT_ACTIVATION_JOB_ID = "assistant_activation"
 
 
 class ScheduleError(ValueError):
@@ -110,29 +102,23 @@ class SchedulerService:
         self.recover_interrupted_occurrences(startup_at)
         self.load_active_schedules()
         self.register_platform_services(now=startup_at)
-        self.register_assistant_assessment()
-        from app.services.assistant_action_service import (
-            process_due_followups,
-            reconcile_function_actions,
-            retry_backend_messages,
-        )
+        from app.services.assistant_action_service import reconcile_function_actions
 
         reconcile_function_actions(self.session_factory)
-        followup_trigger = IntervalTrigger(seconds=30, timezone="UTC") if IntervalTrigger else {"type": "interval", "seconds": 30}
+        trigger = IntervalTrigger(seconds=30, timezone="UTC") if IntervalTrigger else {"type": "interval", "seconds": 30}
         self.scheduler.add_job(
-            self._process_assistant_followups, followup_trigger,
-            id="assistant_followups", args=[], replace_existing=True, max_instances=1,
+            self._activate_assistant, trigger,
+            id=ASSISTANT_ACTIVATION_JOB_ID, args=[], replace_existing=True, max_instances=1,
             coalesce=True, misfire_grace_time=None,
         )
-        process_due_followups(self.session_factory)
-        retry_backend_messages(self.session_factory)
+        self._activate_assistant()
         self.queue_startup_catchups(startup_at)
 
-    def _process_assistant_followups(self) -> None:
-        from app.services.assistant_action_service import process_due_followups, retry_backend_messages
+    def _activate_assistant(self) -> None:
+        from app.services.assistant_activation_service import AssistantActivationService
 
-        process_due_followups(self.session_factory)
-        retry_backend_messages(self.session_factory)
+        with self.session_factory() as db:
+            AssistantActivationService(db).tick()
 
     def shutdown(self) -> None:
         if self.scheduler is not None and getattr(self.scheduler, "running", False):
@@ -166,138 +152,6 @@ class SchedulerService:
                 self._register_platform_job(definition, state)
             else:
                 self._remove_platform_job(definition)
-
-    def register_assistant_assessment(self) -> None:
-        if self.scheduler is None:
-            return
-        assessment = AssistantAssessmentService(self.db)
-        status = assessment.reconcile()
-        if not status["enabled"]:
-            self._remove_assistant_assessment_job()
-            return
-        next_run_at = status["next_run_at"]
-        if next_run_at is None:
-            return
-        schedule = assessment.schedule()
-        interval_kwargs = {
-            str(schedule.unit): schedule.every,
-            "start_date": self._as_utc(next_run_at),
-            "timezone": schedule.timezone,
-        }
-        if IntervalTrigger is None:
-            trigger: Any = {"type": "interval", **interval_kwargs}
-        else:
-            trigger = IntervalTrigger(**interval_kwargs)
-        self.scheduler.add_job(
-            self.execute_assistant_assessment,
-            trigger=trigger,
-            id=ASSISTANT_ASSESSMENT_JOB_ID,
-            args=[],
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-            misfire_grace_time=None,
-        )
-
-    def configure_assistant_assessment(self, enabled: bool) -> dict[str, Any]:
-        status = AssistantAssessmentService(self.db).configure(enabled)
-        self.register_assistant_assessment()
-        return status
-
-    def assistant_assessment_status(self) -> dict[str, Any]:
-        return AssistantAssessmentService(self.db).status()
-
-    def run_assistant_assessment_now(self) -> dict[str, Any]:
-        return AssistantAssessmentService(self.db).run_now()
-
-    def execute_assistant_assessment(self) -> dict[str, Any] | None:
-        with self.session_factory() as db:
-            now = utc_now()
-            assessment = AssistantAssessmentService(db)
-            scheduled_for_at = assessment.latest_due_at(now)
-            if scheduled_for_at is None:
-                return None
-            service = SchedulerService(
-                db,
-                scheduler=self.scheduler,
-                session_factory=self.session_factory,
-                project_root=self.project_root,
-            )
-            occurrence = service._claim_occurrence(
-                schedule_key=service._assistant_assessment_schedule_key(),
-                definition_fingerprint=service._assistant_assessment_definition_fingerprint(),
-                scheduled_for_at=scheduled_for_at,
-                trigger_reason="automatic",
-            )
-            if occurrence is None:
-                return None
-            return service._execute_claimed_assistant_assessment(occurrence)
-
-    def execute_claimed_assistant_assessment(
-        self,
-        occurrence_id: int,
-    ) -> dict[str, Any] | None:
-        with self.session_factory() as db:
-            service = SchedulerService(
-                db,
-                scheduler=self.scheduler,
-                session_factory=self.session_factory,
-                project_root=self.project_root,
-            )
-            occurrence = db.get(ScheduleOccurrence, occurrence_id)
-            if occurrence is None or occurrence.status != "claimed":
-                return None
-            return service._execute_claimed_assistant_assessment(occurrence)
-
-    def _execute_claimed_assistant_assessment(
-        self,
-        occurrence: ScheduleOccurrence,
-    ) -> dict[str, Any] | None:
-        if (
-            occurrence.definition_fingerprint
-            != self._assistant_assessment_definition_fingerprint()
-        ):
-            self._finish_occurrence(
-                occurrence,
-                "blocked",
-                error_message="Assistant assessment schedule changed before execution",
-            )
-            return {
-                "status": "blocked",
-                "reason": "Assistant assessment schedule changed before execution",
-            }
-        occurrence.status = "running"
-        occurrence.started_at = utc_now()
-        self.db.commit()
-        try:
-            result = AssistantAssessmentService(self.db).run_scheduled(
-                occurrence.scheduled_for_at
-            )
-        except Exception as exc:
-            self._finish_occurrence(occurrence, "failed", error_message=str(exc))
-            print(
-                "Scheduled Assistant assessment failed safely: "
-                f"{type(exc).__name__}"
-            )
-            return None
-        status = str(result["status"])
-        self._finish_occurrence(
-            occurrence,
-            status,
-            error_message=str(result.get("reason")) if result.get("reason") else None,
-        )
-        print(f"Scheduled Assistant assessment completed with status {status}")
-        return result
-
-    def _remove_assistant_assessment_job(self) -> None:
-        if self.scheduler is None:
-            return
-        try:
-            job = self.scheduler.get_job(ASSISTANT_ASSESSMENT_JOB_ID)
-        except Exception:
-            job = None
-        if job is not None:
-            self.scheduler.remove_job(ASSISTANT_ASSESSMENT_JOB_ID)
 
     def execute_platform_service(self, service_id: str) -> dict[str, Any] | None:
         with self.session_factory() as db:
@@ -372,31 +226,7 @@ class SchedulerService:
         return self.serialize_platform_schedule(PLATFORM_SCHEDULE_BY_ID[NOTION_DONE_CLEANUP_SERVICE_ID])
 
     def serialize_platform_schedules(self) -> list[dict[str, Any]]:
-        return [self.serialize_platform_schedule(definition) for definition in PLATFORM_SCHEDULES] + [
-            self.serialize_assistant_assessment_schedule()
-        ]
-
-    def serialize_assistant_assessment_schedule(self) -> dict[str, Any]:
-        state = self.assistant_assessment_status()
-        configured = self._assistant_assessment_schedule_update()
-        schedule_data = configured.schedule
-        turns = select(ActTurn).join(ActSession).where(
-            ActSession.agent_id == "assistant", ActSession.origin == "assessment"
-        )
-        latest = self.db.scalar(turns.order_by(ActTurn.id.desc()).limit(1))
-        running = self.db.scalar(turns.where(ActTurn.status == "running").limit(1))
-        return {
-            "id": -2, "schedule_kind": "platform", "service_id": ASSISTANT_ASSESSMENT_SERVICE_ID,
-            "read_only": False, "skill_id": None, "skill_name": None, "skill_enabled": None,
-            "is_running": running is not None, "name": configured.name,
-            "status": "active" if state["enabled"] else "paused", "schedule_type": schedule_data.type,
-            "schedule_json": schedule_data.model_dump(exclude_none=True),
-            "input_json": schedule_data.input, "timezone": schedule_data.timezone,
-            "next_run_at": state["next_run_at"],
-            "last_run_at": state["last_run_at"],
-            "last_run_status": latest.status if latest and state["last_status"] == "queued" else state["last_status"],
-            "created_at": self.platform_started_at, "updated_at": state["last_run_at"] or self.platform_started_at,
-        }
+        return [self.serialize_platform_schedule(definition) for definition in PLATFORM_SCHEDULES]
 
     def serialize_platform_schedule(self, definition: PlatformScheduleDefinition) -> dict[str, Any]:
         state = self._ensure_platform_state(definition.service_id, utc_now())
@@ -469,8 +299,6 @@ class SchedulerService:
         service_id: str,
         payload: ScheduleUpdate,
     ) -> dict[str, Any]:
-        if service_id == ASSISTANT_ASSESSMENT_SERVICE_ID:
-            return self.update_assistant_assessment_schedule(payload)
         definition = self._platform_definition(service_id)
         schedule_data = self._validated_schedule(payload.schedule)
         if schedule_data.input:
@@ -495,42 +323,6 @@ class SchedulerService:
             raise ScheduleError(f"Platform service schedule could not be updated: {exc}") from exc
         self.db.refresh(state)
         return self.serialize_platform_schedule(definition)
-
-    def update_assistant_assessment_schedule(self, payload: ScheduleUpdate) -> dict[str, Any]:
-        schedule_data = self._validated_schedule(payload.schedule)
-        if schedule_data.type != "interval":
-            raise ScheduleError("Assistant assessment schedule must use an interval")
-        if schedule_data.input:
-            raise ScheduleError("Backend-owned service schedules do not accept input")
-
-        now = utc_now()
-        assessment = AssistantAssessmentService(self.db)
-        runtime_state = self.db.get(ScheduleRuntimeState, self._assistant_assessment_schedule_key())
-        if runtime_state is None:
-            runtime_state = ScheduleRuntimeState(
-                schedule_key=self._assistant_assessment_schedule_key(),
-                definition_fingerprint=self._assistant_assessment_definition_fingerprint(),
-                enabled=assessment.status()["enabled"],
-            )
-            self.db.add(runtime_state)
-        runtime_state.configuration_json = ScheduleUpdate(
-            name=payload.name,
-            schedule=schedule_data,
-        ).model_dump(exclude_none=True)
-        assessment.reschedule_after_edit(now=now, commit=False)
-        enabled = assessment.status()["enabled"]
-        runtime_state.enabled = enabled
-        runtime_state.active_since_at = now if enabled else None
-        runtime_state.interval_anchor_at = (
-            now + timedelta(**{str(schedule_data.unit): schedule_data.every})
-            if enabled
-            else None
-        )
-        runtime_state.definition_fingerprint = self._assistant_assessment_definition_fingerprint()
-        self.db.commit()
-        self.db.refresh(runtime_state)
-        self.register_assistant_assessment()
-        return self.serialize_assistant_assessment_schedule()
 
     def run_platform_service_now(self, service_id: str) -> dict[str, Any]:
         self._platform_definition(service_id)
@@ -999,21 +791,6 @@ class SchedulerService:
                     platform_occurrence,
                 )
 
-        assessment = AssistantAssessmentService(self.db)
-        assessment_due_at = assessment.latest_due_at(startup_at)
-        if assessment_due_at is not None:
-            assessment_occurrence = self._claim_occurrence(
-                schedule_key=self._assistant_assessment_schedule_key(),
-                definition_fingerprint=self._assistant_assessment_definition_fingerprint(),
-                scheduled_for_at=assessment_due_at,
-                trigger_reason="startup_catch_up",
-            )
-            if assessment_occurrence is not None:
-                self._queue_claimed_occurrence(
-                    self.execute_claimed_assistant_assessment,
-                    assessment_occurrence,
-                )
-
     def _queue_claimed_occurrence(self, func: Any, occurrence: ScheduleOccurrence) -> None:
         try:
             self.scheduler.add_job(
@@ -1361,26 +1138,6 @@ class SchedulerService:
             schedule=self._default_platform_schedule(definition),
         )
 
-    def _assistant_assessment_schedule_update(self) -> ScheduleUpdate:
-        runtime_state = self.db.get(ScheduleRuntimeState, self._assistant_assessment_schedule_key())
-        if runtime_state is not None and runtime_state.configuration_json is not None:
-            try:
-                return ScheduleUpdate.model_validate(runtime_state.configuration_json)
-            except ValueError as exc:
-                raise ScheduleError(
-                    f"Stored Assistant assessment schedule is invalid: {exc}"
-                ) from exc
-        return ScheduleUpdate(
-            name="Assistant assessment",
-            schedule=SchedulePayload(
-                type="interval",
-                every=3,
-                unit="days",
-                timezone="UTC",
-                input={},
-            ),
-        )
-
     def _build_platform_trigger(
         self,
         definition: PlatformScheduleDefinition,
@@ -1479,26 +1236,6 @@ class SchedulerService:
             }
         )
 
-    def _assistant_assessment_definition_fingerprint(self) -> str:
-        state = self.db.get(AssistantAssessmentState, 1)
-        anchor_at = None
-        enabled = False
-        if state is not None:
-            enabled = state.enabled
-            anchor_at = (
-                self._as_utc(state.anchor_at).isoformat()
-                if state.anchor_at is not None
-                else None
-            )
-        return self._fingerprint(
-            {
-                "service_id": ASSISTANT_ASSESSMENT_SERVICE_ID,
-                "schedule": self._assistant_assessment_schedule_update().schedule.model_dump(exclude_none=True),
-                "enabled": enabled,
-                "anchor_at": anchor_at,
-            }
-        )
-
     @staticmethod
     def _fingerprint(value: dict[str, Any]) -> str:
         payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
@@ -1523,10 +1260,6 @@ class SchedulerService:
     @staticmethod
     def _platform_schedule_key(service_id: str) -> str:
         return f"platform:{service_id}"
-
-    @staticmethod
-    def _assistant_assessment_schedule_key() -> str:
-        return ASSISTANT_ASSESSMENT_SCHEDULE_KEY
 
     @staticmethod
     def _schedule_id_from_key(schedule_key: str) -> int | None:

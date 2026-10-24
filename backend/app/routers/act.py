@@ -5,6 +5,7 @@ from app.db import get_db
 from app.schemas.act import ActSessionCreate, ActSessionRead, ActSessionSummary, ActTurnCreate, ActTurnRead
 from app.services.act_session_service import ActSessionError, ActSessionService
 from app.services.act_workspace_service import ActWorkspaceError, open_act_root
+from app.services.agent_chat_history import project_session, project_turn
 
 router = APIRouter(prefix="/act", tags=["act"])
 
@@ -30,7 +31,7 @@ def list_sessions(db: Session = Depends(get_db)):
 @router.post("/sessions", response_model=ActSessionRead, status_code=status.HTTP_201_CREATED)
 def create_session(payload: ActSessionCreate, db: Session = Depends(get_db)):
     try:
-        return ActSessionService(db).create_session(origin=payload.origin)
+        return project_session(db, ActSessionService(db).create_session(origin=payload.origin))
     except ActSessionError as exc:
         raise _error(exc) from None
 
@@ -38,7 +39,7 @@ def create_session(payload: ActSessionCreate, db: Session = Depends(get_db)):
 @router.get("/sessions/{session_id}", response_model=ActSessionRead)
 def read_session(session_id: int, db: Session = Depends(get_db)):
     try:
-        return ActSessionService(db).read_session(session_id)
+        return project_session(db, ActSessionService(db).read_session(session_id))
     except ActSessionError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
 
@@ -50,7 +51,7 @@ def read_session(session_id: int, db: Session = Depends(get_db)):
 )
 def enqueue_turn(session_id: int, payload: ActTurnCreate, db: Session = Depends(get_db)):
     try:
-        return ActSessionService(db).enqueue_turn(session_id, payload.message)
+        return project_turn(db, ActSessionService(db).enqueue_turn(session_id, payload.message), agent_id="act")
     except ActSessionError as exc:
         raise _error(exc) from None
 
@@ -58,7 +59,7 @@ def enqueue_turn(session_id: int, payload: ActTurnCreate, db: Session = Depends(
 @router.post("/sessions/{session_id}/turns/{turn_id}/cancel", response_model=ActTurnRead)
 def cancel_turn(session_id: int, turn_id: int, db: Session = Depends(get_db)):
     try:
-        return ActSessionService(db).cancel_turn(session_id, turn_id)
+        return project_turn(db, ActSessionService(db).cancel_turn(session_id, turn_id), agent_id="act")
     except ActSessionError as exc:
         raise _error(exc) from None
 

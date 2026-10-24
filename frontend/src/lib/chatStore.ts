@@ -9,6 +9,7 @@ import {
 
 export type ChatMessage = {
   id: number;
+  createdAt?: string;
   role: "user" | "assistant";
   content: string;
   kind?: "text" | "thinking" | "build_approval" | "runtime_approval" | "generation_result";
@@ -54,7 +55,7 @@ export const ACTIVE_CONVERSATION_KEY = "personal-agent.active-chat-conversation.
 export const CHAT_UPDATED_EVENT = "personal-agent-chat-updated";
 
 export function createConversation(
-  mode: ConversationMode = "project",
+  mode: ConversationMode = "assistant",
   options: {
     id?: string;
     title?: string;
@@ -82,7 +83,7 @@ export function createConversation(
 }
 
 export function saveStoredConversations(conversations: ChatConversation[]) {
-  localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(conversations));
+  localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(conversations.map(toStoredConversation)));
   window.dispatchEvent(new Event(CHAT_UPDATED_EVENT));
 }
 
@@ -138,6 +139,16 @@ export function loadStoredConversations(): ChatConversation[] {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [createConversation()];
     const conversations = parsed.filter(isStoredConversation).map(normalizeStoredConversation);
+    // Older versions saved full Assistant, Act, and Observer transcripts in
+    // localStorage. Rewrite those rows as metadata-only as soon as they are read.
+    const sanitized = JSON.stringify(conversations.map(toStoredConversation));
+    if (sanitized !== raw) {
+      try {
+        localStorage.setItem(CHAT_STORAGE_KEY, sanitized);
+      } catch {
+        // The in-memory conversations remain usable when storage is unavailable.
+      }
+    }
     return conversations.length ? conversations : [createConversation()];
   } catch {
     return [createConversation()];
@@ -146,40 +157,60 @@ export function loadStoredConversations(): ChatConversation[] {
 
 export function appendMessages(conversation: ChatConversation, newMessages: ChatMessage[]): ChatConversation {
   const firstUserMessage = newMessages.find((message) => message.role === "user")?.content;
+  const now = new Date().toISOString();
   return {
     ...conversation,
     title: conversation.mode === "project" && conversation.title.startsWith("New ") && firstUserMessage
       ? makeTitle(firstUserMessage)
       : conversation.title,
-    messages: [...conversation.messages, ...newMessages],
-    updatedAt: new Date().toISOString(),
+    messages: [...conversation.messages, ...newMessages.map((message) => ({ ...message, createdAt: message.createdAt ?? now }))],
+    updatedAt: now,
   };
 }
 
-function isStoredConversation(value: unknown): value is ChatConversation {
+type StoredConversation = Omit<ChatConversation, "messages"> & { messages?: ChatMessage[] };
+
+function isStoredConversation(value: unknown): value is StoredConversation {
   if (!value || typeof value !== "object") return false;
   const raw = value as Record<string, unknown>;
+  const isProject = raw.mode === "project";
   return (
     typeof raw.id === "string" &&
     typeof raw.title === "string" &&
     (raw.mode === "project" || raw.mode === "act" || raw.mode === "observer" || raw.mode === "assistant") &&
-    Array.isArray(raw.messages) &&
+    (isProject ? Array.isArray(raw.messages) : raw.messages === undefined || Array.isArray(raw.messages)) &&
     typeof raw.createdAt === "string" &&
     typeof raw.updatedAt === "string"
   );
 }
 
-function normalizeStoredConversation(conversation: ChatConversation): ChatConversation {
+function normalizeStoredConversation(conversation: StoredConversation): ChatConversation {
   return {
     ...conversation,
     mode: conversation.mode,
-    messages: conversation.messages.map((message) => normalizeStarterMessage(message, conversation.mode)),
+    messages: conversation.mode === "project"
+      ? (conversation.messages ?? []).map((message) => normalizeStarterMessage(message, conversation.mode))
+      : initialMessagesForMode(conversation.mode),
     draft: typeof conversation.draft === "string" ? conversation.draft : "",
     pendingGenerationRequestId:
       typeof conversation.pendingGenerationRequestId === "number" ? conversation.pendingGenerationRequestId : undefined,
     actSessionId: typeof conversation.actSessionId === "number" ? conversation.actSessionId : undefined,
     origin: typeof conversation.origin === "string" ? conversation.origin : undefined,
     wecomUserId: typeof conversation.wecomUserId === "string" ? conversation.wecomUserId : undefined,
+  };
+}
+
+function toStoredConversation(conversation: ChatConversation): ChatConversation | Omit<ChatConversation, "messages" | "draft" | "pendingGenerationRequestId"> {
+  if (conversation.mode === "project") return conversation;
+  return {
+    id: conversation.id,
+    title: conversation.title,
+    mode: conversation.mode,
+    actSessionId: conversation.actSessionId,
+    origin: conversation.origin,
+    wecomUserId: conversation.wecomUserId,
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt,
   };
 }
 

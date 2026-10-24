@@ -27,13 +27,18 @@ from app.services.act_chat_message_service import (
     accept_act_reply,
 )
 from app.services.act_session_service import ActSessionError, ActSessionService
-from app.services.act_turn_dispatcher import agent_dispatchers
+from app.services.agent_dispatchers import agent_dispatchers
 from app.services.agent_policy_service import AgentPolicyService
 from app.services.function_catalog_service import FunctionCatalogService
 from app.services.mcp_function_service import McpFunctionError, McpFunctionService
 from app.services.secret_store import FakeSecretStore
 from app.services.telegram_provider import FakeTelegramBotApi
-from app.services.telegram_service import TELEGRAM_ACT_ROLE, TelegramService, TelegramServiceError
+from app.services.telegram_service import (
+    TELEGRAM_ACT_ROLE,
+    TELEGRAM_ASSISTANT_ROLE,
+    TelegramService,
+    TelegramServiceError,
+)
 
 
 @pytest.fixture
@@ -66,10 +71,15 @@ def _prompt(db: Session, turn: ActTurn, *, expires_in: int = 120) -> ActLiveMess
 
 
 def _telegram(db: Session, session: ActSession, turn: ActTurn):
+    if session.agent_id == "assistant":
+        from app.services.assistant_service import AssistantService
+
+        AssistantService(db).state().primary_session_id = session.id
+    role = TELEGRAM_ASSISTANT_ROLE if session.agent_id == "assistant" else TELEGRAM_ACT_ROLE
     store = FakeSecretStore()
     reference = store.put("123:telegram-token", namespace="telegram")
     connection = TelegramBotConnection(
-        role=TELEGRAM_ACT_ROLE, is_default=True, secret_store_id=store.implementation_id,
+        role=role, is_default=True, secret_store_id=store.implementation_id,
         secret_reference=reference, bot_id="1001", status="connected", paired_chat_id="42",
         paired_user_id="7", topics_enabled=True, allows_users_to_create_topics=True,
     )
@@ -79,15 +89,16 @@ def _telegram(db: Session, session: ActSession, turn: ActTurn):
         connection_id=connection.id, telegram_chat_id="42", message_thread_id=91,
         session_id=session.id, topic_name="MarkUs",
     )
-    db.add(mapping)
+    if session.agent_id != "assistant":
+        db.add(mapping)
     turn.delivery_provider = "telegram"
     turn.delivery_connection_id = connection.id
     turn.delivery_chat_id = "42"
-    turn.delivery_message_thread_id = 91
+    turn.delivery_message_thread_id = 91 if session.agent_id != "assistant" else None
     db.commit()
     api = FakeTelegramBotApi()
     service = TelegramService(
-        db, role=TELEGRAM_ACT_ROLE, secret_store=store, api_factory=lambda _token: api,
+        db, role=role, secret_store=store, api_factory=lambda _token: api,
     )
     return service, api, connection, mapping
 
@@ -225,9 +236,9 @@ def test_invalid_messages_never_publish(db: Session, arguments):
     assert db.scalar(select(ActLiveMessage)) is None
 
 
-@pytest.mark.parametrize("condition", ["assistant", "archived", "queued", "cancelled", "wecom", "missing"])
+@pytest.mark.parametrize("condition", ["observer", "archived", "queued", "cancelled", "wecom", "missing"])
 def test_send_requires_supported_running_act_context(db: Session, condition):
-    session, turn = _running(db, agent_id="assistant" if condition == "assistant" else "act")
+    session, turn = _running(db, agent_id="observer" if condition == "observer" else "act")
     if condition == "archived":
         session.status = "archived"
     elif condition == "queued":
@@ -247,7 +258,7 @@ def test_private_mcp_discovery_invocation_and_live_policy_revocation(db: Session
     monkeypatch.setattr(FunctionCatalogService, "list_entries", lambda _self: [])
     name = McpFunctionService.tool_name("agent_private", "chat.send_message")
     assert name not in {tool.name for tool in McpFunctionService(db).list_tools()}
-    for agent_id in ("observer", "assistant"):
+    for agent_id in ("observer",):
         session, _turn = _running(db, agent_id=agent_id)
         token = AgentPolicyService(db).issue(agent_id, session.id)
         client = McpFunctionService(db, agent_token=token)
@@ -309,18 +320,19 @@ def test_handler_rechecks_session_ownership_and_explicit_ban(db: Session):
     assert db.scalar(select(ActLiveMessage)) is None
 
 
-def test_telegram_sends_immediately_to_original_topic_and_accepts_reply(db: Session):
-    session, turn = _running(db)
+@pytest.mark.parametrize("agent_id", ["act", "assistant"])
+def test_telegram_sends_immediately_to_original_topic_and_accepts_reply(db: Session, agent_id):
+    session, turn = _running(db, agent_id=agent_id)
     telegram, api, connection, _mapping = _telegram(db, session, turn)
     result = ActChatMessageCapability(db, telegram_service=telegram).send(session.id, "Duo code: 123")
     assert result["telegram_message_id"] == 1
     assert api.sent_messages[0]["chat"] == {"id": 42}
-    assert api.sent_messages[0]["message_thread_id"] == 91
+    assert api.sent_messages[0]["message_thread_id"] == (91 if agent_id == "act" else None)
     assert api.sent_messages[0]["text"] == "Duo code: 123"
     assert turn.status == "running"
     _prompt(db, turn)
     telegram._handle_message(connection.id, connection.bot_id, {
-        "chat_id": 42, "user_id": 7, "message_thread_id": 91, "text": "done",
+        "chat_id": 42, "user_id": 7, "message_thread_id": 91 if agent_id == "act" else None, "text": "done",
     })
     assert len(api.sent_messages) == 1  # No busy error or new thinking/final message.
     assert db.scalar(select(func.count()).select_from(ActTurn)) == 1
@@ -338,6 +350,79 @@ def test_telegram_reply_requires_paired_identity_and_current_topic(db: Session):
     db.refresh(prompt)
     assert prompt.reply_status == "awaiting"
     assert db.scalar(select(ActLiveMessage).where(ActLiveMessage.role == "user")) is None
+    assert api.sent_messages == []
+
+
+@pytest.mark.parametrize("agent_id", ["act", "assistant"])
+def test_telegram_live_message_renders_markdown_without_changing_saved_text(db: Session, agent_id):
+    session, turn = _running(db, agent_id=agent_id)
+    telegram, api, _connection, _mapping = _telegram(db, session, turn)
+    text = 'I saved **your plan**. [Open it](https://example.com/plan) <script>alert(1)</script>'
+
+    result = ActChatMessageCapability(db, telegram_service=telegram).send(session.id, text)
+
+    delivered = api.sent_messages[-1]
+    assert delivered["parse_mode"] == "HTML"
+    assert "**" not in delivered["text"]
+    assert '<a href="https://example.com/plan">Open it</a>' in delivered["text"]
+    assert "<script>" not in delivered["text"]
+    assert "&lt;script&gt;" in delivered["text"]
+    assert delivered["message_thread_id"] == (91 if agent_id == "act" else None)
+    assert db.get(ActLiveMessage, result["message_id"]).text == text
+    assert turn.status == "running"
+
+
+@pytest.mark.parametrize("agent_id", ["act", "assistant"])
+@pytest.mark.parametrize("plain_draft", [False, True])
+def test_telegram_final_reply_and_draft_render_markdown(db: Session, agent_id, plain_draft):
+    session, turn = _running(db, agent_id=agent_id)
+    telegram, api, connection, _mapping = _telegram(db, session, turn)
+    if plain_draft:
+        api.send_rich_message_draft = None
+    text = 'I saved **your plan**. [Open it](https://example.com/plan)'
+
+    telegram.send_agent_turn_result(
+        connection, text, message_thread_id=turn.delivery_message_thread_id, draft_id=turn.id,
+    )
+
+    delivered = api.sent_messages[-1]
+    assert delivered["parse_mode"] == "HTML"
+    assert "**" not in delivered["text"]
+    assert '<a href="https://example.com/plan">Open it</a>' in delivered["text"]
+    assert delivered["message_thread_id"] == (91 if agent_id == "act" else None)
+    if plain_draft:
+        draft = next(payload for name, payload in api.calls if name == "sendMessageDraft")
+        assert "**" not in draft["text"]
+        assert "[Open it]" not in draft["text"]
+        assert "https://example.com/plan" in draft["text"]
+    else:
+        draft = next(payload for name, payload in api.calls if name == "sendRichMessageDraft")
+        assert draft["rich_message"]["html"] == delivered["text"]
+
+
+def test_telegram_live_message_splits_unicode_within_limits_and_keeps_destination(db: Session):
+    session, turn = _running(db, agent_id="assistant")
+    telegram, api, _connection, _mapping = _telegram(db, session, turn)
+    text = "🌞" * 2500
+
+    result = ActChatMessageCapability(db, telegram_service=telegram).send(session.id, text)
+
+    assert len(api.sent_messages) == 2
+    assert "".join(message["text"] for message in api.sent_messages) == text
+    assert all(message["chat"]["id"] == 42 and message["message_thread_id"] is None
+               and message["parse_mode"] == "HTML" for message in api.sent_messages)
+    assert result["telegram_message_id"] == api.sent_messages[-1]["message_id"]
+    assert db.get(ActLiveMessage, result["message_id"]).text == text
+
+
+def test_assistant_live_message_rejects_changed_chat_with_assistant_error(db: Session):
+    session, turn = _running(db, agent_id="assistant")
+    telegram, api, connection, _mapping = _telegram(db, session, turn)
+    connection.paired_chat_id = "99"
+    db.commit()
+    with pytest.raises(TelegramServiceError, match="Assistant turn's paired Telegram chat") as error:
+        ActChatMessageCapability(db, telegram_service=telegram).send(session.id, "Hello")
+    assert error.value.error_type == "telegram_chat_unavailable"
     assert api.sent_messages == []
 
 

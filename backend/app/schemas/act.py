@@ -33,6 +33,7 @@ class ActTurnRead(BaseModel):
     user_message: str
     assistant_message: str | None
     backend_message_kind: str | None = None
+    assistant_context_json: dict | None = None
     activity_json: list[dict]
     live_messages: list[ActLiveMessageRead] = Field(default_factory=list)
     status: str

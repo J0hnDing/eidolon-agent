@@ -1,0 +1,22 @@
+# Valence utility integration
+
+Valence is an optional local integration for explicit utility calculations. It is not part of Assistant initialization, change collection, assessment, activation, or automatic action selection. The Assistant may call it as an ordinary function when a utility calculation is useful; no background workflow invokes it automatically.
+
+Run the sibling Valence backend at its standard `http://127.0.0.1:8010` address using `Valence/scripts/start-backend.ps1`. The integration supports engine v8 and requires the stateless `POST /api/utility/calculate` endpoint. Restart Valence after installing that endpoint, and restart Eidolon to load the new integration. No credentials, database access, process management, or frontend are required. Availability is checked through Valence's bounded health endpoint. A stopped or incompatible backend makes these functions unavailable without preventing Eidolon startup. Refresh the function catalog after starting Valence; existing MCP processes need a restart to discover new tools.
+
+## Operations
+
+- `valence.describe`: default `section=overview` returns the native feature ontology, checked-in calculation input schema, and encoding guidance. `section=persons` pages active saved people with `offset`, `limit` (1–100), `total`, and `next_offset`. `section=model` requires `person_id` and returns the exact saved model; optional `model_version_id` selects an immutable version, otherwise latest is returned.
+- `valence.utility.calculate`: accepts `person_id`, 1–25 `actions` with unique candidate `id` and native `action`, explicit `state` including `date`, optional `model_version_id`, `horizon_hours` (0–8760; default 168), and `include_details` (default false). Returns engine version, resolved model ID/version, exact model snapshot and legacy-conversion flag, state/horizon snapshots, and results ranked by `total_utility` descending with deterministic ID tie order. Pin the returned version for repeatability. No actions, models, state, or evaluation history are written.
+
+Read the ontology before encoding actions. Every action requires all 19 feature values, title, duration in minutes, and signed net money cost. Titles and notes have no mathematical effect. Zero feature values are explicit assumptions; disclose them rather than presenting them as measured facts. Missing energies remain null; absent needs contribute zero. Money amounts use the model's currency convention without conversion. The native engine applies rate-feature exposure durations, counts whole-action outcomes once, and retains its state/aftereffect/resource semantics. `utility_per_action_hour` excludes time cost and is null for zero duration; ranking uses net `total_utility`.
+
+Default results retain native contribution totals and omit graph and feature/aftereffect/need/energy trace arrays. `include_details=true` returns all native traces and computation graphs. Stored and returned numbers retain full precision; Eidolon does not recalculate or round utility.
+
+## Boundaries
+
+Both operations are low-risk read effects: calculation is deterministic and stateless. They use the normal registry, policy-issued invocation, agent function permissions, declared skill/service authorization, audit, catalog, and MCP paths. Explicit function bans still apply; registering Valence does not grant a skill permission to call it. Provider adapters do not grant authority. There is no generated application skill or special Assistant tool.
+
+Transport permits only fixed paths on `127.0.0.1:8010`, disables proxies and redirects, caps requests at 512 KiB and native responses at 5,000,000 bytes, and uses a one-second health timeout / 30-second operation timeout. Oversized responses fail explicitly; reduce batch size or omit details. Person pagination slices a bounded native list, so an oversized native list also fails explicitly. Native validation rejects invalid encodings and mismatched model ownership. HTTP errors, invalid JSON, non-finite results and provider exception details are normalized safely; raw provider bodies do not enter error output. Existing MCP response limits still apply.
+
+The checked-in action/state schema mirrors engine v8, with explicit canonical feature/need keys and tighter text/batch limits. Future engine contracts require a deliberate adapter/schema update; callers cannot supply URLs, arbitrary routes, code, or custom models through this integration.

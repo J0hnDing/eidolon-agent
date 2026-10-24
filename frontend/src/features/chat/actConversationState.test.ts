@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ActLiveMessage, ActTurn } from "../../api/client";
+import { ActLiveMessage, ActSession, ActTurn } from "../../api/client";
 import { actSessionMessages, awaitingActReply } from "./actConversationState";
 
 const notice: ActLiveMessage = {
@@ -14,6 +14,46 @@ const turn: ActTurn = {
 };
 
 describe("Act live messages", () => {
+  it("preserves backend times for requests, live messages, and final replies", () => {
+    const completedAt = "2026-10-09T15:00:00Z";
+    const session: ActSession = {
+      id: 1, title: "History", origin: "web", status: "active", wecom_user_id: null,
+      created_at: turn.created_at, updated_at: completedAt,
+      turns: [{ ...turn, status: "completed", completed_at: completedAt, assistant_message: "Done" }],
+    };
+    expect(actSessionMessages(session, "act").slice(1).map((message) => message.createdAt))
+      .toEqual([turn.created_at, notice.created_at, completedAt]);
+  });
+
+  it("renders a retained reply without an empty user bubble after its older request expires", () => {
+    const session: ActSession = {
+      id: 1, title: "Retained history", origin: "web", status: "active", wecom_user_id: null,
+      created_at: turn.created_at, updated_at: turn.created_at,
+      turns: [{ ...turn, status: "succeeded", user_message: "", assistant_message: "Retained full reply", live_messages: [] }],
+    };
+    expect(actSessionMessages(session, "act").slice(1).map((message) => [message.role, message.content]))
+      .toEqual([["assistant", "Retained full reply"]]);
+  });
+
+  it("keeps background Assistant prompts and quiet activations out of the conversation", () => {
+    const session: ActSession = {
+      id: 1, title: "Assistant", origin: "web", status: "active", wecom_user_id: null,
+      created_at: turn.created_at, updated_at: turn.created_at, turns: [
+        { ...turn, id: 5, user_message: "Internal review context", backend_message_kind: "assistant_daily", status: "completed", assistant_message: "", live_messages: [], activity_json: [{ kind: "tool", label: "Read calendar" }] },
+        { ...turn, id: 6, user_message: "Internal agenda context", assistant_context_json: { kind: "agenda" }, status: "completed", assistant_message: "How did the interview go?", live_messages: [] },
+        { ...turn, id: 7, user_message: "Internal reflection context", backend_message_kind: "assistant_reflection", status: "failed", assistant_message: null, error_message: "Review could not finish", live_messages: [] },
+      ],
+    };
+    expect(actSessionMessages(session, "assistant").slice(1).map((message) => message.content)).toEqual([
+      "How did the interview go?", "Review could not finish",
+    ]);
+    session.turns[0].status = "running";
+    session.turns[0].live_messages = [notice];
+    expect(actSessionMessages(session, "assistant").slice(1).map((message) => message.content)).toEqual([
+      notice.text, "How did the interview go?", "Review could not finish",
+    ]);
+  });
+
   it("orders the original request, notices and replies before thinking or the final answer", () => {
     const session = {
       id: 1, title: "Sign in", origin: "web", status: "active", wecom_user_id: null,

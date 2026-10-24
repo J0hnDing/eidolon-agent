@@ -1,0 +1,9 @@
+.web-app-detail-entry { display: flex; justify-content: flex-end; border-top: 1px solid var(--line); padding-top: 12px; }
+.web-app-detail-modal { width: min(840px, 100%); }
+.web-app-detail-modal .web-app-diagnostics-content { padding: 0; gap: 20px; }
+.web-app-detail-modal .stack { gap: 20px; }
+.web-app-detail-modal h2 { font-size: 16px; margin: 0; }
+.web-app-detail-modal .detail-grid { gap: 18px 24px; margin: 0; }
+.web-app-detail-modal dd { overflow-wrap: anywhere; font-size: 12px; }
+.web-app-detail-modal pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
+.web-app-detail-modal .run-row { padding: 14px 0; }

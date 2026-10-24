@@ -1,0 +1,92 @@
+/* Product chrome follows the supplied Linear application screenshot. */
+.app-shell { height: 100dvh; grid-template-columns: 228px minmax(0, 1fr); overflow: hidden; background: var(--sidebar); }
+.app-shell .sidebar { gap: 18px; border: 0; padding: 17px 10px 14px; }
+.sidebar .brand { gap: 8px; padding: 0 6px; }
+.sidebar .brand strong { font-size: 14px; font-weight: 600; letter-spacing: -.02em; }
+.sidebar .brand-mark { width: 24px; height: 24px; flex-basis: 24px; }
+.sidebar-brand-row { min-height: 34px; gap: 4px; }
+.sidebar-brand-actions { display: flex; align-items: center; gap: 2px; }
+.sidebar .sidebar-search { width: 30px; height: 30px; min-height: 30px; padding: 6px; color: var(--text-secondary); border: 0; border-radius: 6px; }
+.sidebar .nav-list { gap: 26px; }
+.sidebar .nav-group { gap: 7px; }
+.sidebar .nav-group-items { gap: 2px; }
+.sidebar .nav-group-label { padding-inline: 10px; font-size: 11px; }
+.sidebar .nav-link { min-height: 32px; gap: 9px; padding: 6px 10px; border: 0; border-radius: 6px; color: var(--text-muted); font-size: 13px; font-weight: 500; }
+.sidebar .nav-link.active { background: var(--surface); color: var(--text); }
+.sidebar .nav-link > .app-icon, .sidebar .nav-icon { width: 16px; height: 16px; }
+.sidebar .sidebar-bottom { padding-top: 24px; }
+.app-shell .main-content { position: relative; height: calc(100dvh - 16px); min-height: 0; margin: 8px 8px 8px 0; overflow: auto; border: 1px solid var(--line); border-radius: 9px; background: var(--canvas); scrollbar-width: thin; }
+.app-shell .app-content-header { display: none; }
+.app-shell .route-stage { padding: 0 24px 24px; }
+.app-shell .route-stage > .page { max-width: none; }
+.app-shell .route-stage > .page > .page-header { position: sticky; top: 0; z-index: 10; min-height: 48px; align-items: center; flex-wrap: nowrap; gap: 16px; margin: 0 -24px 20px; border-bottom: 1px solid var(--line); padding: 10px 22px; background: var(--canvas); }
+.app-shell .route-stage > .page > .page-header h1 { margin: 0; font-size: 14px; font-weight: 550; letter-spacing: -.01em; line-height: 1.5; }
+.app-shell .route-stage > .page > .page-header > .button-row { width: auto; justify-content: flex-end; }
+.app-shell .route-stage > .page > .page-header button, .app-shell .route-stage > .page > .page-header .button-link { min-height: 30px; padding: 6px 10px; font-size: 12px; border-radius: 6px; }
+.app-shell .route-stage > .assistant-page > .page-header { margin-bottom: 0; }
+.app-shell .route-stage:has(> .assistant-page), .app-shell .route-stage:has(> .agents-page), .app-shell .route-stage:has(> .build-page) { height: 100%; padding-bottom: 16px; }
+.app-shell .route-stage > .assistant-page, .app-shell .route-stage > .agents-page:has(.embedded-chat), .app-shell .route-stage > .build-page { height: 100%; min-height: 0; }
+.app-shell .route-stage > .assistant-page { gap: 16px; }
+.app-shell .route-stage > .agents-page:has(.embedded-chat) { overflow: hidden; grid-template-rows: auto auto minmax(0, 1fr); gap: 16px; }
+.app-shell .route-stage > .build-page { gap: 16px; }
+.build-page > .page-header > div { display: flex; align-items: center; gap: 16px; }
+.build-page > .page-header .back-link { margin: 0; font-size: 12px; }
+.agent-workspace-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-width: 0; }
+.agent-workspace-toolbar .agent-type-tabs { display: flex; align-items: center; gap: 6px; }
+.agent-workspace-toolbar .agent-type-tabs > a { min-height: 32px; padding: 6px 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; }
+.agent-workspace-toolbar .agent-type-tabs > a.active { border-color: var(--line-strong); background: var(--surface); }
+.agent-workspace-toolbar .agent-glyph { width: auto; height: auto; border: 0; }
+.agent-workspace-toolbar .agent-switch-copy { display: flex; align-items: center; gap: 7px; }
+.agent-workspace-toolbar .agent-switch-copy > small { font-size: 10px; }
+.agent-workspace-toolbar .agent-local-nav { gap: 18px; border: 0; }
+.agent-workspace-toolbar .agent-local-nav > button { min-height: 32px; padding: 4px 0; font-size: 12px; }
+.app-shell .chat-workspace { border-radius: 8px; }
+.app-shell .chat-sidebar { background: var(--canvas); }
+.app-shell .chat-mode-bar { background: var(--canvas); }
+.app-shell .composer-dock { padding-bottom: 4px; }
+.app-shell .message-author img, .app-shell .conversation-welcome > img { border-radius: 0; }
+.app-shell .message-body { color: var(--text-muted); }
+.app-shell .settings-workspace { padding-top: 20px; gap: 40px; grid-template-columns: 174px minmax(0, 1fr); }
+.app-shell .settings-sidebar { top: 20px; }
+.app-shell .settings-sidebar-heading { margin-bottom: 20px; font-size: 14px; }
+.app-shell .settings-content > .page-header { min-height: 42px; padding-bottom: 16px; }
+.app-shell .settings-content > .page-header h1 { font-size: 16px; letter-spacing: -.02em; }
+.app-shell .catalog-tabs { gap: 6px; padding-bottom: 0; border: 0; margin-bottom: 16px; }
+.app-shell .catalog-tabs .catalog-tab { gap: 6px; min-height: 30px; padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; }
+.app-shell .catalog-tabs .catalog-tab.is-active { border-color: var(--line-strong); background: var(--surface); }
+.app-shell .catalog-tab > span { min-width: 16px; padding: 0 3px; background: transparent; font-size: 10px; }
+html[data-theme='light'] .brand-mark img, html[data-theme='light'] .message-author img, html[data-theme='light'] .conversation-welcome > img { filter: invert(1); }
+@media (min-width: 1700px) { .app-shell { grid-template-columns: 236px minmax(0, 1fr); } }
+@media (max-width: 1050px) { .app-shell { grid-template-columns: 208px minmax(0, 1fr); } .app-shell .settings-workspace { gap: 28px; } }
+@media (max-width: 800px) {
+  .app-shell { display: block; height: 100dvh; }
+  .app-shell .sidebar { position: fixed; width: 248px; padding-top: 16px; background: var(--sidebar); }
+  .app-shell .main-content { height: calc(100dvh - 12px); margin: 6px; border-radius: 8px; }
+  .app-shell .app-content-header { display: block; position: sticky; top: 0; z-index: 30; width: 0; height: 0; padding: 0; border: 0; }
+  .app-content-header > .mobile-nav-toggle { position: absolute; top: 9px; left: 10px; width: 30px; height: 30px; min-height: 30px; padding: 6px; background: var(--canvas); }
+  .app-shell .route-stage { padding-inline: 18px; padding-bottom: 18px; }
+  .app-shell .route-stage > .page > .page-header { margin-inline: -18px; padding-left: 52px; padding-right: 14px; }
+  .app-shell .settings-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; padding-top: 0; }
+  .app-shell .settings-sidebar-heading { min-height: 48px; margin: 0 -18px 12px; padding: 14px 18px 12px 52px; border-bottom: 1px solid var(--line); }
+  .app-shell .settings-sidebar { position: static; }
+  .app-shell .settings-content > .page-header { padding-top: 0; }
+  .app-shell .route-stage > .skill-detail-page, .app-shell .web-app-workspace { padding-top: 52px; }
+  .agent-workspace-toolbar { gap: 10px; flex-wrap: wrap; }
+  .agent-workspace-toolbar .agent-type-tabs > a { gap: 8px; padding: 5px 10px; }
+  .agent-workspace-toolbar .agent-local-nav { gap: 12px; }
+}
+@media (max-width: 480px) {
+  .app-shell .route-stage > .page > .page-header { gap: 8px; }
+  .app-shell .route-stage > .page > .page-header h1 { font-size: 13px; }
+  .app-shell .route-stage > .page > .page-header button, .app-shell .route-stage > .page > .page-header .button-link { padding: 5px 8px; font-size: 11px; }
+  .app-shell .route-stage > .page > .page-header .button-row { gap: 5px; }
+  .app-shell .route-stage > .page > .page-header > .button-row { max-width: 65%; }
+  .app-shell .assistant-context-toggle { gap: 6px; }
+  .app-shell .assistant-context-toggle .app-icon { display: none; }
+  .app-shell .catalog-tabs { gap: 6px; }
+}
+
+/* Keep one scroll owner in each Agents view so its toolbar never shifts. */
+.app-shell .main-content:has(.agents-page), .app-shell .main-content:has(.assistant-page) { overflow: hidden; }
+.agent-configuration-view { min-height: 0; overflow-y: auto; scrollbar-gutter: stable; padding-right: 12px; }
+.agent-configuration-view > .agent-configuration { max-width: 1120px; margin-inline: auto; padding-bottom: 24px; }

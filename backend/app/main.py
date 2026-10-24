@@ -21,6 +21,7 @@ from app.routers import (
     functions,
     integrations,
     invocation_approvals,
+    memory,
     memory_facts,
     permission_requests,
     schedules,
@@ -29,7 +30,7 @@ from app.routers import (
     usage,
     web_apps,
 )
-from app.services.act_turn_dispatcher import agent_dispatchers
+from app.services.agent_dispatchers import agent_dispatchers
 from app.services.atlas_lifecycle_service import atlas_lifecycle_service
 from app.services.atlas_settings_service import build_default_atlas_settings_service
 from app.services.codex_usage_service import codex_usage_service
@@ -121,6 +122,23 @@ async def web_app_runtime_maintenance(config: WebAppRuntimeConfig) -> None:
         await asyncio.to_thread(stop_idle_web_app_instances, config)
 
 
+def maintain_agent_chat_history() -> None:
+    from app.services.agent_memory_service import AgentMemoryService
+
+    with SessionLocal() as db:
+        AgentMemoryService(db).sync_chat_history()
+
+
+async def agent_chat_history_maintenance() -> None:
+    # Retention runs even when no chats arrive and proactive Assistant is off.
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await asyncio.to_thread(maintain_agent_chat_history)
+        except Exception:
+            logger.exception("Agent history maintenance failed; retrying on the next interval")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info(
@@ -131,6 +149,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sys.argv,
     )
     create_db_and_tables()
+    from app.services.agent_memory_service import AgentMemoryService
+    with SessionLocal() as memory_db:
+        memory = AgentMemoryService(memory_db)
+        memory.migrate_legacy()
+        memory.sync_chat_history()
+        history_engine = memory_db.get_bind()
+    from app.services.agent_chat_history import reclaim_history_database_space
+
+    try:
+        reclaim_history_database_space(history_engine)
+    except Exception:
+        # Cleared cells are already overwritten by secure_delete. Busy
+        # compaction may wait until another startup; freed pages remain reusable.
+        logger.exception("Could not compact SQLite after history migration")
     quercus_db = SessionLocal()
     try:
         quercus_processing_method = QuercusProcessingService(quercus_db).initialize()
@@ -145,14 +177,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         dispatcher.recover()
     agent_db = SessionLocal()
     try:
-        from app.services.act_session_service import ActSessionError, ActSessionService
         from app.services.agent_proposal_service import AgentProposalService
-        try:
-            ActSessionService(agent_db, agent_id="assistant").prune_assistant_sessions()
-            agent_db.commit()
-        except ActSessionError:
-            agent_db.rollback()
-            logger.warning("Assistant retention reconciliation is waiting for an existing session")
         AgentProposalService(agent_db).reconcile()
     finally:
         agent_db.close()
@@ -187,6 +212,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     web_app_db = SessionLocal()
     WebAppRuntimeService(web_app_db, config=web_app_config).recover_stale_instances()
     web_app_maintenance = asyncio.create_task(web_app_runtime_maintenance(web_app_config))
+    history_maintenance = asyncio.create_task(agent_chat_history_maintenance())
     original_signal_handlers = install_shutdown_signal_logging()
     try:
         yield
@@ -203,11 +229,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await asyncio.to_thread(stop_telegram_pollers, telegram_pollers)
         for dispatcher in agent_dispatchers.values():
             await asyncio.to_thread(dispatcher.stop)
-        web_app_maintenance.cancel()
-        try:
-            await web_app_maintenance
-        except asyncio.CancelledError:
-            pass
+        for maintenance in (web_app_maintenance, history_maintenance):
+            maintenance.cancel()
+            try:
+                await maintenance
+            except asyncio.CancelledError:
+                pass
         WebAppRuntimeService(web_app_db, config=web_app_config).shutdown_all()
         web_app_db.close()
         codex_usage_service.stop()
@@ -252,6 +279,7 @@ async def enforce_web_app_gateway_origin(request: Request, call_next):
     return await call_next(request)
 
 app.include_router(memory_facts.router)
+app.include_router(memory.router)
 app.include_router(act.router)
 app.include_router(agents.router)
 app.include_router(functions.router)

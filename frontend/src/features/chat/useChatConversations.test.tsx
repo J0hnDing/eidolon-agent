@@ -1,12 +1,51 @@
 // @vitest-environment jsdom
 
-import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { clearManagedSessionCache } from "./managedSessionCache";
 import { useChatConversations } from "./useChatConversations";
+import { CHAT_STORAGE_KEY, ACTIVE_CONVERSATION_KEY, createConversation } from "../../lib/chatStore";
 
 describe("useChatConversations", () => {
-  beforeEach(() => localStorage.clear());
+  afterEach(cleanup);
+  beforeEach(() => { localStorage.clear(); clearManagedSessionCache(); });
+
+  it("keeps each conversation home scoped while preserving builds and agent metadata", () => {
+    const build = { ...createConversation("project", { id: "existing-build" }), draft: "Keep this build draft" };
+    const observer = createConversation("observer", { id: "existing-observer", actSessionId: 71 });
+    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify([build, observer]));
+    localStorage.setItem(ACTIVE_CONVERSATION_KEY, observer.id);
+    const { result, unmount } = renderHook(() => useChatConversations("project"));
+    expect(result.current.mode).toBe("project");
+    expect(result.current.activeConversationId).toBe(build.id);
+    expect(result.current.draft).toBe("Keep this build draft");
+    expect(result.current.conversations).toHaveLength(1);
+    act(() => result.current.createNewConversation("project"));
+    const selectedBuildId = result.current.activeConversationId;
+    unmount();
+    const agentView = renderHook(() => useChatConversations("observer"));
+    expect(agentView.result.current.mode).toBe("observer");
+    act(() => agentView.result.current.updateDraft("Private observer draft"));
+    expect(localStorage.getItem(CHAT_STORAGE_KEY)).not.toContain("Private observer draft");
+    agentView.unmount();
+    const reopenedBuilds = renderHook(() => useChatConversations("project"));
+    expect(reopenedBuilds.result.current.activeConversationId).toBe(selectedBuildId);
+    reopenedBuilds.unmount();
+    const reopenedObserver = renderHook(() => useChatConversations("observer"));
+    expect(reopenedObserver.result.current.draft).toBe("Private observer draft");
+    expect(reopenedObserver.result.current.conversations[0].actSessionId).toBe(71);
+    reopenedObserver.unmount();
+  });
+
+  it("keeps a deleted home's replacement in the same mode", () => {
+    const { result } = renderHook(() => useChatConversations("project"));
+    const first = result.current.activeConversationId;
+    act(() => result.current.deleteConversation(first));
+    expect(result.current.mode).toBe("project");
+    expect(result.current.activeConversationId).not.toBe(first);
+    expect(result.current.conversations).toHaveLength(1);
+  });
 
   it("keeps agent bindings distinct and removes pruned sessions without changing a valid selection", () => {
     const { result } = renderHook(() => useChatConversations());
@@ -21,7 +60,7 @@ describe("useChatConversations", () => {
     expect(result.current.conversations.some((item) => item.id === "observer-7")).toBe(false);
     act(() => result.current.importAgentSessions("assistant", []));
     expect(result.current.activeConversation).toBeDefined();
-    expect(result.current.mode).toBe("project");
+    expect(result.current.mode).toBe("assistant");
   });
 
   it("owns drafts and creates conversations with immutable modes", () => {
@@ -31,7 +70,7 @@ describe("useChatConversations", () => {
     act(() => result.current.updateDraft("Build a tool"));
     act(() => result.current.appendMessages([{ id: 99, role: "user", content: "Build a tool" }]));
     expect(result.current.draft).toBe("Build a tool");
-    expect(result.current.mode).toBe("project");
+    expect(result.current.mode).toBe("assistant");
     expect(result.current.messages[result.current.messages.length - 1]?.content).toBe("Build a tool");
 
     act(() => result.current.createNewConversation("project"));
@@ -69,7 +108,7 @@ describe("useChatConversations", () => {
 
     expect(result.current.activeConversation).toBeUndefined();
     expect(result.current.messages).toEqual([
-      { id: 1, role: "assistant", content: "Hi, what can I build for you today?" },
+      { id: 1, role: "assistant", content: "Hi, what can I do for you?" },
     ]);
     expect(result.current.messages.some((message) => message.content === "Private first transcript")).toBe(false);
   });
@@ -87,10 +126,10 @@ describe("useChatConversations", () => {
 
     const { result } = renderHook(() => useChatConversations());
 
-    expect(result.current.mode).toBe("project");
+    expect(result.current.mode).toBe("assistant");
     expect(result.current.conversations).toHaveLength(1);
     expect(result.current.conversations[0].id).not.toBe("legacy-chat");
-    expect(result.current.messages[0]?.content).toBe("Hi, what can I build for you today?");
+    expect(result.current.messages[0]?.content).toBe("Hi, what can I do for you?");
   });
 
   it("updates only the exact retired starter lines in stored Project and Act conversations", () => {
@@ -123,7 +162,77 @@ describe("useChatConversations", () => {
     expect(result.current.conversations[0].messages[0].content).toBe("Hi, what can I build for you today?");
     expect(result.current.conversations[1].messages.map((message) => message.content)).toEqual([
       "Hi, what can I do for you?",
-      "Keep this real response.",
     ]);
+    expect(localStorage.getItem(CHAT_STORAGE_KEY)).not.toContain("Keep this real response.");
+  });
+
+  it("purges legacy managed transcripts from storage while preserving Project history", () => {
+    const legacy = [
+      {
+        id: "assistant-8", title: "Assistant", mode: "assistant", actSessionId: 8,
+        draft: "unsent managed draft", messages: [{ id: 2, role: "user", content: "assistant secret" }],
+        createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z",
+      },
+      {
+        id: "observer-9", title: "Observer", mode: "observer", actSessionId: 9,
+        messages: [{ id: 3, role: "assistant", content: "observer secret", actWork: { activities: [{ label: "private activity" }] } }],
+        createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z",
+      },
+      {
+        id: "project-2", title: "Project", mode: "project", draft: "Project draft",
+        messages: [{ id: 4, role: "user", content: "Project transcript stays" }],
+        createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z",
+      },
+    ];
+    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(legacy));
+
+    const { result } = renderHook(() => useChatConversations());
+    const stored = localStorage.getItem(CHAT_STORAGE_KEY) ?? "";
+
+    expect(stored).not.toContain("assistant secret");
+    expect(stored).not.toContain("observer secret");
+    expect(stored).not.toContain("private activity");
+    expect(JSON.parse(stored)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "assistant-8", actSessionId: 8 }),
+      expect.objectContaining({ id: "observer-9", actSessionId: 9 }),
+      expect.objectContaining({ id: "project-2", messages: legacy[2].messages, draft: "Project draft" }),
+    ]));
+    expect(JSON.parse(stored).find((item: { id: string }) => item.id === "assistant-8")).not.toHaveProperty("messages");
+    expect(result.current.conversations.find((item) => item.id === "assistant-8")?.messages[0]?.content)
+      .toBe("Hi, what can I do for you?");
+    expect(result.current.conversations.find((item) => item.id === "project-2")?.messages[0]?.content)
+      .toBe("Project transcript stays");
+  });
+
+  it("keeps hydrated managed history in memory without persisting replies or drafts", () => {
+    const { result } = renderHook(() => useChatConversations());
+    const assistant = { id: 11, title: "Assistant", origin: "web", status: "active",
+      created_at: "2026-09-05T12:00:00Z", updated_at: "2026-09-05T12:00:00Z", wecom_user_id: null };
+    act(() => result.current.importAgentSessions("assistant", [assistant]));
+    act(() => result.current.selectConversation("assistant-11"));
+    act(() => result.current.updateConversation("assistant-11", (conversation) => ({
+      ...conversation,
+      messages: [
+        { id: 1, role: "assistant", content: "Hi, what can I do for you?" },
+        { id: 2, role: "user", content: "Server loaded question" },
+        { id: 3, role: "assistant", content: "Server loaded answer" },
+      ],
+    })));
+    act(() => result.current.updateDraft("private unsent input"));
+
+    expect(result.current.messages.map((message) => message.content)).toEqual([
+      "Hi, what can I do for you?", "Server loaded question", "Server loaded answer",
+    ]);
+    const stored = localStorage.getItem(CHAT_STORAGE_KEY) ?? "";
+    expect(stored).not.toContain("Server loaded question");
+    expect(stored).not.toContain("Server loaded answer");
+    expect(stored).not.toContain("private unsent input");
+    expect(JSON.parse(stored).find((item: { id: string }) => item.id === "assistant-11")).toMatchObject({
+      id: "assistant-11", actSessionId: 11,
+    });
+
+    act(() => result.current.createNewConversation("project"));
+    act(() => result.current.appendMessages([{ id: 21, role: "user", content: "Project history stays saved" }]));
+    expect(localStorage.getItem(CHAT_STORAGE_KEY)).toContain("Project history stays saved");
   });
 });

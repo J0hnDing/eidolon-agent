@@ -27,7 +27,7 @@ Atlas reads are backend-owned integration functions in the ordinary catalog, ava
 | `atlas.records.get` | Complete native record by `id`: data, custom fields, provenance, facts, links and backlinks. This explicit read includes sensitive Person identifiers and physical health. |
 | `atlas.links.get` | Complete native link by `id`. |
 | `atlas.person.completeness.get` | Atlas's overall and per-area `complete`/`missing` percentages, counts/targets, criteria and available missing-field/domain/spectrum lists. |
-| `atlas.states.get` | Complete state estimates, confidence and recency, optionally `at`, or `view=configuration`. Reads do not save observations or evolve stored state. |
+| `atlas.states.get` | Complete state estimates, per-record goal/interest/relationship satisfaction targets, evidence, confidence, event/progress recency and derived summaries, optionally `at`, or `view=configuration` including target decay rates. Reads do not save observations or evolve stored state. |
 | `atlas.personality.get` | Complete native Personality response, standalone spectra and exact imported Valence model when present; unknown values and stored precision stay unchanged. |
 | `atlas.history.list` | `kind=record|link` revisions with `id`, or `kind=states` event/manual-estimate history. |
 | `atlas.graph.get` | Full motivational graph, optionally focused by `goal_id`. |
@@ -42,6 +42,50 @@ Record searches and history return `items`, `total`, and `next_cursor`; native K
 Transport limits still apply after provider reads: MCP output is limited to 1 MiB and skill integration responses to 5,000,000 bytes. A native response fitting the provider limit can exceed a caller's transport limit; the caller receives `response_too_large`, never a silently shortened record.
 
 ## Existing semantic functions
+
+`atlas.records.create` / `atlas.records.update` and `atlas.links.create` / `atlas.links.update` expose native personal-record and relationship writes through the ordinary registry, integration authorization, audit and invocation kernel. New records/links require explicit provenance. Inputs use native camelCase fields; updates require `id` and `expected_revision`, translated to Atlas's optimistic `revision`. Record `data` replaces the entire data object, so read first and preserve untouched fields, evidence and unknown values. `customFieldValues` likewise carries the complete desired custom values. A populated Cash currency change requires `confirmCurrencyChange=true`; Atlas does not convert amounts. Atlas validates category data, evidence and motivational graph invariants. Stale edits fail without automatic retry. Existing runtime approvals never authorize new operations implicitly.
+
+## Editable content parity
+
+The Assistant can use all native editable-content actions outside Knowledge and the separately excluded Personality/Valence file import. This includes Person and physical health, Personality spectra/annotations, Ends, Goals and blueprints, Beliefs, Interests, Experiences, Projects, Resources and Relationships through the existing generic record operations. Native fixed-Cash, graph, imported-model and other validation rules remain authoritative; a tool cannot bypass a restriction that Atlas applies to its UI.
+
+| Operation | Behavior |
+| --- | --- |
+| `atlas.records.trash` | Reversible removal at `expected_revision`. |
+| `atlas.records.restore` | Restore from Trash at `expected_revision`. |
+| `atlas.records.restore_revision` | Restore historical `revision` as a new current revision, guarded by `expected_revision`; optional `confirm_currency_change` maps to native currency acknowledgement. Historical trash status is restored too. |
+| `atlas.trash.empty` | Permanently purge **all currently trashed records**, including their history and attachments; inspect Trash first. Atlas supplies no individual purge or revision guard. |
+| `atlas.links.delete` | Remove at `expected_revision`, retaining link history. |
+| `atlas.links.restore_revision` | Restore selected historical `revision` at current `expected_revision`, including deleted-link recovery. Read current revision from the link/history. |
+| `atlas.custom_fields.list/create/update/delete` | Manage native typed definitions; record custom values use `records.create/update`. Updates validate current and historical values; native definitions have no revision guard. Deletion irreversibly purges the definition and its values from **current records and historical revisions**. |
+| `atlas.states.configuration.update` | Prospectively patch specified `states` and/or per-record `targets` parameters at `expected_revision`; preserve untouched parameters and imported Valence-bound optimal ranges. |
+| `atlas.states.events.create` | Register a completed activity using native timestamps, `eventId`, confidence and `impacts` and/or per-record `targets`. Target impacts and legacy `goal_progression` use a single stimulus and forbid duration; other states use intensity and duration. |
+| `atlas.states.observations.create` | Save exact current manual `states` and/or per-record `targets` values/confidence, including zero, with a stable `eventId`. |
+| `atlas.attachments.upload` | Upload an Experience JPEG/PNG/WebP (20 MiB maximum), or create/replace a Person PDF/DOCX resume (10 MiB maximum). |
+| `atlas.attachments.download` | Save original attachment bytes to a unique file in `workspace/downloads`, returning its path, filename, byte count, media type and SHA-256. |
+| `atlas.attachments.delete` | Permanently remove image bytes or a Person resume. Record revision restoration does not recover deleted attachment bytes. |
+
+Attachment uploads accept `{kind, record_id, file: {path, filename, bytes, sha256}}`. The file must be a regular file directly in the shared `workspace/downloads/` directory. Absolute paths, traversal, alternate data streams, symbolic links and Windows junctions are rejected. Filename, actual bounded byte count and SHA-256 must match before upload. Binary content travels to a fixed native endpoint, outside tool JSON limits; no arbitrary local read, destination path, HTTP path or request headers are exposed. `attachments.read/list` remain available for explicit paged bytes/text and metadata. `kind=image` deletion/download uses image ID; `kind=resume` uses Person record ID. Uploads preserve original bytes and use URI-encoded filenames. Images have no native edit/rename/reorder action; use remove/add. Resume upload replaces the singleton. Attachments do not create record revisions.
+
+States history and configuration revisions are append-only in Atlas, including for users. No artificial update/delete operation is exposed for immutable events. Repeating an identical `eventId` payload returns `duplicate=true`; changed reuse fails with `event_id_conflict`, never an automatic retry or an optimistic-revision error.
+
+### Per-record satisfaction and Assistant use
+
+The native States response includes `targets`, keyed by the record IDs of live Goals, Interests and relationships with people. Each target has a satisfaction estimate in `[0,1]`, confidence, independently configurable need dynamics including hourly `decayRate`, evidence when available, and event/observation/progress timestamps. `lastProgressAt` and `elapsedHoursSinceProgress` track positive activity separately from `lastObservationAt`: asking for feedback must not make an old goal look recently progressed. A prior-only estimate has no supporting observation and must not be presented as known dissatisfaction. These estimates describe recent satisfaction, not the Goal blueprint's completion percentage, an Interest's liking/skill rating, or a Relationship record's other properties.
+
+The existing `goal_progression` is the equal mean of eligible active Goals and Interests together; the existing `close_connection` is the equal mean of personal Relationship estimates. There are exactly seven top-level States. Read individual estimates, confidence and component coverage before interpreting a summary. Paused, achieved or abandoned Goals do not contribute; organization relationships are excluded. The canonical labels, temporal basis and settings, including Valence optimal bounds, remain attached to these summaries. Target dynamics determine summary values. Historical global reports remain readable and provide fallback only when no relevant live records exist. New direct estimates or impacts for currently derived summaries reject rather than silently changing a hidden fallback; update individual targets instead. Identical historical retries still succeed.
+
+All three existing State write operations accept an optional `targets` map. Configuration updates use `{expected_revision, targets: {recordId: {decayRate: 0.015}}}`. Observations use `{eventId, targets: {recordId: {value: 0.7, confidence: 0.8, evidence: {attribution: "user_report", source: "conversation:feedback", note: "The user reported the session was satisfying."}}}}`. Activities use `{eventId, startedAt, endedAt, confidence, targets: {recordId: {intensity: 0.5, evidence: {...}}}}`. At least one canonical State or target entry is required overall; omitted or empty companion `states`/`impacts` maps remain valid when a target is supplied. Target events always apply a single intensity stimulus regardless of event length, so they never accept `durationHours`.
+
+Target evidence requires `attribution=user_report|observed|inferred`, a nonempty `source` and `note` of at most 2,000 characters each. Keep the original evidence with the same stable event ID on retries; changing evidence also conflicts. Atlas validates target existence and eligibility atomically. Inferred estimates should retain honest confidence and distinguish interpretation from the user's report. The integration does not fabricate State updates from record edits or calendar completion.
+
+The Assistant considers States during morning planning alongside current priorities, commitments, interests and available time. Low satisfaction or stale progress is a reason to resolve uncertainty or offer a free block when useful; it does not automatically determine the plan or imply lost interest. After relevant events, the Assistant actively records warranted target updates, usually after feedback when satisfaction is unclear, and can use sufficiently grounded observation/inference without asking every time. Physical activity and mental stimulation are excluded from the Assistant's State planning, follow-up and updates for now; the Atlas model and editable history remain available.
+
+These State read/write contracts use version 3. Their authorization fingerprints change, so affected installed skills/services need current reviewed authorization; agent policies, explicit bans and Observer's read-only boundary still apply.
+
+Reads/downloads are low risk. Ordinary create/edit, record trash/restore and recoverable link removal are medium risk. Permanent Trash purge, custom-field deletion and attachment deletion are high risk and use Eidolon's existing backend-owned per-call approval path. Observer remains read-only; Assistant/Act defaults, explicit bans, selected integration declarations, authorization fingerprints and connection checks all still apply. New operations are discovered from the canonical registry and do not inherit authorization from old selected operations.
+
+Vault administration (setup, passphrases, unlock/lock, reset and encrypted backup export/import) stays in trusted Settings, as requested. Knowledge and Personality file-import capabilities are not expanded. Restart the backend and existing MCP sessions to publish the new catalog snapshot; review changed runtime approvals before running affected installed skills.
 
 Stable operation IDs remain available with current contracts:
 

@@ -97,6 +97,7 @@ class ProductManagerSessionService:
         model: str | None = None,
         reasoning_effort: str | None = None,
         developer_instructions: str | None = None,
+        base_instructions: str | None = None,
         sandbox: str | None = None,
         approval_policy: str | None = None,
         config: dict[str, Any] | None = None,
@@ -111,6 +112,8 @@ class ProductManagerSessionService:
             params["config"] = {"model_reasoning_effort": reasoning_effort}
         if developer_instructions is not None:
             params["developerInstructions"] = developer_instructions
+        if base_instructions is not None:
+            params["baseInstructions"] = base_instructions
         if sandbox is not None:
             params["sandbox"] = sandbox
         if approval_policy is not None:

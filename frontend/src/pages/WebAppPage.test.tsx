@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +9,7 @@ import { Skill, WebAppOpenResponse, api } from "../api/client";
 import WebAppPage, { WEB_APP_IFRAME_SANDBOX, WebAppFrame, isControlledWebAppEmbedUrl } from "./WebAppPage";
 
 afterEach(() => {
+  cleanup();
   vi.restoreAllMocks();
 });
 
@@ -64,6 +65,16 @@ describe("WebAppFrame", () => {
 
     await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1));
     expect(await screen.findByTitle("Notes application")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Back to Applications" }).getAttribute("href")).toBe("/apps");
+    expect(screen.getByRole("link", { name: "Skill details" }).getAttribute("href")).toBe("/skills/7");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByText("Containment and lifecycle details"));
+    expect(screen.getByRole("dialog", { name: "Application diagnostics" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Lifecycle diagnostics" })).toBeTruthy();
+    expect(screen.getByTitle("Notes application")).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(openSpy).toHaveBeenCalledTimes(1);
   });
 
   it("rejects ordinary external and credential-bearing origins", () => {

@@ -375,6 +375,7 @@ def test_unified_catalog_persists_categories_states_and_user_lifecycle(
     assert entries["notion.todo.delete"]["mcp_destructive"] is True
     assert entries["notion.report.list"]["mcp_read_only"] is True
     assert entries["notion.report.delete"]["mcp_destructive"] is True
+    assert entries["notion.daily_feed.read"]["mcp_read_only"] is True
     assert entries["notion.todo.update"]["mcp_destructive"] is False
     assert entries["notion.todo.create"]["invocation"]["risk"] == "medium"
     assert "integration_test_adapter.DeterministicFakeIntegrationAdapter" in entries[
@@ -391,6 +392,7 @@ def test_unified_catalog_persists_categories_states_and_user_lifecycle(
     connected = {entry["id"]: entry for entry in catalog.list_entries()}
     assert connected["github.repository.get"]["availability"] == "available"
     assert connected["notion.todo.list"]["availability"] == "available"
+    assert connected["notion.daily_feed.read"]["availability"] == "available"
     assert "github.repository.get" in {
         entry["id"] for entry in catalog.available_index()
     }

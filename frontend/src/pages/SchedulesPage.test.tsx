@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "../api/client";
+import { SkillSchedule, api } from "../api/client";
 import SchedulesPage from "./SchedulesPage";
 
 afterEach(() => {
@@ -12,7 +12,42 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("SchedulesPage", () => {
+describe("AutomationsPage", () => {
+  it("shows a clear empty state when no automations are scheduled", async () => {
+    vi.spyOn(api, "listSchedules").mockResolvedValue([]);
+
+    render(<MemoryRouter><SchedulesPage /></MemoryRouter>);
+
+    expect(await screen.findByRole("heading", { name: "Automations" })).toBeTruthy();
+    expect(screen.getByText("No automations are scheduled yet.")).toBeTruthy();
+  });
+
+  it("combines automation source, search, and backend availability filters", async () => {
+    const platform: SkillSchedule = {
+      id: -3, schedule_kind: "platform", service_id: "backend.cleanup", read_only: false,
+      skill_enabled: null, is_running: false, skill_id: null, skill_name: null,
+      name: "System cleanup", status: "paused", schedule_type: "daily",
+      schedule_json: { type: "daily", time: "08:00", timezone: "UTC", input: {} }, input_json: {},
+      timezone: "UTC", next_run_at: null, last_run_at: null, last_run_status: null,
+      created_at: "2026-10-21T00:00:00Z", updated_at: "2026-10-21T00:00:00Z",
+    };
+    vi.spyOn(api, "listSchedules").mockResolvedValue([
+      platform,
+      { ...platform, id: 8, schedule_kind: "service", skill_id: 4, skill_name: "weekly_brief", name: "Weekly brief", skill_enabled: true },
+    ]);
+    render(<MemoryRouter><SchedulesPage /></MemoryRouter>);
+    expect(await screen.findByText("System Cleanup")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Skill automations 1" }));
+    expect(screen.queryByText("System Cleanup")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Status"), { target: { value: "active" } });
+    expect(screen.getByRole("link", { name: "Weekly Brief" })).toBeTruthy();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search automations" }), { target: { value: "unknown" } });
+    expect(screen.getByRole("heading", { name: "No automations match these filters" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getByText("System Cleanup")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Weekly Brief" })).toBeTruthy();
+  });
+
   it("shows controls for every backend-owned platform schedule", async () => {
     vi.spyOn(api, "listSchedules").mockResolvedValue([
       {
@@ -84,17 +119,17 @@ describe("SchedulesPage", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "Delete" })).toBeNull());
   });
 
-  it("uses the assessment controls and opens its editable schedule popup", async () => {
+  it("uses ordinary platform controls and opens its editable schedule popup", async () => {
     vi.spyOn(api, "listSchedules").mockResolvedValue([{
       id: -2,
       schedule_kind: "platform",
-      service_id: "backend.assistant.assessment",
+      service_id: "backend.example.maintenance",
       read_only: false,
       skill_enabled: null,
       is_running: false,
       skill_id: null,
       skill_name: null,
-      name: "Assistant assessment",
+      name: "Example maintenance",
       status: "paused",
       schedule_type: "interval",
       schedule_json: { type: "interval", every: 3, unit: "days", timezone: "UTC", input: {} },
@@ -106,24 +141,19 @@ describe("SchedulesPage", () => {
       created_at: "2026-08-26T12:00:00Z",
       updated_at: "2026-08-26T12:00:00Z",
     }]);
-    const update = vi.spyOn(api, "updateAssistantAssessment").mockResolvedValue({
-      enabled: true,
-      next_run_at: null,
-      last_run_at: null,
-      last_status: null,
-    });
+    const update = vi.spyOn(api, "updatePlatformScheduleAvailability").mockResolvedValue({} as never);
 
     render(<MemoryRouter><SchedulesPage /></MemoryRouter>);
 
     fireEvent.click(await screen.findByRole("button", { name: "Enable" }));
-    await waitFor(() => expect(update).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(update).toHaveBeenCalledWith("backend.example.maintenance", true));
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    expect(screen.getByRole("dialog", { name: "Edit Service Schedule" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Edit automation" })).toBeTruthy();
     expect((screen.getByLabelText("Every") as HTMLInputElement).value).toBe("3");
     expect((screen.getByLabelText("Type") as HTMLSelectElement).value).toBe("interval");
-    expect(screen.queryByRole("option", { name: "daily" })).toBeNull();
-    expect(screen.queryByRole("option", { name: "weekly" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Run Now" })).not.toHaveProperty("disabled", true);
+    expect(screen.getByRole("option", { name: "daily" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "weekly" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Run Now" })).toHaveProperty("disabled", true);
   });
 
   it("shows the last-run status only as a tooltip dot before the timestamp", async () => {
@@ -193,7 +223,7 @@ describe("SchedulesPage", () => {
 
     expect(screen.queryByRole("dialog")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    const dialog = screen.getByRole("dialog", { name: "Edit Service Schedule" });
+    const dialog = screen.getByRole("dialog", { name: "Edit automation" });
     expect(dialog.querySelector("form")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).toBeNull();

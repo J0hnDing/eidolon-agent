@@ -1,0 +1,3 @@
+[     137ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5174/src/pages/ApprovalRequestsPage.tsx?t=1792547019866:0
+[     208ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:5174/favicon.ico:0
+[    2738ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5174/src/pages/ApprovalRequestsPage.tsx?t=1792547019866:0
