@@ -409,7 +409,8 @@
 .settings-workspace .integration-tile:hover,
 .settings-workspace .integration-tile:focus-visible { border-color: var(--line-strong); background: var(--surface-hover); transform: none; }
 .settings-workspace .integration-icon { display: grid; place-items: center; width: 40px; height: 40px; flex-shrink: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
-html:not([data-theme='light']) .integration-icon img { filter: invert(1); opacity: .85; }
+html:not([data-theme='light']) .integration-icon-github img,
+html:not([data-theme='light']) .integration-icon-notion img { filter: invert(1); }
 .integration-connection-state { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; }
 .integration-connection-state.connected { --status-color: var(--success); }
 .integration-connection-state.partial { --status-color: var(--warning); }

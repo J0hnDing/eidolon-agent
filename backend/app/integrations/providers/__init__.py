@@ -13,6 +13,7 @@ from .notion import NotionProviderAdapter
 from .outlook import OutlookProviderAdapter
 from .telegram import TelegramProviderAdapter
 from .valence import ValenceProviderAdapter
+from .whatsapp import WhatsAppProviderAdapter
 
 
 def build_provider_adapters(compatibility_service: Any) -> tuple[object, ...]:
@@ -28,6 +29,7 @@ def build_provider_adapters(compatibility_service: Any) -> tuple[object, ...]:
         GmailProviderAdapter(compatibility_service),
         OutlookProviderAdapter(compatibility_service),
         TelegramProviderAdapter(compatibility_service),
+        WhatsAppProviderAdapter(compatibility_service),
         HuggingFaceProviderAdapter(compatibility_service),
         MacroProviderAdapter("fred", compatibility_service),
         MacroProviderAdapter("bls", compatibility_service),
@@ -48,5 +50,6 @@ __all__ = [
     "NotionProviderAdapter",
     "OutlookProviderAdapter",
     "TelegramProviderAdapter",
+    "WhatsAppProviderAdapter",
     "build_provider_adapters",
 ]

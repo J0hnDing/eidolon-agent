@@ -143,6 +143,7 @@ class IntegrationCapabilityPolicy:
             provider_account_id=account_id,
             resource=resource,
             authorization_id=authorization_id,
+            approval_id=approval.id if approval is not None else None,
         )
 
     def operation_contract_fingerprint(

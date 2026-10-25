@@ -21,6 +21,7 @@ from app.models import CodexMcpSettings, McpAuditRecord
 from app.services.act_runtime_capabilities import act_private_tool_entries
 from app.services.assistant_tools import assistant_private_tool_entries
 from app.services.function_catalog_service import FunctionCatalogService
+from app.services.whatsapp_mcp_client import WhatsAppMcpClient
 
 MAX_MCP_INPUT_BYTES = 256 * 1024
 MAX_MCP_OUTPUT_BYTES = 1024 * 1024
@@ -95,11 +96,13 @@ class McpFunctionService:
         project_root=None,
         agent_token: str | None = None,
         executor: InvocationExecutor | None = None,
+        whatsapp_client: WhatsAppMcpClient | None = None,
     ) -> None:
         self.db = db
         self.project_root = project_root
         self.agent_token = agent_token
         self.executor = executor or InvocationExecutor(db, project_root=project_root)
+        self.whatsapp_client = whatsapp_client or WhatsAppMcpClient()
         self.context_factory = InvocationContextFactory(db, project_root=project_root)
         self.agent_identity = None
         if agent_token is not None:
@@ -197,14 +200,20 @@ class McpFunctionService:
                 path = ".".join(str(item) for item in exc.absolute_path)
                 location = f" at {path}" if path else ""
                 raise McpFunctionError("invalid_input", f"MCP tool input is invalid{location}.") from None
-            outcome = self.executor.execute(
-                InvocationTargetRef(
-                    category=snapshot.category,
-                    target_id=snapshot.function_id,
-                ),
-                arguments,
-                context,
-            )
+            if snapshot.category == "integration" and snapshot.function_id.startswith("whatsapp."):
+                # A STDIO MCP process does not own the persistent Baileys socket.
+                # Forward the caller credential; the backend re-authenticates and
+                # runs InvocationExecutor against its live connection and bridge.
+                outcome = self.whatsapp_client.invoke(snapshot.function_id, arguments, agent_token=self.agent_token)
+            else:
+                outcome = self.executor.execute(
+                    InvocationTargetRef(
+                        category=snapshot.category,
+                        target_id=snapshot.function_id,
+                    ),
+                    arguments,
+                    context,
+                )
             if outcome.status not in {"succeeded", "partial", "pending_approval"}:
                 raise McpFunctionError(
                     outcome.error_type or "function_failed",

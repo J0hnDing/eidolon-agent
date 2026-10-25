@@ -202,3 +202,14 @@ Deterministic ProductManager fixtures conform to the current planning transport 
 
 -Acceptance Criteria:
 Vitest, @vitest/mocker, and tinypool resolve to unaffected releases; any Node/Vite peer requirements are handled explicitly; the complete frontend test suite and production build pass; the lockfile records the reviewed versions without forced overrides.
+
+## TODO-028: Verify WhatsApp account pairing and approved live messaging
+
+- Priority: medium
+- Category: test
+- Area: WhatsApp integration
+- Dependencies: none
+- Rationale: Automated bridge, backend and Settings checks pass. Live end-to-end verification needs the user to link their account by scanning the Settings QR code.
+
+-Acceptance Criteria:
+Restart the backend and pair an account in Settings. Verify contacts, chats and available recent messages without marking read. Deny one send and verify no message is sent; approve one explicit test text and verify one accepted message. Verify restart restores pairing and disconnect removes local auth/cache.

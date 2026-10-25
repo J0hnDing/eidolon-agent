@@ -21,6 +21,14 @@ After process-snapshot validation, MCP constructs either a direct-user or authen
 
 Integration tools use the executor's integration handler with direct-user attribution. It omits only skill-specific manifest and standing `IntegrationAuthorization` checks. Operation existence, schema, risk approval, current connection/account, and agent policy still pass through `IntegrationCapabilityPolicy`; only its secret-free authorized invocation can enter `IntegrationRuntime`. Provider adapters retain credential isolation, transport bounds, response validation, and normalized errors. GitHub direct tools may use any repository allowed by the configured token; generated skills keep exact typed repository scopes. Provider-discovered audit resources return as explicit outcome metadata instead of serving as caller identity.
 
+WhatsApp has a persistent backend-owned Baileys socket, so its MCP tools forward
+their bounded operation and input to a fixed loopback backend endpoint. Agent
+calls forward only their existing agent credential; the backend derives fresh
+identity and enters `InvocationExecutor` there. Public MCP calls retain the
+enabled-connection gate and direct-user attribution. The MCP process keeps its
+snapshot validation and audit; it never starts another WhatsApp session or
+serializes caller context/approved authority to the backend.
+
 Provider credentials stay in Windows Credential Manager. MCP results return validated object output as `structuredContent` plus a short non-sensitive text summary. Integration operations with native array results, such as Hugging Face paper lists, retain arrays through the integration capability API; MCP projects them as `{"result": [...]}` because its structured content must be an object, and publishes the matching wrapper output schema. Generic MCP request and response bounds apply in addition to provider/runtime bounds.
 
 `mcp_audit_records` stores only caller type, function ID, category, status, a bounded resource identifier when applicable, normalized error type, byte counts, and timestamps. It never stores prompts, arguments, results, credentials, secret references, headers, or capability tokens.

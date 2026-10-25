@@ -833,6 +833,21 @@ export interface AtlasIntegrationStatus {
   error_type?: string | null;
 }
 
+export interface WhatsAppIntegrationStatus {
+  provider: "whatsapp";
+  connected: boolean;
+  status: string;
+  account_id: string | null;
+  account_login: string | null;
+  qr_data_url: string | null;
+  sync_status: string;
+  last_synced_at: string | null;
+  oldest_message_at: string | null;
+  retention_cutoff: string | null;
+  error_type: string | null;
+  remote_logout_failed: boolean;
+}
+
 export interface AgentRunDetail extends AgentRun {
   steps: AgentRunStep[];
 }
@@ -1461,6 +1476,12 @@ export const api = {
   removeWeComUser: (userId: string) =>
     request<void>(`/settings/integrations/wecom/users/${encodeURIComponent(userId)}`, { method: "DELETE" }),
   removeWeComConnection: () => request<void>("/settings/integrations/wecom", { method: "DELETE" }),
+  getWhatsAppConnection: () => request<WhatsAppIntegrationStatus>("/settings/integrations/whatsapp"),
+  getWhatsAppPairingStatus: () => request<WhatsAppIntegrationStatus>("/settings/integrations/whatsapp/pairing"),
+  startWhatsAppPairing: () => request<WhatsAppIntegrationStatus>("/settings/integrations/whatsapp/pairing/start", { method: "POST" }),
+  reconnectWhatsApp: () => request<WhatsAppIntegrationStatus>("/settings/integrations/whatsapp/reconnect", { method: "POST" }),
+  clearWhatsAppCache: () => request<WhatsAppIntegrationStatus>("/settings/integrations/whatsapp/cache", { method: "DELETE" }),
+  removeWhatsAppConnection: () => request<WhatsAppIntegrationStatus>("/settings/integrations/whatsapp", { method: "DELETE" }),
   getAtlasStatus: () => request<AtlasIntegrationStatus>("/settings/integrations/atlas"),
   updateAtlasDirectory: (directory: string) =>
     request<AtlasIntegrationStatus>("/settings/integrations/atlas/directory", {

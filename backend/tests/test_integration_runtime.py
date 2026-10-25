@@ -192,6 +192,7 @@ def test_default_adapter_composition_is_exact_and_secret_free() -> None:
         "gmail",
         "outlook",
         "telegram",
+        "whatsapp",
         "huggingface",
         "fred",
         "bls",

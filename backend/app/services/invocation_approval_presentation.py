@@ -34,6 +34,7 @@ class ApprovalMessagePresentation:
 
 
 _ERROR_MEANINGS = {
+    "outcome_unknown": "The provider may have accepted this action. Eidolon will not retry it automatically.",
     "authorization_missing_or_stale": "The required authorization is missing or no longer matches this action.",
     "connection_changed": "The connected provider account changed before the action could execute.",
     "execution_failed": "The approved action could not be completed.",
@@ -172,6 +173,8 @@ def outcome_message(
         heading = "❌ Denied"
     elif execution_status == "succeeded":
         heading = "✅ Approved · Executed"
+    elif execution_status == "outcome_unknown":
+        heading = "⚠️ Approved · Outcome unknown"
     else:
         heading = "⚠️ Approved · Execution failed"
 

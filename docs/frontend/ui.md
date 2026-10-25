@@ -52,6 +52,12 @@ Settings has grouped secondary navigation beside a focused reading column and us
 
 ## API Client
 
+WhatsApp appears under Messaging in Integrations. Its focused Settings panel
+handles QR pairing, connection and available-history status, reconnect, cache
+clearing, and disconnect. Cache clearing and disconnect use Eidolon modal
+confirmations. QR codes are fetched only by the mounted pairing panel; the
+integration overview never receives them. See [WhatsApp](../integrations/whatsapp.md).
+
 `frontend/src/api/client.ts` defines API types and request helpers. Frontend types mirror backend schemas for skills, runs, versions, approvals, schedules, generation requests, and agent runs.
 
 Concurrent identical GETs share one in-flight request. This prevents React development-mode mount replays and overlapping page consumers from duplicating read-only backend work; completed responses are not cached, so later navigation and explicit refreshes still read current state.
@@ -180,6 +186,8 @@ Settings uses a grouped secondary sidebar and focused reading column so each con
 `/settings/models` labels the existing blueprint route **Project planning and clarification**. It loads the live App Server model catalog and lets the user choose model and reasoning effort independently under **Agent Routing** for Act, Observer, and Assistant, with separate local views for ProductManager actions, the single-Codex Builder and Builder difficulty tiers plus repair/update, and Tester task/final/update actions. Switching views preserves unsaved routing choices. A sticky **Save model routing** bar shows whether changes are unsaved or when the persisted routes were last saved. Unsupported model/effort combinations are rejected by the backend.
 
 `/settings/integrations` is a searchable directory grouped into Connected apps, Messaging, and Local tools & data. Keyword and connection-state filters combine, with a result count and resettable empty state. Each integration has a named, keyboard-accessible card with a locally stored brand mark or interface icon, a short description, a connection-state dot and text, and a trailing arrow. Provider cards form two columns on desktop and one on phones. The overview loads sanitized status metadata and never renders credential forms. Refresh checks all overview statuses; detail pages still load only their selected provider and retain a return to the directory.
+
+Brand marks retain their colors in both themes: Google uses its multicolor G, Telegram its blue mark, WhatsApp its green symbol, and WeCom the official Tencent logo. Only monochrome GitHub and Notion marks invert in dark mode. Assets and their sources are listed in `frontend/resource/integrations/README.md`.
 
 Directory states are Connected, Partial, and Disconnected. Google aggregates Calendar, Gmail, and Drive; Telegram aggregates its four bots. All connections active means Connected, some active (or pairing/connecting) means Partial, and none active means Disconnected. Other remote providers use the backend connection state. Atlas is Connected only while running, initialized, and unlocked, and Partial while running but not ready. Codex tools are Connected while enabled and correctly registered, and Partial when setup needs repair. Browser authentication reflects stored credentials, and Macro data reflects configured keys; their tooltip and accessible description explain that these are configuration states, not live validation. A failed or unavailable status request shows Unavailable, never a guessed Disconnected. Initial requests show Checking; each integration updates independently so one failed provider does not hide other states.
 

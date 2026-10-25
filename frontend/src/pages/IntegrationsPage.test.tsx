@@ -9,7 +9,7 @@ import { integrations } from "../features/integrations/IntegrationNavigation";
 import IntegrationsPage from "./IntegrationsPage";
 
 beforeEach(() => {
-  for (const method of ["getGitHubConnection", "getOutlookConnection", "getNotionConnection", "getQuercusConnection", "getGoogleCalendarConnection", "getGmailConnection", "getGoogleDriveConnection", "getTelegramConnection", "getTelegramAgentConnection", "getTelegramObserverAgentConnection", "getTelegramAssistantAgentConnection", "getWeComConnection", "getAtlasStatus", "getCodexMcpStatus", "getBrowserAuthentication", "getApiKeyConnection"] as const) {
+  for (const method of ["getGitHubConnection", "getOutlookConnection", "getNotionConnection", "getQuercusConnection", "getGoogleCalendarConnection", "getGmailConnection", "getGoogleDriveConnection", "getTelegramConnection", "getTelegramAgentConnection", "getTelegramObserverAgentConnection", "getTelegramAssistantAgentConnection", "getWeComConnection", "getWhatsAppConnection", "getAtlasStatus", "getCodexMcpStatus", "getBrowserAuthentication", "getApiKeyConnection"] as const) {
     vi.spyOn(api, method).mockRejectedValue(new Error("Backend unavailable"));
   }
 });

@@ -32,6 +32,7 @@ import {
   api,
 } from "../api/client";
 import { DeleteIconButton } from "../components/DeleteIconButton";
+import WhatsAppIntegrationSettings from "../components/WhatsAppIntegrationSettings";
 import { IntegrationIcon, IntegrationId, integrations, IntegrationsDirectory } from "../features/integrations/IntegrationNavigation";
 import { useIntegrationStatuses } from "../features/integrations/useIntegrationStatuses";
 import { formatSystemDateTime } from "../lib/dateTime";
@@ -1315,7 +1316,7 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
             {selectedIntegration?.title ?? settingsPageCopy[section].title}
           </h1>
         </div>
-        {section !== "appearance" && (
+        {section !== "appearance" && !(section === "integrations" && integration === "whatsapp") && (
           <button type="button" className="secondary" onClick={() => integrationOverview ? void connectionStatuses.refresh() : void loadSettings(true)} disabled={integrationOverview ? connectionStatuses.refreshing : loading}>
             Refresh
           </button>
@@ -1755,6 +1756,7 @@ export default function UsageSettingsPage({ section = "usage", integration }: { 
           </div>
         </section>
       )}
+      {section === "integrations" && integration === "whatsapp" && <WhatsAppIntegrationSettings />}
       {section === "integrations" && integration === "codex" && codexMcp && (
         <section className="detail-panel stack">
           <div>

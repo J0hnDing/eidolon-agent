@@ -69,6 +69,7 @@ class AuthorizedIntegrationInvocation:
     effects: frozenset[IntegrationEffect]
     authorization_id: int | None
     _marker: object = field(repr=False, compare=False)
+    approval_id: int | None = None
 
     def __post_init__(self) -> None:
         if self._marker is not _AUTHORIZED_INVOCATION_MARKER:
@@ -86,6 +87,7 @@ def _issue_authorized_integration_invocation(
     provider_account_id: str | None,
     resource: ResourceIdentity | None,
     authorization_id: int | None,
+    approval_id: int | None = None,
 ) -> AuthorizedIntegrationInvocation:
     return AuthorizedIntegrationInvocation(
         context=context,
@@ -97,6 +99,7 @@ def _issue_authorized_integration_invocation(
         resource=resource,
         effects=operation.effects,
         authorization_id=authorization_id,
+        approval_id=approval_id,
         _marker=_AUTHORIZED_INVOCATION_MARKER,
     )
 

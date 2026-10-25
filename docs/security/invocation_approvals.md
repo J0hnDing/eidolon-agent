@@ -13,3 +13,9 @@ Local and Telegram decisions call the same service. Approval atomically claims t
 Telegram decision buttons are attached to the approval status message. After a decision, Eidolon edits that message, removes its buttons, and reports `Approved · Executed`, `Denied`, or `Approved · Execution failed`. Email outcomes retain recipient and subject metadata. Failed executions include a normalized error code, its backend-owned user-facing meaning, and bounded sanitized details when available.
 
 `InvocationApproval` keeps decision status separate from execution status and stores bounded input, hashes, attribution, delivery metadata, outcome, and timestamps. `/invocation-approvals` provides list/detail/local approve/local deny. Existing `approval_requests`, `/permission-requests`, and `PermissionService` remain unchanged.
+
+Verified approved integration invocations carry the claimed approval ID internally
+so an adapter can derive a stable dispatch identity without adding caller-controlled
+approval inputs. Providers that cannot determine whether an external write was
+accepted may return `outcome_unknown`; the approval records that outcome and never
+automatically retries it. WhatsApp uses this identity for its durable send ledger.

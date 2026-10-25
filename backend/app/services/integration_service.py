@@ -2241,6 +2241,10 @@ class IntegrationService:
         )
 
     def provider_connected(self, provider: str) -> bool:
+        if provider == "whatsapp":
+            from app.services.whatsapp_service import WhatsAppService
+
+            return WhatsAppService(self.db, secret_store=self.secret_store).status().connected
         if provider == "valence":
             return self.valence is not None and self.valence.available()
         if provider == "huggingface":

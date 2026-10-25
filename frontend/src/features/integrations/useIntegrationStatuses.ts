@@ -63,6 +63,7 @@ function statusRequests(): Array<[IntegrationId, Promise<IntegrationStatus>]> {
     ["notion", api.getNotionConnection().then(connectionStatus)],
     ["quercus", api.getQuercusConnection().then(connectionStatus)],
     ["telegram", groupedConnections([api.getTelegramConnection(), api.getTelegramAgentConnection(), api.getTelegramObserverAgentConnection(), api.getTelegramAssistantAgentConnection()], ["Notification / Approval", "Act", "Observer", "Assistant"])],
+    ["whatsapp", api.getWhatsAppConnection().then(connectionStatus)],
     ["wecom", api.getWeComConnection().then(connectionStatus)],
     ["atlas", api.getAtlasStatus().then(atlasConnectionStatus)],
     ["codex", api.getCodexMcpStatus().then(codexConnectionStatus)],

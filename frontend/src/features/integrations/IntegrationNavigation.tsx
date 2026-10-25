@@ -2,9 +2,11 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import githubIcon from "../../../resource/integrations/github.svg";
-import googleIcon from "../../../resource/integrations/google.svg";
+import googleIcon from "../../../resource/integrations/google.png";
 import notionIcon from "../../../resource/integrations/notion.svg";
 import telegramIcon from "../../../resource/integrations/telegram.svg";
+import whatsappIcon from "../../../resource/integrations/whatsapp.svg";
+import wecomIcon from "../../../resource/integrations/wecom.svg";
 import type { IntegrationStatuses } from "./useIntegrationStatuses";
 
 export const integrations = [
@@ -14,7 +16,8 @@ export const integrations = [
   { id: "notion", title: "Notion", description: "Todos, reports, and Daily Feed", group: "Connected apps", icon: notionIcon },
   { id: "quercus", title: "Quercus", description: "Course selection and knowledge sync", group: "Connected apps", icon: null },
   { id: "telegram", title: "Telegram", description: "Notifications, approvals, and agent bots", group: "Messaging", icon: telegramIcon },
-  { id: "wecom", title: "WeCom", description: "Observer bot and paired users", group: "Messaging", icon: null },
+  { id: "whatsapp", title: "WhatsApp", description: "Search messages and send text with Baileys", group: "Messaging", icon: whatsappIcon },
+  { id: "wecom", title: "WeCom", description: "Observer bot and paired users", group: "Messaging", icon: wecomIcon },
   { id: "atlas", title: "Eidolon-Atlas", description: "Local companion and vault access", group: "Local tools & data", icon: null },
   { id: "codex", title: "Codex tools", description: "Eidolon tools in Codex sessions", group: "Local tools & data", icon: null },
   { id: "browser-authentication", title: "Browser authentication", description: "U of T Weblogin credentials", group: "Local tools & data", icon: null },
@@ -40,7 +43,6 @@ export function IntegrationIcon({ id }: { id: IntegrationId }) {
           {id === "browser-authentication" && <><rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" /></>}
           {id === "macro-data" && <><path d="M4 3v17h17M8 16v-5M13 16V6M18 16V9" /></>}
           {id === "codex" && <path d="m7 6-5 6 5 6m10-12 5 6-5 6M14 4l-4 16" />}
-          {id === "wecom" && <><path d="M4 4h16v12H9l-5 4V4Z" /><path d="M8 10h.01M12 10h.01M16 10h.01" strokeWidth="3" /></>}
         </svg>
       )}
     </span>

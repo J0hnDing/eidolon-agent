@@ -22,6 +22,7 @@ from app.integrations.types import (
     RiskLevel,
 )
 from app.integrations.valence import VALENCE_SPECS
+from app.integrations.whatsapp import WHATSAPP_OPERATIONS, WHATSAPP_PROVIDER
 
 REPOSITORY_PROPERTIES = {
     "owner": {"type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"},
@@ -1959,6 +1960,7 @@ _PROVIDER_SPECS = (
         display_name="Telegram",
         supported_operations=frozenset(operation.id for operation in _TELEGRAM_OPERATIONS),
     ),
+    WHATSAPP_PROVIDER,
     ProviderSpec(
         id="google_drive", display_name="Google Drive",
         supported_operations=frozenset(operation.id for operation in _GOOGLE_DRIVE_OPERATIONS),
@@ -2177,6 +2179,7 @@ DEFAULT_INTEGRATION_REGISTRY = IntegrationOperationRegistry(
         *_GOOGLE_DRIVE_OPERATIONS,
         *_EMAIL_OPERATIONS,
         *_TELEGRAM_OPERATIONS,
+        *WHATSAPP_OPERATIONS,
         *_MACRO_OPERATIONS,
     ),
 )

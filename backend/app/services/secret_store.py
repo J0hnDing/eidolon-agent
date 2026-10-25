@@ -50,6 +50,7 @@ class WindowsCredentialSecretStore:
         "gmail": "Eidolon/Gmail/",
         "google_oauth": "Eidolon/GoogleOAuth/",
         "telegram": "Eidolon/Telegram/",
+        "whatsapp": "Eidolon/WhatsApp/",
         "wecom": "Eidolon/WeCom/",
         "microsoft_oauth": "Eidolon/MicrosoftOAuth/",
         "outlook": "Eidolon/Outlook/",

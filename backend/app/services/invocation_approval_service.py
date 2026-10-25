@@ -322,6 +322,8 @@ class InvocationApprovalService:
                 "function_unavailable",
             }:
                 approval.execution_status = "stale"
+            elif error_type == "outcome_unknown":
+                approval.execution_status = "outcome_unknown"
             else:
                 approval.execution_status = "failed"
             approval.error_type = error_type

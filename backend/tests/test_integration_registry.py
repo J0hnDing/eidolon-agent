@@ -100,6 +100,11 @@ EXPECTED_OPERATION_IDS = {
     "notion.todo.list",
     "notion.todo.update",
     "telegram.notification.send",
+    "whatsapp.contact.search",
+    "whatsapp.chat.list",
+    "whatsapp.message.list",
+    "whatsapp.message.search",
+    "whatsapp.message.send",
 }
 
 
@@ -174,6 +179,7 @@ def test_default_registry_lookup_and_order_are_deterministic() -> None:
             "gmail",
             "outlook",
             "telegram",
+            "whatsapp",
             "huggingface",
             "fred",
             "bls",

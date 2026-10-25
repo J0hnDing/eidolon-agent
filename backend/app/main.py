@@ -29,6 +29,7 @@ from app.routers import (
     skills,
     usage,
     web_apps,
+    whatsapp,
 )
 from app.services.agent_dispatchers import agent_dispatchers
 from app.services.atlas_lifecycle_service import atlas_lifecycle_service
@@ -47,6 +48,8 @@ from app.services.scheduler_service import SchedulerService
 from app.services.telegram_service import start_telegram_pollers, stop_telegram_pollers
 from app.services.web_app_runtime_service import WebAppRuntimeConfig, WebAppRuntimeService
 from app.services.wecom_service import start_wecom_observer_worker, stop_wecom_observer_worker
+from app.services.whatsapp_bridge import whatsapp_bridge
+from app.services.whatsapp_service import WhatsAppService
 
 GOOGLE_OAUTH_CALLBACK_PATHS = (
     "/settings/integrations/google-calendar/oauth/callback",
@@ -139,6 +142,29 @@ async def agent_chat_history_maintenance() -> None:
             logger.exception("Agent history maintenance failed; retrying on the next interval")
 
 
+async def whatsapp_maintenance() -> None:
+    last_connected: bool | None = None
+
+    def restore() -> None:
+        nonlocal last_connected
+        with SessionLocal() as db:
+            service = WhatsAppService(db)
+            service.startup()
+            connected = service.status().connected
+            if connected != last_connected:
+                # The socket connects asynchronously after backend startup. Its
+                # available functions must appear without opening Settings.
+                FunctionCatalogService(db).refresh()
+                last_connected = connected
+
+    while True:
+        await asyncio.sleep(10)
+        try:
+            await asyncio.to_thread(restore)
+        except Exception:
+            logger.warning("Optional WhatsApp bridge recovery failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info(
@@ -182,6 +208,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         agent_db.close()
     telegram_pollers = start_telegram_pollers()
+    with SessionLocal() as whatsapp_db:
+        try:
+            await asyncio.to_thread(WhatsAppService(whatsapp_db).startup)
+        except Exception:
+            logger.warning("Optional WhatsApp bridge could not start")
     start_wecom_observer_worker()
     for dispatcher in agent_dispatchers.values():
         dispatcher.start()
@@ -213,6 +244,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     WebAppRuntimeService(web_app_db, config=web_app_config).recover_stale_instances()
     web_app_maintenance = asyncio.create_task(web_app_runtime_maintenance(web_app_config))
     history_maintenance = asyncio.create_task(agent_chat_history_maintenance())
+    whatsapp_recovery = asyncio.create_task(whatsapp_maintenance())
     original_signal_handlers = install_shutdown_signal_logging()
     try:
         yield
@@ -229,7 +261,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await asyncio.to_thread(stop_telegram_pollers, telegram_pollers)
         for dispatcher in agent_dispatchers.values():
             await asyncio.to_thread(dispatcher.stop)
-        for maintenance in (web_app_maintenance, history_maintenance):
+        for maintenance in (web_app_maintenance, history_maintenance, whatsapp_recovery):
             maintenance.cancel()
             try:
                 await maintenance
@@ -241,6 +273,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         scheduler_service.shutdown()
         scheduler_db.close()
         atlas_lifecycle_service.stop()
+        await asyncio.to_thread(whatsapp_bridge.stop)
         restore_shutdown_signal_handlers(original_signal_handlers)
         logger.info("Eidolon backend shutdown completed pid=%s", os.getpid())
 
@@ -285,6 +318,8 @@ app.include_router(agents.router)
 app.include_router(functions.router)
 app.include_router(integrations.router)
 app.include_router(atlas_settings.router)
+app.include_router(whatsapp.router)
+app.include_router(whatsapp.invocation_router)
 app.include_router(skills.router)
 app.include_router(agent_runs.router)
 app.include_router(chat.router)
