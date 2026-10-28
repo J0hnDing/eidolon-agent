@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.integrations.types import (
     IntegrationEffect,
     IntegrationOperationSpec,
+    InvocationApprovalMode,
     OperationPresentation,
     ProviderSpec,
     ResourceSpec,
@@ -13,8 +14,9 @@ _CHAT_JID = {
     "type": "string",
     "minLength": 3,
     "maxLength": 128,
-    "pattern": r"^(?:[0-9]{6,20}@s\.whatsapp\.net|[0-9]{6,20}@lid|[0-9]{6,20}(?:-[0-9]{6,20})?@g\.us)$",
+    "pattern": r"^(?:[0-9]{6,20}@s\.whatsapp\.net|[0-9]{6,20}@(?:lid|bot)|[0-9]{6,20}(?:-[0-9]{6,20})?@g\.us)$",
 }
+_SEND_CHAT_JID = {**_CHAT_JID, "pattern": r"^(?:[0-9]{6,20}@s\.whatsapp\.net|[0-9]{6,20}@lid|[0-9]{6,20}(?:-[0-9]{6,20})?@g\.us)$"}
 _RECIPIENT = {
     "type": "string",
     "minLength": 3,
@@ -22,6 +24,8 @@ _RECIPIENT = {
     "pattern": r"^(?:\+[1-9][0-9]{6,14}|[0-9]{6,20}@s\.whatsapp\.net|[0-9]{6,20}@lid|[0-9]{6,20}(?:-[0-9]{6,20})?@g\.us)$",
 }
 _MESSAGE_ID = {"type": "string", "minLength": 1, "maxLength": 256}
+MUSE_OPERATION_ID = "whatsapp.muse.converse"
+MUSE_RECIPIENT_ID = "1807055946647697@bot"
 _PAGE_SIZE = {"type": "integer", "minimum": 1, "maximum": 100, "default": 50}
 _CURSOR = {"type": "string", "minLength": 1, "maxLength": 512}
 _COVERAGE = {
@@ -69,7 +73,7 @@ _CHAT = _object(
     {
         "id": _CHAT_JID,
         "name": {"type": "string", "maxLength": 256},
-        "type": {"type": "string", "enum": ["direct", "group"]},
+        "type": {"type": "string", "enum": ["direct", "group", "agent"]},
         "last_message_at": {"type": ["string", "null"], "format": "date-time"},
     },
     ["id", "name", "type", "last_message_at"],
@@ -123,7 +127,50 @@ def _presentation(operation: str, example: dict) -> OperationPresentation:
 
 WHATSAPP_OPERATIONS = (
     IntegrationOperationSpec(
+        id=MUSE_OPERATION_ID,
+        title="Converse with Muse",
+        description=("Assistant-only conversation with the fixed Muse WhatsApp agent. Requires the user's "
+                     "one-time, account-bound Muse permission in Settings. Send text with a stable request_id, "
+                     "or resume an exchange_id without sending again. A pending reply resumes through Assistant's agenda. "
+                     "Reuse request_id only for the identical action; never retry an uncertain send as a new request."),
+        input_schema={
+            **_object({
+                "text": {"type": "string", "minLength": 1, "maxLength": 4000},
+                "request_id": {"type": "string", "minLength": 8, "maxLength": 64,
+                               "pattern": "^[A-Za-z0-9_-]+$"},
+                "purpose": {"type": "string", "minLength": 1, "maxLength": 500},
+                "reply_to_message_id": _MESSAGE_ID,
+                "exchange_id": {"type": "string", "pattern": "^[a-f0-9]{64}$", "maxLength": 64},
+                "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 20, "default": 10},
+            }, []),
+            "oneOf": [
+                {"required": ["text", "request_id"], "not": {"required": ["exchange_id"]}},
+                {"required": ["exchange_id"], "not": {"anyOf": [
+                    {"required": [field]} for field in ("text", "request_id", "purpose", "reply_to_message_id")
+                ]}},
+            ],
+        },
+        output_schema=_object({
+            "exchange_id": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "status": {"type": "string", "enum": ["pending", "replied", "outcome_unknown", "cancelled", "expired"]},
+            "sent_message_id": {"type": ["string", "null"], "maxLength": 256},
+            "replies": {"type": "array", "maxItems": 20, "items": _object({
+                "message_id": _MESSAGE_ID, "text": {"type": "string", "maxLength": 20000},
+                "timestamp": {"type": "string", "format": "date-time"},
+            }, ["message_id", "text", "timestamp"])},
+            "last_reply_at": {"type": ["string", "null"], "format": "date-time"},
+            "coverage": _COVERAGE,
+        }, ["exchange_id", "status", "sent_message_id", "replies", "last_reply_at", "coverage"]),
+        effects=frozenset({IntegrationEffect.READ, IntegrationEffect.SEND}),
+        resource=ResourceSpec("whatsapp.muse"),
+        risk=RiskLevel.HIGH,
+        invocation_approval_mode=InvocationApprovalMode.STANDING_GRANT,
+        presentation=_presentation(MUSE_OPERATION_ID, {"text": "Help me consider this idea.",
+                                                       "request_id": "muse-discussion-001"}),
+    ),
+    IntegrationOperationSpec(
         id="whatsapp.contact.search",
+        contract_version=2,
         title="Search WhatsApp contacts",
         description="Search contacts available in Eidolon's recent WhatsApp cache.",
         input_schema=_object(
@@ -138,12 +185,13 @@ WHATSAPP_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="whatsapp.chat.list",
+        contract_version=2,
         title="List WhatsApp chats",
-        description="List direct and group chats from the available 30-day WhatsApp cache.",
+        description="List direct, group, and Meta AI agent chats from the available WhatsApp cache; message history is limited to 30 days.",
         input_schema=_object(
             {
                 "query": {"type": "string", "minLength": 1, "maxLength": 200},
-                "type": {"type": "string", "enum": ["direct", "group"]},
+                "type": {"type": "string", "enum": ["direct", "group", "agent"]},
                 "page_size": _PAGE_SIZE,
                 "cursor": _CURSOR,
             },
@@ -157,6 +205,7 @@ WHATSAPP_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="whatsapp.message.list",
+        contract_version=2,
         title="Read WhatsApp chat messages",
         description="Read recent cached text and message metadata for one WhatsApp chat without marking it read.",
         input_schema=_object(
@@ -173,6 +222,7 @@ WHATSAPP_OPERATIONS = (
     ),
     IntegrationOperationSpec(
         id="whatsapp.message.search",
+        contract_version=2,
         title="Search WhatsApp messages",
         description="Search recent cached text messages, optionally within one chat and date range.",
         input_schema=_object(
@@ -208,7 +258,7 @@ WHATSAPP_OPERATIONS = (
             {
                 "accepted": {"type": "boolean", "const": True},
                 "message_id": _MESSAGE_ID,
-                "chat_id": _CHAT_JID,
+                "chat_id": _SEND_CHAT_JID,
             },
             ["accepted", "message_id", "chat_id"],
         ),

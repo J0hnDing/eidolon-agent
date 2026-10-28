@@ -44,6 +44,15 @@ const runtime: AssistantRuntime = {
 
 function mockAssistant(items: AssistantAgendaItem[] = []) {
   vi.spyOn(api, "getAgent").mockResolvedValue(agents[2]);
+  const empty = { model: null, reasoning_effort: null };
+  vi.spyOn(api, "getCodexRoutingSettings").mockResolvedValue({
+    project_build_workflow_override: null, updated_at: null, act: empty, observer: empty, assessment: empty,
+    product_manager: { default: empty, blueprint_and_permissions: empty, task_dag: empty, repair: empty, update: empty },
+    builder: { default: empty, single_codex: empty, easy: empty, medium: empty, hard: empty, repair: empty, update: empty },
+    tester: { default: empty, task: empty, final_e2e: empty, update: empty },
+  });
+  vi.spyOn(api, "getCodexModels").mockResolvedValue({ available: true, fetched_at: "2026-10-25", error: null, models: [] });
+  vi.spyOn(api, "getAgentInstructions").mockResolvedValue({ agent_id: "assistant", instructions: "Assistant runtime instructions." });
   vi.spyOn(api, "listAgentSessions").mockResolvedValue([]);
   vi.spyOn(api, "listAssistantProposals").mockResolvedValue([]);
   vi.spyOn(api, "getAssistantRuntime").mockResolvedValue(runtime);
@@ -71,6 +80,8 @@ describe("AssistantPage", () => {
     mockAssistant();
     renderAssistant(true, "settings");
     await screen.findByLabelText("Assistant timezone");
+    expect(await screen.findByRole("combobox", { name: "Assistant model" })).toBeTruthy();
+    expect(await screen.findByLabelText("Assistant base instructions")).toHaveProperty("textContent", "Assistant runtime instructions.");
     expect(screen.queryByRole("heading", { name: "Assistant agenda" })).toBeNull();
     fireEvent.change(screen.getByLabelText("Assistant timezone"), { target: { value: "Europe/London" } });
     fireEvent.click(screen.getByRole("link", { name: "Agenda & questions" }));

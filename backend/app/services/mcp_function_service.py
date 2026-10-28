@@ -201,7 +201,7 @@ class McpFunctionService:
                 location = f" at {path}" if path else ""
                 raise McpFunctionError("invalid_input", f"MCP tool input is invalid{location}.") from None
             if snapshot.category == "integration" and snapshot.function_id.startswith("whatsapp."):
-                # A STDIO MCP process does not own the persistent Baileys socket.
+                # A STDIO MCP process does not own the persistent WhatsApp socket.
                 # Forward the caller credential; the backend re-authenticates and
                 # runs InvocationExecutor against its live connection and bridge.
                 outcome = self.whatsapp_client.invoke(snapshot.function_id, arguments, agent_token=self.agent_token)
@@ -246,6 +246,8 @@ class McpFunctionService:
             audit.response_size = response_size
             audit.completed_at = utc_now()
             self._commit_audit()
+            self._record_planning_read(snapshot, arguments, context, output=output,
+                                       error_type=None if status == "succeeded" else status)
             qualifier = (
                 " with partial status"
                 if status == "partial"
@@ -260,14 +262,26 @@ class McpFunctionService:
             )
         except McpFunctionError as exc:
             self._fail_audit(audit, exc.error_type)
+            self._record_planning_read(snapshot, arguments, context, error_type=exc.error_type)
             raise
         except InvocationExecutionError as exc:
             self._fail_audit(audit, exc.error_type)
+            self._record_planning_read(snapshot, arguments, context, error_type=exc.error_type)
             raise McpFunctionError(exc.error_type, str(exc)) from None
         except Exception:
             self.db.rollback()
             self._fail_audit(audit, "internal_failure")
             raise McpFunctionError("internal_failure", "Eidolon MCP invocation failed safely.") from None
+
+    def _record_planning_read(self, snapshot, arguments, context, *, output=None, error_type=None):
+        if (context.principal_kind != "agent" or context.agent_id != "assistant"
+                or snapshot.function_id not in {"notion.todo.list", "atlas.goal.list", "atlas.records.search"}):
+            return
+        from app.services.assistant_planning_review import record_planning_read
+
+        record_planning_read(self.db, context.agent_turn_id, session_id=context.agent_session_id,
+                             operation=snapshot.function_id, arguments=arguments,
+                             output=output, error_type=error_type)
 
     def _audit_agent_denial(self, tool_name: str, error_type: str) -> None:
         if self.agent_identity is None:

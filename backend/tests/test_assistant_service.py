@@ -273,6 +273,42 @@ def test_private_tools_use_real_authenticated_invocation_path_and_not_public_or_
         mcp.invoke(name, {"title": "Blocked"})
 
 
+def test_daily_plan_tool_uses_authenticated_catalog_and_saved_agenda_ids(db):
+    from datetime import timedelta
+
+    from app.services.agent_policy_service import AgentPolicyService
+
+    service = AssistantService(db)
+    service.state()
+    session = ActSession(agent_id="assistant", codex_thread_id="pending:planning")
+    db.add(session)
+    db.flush()
+    turn = ActTurn(session_id=session.id, user_message="Plan today", status="running")
+    db.add(turn)
+    db.commit()
+    now = datetime.now(UTC)
+    selection = {"work": [], "interaction": [], "other": []}
+    for category, count in (("work", 2), ("interaction", 2), ("other", 1)):
+        for index in range(count):
+            item = service.create_item(AgendaCreate(
+                title=f"{category} {index}", due_at=now + timedelta(seconds=1)))
+            selection[category].append(item["id"])
+    mcp = McpFunctionService(db, agent_token=AgentPolicyService(db).issue("assistant", session.id))
+    name = mcp.tool_name("agent_private", "assistant.plan.save")
+    result = mcp.invoke(name, selection)
+    assert result.output["planned"] == {"work": 2, "interaction": 2, "other": 1}
+    assert result.output["completed"] == {"work": 0, "interaction": 0, "other": 0}
+    assert result.output["planned_satisfied"] is True
+    assert name not in {tool.name for tool in McpFunctionService(db).list_tools()}
+    db.refresh(turn)
+    assert turn.assistant_context_json["daily_plan"]["items"]["work"][0]["id"] == selection["work"][0]
+    # Saving plan metadata must not hide an ordinary user message from history.
+    turn.status, turn.completed_at, turn.assistant_message = "succeeded", now, "Plan saved."
+    db.commit()
+    AgentMemoryService(db).sync_chat_history(now=now)
+    assert AgentMemoryService(db).read_turn_content(turn)["user_message"] == "Plan today"
+
+
 def test_approval_is_durable_deduplicated_and_does_not_execute_without_decision(db, monkeypatch):
     monkeypatch.setattr(AgentProposalService, "mirror", lambda *_: None)
     monkeypatch.setattr(AgentProposalService, "_telegram", lambda *_a, **_kw: None)
@@ -373,7 +409,7 @@ def test_recurring_agenda_api_run_history_and_pause_use_shared_records(db, monke
         assert client.patch(path, json={"expected_revision": paused["revision"], "kind": "question"}).status_code == 409
 
 
-@pytest.mark.parametrize("approval_source", ["ordinary", "live_reply"])
+@pytest.mark.parametrize("approval_source", ["ordinary", "ordinary_with_plan", "live_reply"])
 def test_natural_approval_requires_current_user_evidence_and_is_consumed_once(db, monkeypatch, approval_source):
     from app.services.act_session_service import ActSessionService
     from app.services.act_turn_dispatcher import act_turn_dispatcher
@@ -395,8 +431,8 @@ def test_natural_approval_requires_current_user_evidence_and_is_consumed_once(db
     payload = {"proposal_id": result["proposal_id"], "approve": True, "user_statement": "Yes, send the reviewed document."}
     with pytest.raises(ValueError, match="current user"):
         service.decide_approval(payload, session.id, turn.id)
-    if approval_source == "ordinary":
-        turn.assistant_context_json = None
+    if approval_source in {"ordinary", "ordinary_with_plan"}:
+        turn.assistant_context_json = {"daily_plan": {"day": "2026-10-25"}} if approval_source == "ordinary_with_plan" else None
     else:
         prompt = ActLiveMessage(turn_id=turn.id, role="assistant", text="Approve this action?",
                                reply_status="answered")

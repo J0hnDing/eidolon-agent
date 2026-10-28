@@ -221,9 +221,9 @@ class FunctionCatalogService:
             reasons = [] if connected else [unavailable_reason]
             risk_level = self._risk_value(operation)
             effects = self._effect_values(operation)
-            # HIGH is the only operation-level approval trigger.  Do not read
-            # a compatibility flag from a catalog/provider implementation.
-            requires_invocation_approval = risk_level == "high"
+            # The canonical operation owns its approval mode. Persisted
+            # projections and provider adapters cannot suppress approval.
+            requires_invocation_approval = operation.requires_invocation_approval
             effective = effective_invocation_contract(
                 description=operation.description,
                 input_schema=operation.input_schema,

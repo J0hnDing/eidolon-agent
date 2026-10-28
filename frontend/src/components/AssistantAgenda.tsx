@@ -5,7 +5,7 @@ import { parseBackendDateTime } from "../lib/dateTime";
 import { Modal } from "./Modal";
 import "./assistant-agenda.css";
 
-export function AssistantAgenda({ items, questionAsking, onChange, fixedKind, compact = false }: { items: AssistantAgendaItem[]; questionAsking?: AssistantRuntime["question_asking"]; onChange: () => Promise<void>; fixedKind?: AssistantAgendaItem["kind"]; compact?: boolean }) {
+export function AssistantAgenda({ items, questionAsking, dailyPlan, onChange, fixedKind, compact = false }: { items: AssistantAgendaItem[]; questionAsking?: AssistantRuntime["question_asking"]; dailyPlan?: AssistantRuntime["daily_plan"]; onChange: () => Promise<void>; fixedKind?: AssistantAgendaItem["kind"]; compact?: boolean }) {
   const [selectedKind, setKind] = useState<AssistantAgendaItem["kind"]>("task");
   const kind = fixedKind ?? selectedKind;
   const [view, setView] = useState<"current" | "past">("current");
@@ -51,6 +51,10 @@ export function AssistantAgenda({ items, questionAsking, onChange, fixedKind, co
         : <select aria-label="Filter by schedule" value={schedule} onChange={(event) => setSchedule(event.target.value)}><option value="">All schedules</option><option value="recurring">Recurring</option><option value="one-time">One-time</option></select>}
     </div>
     {kind === "question" && <div className="agenda-question-context">{questionAsking && <span>Asked today: {questionAsking.asked_today} ({questionAsking.timezone}).</span>}<span>Important questions need prompt attention. Temporal questions follow their scheduled time; common questions wait for a suitable opening.</span></div>}
+    {dailyPlan && <div className="agenda-question-context" role="status" aria-label="Today's Assistant plan">
+      <span>Today · {dailyPlan.day} ({dailyPlan.timezone})</span>
+      {dailyPlan.plan_turn_id === null ? <span>Morning plan not saved yet.</span> : ([['work', 'Work'], ['interaction', 'Interactions'], ['other', 'Other']] as const).map(([category, label]) => <span key={category}>{label}: {dailyPlan.completed[category]}/{dailyPlan.required[category]} {category === 'interaction' ? 'initiated' : 'completed'} · {dailyPlan.planned[category]} planned</span>)}
+    </div>}
     {error && !selected && <p className="error-text" role="alert">{error}</p>}
     <div className="agenda-list-count">{visible.length} {kind === "question" ? (visible.length === 1 ? "question" : "questions") : (visible.length === 1 ? "task" : "tasks")}{hasFilters ? ` of ${collection.length}` : ""}</div>
     {visible.length > 0 ? <ul className="agenda-record-list" aria-label={kind === "question" ? "Questions" : "Agenda tasks"}>{visible.map((item) => <li key={item.id}>
@@ -64,8 +68,9 @@ export function AssistantAgenda({ items, questionAsking, onChange, fixedKind, co
       <div className="agenda-detail-body">
         <div className="agenda-detail-labels"><span className={`badge status-${selected.status}`}>{selected.status}</span><span className="muted">{selected.kind === "question" ? `${questionCategoryLabel(selected.question_category)} question` : selected.recurrence ? "Recurring task" : "One-time task"}</span></div>
         <section className="agenda-detail-notes"><h3>{selected.kind === "question" ? "Context and why it matters" : "Notes and next step"}</h3><p className={selected.notes ? "preserve-whitespace" : "muted"}>{selected.notes || "No notes added."}</p></section>
-        {(selected.recurrence || selected.due_at || selected.last_occurrence || selected.completion_requirement === "interaction_today") && <div className="agenda-detail-schedule">
+        {(selected.recurrence || selected.due_at || selected.last_occurrence || selected.completion_requirement) && <div className="agenda-detail-schedule">
           {selected.completion_requirement === "interaction_today" && <p className="muted">Requires an interaction today</p>}
+          {selected.completion_requirement === "morning_plan" && <p className="muted">Requires 2 work items, 2 interactions, 1 other item and the morning feed</p>}
           {selected.recurrence && <p className="muted">{formatRecurrence(selected.recurrence)} · {selected.status === "waiting" ? "Paused" : selected.status === "open" ? "Active" : "Stopped"}</p>}
           {selected.due_at && <p className="muted">{selected.kind === "question" ? "Next ask" : selected.recurrence ? "Next occurrence" : "Next check"}: {formatTimestamp(selected.due_at)}</p>}
           {selected.last_occurrence && <p className="muted">Last occurrence: {formatTimestamp(selected.last_occurrence.scheduled_at)} · {selected.last_occurrence.status}{selected.last_occurrence.retry_at ? ` · Retry: ${formatTimestamp(selected.last_occurrence.retry_at)}` : ""}</p>}

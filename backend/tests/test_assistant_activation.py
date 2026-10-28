@@ -476,10 +476,11 @@ def test_standing_prompt_leaves_review_and_summary_procedures_to_tasks_and_tools
     from app.services.assistant_tools import assistant_private_tool_entries
 
     instructions = ASSISTANT_INSTRUCTIONS_TEMPLATE
-    for phrase in ("Morning planning", "Evening reflection", "assistant.changes.list",
+    for phrase in ("Evening reflection", "assistant.changes.list",
                    "assistant.memory.history.read", "assistant.memory.summary.write"):
         assert phrase not in instructions
     assert "previous_turn_id" in instructions and "scheduled_at" in instructions
+    assert "assistant.plan.save" in instructions and "current.daily_plan" in instructions
     tools = {entry["id"]: entry for entry in assistant_private_tool_entries()}
     assert "unavailable sources preserve previous state" in tools["assistant.changes.list"]["description"]
     assert "untrusted evidence" in tools["assistant.memory.history.read"]["description"]

@@ -14,6 +14,10 @@ from app.execution.context_factory import InvocationContextFactory
 from app.models import InvocationApproval, Skill
 from app.services.agent_policy_service import AgentPermissionError, AgentPolicyService
 from app.services.function_registry_service import FunctionRegistryError
+from app.services.integration_standing_grant_service import (
+    IntegrationStandingGrantError,
+    IntegrationStandingGrantService,
+)
 from app.services.invocation_approval_contract import (
     InvocationApprovalContractError,
     effective_invocation_contract,
@@ -33,7 +37,7 @@ from .authorization import (
     _issue_authorized_integration_invocation,
     derive_resource_identity,
 )
-from .types import IntegrationOperationSpec, ResourceIdentity, RiskLevel
+from .types import IntegrationOperationSpec, InvocationApprovalMode, ResourceIdentity
 
 
 class IntegrationPolicyError(RuntimeError):
@@ -49,6 +53,16 @@ class PendingIntegrationApproval:
     @property
     def output(self) -> dict[str, Any]:
         return {"status": "pending_approval", "approval_id": self.approval_id}
+
+
+def integration_contract_fingerprint(
+    registry: Any, operation_id: str, provider_id: str | None = None,
+) -> str:
+    """Canonical operation identity shared by approval, settings, and dispatch."""
+    identity = registry.contract_identity(operation_id)
+    if provider_id is not None:
+        identity = {**identity, "selected_provider": provider_id}
+    return _fingerprint({"id": operation_id, "contract": identity})
 
 
 class IntegrationCapabilityPolicy:
@@ -84,7 +98,7 @@ class IntegrationCapabilityPolicy:
 
         business_input = dict(input_json)
         reason: str | None = None
-        if operation.risk is RiskLevel.HIGH and approval is None:
+        if operation.requires_invocation_approval and approval is None:
             try:
                 effective = effective_invocation_contract(
                     description=operation.description,
@@ -109,6 +123,11 @@ class IntegrationCapabilityPolicy:
 
         resource = derive_resource_identity(operation, business_input)
         authorization_id = self._authorize_caller(context, operation, resource, selected_provider)
+        standing_grant_id = None
+        if operation.invocation_approval_mode is InvocationApprovalMode.STANDING_GRANT:
+            standing_grant_id = self._require_standing_grant(
+                context, operation, selected_provider, connection_id, account_id,
+            )
 
         if approval is not None:
             self._verify_claimed_approval(
@@ -121,7 +140,7 @@ class IntegrationCapabilityPolicy:
                 provider_id=selected_provider,
                 resource=resource,
             )
-        elif operation.risk is RiskLevel.HIGH:
+        elif operation.requires_invocation_approval:
             assert reason is not None
             return self._submit_approval(
                 context,
@@ -144,17 +163,47 @@ class IntegrationCapabilityPolicy:
             resource=resource,
             authorization_id=authorization_id,
             approval_id=approval.id if approval is not None else None,
+            standing_grant_id=standing_grant_id,
         )
+
+    def _require_standing_grant(
+        self,
+        context: InvocationContext,
+        operation: IntegrationOperationSpec,
+        provider_id: str,
+        connection_id: int | None,
+        account_id: str | None,
+    ) -> int:
+        # Current supported standing principals are authenticated agents. Other
+        # transports cannot borrow their authority or supply a principal in JSON.
+        if context.principal_kind != "agent" or context.agent_id is None:
+            raise IntegrationPolicyError(
+                "standing_grant_missing_or_stale", "Integration standing grant is unavailable to this caller",
+            )
+        try:
+            grant = IntegrationStandingGrantService(self.db).active(
+                operation_id=operation.id,
+                contract_fingerprint=self.operation_contract_fingerprint(operation, provider_id),
+                provider=provider_id,
+                connection_id=connection_id,
+                account_id=account_id,
+                principal_kind=context.principal_kind,
+                principal_id=context.agent_id,
+            )
+        except IntegrationStandingGrantError as exc:
+            raise IntegrationPolicyError(exc.error_type, str(exc)) from None
+        if grant is None:
+            raise IntegrationPolicyError(
+                "standing_grant_missing_or_stale", "Integration standing grant is missing, revoked, or stale",
+            )
+        return grant.id
 
     def operation_contract_fingerprint(
         self,
         operation: IntegrationOperationSpec,
         provider_id: str | None = None,
     ) -> str:
-        identity = self.registry.contract_identity(operation.id)
-        if provider_id is not None:
-            identity = {**identity, "selected_provider": provider_id}
-        return _fingerprint({"id": operation.id, "contract": identity})
+        return integration_contract_fingerprint(self.registry, operation.id, provider_id)
 
     def _authorize_caller(
         self,
@@ -343,7 +392,7 @@ class IntegrationCapabilityPolicy:
     ) -> None:
         if approval.target_kind != "integration" or approval.target_id != operation.id:
             raise IntegrationPolicyError("stale_contract", "Approved integration target has changed")
-        if operation.risk is not RiskLevel.HIGH:
+        if not operation.requires_invocation_approval:
             raise IntegrationPolicyError(
                 "stale_contract",
                 "Approved integration risk no longer requires invocation approval",

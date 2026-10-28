@@ -1,14 +1,50 @@
 import json
 
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import Session
 
 import app.db as db_module
 from app.db import engine
+from app.models import MuseExchange
 
 
 def test_application_engine_enables_sqlite_foreign_keys() -> None:
     with engine.connect() as connection:
         assert connection.execute(text("PRAGMA foreign_keys")).scalar_one() == 1
+
+
+def test_local_schema_upgrades_muse_exchanges_preserving_dispatch_state(tmp_path, monkeypatch) -> None:
+    legacy_engine = create_engine(f"sqlite:///{tmp_path / 'muse-legacy.db'}")
+    MuseExchange.__table__.create(legacy_engine)
+    with Session(legacy_engine) as db:
+        db.add(MuseExchange(
+            id="legacy-exchange", grant_id=7, connection_id=13, account_id="account1",
+            request_id="daily-muse-1", request_digest="original-digest", status="outcome_unknown",
+            source_session_id=66, source_turn_id=301, agenda_item_id=42, wake_scheduled=True,
+        ))
+        db.commit()
+    with legacy_engine.begin() as connection:
+        connection.execute(text("ALTER TABLE muse_exchanges DROP COLUMN sent_message_id"))
+
+    monkeypatch.setattr(db_module, "engine", legacy_engine)
+    db_module.ensure_local_schema()
+    with Session(legacy_engine) as db:
+        exchange = db.get(MuseExchange, "legacy-exchange")
+        assert exchange is not None
+        assert exchange.sent_message_id is None
+        assert exchange.status == "outcome_unknown"
+        assert exchange.request_id == "daily-muse-1"
+        assert exchange.request_digest == "original-digest"
+        assert (exchange.grant_id, exchange.connection_id, exchange.account_id) == (7, 13, "account1")
+        assert (exchange.source_session_id, exchange.source_turn_id, exchange.agenda_item_id) == (66, 301, 42)
+        assert exchange.wake_scheduled
+        exchange.sent_message_id = "accepted-message"
+        db.commit()
+
+    db_module.ensure_local_schema()
+    with Session(legacy_engine) as db:
+        assert db.get(MuseExchange, "legacy-exchange").sent_message_id == "accepted-message"
+    legacy_engine.dispose()
 
 
 def test_local_schema_migrates_legacy_statuses_task_columns_and_retired_skill_fields(

@@ -15,6 +15,7 @@ from app.integrations.atlas_write import ATLAS_WRITE_SPECS
 from app.integrations.types import (
     IntegrationEffect,
     IntegrationOperationSpec,
+    InvocationApprovalMode,
     OperationPresentation,
     ProviderSelectionMode,
     ProviderSpec,
@@ -2069,6 +2070,8 @@ class IntegrationOperationRegistry:
                 raise ValueError(f"Integration operation {operation.id} has an invalid effect")
             if not isinstance(operation.risk, RiskLevel):
                 raise ValueError(f"Integration operation {operation.id} has an invalid risk")
+            if not isinstance(operation.invocation_approval_mode, InvocationApprovalMode):
+                raise ValueError(f"Integration operation {operation.id} has an invalid invocation approval mode")
             if not isinstance(operation.provider_selection, ProviderSelectionMode):
                 raise ValueError(f"Integration operation {operation.id} has an invalid provider selection mode")
             cls._validate_resource(operation.id, operation.resource)

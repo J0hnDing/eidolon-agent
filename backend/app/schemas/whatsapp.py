@@ -1,6 +1,19 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class WhatsAppHistoryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chat_id: str = Field(min_length=1, max_length=128)
+
+
+class WhatsAppMusePermissionUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    account_id: str | None = Field(default=None, max_length=128)
 
 
 class WhatsAppStatus(BaseModel):
@@ -16,3 +29,5 @@ class WhatsAppStatus(BaseModel):
     retention_cutoff: str | None = None
     error_type: str | None = None
     remote_logout_failed: bool = False
+    muse_enabled: bool = False
+    muse_grant_id: int | None = None

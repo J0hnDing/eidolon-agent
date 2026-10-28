@@ -7,12 +7,14 @@ from app.schemas.act import ActSessionCreate, ActSessionRead, ActSessionSummary,
 from app.schemas.agents import AgentPolicyUpdate
 from app.schemas.assistant import AgendaCreate, AgendaRun, AgendaUpdate, AssistantSettingsUpdate
 from app.schemas.assistant_actions import FunctionStep
+from app.schemas.codex_routing import CodexRoutingSettingsRead, InvocationChoice
 from app.services.act_session_service import ActSessionError, ActSessionService
 from app.services.agent_chat_history import project_session, project_turn
 from app.services.agent_policy_service import AGENTS, AgentPermissionError, AgentPolicyService
 from app.services.agent_proposal_service import AgentProposalService
 from app.services.assistant_activation_service import AssistantActivationService
 from app.services.assistant_service import AssistantService
+from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -139,6 +141,25 @@ def update_policy(agent_id: str, payload: AgentPolicyUpdate, db: Session = Depen
     try:
         return AgentPolicyService(db).update(agent_id, payload)
     except AgentPermissionError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@router.get("/{agent_id}/instructions")
+def read_instructions(agent_id: str):
+    if agent_id not in AGENTS:
+        raise HTTPException(404, "Agent not found")
+    from app.services.act_app_server_service import render_agent_instructions
+
+    return {"agent_id": agent_id, "instructions": render_agent_instructions(agent_id, ())}
+
+
+@router.put("/{agent_id}/model", response_model=CodexRoutingSettingsRead)
+def update_model(agent_id: str, payload: InvocationChoice, db: Session = Depends(get_db)):
+    if agent_id not in AGENTS:
+        raise HTTPException(404, "Agent not found")
+    try:
+        return CodexRoutingService(db).update_agent_model(agent_id, payload)
+    except CodexRoutingError as exc:
         raise HTTPException(409, str(exc)) from None
 
 

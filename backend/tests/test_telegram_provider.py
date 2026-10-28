@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import html
 import io
-from urllib.error import HTTPError
+import json
+import socket
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -33,11 +35,12 @@ from app.services.telegram_provider import (
 
 
 class _ErrorOpener:
-    def __init__(self, payload: bytes) -> None:
+    def __init__(self, payload: bytes, code: int = 400) -> None:
         self.payload = payload
+        self.code = code
 
     def open(self, request, timeout):  # noqa: ANN001, ANN201
-        raise HTTPError(request.full_url, 400, "Bad Request", {}, io.BytesIO(self.payload))
+        raise HTTPError(request.full_url, self.code, "Bad Request", {}, io.BytesIO(self.payload))
 
 
 class _Response:
@@ -63,6 +66,41 @@ class _CaptureOpener:
         self.request = request
         self.timeout = timeout
         return _Response(b'{"ok":true,"result":{"message_id":17}}')
+
+
+@pytest.mark.parametrize("retry_after,expected", [(3, 3), (0, 0), (True, None), (-1, None), ("3", None), (None, None)])
+@pytest.mark.parametrize("http_error", [False, True])
+def test_rate_limit_preserves_valid_retry_delay(retry_after, expected, http_error):
+    payload = json.dumps({"ok": False, "error_code": 429, "parameters": {"retry_after": retry_after}}).encode()
+
+    class Opener:
+        def open(self, request, timeout):
+            if http_error:
+                raise HTTPError(request.full_url, 429, "Too Many Requests", {}, io.BytesIO(payload))
+            return _Response(payload)
+
+    api = UrllibTelegramBotApi("123:private-token", opener=Opener())
+    with pytest.raises(TelegramProviderError) as error:
+        api.send_message(42, "Hello")
+    assert error.value.error_type == "rate_limited"
+    assert error.value.retry_after_seconds == expected
+    assert "private-token" not in str(error.value)
+
+
+@pytest.mark.parametrize("reason,expected", [
+    (ConnectionRefusedError(), "connection_failed"),
+    (socket.gaierror(), "connection_failed"),
+    (TimeoutError(), "provider_timeout"),
+    (ConnectionResetError(), "provider_timeout"),
+])
+def test_connection_failures_distinguish_unsent_from_uncertain_requests(reason, expected):
+    class Opener:
+        def open(self, request, timeout):
+            raise URLError(reason)
+
+    with pytest.raises(TelegramProviderError) as error:
+        UrllibTelegramBotApi("123:private-token", opener=Opener()).send_message(42, "Hello")
+    assert error.value.error_type == expected
 
 
 def _pairing_update(code: str, *, chat_id: int = 42, user_id: int = 7, update_id: int = 1) -> dict:

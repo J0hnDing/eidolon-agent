@@ -54,7 +54,9 @@ def assistant_private_tool_entries() -> list[dict]:
               "backend-managed. Monthly days absent from a month are skipped. "
               "Only the most recently missed occurrence is recovered. The daily check-in uses "
               "completion_requirement: interaction_today to require actual user-visible Assistant output "
-              "on the current local day; a silent turn does not count.",
+              "on the current local day; a silent turn does not count. Morning planning uses "
+              "completion_requirement: morning_plan to require a saved 2-work/2-interaction/1-other "
+              "daily plan and an actual morning briefing.",
               create, ("title",)),
         _tool("assistant.agenda.update", "Revise an agenda item after learning or acting. Use current revision. "
               "Resolve answered questions; defer or dismiss declined/stale ones. Null due_at clears a wake "
@@ -63,8 +65,26 @@ def assistant_private_tool_entries() -> list[dict]:
               "For recurring tasks waiting pauses, open resumes, done/dismissed ends the entire task. "
               "Do not mark a recurring task done merely because one occurrence succeeded. "
               "Set recurrence:null to remove recurrence; clear completion_requirement with it. Omit due_at "
-              "when setting recurrence. The daily interaction requirement is checked by the backend.",
+              "when setting recurrence. Completion requirements are checked by the backend.",
               {"id": {"type": "integer", "minimum": 1}, **patch}, ("id", "expected_revision")),
+        _tool("assistant.plan.save", "Save today's deliberate plan after creating/reviewing and scheduling "
+              "the actual agenda items. Supply at least two work IDs, two interaction IDs and one other ID; "
+              "all IDs must be distinct, nonrecurring responsibilities. Work must be tasks with concrete "
+              "outcomes; interactions may be questions or casual-conversation tasks. The other item is "
+              "an additional useful responsibility of your choosing. Pending items need due_at today "
+              "in current.timezone; already executed/delivered items need actual evidence today. "
+              "Do not count this feed, routine maintenance, blocked work or unanswered waiting questions. "
+              "Reuse existing items rather than duplicate them. This saves a plan, not execution or delivery. "
+              "current.daily_plan tracks actual follow-through; the morning feed does not count as either "
+              "personal interaction. Morning planning must freshly review all todos and goals, including "
+              "unchanged/overdue/blocked items; fresh source-read coverage is checked separately. "
+              "Take useful work from those responsibilities and bring specific input/approval needs to "
+              "the user instead of leaving them only in notes. Retry may reuse today's valid selection "
+              "after reviewing the current sources again.",
+              {category: {"type": "array", "minItems": minimum, "maxItems": 30,
+                          "uniqueItems": True, "items": {"type": "integer", "minimum": 1}}
+               for category, minimum in (("work", 2), ("interaction", 2), ("other", 1))},
+              ("work", "interaction", "other")),
         _tool("assistant.question.ask", "Ask an open agenda question in this conversation when due or unscheduled. "
               "There is no hard quota or fixed spacing. Pace common questions using recent user attention. "
               "Important/temporal questions may be asked immediately. Future agenda times are respected. "
@@ -84,6 +104,8 @@ def assistant_private_tool_entries() -> list[dict]:
               "Failed/unavailable sources preserve previous state. Do not manage source cursors or review receipts. "
               "Initial baseline and entered_scope items "
               "are context, not necessarily new events. removed_from_scope is not proof of deletion. "
+              "No pending changes does not mean no unfinished or overdue work. Morning planning must "
+              "also read current todos and goals in full, even when this list is empty. "
               "Fetch authoritative source details and check present circumstances before acting on old changes. "
               "Only changes supplied to this turn are marked reviewed after it succeeds; "
               "failed/cancelled/interrupted turns leave them pending.",

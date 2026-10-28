@@ -506,6 +506,7 @@ export interface AssistantProposal {
 }
 
 export interface AssistantRuntime {
+  daily_plan?: AssistantDailyPlan;
   initialization: { status: "pending" | "reading" | "blocked" | "complete"; reviewed_batches: number; remaining: number | null; error: string | null };
   question_asking: { asked_today: number; last_asked_at?: string | null; timezone: string };
   enabled: boolean;
@@ -522,6 +523,17 @@ export interface AssistantRuntime {
     pending_count: number;
     sources: { source: string; checked_at: string | null; succeeded_at: string | null; error: string | null; pending_count: number }[];
   };
+}
+
+export interface AssistantDailyPlan {
+  day: string;
+  timezone: string;
+  required: Record<"work" | "interaction" | "other", number>;
+  planned: Record<"work" | "interaction" | "other", number>;
+  completed: Record<"work" | "interaction" | "other", number>;
+  planned_satisfied: boolean;
+  follow_through_satisfied: boolean;
+  plan_turn_id: number | null;
 }
 
 export type AssistantRuntimeUpdate = Partial<Pick<AssistantRuntime, "enabled" | "timezone">>;
@@ -548,7 +560,7 @@ export interface AssistantAgendaItem {
   id: number;
   kind: "task" | "question";
   question_category: AssistantQuestionCategory;
-  completion_requirement?: "interaction_today" | null;
+  completion_requirement?: "interaction_today" | "morning_plan" | null;
   recurrence?: AssistantAgendaRecurrence | null;
   last_occurrence?: AssistantAgendaOccurrence | null;
   title: string;
@@ -839,6 +851,8 @@ export interface WhatsAppIntegrationStatus {
   status: string;
   account_id: string | null;
   account_login: string | null;
+  muse_enabled?: boolean;
+  muse_grant_id?: number | null;
   qr_data_url: string | null;
   sync_status: string;
   last_synced_at: string | null;
@@ -1149,7 +1163,11 @@ export const api = {
   archiveActSession: (sessionId: number) => request<void>(`/act/sessions/${sessionId}`, { method: "DELETE" }),
   listAgents: () => request<AgentDefinition[]>("/agents"),
   getAgent: (agentId: AgentId) => request<AgentDefinition>(`/agents/${agentId}`),
-  updateAgentPolicy: (agentId: AgentId, policy: AgentPolicy) =>
+  getAgentInstructions: (agentId: AgentId) =>
+    request<{ agent_id: AgentId; instructions: string }>(`/agents/${agentId}/instructions`),
+  updateAgentModel: (agentId: AgentId, choice: CodexInvocationChoice) =>
+    request<CodexRoutingSettings>(`/agents/${agentId}/model`, { method: "PUT", body: JSON.stringify(choice) }),
+  updateAgentPolicy: (agentId: AgentId, policy: Omit<AgentPolicy, "model" | "reasoning_effort">) =>
     request<AgentDefinition>(`/agents/${agentId}/policy`, {
       method: "PUT",
       body: JSON.stringify(policy),
@@ -1482,6 +1500,11 @@ export const api = {
   reconnectWhatsApp: () => request<WhatsAppIntegrationStatus>("/settings/integrations/whatsapp/reconnect", { method: "POST" }),
   clearWhatsAppCache: () => request<WhatsAppIntegrationStatus>("/settings/integrations/whatsapp/cache", { method: "DELETE" }),
   removeWhatsAppConnection: () => request<WhatsAppIntegrationStatus>("/settings/integrations/whatsapp", { method: "DELETE" }),
+  setWhatsAppMusePermission: (enabled: boolean, accountId: string | null) =>
+    request<WhatsAppIntegrationStatus>("/settings/integrations/whatsapp/muse", {
+      method: "PUT",
+      body: JSON.stringify({ enabled, account_id: accountId }),
+    }),
   getAtlasStatus: () => request<AtlasIntegrationStatus>("/settings/integrations/atlas"),
   updateAtlasDirectory: (directory: string) =>
     request<AtlasIntegrationStatus>("/settings/integrations/atlas/directory", {

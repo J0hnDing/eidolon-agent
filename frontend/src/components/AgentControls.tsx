@@ -7,7 +7,7 @@ import "./agent-configuration.css";
 export function AgentPolicyEditor({ agent, isWorking, onSave }: {
   agent: AgentDefinition;
   isWorking: boolean;
-  onSave: (policy: AgentPolicy) => void;
+  onSave: (policy: Omit<AgentPolicy, "model" | "reasoning_effort">) => void;
 }) {
   const [policy, setPolicy] = useState(agent.policy);
   const [allowedText, setAllowedText] = useState(agent.policy.allowed_functions.join(", "));
@@ -16,11 +16,10 @@ export function AgentPolicyEditor({ agent, isWorking, onSave }: {
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     onSave({
-      ...policy,
+      max_risk: policy.max_risk,
+      read_only: policy.read_only,
       allowed_functions: parseFunctionList(allowedText),
       banned_functions: parseFunctionList(bannedText),
-      model: policy.model?.trim() || null,
-      reasoning_effort: policy.reasoning_effort?.trim() || null,
     });
   }
 
@@ -49,17 +48,6 @@ export function AgentPolicyEditor({ agent, isWorking, onSave }: {
           </label>
           <label>Explicitly banned function IDs
             <textarea rows={3} value={bannedText} onChange={(event) => setBannedText(event.target.value)} placeholder="function.three" />
-          </label>
-        </div>
-      </section>
-      <section className="agent-policy-section" aria-labelledby="agent-model-settings-title">
-        <div><h3 id="agent-model-settings-title">Model settings</h3><p className="muted">Leave either field blank to use the configured default.</p></div>
-        <div className="agent-policy-fields">
-          <label>Model override
-            <input value={policy.model ?? ""} onChange={(event) => setPolicy({ ...policy, model: event.target.value || null })} placeholder="Use backend default" />
-          </label>
-          <label>Reasoning effort override
-            <input value={policy.reasoning_effort ?? ""} onChange={(event) => setPolicy({ ...policy, reasoning_effort: event.target.value || null })} placeholder="Use model default" />
           </label>
         </div>
       </section>

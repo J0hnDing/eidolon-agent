@@ -10,7 +10,7 @@ from app.execution.types import InvocationExecutionError, InvocationOutcome, Inv
 from app.integrations.registry import DEFAULT_INTEGRATION_REGISTRY
 from app.models import CodexMcpSettings
 from app.schemas.integration import IntegrationInvocationRequest
-from app.schemas.whatsapp import WhatsAppStatus
+from app.schemas.whatsapp import WhatsAppHistoryRequest, WhatsAppMusePermissionUpdate, WhatsAppStatus
 from app.services.agent_policy_service import AgentPermissionError
 from app.services.function_catalog_service import FunctionCatalogService
 from app.services.whatsapp_bridge import WhatsAppError
@@ -71,13 +71,50 @@ def whatsapp_pairing(db: Session = Depends(get_db)) -> WhatsAppStatus:
     return result
 
 
+@router.get("/diagnostics")
+def whatsapp_diagnostics(db: Session = Depends(get_db)) -> dict:
+    try:
+        return WhatsAppService(db).diagnostics()
+    except WhatsAppError as exc:
+        raise HTTPException(status_code=409, detail={"error_type": exc.error_type,
+                                                    "message": "WhatsApp diagnostics are unavailable"}) from None
+
+
+@router.post("/agents/discover")
+def whatsapp_discover_agents(db: Session = Depends(get_db)) -> dict:
+    try:
+        return WhatsAppService(db).diagnostics(discover_agents=True)
+    except WhatsAppError as exc:
+        raise HTTPException(status_code=409, detail={"error_type": exc.error_type,
+                                                    "message": "WhatsApp agent directory is unavailable"}) from None
+
+
+@router.post("/history")
+def whatsapp_request_history(payload: WhatsAppHistoryRequest, db: Session = Depends(get_db)) -> dict:
+    try:
+        return WhatsAppService(db).request_history(payload.chat_id)
+    except WhatsAppError as exc:
+        raise HTTPException(status_code=409, detail={"error_type": exc.error_type,
+                                                    "message": "WhatsApp history request could not be completed"}) from None
+
+
+@router.put("/muse", response_model=WhatsAppStatus)
+def whatsapp_muse_permission(payload: WhatsAppMusePermissionUpdate, db: Session = Depends(get_db)) -> WhatsAppStatus:
+    try:
+        result = WhatsAppService(db).configure_muse(enabled=payload.enabled, account_id=payload.account_id)
+    except WhatsAppError as exc:
+        raise HTTPException(status_code=409, detail={"error_type": exc.error_type,
+                                                    "message": "Muse permission could not be changed. Check the linked account and Assistant policy."}) from None
+    FunctionCatalogService(db).refresh()
+    return result
+
+
 def _change(db: Session, action: str) -> WhatsAppStatus:
     try:
         result = getattr(WhatsAppService(db), action)()
     except WhatsAppError as exc:
         message = {
-            "dependencies_missing": "Install the WhatsApp bridge dependencies with npm ci in bridges/whatsapp.",
-            "node_version_unsupported": "The WhatsApp bridge requires Node.js 24 or later.",
+            "dependencies_missing": "Build the Whatsmeow bridge with bridges/whatsapp/build.ps1 before pairing.",
             "secret_store_unavailable": "Windows Credential Manager is unavailable; WhatsApp credentials cannot be accessed.",
             "cleanup_pending": "Local WhatsApp cleanup is incomplete. Retry Disconnect before pairing again.",
             "pairing_required": "Pair WhatsApp before reconnecting.",

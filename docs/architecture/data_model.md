@@ -81,6 +81,17 @@ Links one caller skill, one target function, the user-facing approval request, a
 
 Stores sanitized connection rows. A provider may have multiple rows, but a partial unique index permits at most one `is_default` row per provider; current Settings/OAuth flows read and replace that default without exposing a public account selector. GitHub and Quercus store validated account identity. Notion additionally stores sanitized bot/workspace identity plus separate non-secret configured Todo and Reports data-source IDs and one standalone Daily Feed page ID under one credential reference. The Reports and Daily Feed IDs are nullable for compatibility with legacy Todo-only connections. Atlas may use the row for its optional owned-process passphrase lifecycle. Gmail and Outlook store only OS-secret-store implementation ids and opaque refresh-token references, with Outlook's account id hashed before persistence. Existing connection ids, secret references, grants, approvals, and dependent foreign keys survive the in-place uniqueness migration; legacy rows become defaults by provider.
 
+### muse_exchanges and muse_inbox_states
+
+`muse_exchanges` retains account/grant-bound dispatch identities, outgoing message IDs,
+uncertain-send state and delayed-reply agenda references. `muse_inbox_states` retains
+the bridge's incoming event cursor and current conversation agenda ID per standing
+grant. Incoming cursor advancement and agenda ownership commit atomically, preventing
+duplicate activation across polling and restart. These tables contain no message
+bodies; Muse content remains in the WhatsApp rolling cache. Fresh installations create
+both tables, and local schema upgrades add the nullable outgoing message ID to older
+exchange tables.
+
 ### quercus_courses, quercus_course_exclusions, and quercus_sync_resources
 
 `quercus_courses` stores selected or retained course identity, stable title-based local path, owning Canvas account, course presentation fields, sync generation/status, skipped-file counts, and independent processing status and success/failure counts. Deselection stops updates without deleting the retained mirror. Connecting a different account is rejected while any retained course rows remain.

@@ -63,6 +63,7 @@ describe("agenda completion requirements", () => {
 
   it.each([
     ["interaction_today", "Requires an interaction today"],
+    ["morning_plan", "Requires 2 work items, 2 interactions, 1 other item and the morning feed"],
   ] as const)("shows %s and leaves it intact in an edit PATCH", async (completion_requirement, label) => {
     const dailyCheckIn = { ...task, completion_requirement };
     const update = vi.spyOn(api, "updateAssistantAgendaItem").mockResolvedValue(dailyCheckIn);
@@ -75,6 +76,18 @@ describe("agenda completion requirements", () => {
     await waitFor(() => expect(update).toHaveBeenCalledWith(12, expect.objectContaining({ title: "Daily planning and check-in", expected_revision: 3 })));
     expect(update.mock.calls[0][1]).not.toHaveProperty("completion_requirement");
     expect(screen.getByText(label)).toBeTruthy();
+  });
+
+  it("shows planned work separately from completion and initiated interactions", () => {
+    render(<AssistantAgenda items={[]} dailyPlan={{
+      day: "2026-10-25", timezone: "America/Toronto", plan_turn_id: 34,
+      required: { work: 2, interaction: 2, other: 1 }, planned: { work: 2, interaction: 2, other: 1 },
+      completed: { work: 1, interaction: 0, other: 0 }, planned_satisfied: true, follow_through_satisfied: false,
+    }} onChange={vi.fn().mockResolvedValue(undefined)} />);
+    const progress = screen.getByRole("status", { name: "Today's Assistant plan" });
+    expect(progress.textContent).toContain("Work: 1/2 completed · 2 planned");
+    expect(progress.textContent).toContain("Interactions: 0/2 initiated · 2 planned");
+    expect(progress.textContent).toContain("Other: 0/1 completed · 1 planned");
   });
 });
 

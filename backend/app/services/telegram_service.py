@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 import threading
+import time
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -1510,20 +1511,39 @@ class TelegramService:
         if self.role == TELEGRAM_ASSISTANT_ROLE:
             message_thread_id = None
         _row, token = self._connected_api_credential()
+        binding = (row.id, row.bot_id, row.paired_chat_id, row.paired_user_id, row.secret_reference)
         try:
             api = self.api_factory(token)
             for chunk in render_agent_message_chunks(reply):
-                try:
-                    api.send_message(
-                        int(row.paired_chat_id or "0"),
-                        chunk,
-                        message_thread_id=message_thread_id,
-                        parse_mode="HTML",
-                    )
-                except TelegramProviderError as exc:
-                    if message_thread_id is not None:
-                        self._reconcile_missing_topic(row, message_thread_id, exc)
-                    raise
+                waited = 0
+                for attempt in range(3):
+                    try:
+                        receipt = api.send_message(
+                            int(binding[2] or "0"), chunk,
+                            message_thread_id=message_thread_id, parse_mode="HTML",
+                        )
+                        message_id = receipt.get("message_id")
+                        if isinstance(message_id, bool) or not isinstance(message_id, int) or message_id < 1:
+                            raise TelegramProviderError("provider_unavailable", "Telegram returned an invalid message receipt")
+                        break
+                    except TelegramProviderError as exc:
+                        if message_thread_id is not None:
+                            self._reconcile_missing_topic(row, message_thread_id, exc)
+                        # Only retry a rejected request or a failure known to
+                        # precede transmission. Timeouts can hide accepted sends.
+                        if exc.error_type not in {"rate_limited", "connection_failed"} or attempt == 2:
+                            raise
+                        delay = exc.retry_after_seconds if exc.retry_after_seconds is not None else attempt + 1
+                        if isinstance(delay, bool) or not isinstance(delay, int) or delay < 0 or waited + delay > 30:
+                            raise
+                        time.sleep(delay)
+                        waited += delay
+                        self.db.refresh(row)
+                        current, token = self._connected_api_credential()
+                        if binding != (current.id, current.bot_id, current.paired_chat_id,
+                                       current.paired_user_id, current.secret_reference):
+                            raise TelegramServiceError("connection_unavailable", "Telegram pairing changed during delivery")
+                        api = self.api_factory(token)
         finally:
             token = ""
 

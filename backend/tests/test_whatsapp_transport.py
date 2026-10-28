@@ -3,7 +3,7 @@ import sys
 import threading
 from base64 import b64encode
 from pathlib import Path
-from shutil import rmtree, which
+from shutil import rmtree
 from uuid import uuid4
 
 import pytest
@@ -64,10 +64,34 @@ def test_missing_dependencies_has_actionable_sanitized_error(tmp_path):
     assert "PRIVATE" not in str(exc.value)
 
 
+def test_launch_uses_only_fixed_built_binary_and_passes_key_through_private_request(tmp_path, monkeypatch):
+    name = "eidolon-whatsapp-bridge.exe" if sys.platform == "win32" else "eidolon-whatsapp-bridge"
+    executable = tmp_path / "runtime" / "bin" / name
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    (tmp_path / "bridges" / "whatsapp").mkdir(parents=True)
+    launched = []
+    initialized = []
+    process = object()
+    bridge = WhatsAppBridge(tmp_path)
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: launched.append((args, kwargs)) or process)
+    monkeypatch.setattr(threading.Thread, "start", lambda self: None)
+    monkeypatch.setattr(bridge, "request", lambda method, payload: initialized.append((method, payload)) or {})
+    bridge.start(key="PRIVATE_STDIN_KEY", generation="generation")
+    assert launched[0][0] == ([str(executable)],)
+    assert launched[0][1]["shell"] is False
+    assert "PRIVATE_STDIN_KEY" not in repr(launched)
+    assert initialized == [("initialize", {
+        "key": "PRIVATE_STDIN_KEY", "directory": str(tmp_path / "runtime" / "whatsapp" / "generation"),
+        "generation": "generation",
+    })]
+
+
 def test_real_bridge_initializes_and_stops_without_pairing():
     root = Path(__file__).resolve().parents[2]
-    if not which("node") or not (root / "bridges/whatsapp/node_modules/@whiskeysockets/baileys").exists():
-        pytest.skip("Optional Node/Baileys dependencies are not installed")
+    name = "eidolon-whatsapp-bridge.exe" if sys.platform == "win32" else "eidolon-whatsapp-bridge"
+    if not (root / "runtime" / "bin" / name).is_file():
+        pytest.skip("Optional Whatsmeow bridge has not been built")
     bridge = WhatsAppBridge(root)
     generation = uuid4().hex
     directory = root / "runtime" / "whatsapp" / generation

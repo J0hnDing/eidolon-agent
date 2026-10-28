@@ -22,6 +22,11 @@ class RiskLevel(StrEnum):
     HIGH = "high"
 
 
+class InvocationApprovalMode(StrEnum):
+    PER_CALL = "per_call"
+    STANDING_GRANT = "standing_grant"
+
+
 class ProviderSelectionMode(StrEnum):
     """How an operation chooses its provider at invocation time."""
 
@@ -71,10 +76,14 @@ class IntegrationOperationSpec:
     contract_version: int = 1
     presentation: OperationPresentation | None = None
     provider_selection: ProviderSelectionMode = ProviderSelectionMode.SINGLE
+    invocation_approval_mode: InvocationApprovalMode = InvocationApprovalMode.PER_CALL
 
     @property
     def requires_invocation_approval(self) -> bool:
-        return self.risk is RiskLevel.HIGH
+        return (
+            self.risk is RiskLevel.HIGH
+            and self.invocation_approval_mode is not InvocationApprovalMode.STANDING_GRANT
+        )
 
     @property
     def read_only(self) -> bool:
@@ -125,6 +134,10 @@ class IntegrationOperationSpec:
             "risk": self.risk.value,
             "version": self.contract_version,
         }
+        # Preserve existing authorization fingerprints byte for byte. Only
+        # operations with an explicit different approval contract add this key.
+        if self.invocation_approval_mode is not InvocationApprovalMode.PER_CALL:
+            identity["invocation_approval_mode"] = self.invocation_approval_mode.value
         return identity
 
 

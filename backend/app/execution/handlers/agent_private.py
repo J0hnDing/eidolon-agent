@@ -65,6 +65,11 @@ class AgentPrivateHandler:
                 output = service.update_item(payload["id"],
                     AgendaUpdate.model_validate({k: v for k, v in payload.items() if k != "id"}),
                     turn_id=context.agent_turn_id)
+            elif target_id == "assistant.plan.save":
+                from app.services.assistant_daily_plan import save_daily_plan
+
+                output = save_daily_plan(self.db, payload, session_id=context.agent_session_id,
+                                        turn_id=context.agent_turn_id)
             elif target_id == "assistant.initialization.acknowledge":
                 from app.services.assistant_initialization import AssistantInitializationService
                 if context.agent_turn_id is None:

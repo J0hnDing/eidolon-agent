@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import select, update
 
 from app.db import SessionLocal
@@ -15,6 +17,7 @@ from app.models import (
 )
 from app.services.act_session_service import ActSessionError, ActSessionService
 from app.services.agent_memory_service import AgentMemoryService
+from app.services.assistant_daily_plan import has_activation_context
 from app.services.telegram_service import (
     TELEGRAM_AGENT_IDS,
     TELEGRAM_AGENT_LABELS,
@@ -22,6 +25,8 @@ from app.services.telegram_service import (
 )
 from app.services.wecom_provider import WECOM_AGENT_ID, WeComProviderError
 from app.services.wecom_service import wecom_observer_worker
+
+logger = logging.getLogger(__name__)
 
 
 def deliver_agent_turn_result(turn_id: int, *, session_factory=SessionLocal) -> None:
@@ -42,7 +47,7 @@ def deliver_agent_turn_result(turn_id: int, *, session_factory=SessionLocal) -> 
         content = AgentMemoryService(db).read_turn_content(turn, agent_id=session.agent_id if session else None)
         reply = content["assistant_message"]
         background_success = (session is not None and session.agent_id == "assistant"
-                              and bool(turn.assistant_context_json) and turn.status == "succeeded")
+                              and has_activation_context(turn) and turn.status == "succeeded")
         archived_silent = (background_success and (turn.assistant_review_json or {}).get(
             "chat_history", {}).get("has_assistant_response") is False)
         if turn.history_archived_at is not None and not content["available"] and not archived_silent:
@@ -66,7 +71,11 @@ def deliver_agent_turn_result(turn_id: int, *, session_factory=SessionLocal) -> 
             _deliver_wecom(db, turn, session, reply)
         else:
             _mark_failed(db, turn)
-    except Exception:
+    except Exception as exc:
+        # Provider exceptions may carry credentials in their raw messages or
+        # tracebacks. Log only the normalized code and operational turn ID.
+        logger.warning("Agent turn delivery failed turn_id=%s error_type=%s", turn_id,
+                       getattr(exc, "error_type", type(exc).__name__))
         db.rollback()
         turn = db.get(ActTurn, turn_id)
         if turn is not None and turn.delivery_status in {"pending", "sending"}:

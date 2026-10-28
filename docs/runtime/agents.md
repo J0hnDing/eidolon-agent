@@ -28,7 +28,12 @@ Assistant owns a durable agenda of tasks and questions, including ordinary recur
 
 ## API
 
+Agent settings show the current runtime base instructions read-only, directly from the same renderer used to start and resume managed threads. This is the role prompt loaded by the backend, not a past conversation's complete prompt, task context, or tool definitions. Instruction-file edits require a backend restart to refresh the loaded text.
+
+The model and reasoning-effort selectors in Act/Observer Configuration and Assistant Settings are aliases of Settings → Model routing (`act`, `observer`, and `assessment`). Saving through the agent endpoint replaces only that agent's route while preserving other routing and project-build settings, using the existing catalog validation. Routing reads include legacy policy model overrides; a routing save consolidates those values into routing and clears the old override fields without changing function permissions. Permission-only saves leave model fields untouched.
+
 - GET /agents, GET /agents/{agentId}, PUT /agents/{agentId}/policy.
+- GET /agents/{agentId}/instructions (read-only runtime base prompt), PUT /agents/{agentId}/model (model/effort alias).
 - GET/POST /agents/{agentId}/sessions, GET/DELETE /agents/{agentId}/sessions/{sessionId}.
 - POST /agents/{agentId}/sessions/{sessionId}/turns and POST .../turns/{turnId}/cancel.
 - GET /agents/assistant/proposals, PATCH /agents/assistant/proposals/{id}/functions, POST /agents/assistant/proposals/{id}/approve|deny.

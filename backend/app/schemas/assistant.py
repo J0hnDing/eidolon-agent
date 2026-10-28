@@ -65,7 +65,7 @@ class AgendaCreate(BaseModel):
     status: Literal["open", "waiting", "done", "dismissed"] = "open"
     due_at: datetime | None = None
     recurrence: AgendaRecurrence | None = None
-    completion_requirement: Literal["interaction_today"] | None = None
+    completion_requirement: Literal["interaction_today", "morning_plan"] | None = None
 
     @model_validator(mode="after")
     def recurring_task(self):
@@ -96,7 +96,7 @@ class AgendaUpdate(BaseModel):
     status: Literal["open", "waiting", "done", "dismissed"] | None = None
     due_at: datetime | None = None
     recurrence: AgendaRecurrence | None = None
-    completion_requirement: Literal["interaction_today"] | None = None
+    completion_requirement: Literal["interaction_today", "morning_plan"] | None = None
 
     _timezone_required = field_validator("due_at")(AgendaCreate.timezone_required.__func__)
 

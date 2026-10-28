@@ -105,6 +105,7 @@ EXPECTED_OPERATION_IDS = {
     "whatsapp.message.list",
     "whatsapp.message.search",
     "whatsapp.message.send",
+    "whatsapp.muse.converse",
 }
 
 

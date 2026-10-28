@@ -58,7 +58,7 @@ The product and repository are named **Eidolon**. Existing environment variables
 - [Gmail OAuth integration](integrations/gmail.md)
 - [Outlook OAuth and Microsoft Graph integration](integrations/outlook.md)
 - [Telegram Notification and Approval bot](integrations/telegram.md)
-- [WhatsApp through Baileys](integrations/whatsapp.md)
+- [WhatsApp through Whatsmeow](integrations/whatsapp.md)
 - [WeCom Observer transport](integrations/wecom.md)
 - [Quercus knowledge synchronization](integrations/quercus.md)
 - [Macro data source integrations](integrations/macro_data.md)

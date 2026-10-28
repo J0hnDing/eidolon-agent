@@ -9,17 +9,6 @@
 -Acceptance Criteria:
 A backend adapter reads only the selected path and relevant context, invokes the configured local model, validates its output, and writes only the corresponding backend-controlled artifacts.
 
-## TODO-006: Resolve Backend Message Storage Boundary
-
-- Priority: low
-- Category: research
-- Area: backend-and-frontend-chat-persistence
-- Dependencies: none
-- Rationale: Chat history is currently frontend-local while the backend retains a compatibility `messages` table mainly for memory-source cleanup. The ownership boundary should be explicit rather than indefinite compatibility code.
-
--Acceptance Criteria:
-Decide whether chat history is backend-persisted or frontend-local; migrate or remove the compatibility table and cleanup route accordingly; preserve explicit memory edit/delete behavior; and document the chosen single source of truth.
-
 ## TODO-007: Transactional Filesystem and Database Operations
 
 - Priority: low
@@ -30,30 +19,6 @@ Decide whether chat history is backend-persisted or frontend-local; migrate or r
 
 -Acceptance Criteria:
 Destructive lifecycle operations use staging plus deterministic commit/rollback or recovery markers; restart recovery is tested; and failed operations leave a clear diagnostic state.
-
-## TODO-008: Real Parallel DAG Execution
-
-- Priority: low
-- Category: feature
-- Area: backend-project-build-execution
-- Dependencies: none
-- Rationale: The scheduler is parallel-aware but executes each admitted ready-node batch serially in one shared skill workspace. Real concurrency requires isolated writes and deterministic integration.
-
--Acceptance Criteria:
-Independent ready nodes produce measurable wall-clock concurrency; concurrent nodes cannot observe or overwrite unmerged changes; undeclared writes and merge conflicts block the affected batch; failed nodes do not merge partial output; retry does not repeat merged nodes; and current locks, permissions, token accounting, and quota-pause behavior remain enforced.
-
-Suggested design:
-
-1. Compute the complete ready-node batch from satisfied dependencies.
-2. Admit only `parallel_safe` nodes whose declared `file_write_claims` do not overlap.
-3. Create one isolated workspace per node.
-4. Run Builder, Tester, and node-local tests in that workspace.
-5. Compare actual changes with `file_write_claims` and reject unsafe or undeclared writes.
-6. Merge successful outputs into the integration workspace in a stable order.
-7. Revalidate interfaces, manifest, permissions, and integrated tests after each batch.
-8. Persist per-node status, logs, failures, and token usage without sharing mutable database sessions or usage accumulators across workers.
-9. Apply one quota decision to the admitted batch, then recheck reserves before admitting the next batch.
-10. Clean up isolated workspaces safely on pause, failure, cancellation, or restart while preserving diagnostics.
 
 ## TODO-010: Domain-Level Runtime Egress Enforcement
 
@@ -76,17 +41,6 @@ Docker runtime egress is restricted to the approved manifest domains for both bo
 
 -Acceptance Criteria:
 Codex JSONL and relevant tool/file activity are streamed and persisted as invocation progress; an idle timeout terminates invocations only after a documented period without meaningful activity while a separate hard deadline remains authoritative; each project workflow has a backend-owned total execution budget that excludes user approval and deliberate pause time and is checked before admitting new work; timeout records preserve partial events, usage, last meaningful activity, command context, and structured timeout type; Task-DAG recovery resumes from the last backend-validated workflow state without rerunning completed nodes or accepting unmerged partial node output; single-Codex recovery has an explicit safe policy for reusing or discarding its partial workspace and never marks it valid without full deterministic validation; Windows termination covers the complete spawned process tree; restart, cancellation, timeout, and retry behavior are idempotent and covered by tests; and the UI reports whether a run exceeded idle, invocation-hard, or workflow-budget limits and what recovery action is available.
-
-## TODO-014: Memory Context And Long-Term Adaptation
-
-- Priority: medium
-- Category: feature
-- Area: memory-adaptation
-- Dependencies: none
-- Rationale: Eidolon can store explicit editable memory and preserve skill/run history, but it does not yet select memory for chat or skills, capture structured outcome feedback, or turn accumulated evidence into safe adaptation proposals. Long-term usefulness must grow without silently collecting conversations, rewriting memory, or mutating active skills.
-
--Acceptance Criteria:
-Memory retrieval uses an inspectable backend-owned selection policy and includes only user-owned facts relevant to the current context; the UI shows which facts were used and allows exclusion, correction, and deletion; users can attach structured feedback and outcomes to skill runs; adaptation proposals cite the memory, feedback, and run evidence that caused them; proposed memory changes require explicit confirmation; proposed skill changes enter the existing versioned update, validation, comparison, permission, and activation workflow; no adaptation installs, enables, schedules, or activates itself; evaluation compares a proposal with its active predecessor against preserved acceptance criteria and regression tests; rejected adaptations remain auditable without repeatedly resurfacing; and all adaptation state remains local and deletable.
 
 ## TODO-015: Implement intent refinement with memory retrieval and preference extraction
 
@@ -213,3 +167,14 @@ Vitest, @vitest/mocker, and tinypool resolve to unaffected releases; any Node/Vi
 
 -Acceptance Criteria:
 Restart the backend and pair an account in Settings. Verify contacts, chats and available recent messages without marking read. Deny one send and verify no message is sent; approve one explicit test text and verify one accepted message. Verify restart restores pairing and disconnect removes local auth/cache.
+
+## TODO-029: Add native Muse protocol support to the WhatsApp bridge
+
+- Priority: medium
+- Category: feature
+- Area: WhatsApp / native agents
+- Dependencies: none
+- Rationale: Live investigation identified Muse at 1807055946647697@bot and verified the user phone-originated Hi through MCP. Pinned Baileys 7.0.0-rc14 cannot read Muse replies or send the required Muse envelope; upstream PR2857 explicitly excludes Muse WASA envelope/root-secret app-state synchronization. Read discovery, routing and sync reporting are fixed.
+
+-Acceptance Criteria:
+Use a reviewed pinned dependency or repository-owned adapter to implement and test the native Muse WASA envelope and required encrypted app-state secret handling. Verify real Muse replies and honest send acceptance. Support the requested dedicated fixed-Muse sending capability with standing authorization while keeping ordinary WhatsApp sends approval-gated. Keep credentials and root secrets out of tools, logs, and unencrypted storage; preserve existing pairing/history and uncertainty protection.

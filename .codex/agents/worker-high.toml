@@ -1,7 +1,7 @@
 name = "worker_high"
 description = "Handles complex, coupled, ambiguous, or high-risk implementation work."
 model = "gpt-6.1-sol"
-model_reasoning_effort = "high"
+model_reasoning_effort = "xhigh"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 Implement complex or high-risk work whose behavior spans multiple coupled components.

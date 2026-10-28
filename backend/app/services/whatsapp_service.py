@@ -5,12 +5,12 @@ import secrets
 import shutil
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.integrations.authorization import AuthorizedIntegrationInvocation
 from app.integrations.runtime import IntegrationRuntimeError
-from app.models import IntegrationAuthorization, IntegrationConnection
+from app.models import IntegrationAuthorization, IntegrationConnection, InvocationApproval
 from app.schemas.whatsapp import WhatsAppStatus
 from app.services.secret_store import SecretStore, SecretStoreError, default_secret_store
 from app.services.whatsapp_bridge import WhatsAppBridge, WhatsAppError, whatsapp_bridge
@@ -43,11 +43,13 @@ class WhatsAppService:
             if not self.bridge.running() or self.bridge.generation != row.secret_reference:
                 return WhatsAppStatus(status="unavailable", account_id=row.account_id or None,
                                       account_login=row.account_login or None,
-                                      error_type=self.bridge.error_type or "bridge_unavailable")
+                                      error_type=self.bridge.error_type or "bridge_unavailable",
+                                      **self._muse_permission(row))
             try:
                 state = self.bridge.request("status")
             except WhatsAppError as exc:
-                return WhatsAppStatus(status="unavailable", error_type=exc.error_type)
+                return WhatsAppStatus(status="unavailable", error_type=exc.error_type,
+                                      account_id=row.account_id or None, **self._muse_permission(row))
             state = {name: state[name] for name in WhatsAppStatus.model_fields if name in state and name != "provider"}
             value = WhatsAppStatus(**state)
             if not pairing:
@@ -61,11 +63,24 @@ class WhatsAppService:
                     row.status = "connected"
                     row.last_validated_at = datetime.now(UTC)
                     self.db.commit()
-            elif value.status == "logged_out" and row.status != "logged_out":
-                row.status = "logged_out"
-                self._invalidate("WhatsApp logged out")
+            elif value.status in {"logged_out", "relink_required"} and row.status != value.status:
+                row.status = value.status
+                self._invalidate("WhatsApp logged out" if value.status == "logged_out"
+                                 else "WhatsApp transport requires new pairing")
                 self.db.commit()
+            for name, state in self._muse_permission(row).items():
+                setattr(value, name, state)
             return value
+
+    def _muse_permission(self, row) -> dict:
+        from app.services.muse_service import MuseService
+
+        return MuseService(self.db, self).permission(row)
+
+    def configure_muse(self, *, enabled: bool, account_id: str | None) -> WhatsAppStatus:
+        from app.services.muse_service import MuseService
+
+        return WhatsAppStatus(**MuseService(self.db, self).configure(enabled=enabled, account_id=account_id))
 
     def startup(self) -> None:
         with self.bridge.lock:
@@ -121,7 +136,11 @@ class WhatsAppService:
                     raise
             self._start(row)
             self.bridge.request("pair")
-            return self.status(pairing=True)
+            result = self.status(pairing=True)
+            if not result.connected:
+                row.status = "pairing"
+                self.db.commit()
+            return result
 
     def reconnect(self) -> WhatsAppStatus:
         with self.bridge.lock:
@@ -139,7 +158,18 @@ class WhatsAppService:
                 raise WhatsAppError("connection_unavailable")
             self._start(row)
             self.bridge.request("clear_cache")
+            from app.services.muse_service import MuseService
+
+            MuseService(self.db, self).cancel_pending()
             return self.status()
+
+    def diagnostics(self, *, discover_agents: bool = False) -> dict:
+        with self.bridge.lock:
+            row = self.connection()
+            if row is None or row.status in {"cleanup_pending", "logged_out"}:
+                raise WhatsAppError("connection_unavailable")
+            self._start(row)
+            return self.bridge.request("discover_agents" if discover_agents else "diagnostics")
 
     def disconnect(self) -> WhatsAppStatus:
         with self.bridge.lock:
@@ -175,6 +205,12 @@ class WhatsAppService:
             self.db.commit()
             return WhatsAppStatus(remote_logout_failed=remote_failed)
 
+    def request_history(self, chat_id: str) -> dict:
+        with self.bridge.lock:
+            if not self.status().connected:
+                raise WhatsAppError("connection_unavailable")
+            return self.bridge.request("sync_chat", {"chat_id": chat_id})
+
     def execute(self, invocation: AuthorizedIntegrationInvocation) -> dict:
         with self.bridge.lock:
             status = self.status()
@@ -183,6 +219,10 @@ class WhatsAppService:
                     or row.account_id != invocation.provider_account_id):
                 raise IntegrationRuntimeError("connection_unavailable", "WhatsApp connection changed or is offline")
             approval_id = invocation.approval_id
+            if invocation.operation.id == "whatsapp.muse.converse":
+                from app.services.muse_service import MuseService
+
+                return MuseService(self.db, self).execute(invocation)
             if invocation.operation.id == "whatsapp.message.send" and approval_id is None:
                 raise IntegrationRuntimeError("approval_required", "WhatsApp sends require per-call approval")
             try:
@@ -195,6 +235,16 @@ class WhatsAppService:
                 raise IntegrationRuntimeError(exc.error_type, "WhatsApp operation could not be completed") from None
 
     def _invalidate(self, reason: str) -> None:
+        from app.services.muse_service import MuseService
+
+        MuseService(self.db, self).invalidate(cancel_bridge=False)
+        # Pending dispatches must remain stale even if the same account is relinked.
+        self.db.execute(update(InvocationApproval).where(
+            InvocationApproval.provider == "whatsapp",
+            InvocationApproval.execution_status == "not_started",
+            InvocationApproval.decision_status.in_(("pending", "approved")),
+        ).values(execution_status="stale", error_type="connection_changed",
+                 error_message=reason, execution_completed_at=datetime.now(UTC)))
         for authorization in self.db.scalars(select(IntegrationAuthorization).where(
             IntegrationAuthorization.provider == "whatsapp", IntegrationAuthorization.invalidated_at.is_(None),
         )):

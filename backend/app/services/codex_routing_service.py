@@ -6,7 +6,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models import CodexRoutingSettings
+from app.models import AgentPolicy, CodexRoutingSettings
 from app.schemas.codex_routing import (
     CodexRoutingSettingsPayload,
     CodexRoutingSettingsRead,
@@ -26,6 +26,7 @@ _PM_ACTIONS = {
     "product_manager_repair_blueprint": "repair",
     "product_manager_update_review": "update",
 }
+AGENT_ROUTES = {"act": "act", "observer": "observer", "assistant": "assessment"}
 
 
 @dataclass
@@ -36,7 +37,25 @@ class CodexRoutingService:
     def read_settings(self) -> CodexRoutingSettingsRead:
         row = self.db.get(CodexRoutingSettings, 1)
         payload = self._payload(row.settings_json if row is not None else {})
+        # Present legacy policy overrides in the same selectors as their routes.
+        for agent_id, route in AGENT_ROUTES.items():
+            policy = self.db.get(AgentPolicy, agent_id)
+            if policy is not None:
+                values = policy.policy_json or {}
+                choice = getattr(payload, route)
+                setattr(payload, route, InvocationChoice(
+                    model=values.get("model") or choice.model,
+                    reasoning_effort=values.get("reasoning_effort") or choice.reasoning_effort,
+                ))
         return CodexRoutingSettingsRead(**payload.model_dump(mode="json"), updated_at=row.updated_at if row else None)
+
+    def update_agent_model(self, agent_id: str, choice: InvocationChoice) -> CodexRoutingSettingsRead:
+        route = AGENT_ROUTES.get(agent_id)
+        if route is None:
+            raise CodexRoutingError("Unknown agent")
+        payload = CodexRoutingSettingsPayload.model_validate(self.read_settings().model_dump(exclude={"updated_at"}))
+        setattr(payload, route, choice)
+        return self.update_settings(payload)
 
     def update_settings(self, payload: CodexRoutingSettingsPayload) -> CodexRoutingSettingsRead:
         catalog = self.catalog_service.read_model_catalog(refresh=True)
@@ -47,6 +66,12 @@ class CodexRoutingService:
             self.db.add(row)
         else:
             row.settings_json = payload.model_dump(mode="json")
+        # A saved route replaces the old second layer of model overrides.
+        for agent_id in AGENT_ROUTES:
+            policy = self.db.get(AgentPolicy, agent_id)
+            if policy is not None and (policy.policy_json.get("model") or policy.policy_json.get("reasoning_effort")):
+                policy.policy_json = {**policy.policy_json, "model": None, "reasoning_effort": None}
+                policy.revision += 1
         self.db.commit()
         self.db.refresh(row)
         return CodexRoutingSettingsRead(**payload.model_dump(mode="json"), updated_at=row.updated_at)

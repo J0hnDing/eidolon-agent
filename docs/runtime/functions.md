@@ -42,7 +42,7 @@ For concise extension blueprints covering user, integration, and backend-core fu
 
 The trusted integration path also includes Google Calendar, Gmail, and Telegram. Gmail and Calendar keep separate OAuth identities; direct provider access remains blocked.
 
-Approval-required functions and integrations expose a backend-derived contract consistently in catalog, ProductManager context, capability discovery, manual runs, and MCP. For integrations, canonical `HIGH` risk is the sole trigger; callers and adapters cannot suppress it. The immediate caller receives only a pending approval id and is never resumed. Execution happens later through the backend-owned decision service and re-enters the same policy path. See [Invocation approvals](../security/invocation_approvals.md).
+Approval-required functions and integrations expose a backend-derived contract consistently in catalog, ProductManager context, capability discovery, manual runs, and MCP. Integrations default to canonical `HIGH` risk requiring per-call approval. An explicit checked-in standing-grant mode instead requires an exact operation/account/principal grant while retaining risk and effects; callers and adapters cannot choose or suppress either requirement. Per-call submissions immediately return a pending approval id and do not resume the caller. Execution happens later through the backend-owned decision service and re-enters the same policy path. See [Invocation approvals](../security/invocation_approvals.md).
 
 ## Authorization
 

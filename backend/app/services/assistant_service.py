@@ -208,7 +208,7 @@ class AssistantService:
             if values.get("completion_requirement") is not None:
                 raise ValueError("Completion requirements apply to recurring tasks")
             values["completion_requirement"] = None
-        elif (current.completion_requirement == "interaction_today"
+        elif (current.completion_requirement in {"interaction_today", "morning_plan"}
                 and values.get("completion_requirement", current.completion_requirement) != current.completion_requirement):
             raise ValueError("Remove recurrence before clearing or changing its completion requirement")
         if recurrence and values.get("kind", current.kind) != "task":
@@ -266,6 +266,7 @@ class AssistantService:
 
     def context(self, session_id: int) -> dict:
         from app.services.assistant_changes import AssistantChangeService
+        from app.services.assistant_daily_plan import daily_plan_status
         from app.services.assistant_initialization import AssistantInitializationService
         from app.services.assistant_planning import daily_interaction_status
         from app.services.assistant_questions import AssistantQuestionService
@@ -305,6 +306,7 @@ class AssistantService:
             "initialization": AssistantInitializationService(self.db).status(),
             "question_asking": AssistantQuestionService(self.db).status(state, datetime.now(UTC)),
             "daily_interaction": daily_interaction_status(self.db, state.timezone, datetime.now(UTC)),
+            "daily_plan": daily_plan_status(self.db, state.timezone, datetime.now(UTC)),
             "agenda": agenda_context,
             "agenda_total": len(agenda),
             "memory": {
@@ -361,6 +363,7 @@ class AssistantService:
 
     def decide_approval(self, payload: dict, session_id: int, turn_id: int | None) -> dict:
         from app.services.agent_proposal_service import AgentProposalService
+        from app.services.assistant_daily_plan import has_activation_context
 
         turn = self.db.get(ActTurn, turn_id) if turn_id is not None else None
         proposal = self.db.get(AgentProposal, payload["proposal_id"])
@@ -372,7 +375,7 @@ class AssistantService:
         ).order_by(ActLiveMessage.id.desc()).limit(1))
         if live_reply is not None:
             user_message, message_at = live_reply.text, live_reply.created_at
-        elif not turn.assistant_context_json and not turn.backend_message_kind:
+        elif not has_activation_context(turn) and not turn.backend_message_kind:
             user_message, message_at = turn.user_message, turn.created_at
         else:
             raise ValueError("Only the current user message can supply an approval decision")

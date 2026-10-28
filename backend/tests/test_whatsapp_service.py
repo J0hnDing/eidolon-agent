@@ -197,6 +197,37 @@ def test_send_defers_execution_then_handles_deny_stale_repeat_and_unknown(setup,
     assert len(bridge.executions) == 2
 
 
+def test_relink_invalidates_pending_send_even_when_same_account_returns(setup, monkeypatch, tmp_path):
+    db, service, bridge, store = setup
+    service.pair()
+    bridge.connect()
+    service.status()
+    integration = IntegrationService(db, project_root=tmp_path, secret_store=store)
+    monkeypatch.setattr(InvocationApprovalService, "_telegram_service", lambda self: Telegram())
+    executor = InvocationExecutor(db, project_root=tmp_path, integration_service=integration)
+    outcome = executor.execute(
+        InvocationTargetRef(category="integration", target_id="whatsapp.message.send"),
+        {"recipient": "+12025550123", "text": "Queued before migration", "reason_to_call": "User request"},
+        InvocationContext(principal_kind="user", origin="http"),
+    )
+    identifier = outcome.output["approval_id"]
+    reference = service.connection().secret_reference
+    bridge.state.update(connected=False, status="relink_required", qr_data_url=None)
+    assert service.status().status == "relink_required"
+    assert service.connection().status == "relink_required"
+    assert db.get(InvocationApproval, identifier).execution_status == "stale"
+    service.pair()
+    assert service.connection().secret_reference == reference
+    assert service.connection().status == "pairing"
+    bridge.connect()
+    service.status()
+    result = InvocationApprovalService(db, project_root=tmp_path).approve(
+        identifier, decided_via="local", decided_by="test",
+    )
+    assert result.execution_status == "stale"
+    assert bridge.executions == []
+
+
 def test_settings_routes_use_service_and_keep_qr_private(setup, monkeypatch):
     db, service, bridge, store = setup
     service.pair()
@@ -216,3 +247,34 @@ def test_startup_failure_is_optional(setup):
     service.startup()
     assert bridge.error_type == "secret_store_unavailable"
     assert not service.status().connected
+
+
+def test_diagnostics_and_explicit_agent_discovery_use_only_private_bridge_methods(setup, monkeypatch):
+    db, service, bridge, store = setup
+    service.pair()
+    bridge.connect()
+    monkeypatch.setattr(routes, "WhatsAppService", lambda db: service)
+    routes.whatsapp_diagnostics(db)
+    assert bridge.calls[-1] == "diagnostics"
+    routes.whatsapp_discover_agents(db)
+    assert bridge.calls[-1] == "discover_agents"
+    assert bridge.executions == []
+
+
+def test_trusted_history_request_is_bounded_setup_and_requires_connection(setup, monkeypatch):
+    from pydantic import ValidationError
+
+    from app.schemas.whatsapp import WhatsAppHistoryRequest
+
+    db, service, bridge, store = setup
+    service.pair()
+    with pytest.raises(WhatsAppError):
+        service.request_history("1807055946647697@bot")
+    assert "sync_chat" not in bridge.calls
+    bridge.connect()
+    monkeypatch.setattr(routes, "WhatsAppService", lambda db: service)
+    routes.whatsapp_request_history(WhatsAppHistoryRequest(chat_id="1807055946647697@bot"), db)
+    assert bridge.calls[-1] == "sync_chat"
+    assert bridge.executions == []
+    with pytest.raises(ValidationError):
+        WhatsAppHistoryRequest(chat_id="chat", count=10000)

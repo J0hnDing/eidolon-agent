@@ -21,7 +21,7 @@ After process-snapshot validation, MCP constructs either a direct-user or authen
 
 Integration tools use the executor's integration handler with direct-user attribution. It omits only skill-specific manifest and standing `IntegrationAuthorization` checks. Operation existence, schema, risk approval, current connection/account, and agent policy still pass through `IntegrationCapabilityPolicy`; only its secret-free authorized invocation can enter `IntegrationRuntime`. Provider adapters retain credential isolation, transport bounds, response validation, and normalized errors. GitHub direct tools may use any repository allowed by the configured token; generated skills keep exact typed repository scopes. Provider-discovered audit resources return as explicit outcome metadata instead of serving as caller identity.
 
-WhatsApp has a persistent backend-owned Baileys socket, so its MCP tools forward
+WhatsApp has a persistent backend-owned Whatsmeow socket, so its MCP tools forward
 their bounded operation and input to a fixed loopback backend endpoint. Agent
 calls forward only their existing agent credential; the backend derives fresh
 identity and enters `InvocationExecutor` there. Public MCP calls retain the

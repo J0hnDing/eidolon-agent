@@ -22,8 +22,14 @@ def test_whatsapp_operations_are_discovered_with_canonical_effect_and_risk() -> 
         "whatsapp.message.list",
         "whatsapp.message.search",
         "whatsapp.message.send",
+        "whatsapp.muse.converse",
     }
     for operation in operations:
+        if operation.id == "whatsapp.muse.converse":
+            assert operation.risk is RiskLevel.HIGH
+            assert operation.effects == frozenset({IntegrationEffect.READ, IntegrationEffect.SEND})
+            assert not operation.read_only and not operation.requires_invocation_approval
+            continue
         expected_risk = RiskLevel.HIGH if operation.id.endswith(".send") else RiskLevel.LOW
         assert operation.risk is expected_risk
         assert operation.effects == (
@@ -43,6 +49,9 @@ def test_whatsapp_operations_are_discovered_with_canonical_effect_and_risk() -> 
         ("whatsapp.contact.search", {"query": "Jordan", "page_size": 50}),
         ("whatsapp.chat.list", {"type": "group", "page_size": 25}),
         ("whatsapp.chat.list", {"type": "group", "query": "Family"}),
+        ("whatsapp.chat.list", {"type": "agent"}),
+        ("whatsapp.message.list", {"chat_id": "867051314767696@bot"}),
+        ("whatsapp.message.search", {"query": "Muse", "chat_id": "867051314767696@bot"}),
         (
             "whatsapp.message.list",
             {"chat_id": "12025550123@s.whatsapp.net", "page_size": 50},
@@ -68,6 +77,7 @@ def test_whatsapp_input_contract_accepts_bounded_examples(operation_id: str, pay
     "payload",
     [
         {"recipient": "status@broadcast", "text": "hello"},
+        {"recipient": "867051314767696@bot", "text": "hello"},
         {"recipient": "https://example.com", "text": "hello"},
         {"recipient": "12025550123@newsletter", "text": "hello"},
         {"recipient": "+12025550123", "text": "x" * 4001},

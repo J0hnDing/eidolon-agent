@@ -14,6 +14,7 @@ import html
 import json
 import re
 import secrets
+import socket
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -278,6 +279,7 @@ def _error_from_http(
     description: str | None = None,
     *,
     method: str | None = None,
+    parameters: Any = None,
 ) -> TelegramProviderError:
     normalized = " ".join((description or "").casefold().split())
     if method in {"sendMessageDraft", "sendRichMessageDraft"} and (
@@ -308,7 +310,12 @@ def _error_from_http(
     if code == 409:
         return TelegramProviderError("polling_conflict", "Another Telegram long-poll request is active")
     if code == 429:
-        return TelegramProviderError("rate_limited", "Telegram rate limit was reached")
+        retry_after = parameters.get("retry_after") if isinstance(parameters, dict) else None
+        if isinstance(retry_after, bool) or not isinstance(retry_after, int) or retry_after < 0:
+            retry_after = None
+        return TelegramProviderError(
+            "rate_limited", "Telegram rate limit was reached", retry_after_seconds=retry_after,
+        )
     if 500 <= code <= 599:
         return TelegramProviderError("provider_unavailable", "Telegram is temporarily unavailable")
     if code == 400:
@@ -610,9 +617,15 @@ class UrllibTelegramBotApi:
                 raw_error = exc.read(TELEGRAM_MAX_RESPONSE_BYTES + 1)
             except (AttributeError, OSError):
                 raw_error = b""
-            description = _telegram_error_description(raw_error)
-            raise _error_from_http(exc.code, description, method=method) from None
-        except (TimeoutError, URLError, OSError):
+            error = _telegram_error_response(raw_error)
+            raise _error_from_http(
+                exc.code, error.get("description"), method=method, parameters=error.get("parameters"),
+            ) from None
+        except URLError as exc:
+            if isinstance(exc.reason, (ConnectionRefusedError, socket.gaierror)):
+                raise TelegramProviderError("connection_failed", "Telegram connection could not be established") from None
+            raise TelegramProviderError("provider_timeout", "Telegram did not respond before the timeout") from None
+        except OSError:
             raise TelegramProviderError("provider_timeout", "Telegram did not respond before the timeout") from None
         if len(raw) > TELEGRAM_MAX_RESPONSE_BYTES:
             raise TelegramProviderError("response_too_large", "Telegram response exceeded the operation limit")
@@ -628,6 +641,7 @@ class UrllibTelegramBotApi:
                     error_code,
                     description if isinstance(description, str) else None,
                     method=method,
+                    parameters=value.get("parameters"),
                 )
             raise TelegramProviderError("provider_unavailable", "Telegram returned an unsuccessful response")
         return value
@@ -680,8 +694,10 @@ class UrllibTelegramBotApi:
                 raw_error = exc.read(TELEGRAM_MAX_RESPONSE_BYTES + 1)
             except (AttributeError, OSError):
                 raw_error = b""
-            description = _telegram_error_description(raw_error)
-            raise _error_from_http(exc.code, description, method=method) from None
+            error = _telegram_error_response(raw_error)
+            raise _error_from_http(
+                exc.code, error.get("description"), method=method, parameters=error.get("parameters"),
+            ) from None
         except (TimeoutError, URLError, OSError):
             raise TelegramProviderError("provider_timeout", "Telegram did not respond before the timeout") from None
         if len(raw) > TELEGRAM_MAX_RESPONSE_BYTES:
@@ -698,20 +714,24 @@ class UrllibTelegramBotApi:
                     error_code,
                     description if isinstance(description, str) else None,
                     method=method,
+                    parameters=value.get("parameters"),
                 )
             raise TelegramProviderError("provider_unavailable", "Telegram returned an unsuccessful response")
         return value
 
 
-def _telegram_error_description(raw: bytes) -> str | None:
+def _telegram_error_response(raw: bytes) -> dict[str, Any]:
     if len(raw) > TELEGRAM_MAX_RESPONSE_BYTES:
-        return None
+        return {}
     try:
         value = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    description = value.get("description") if isinstance(value, dict) else None
-    return description if isinstance(description, str) else None
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    if not isinstance(value.get("description"), str):
+        value.pop("description", None)
+    return value
 
 
 def _validate_parse_mode(value: Any) -> None:

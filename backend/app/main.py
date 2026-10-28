@@ -151,6 +151,10 @@ async def whatsapp_maintenance() -> None:
             service = WhatsAppService(db)
             service.startup()
             connected = service.status().connected
+            if connected:
+                from app.services.muse_service import MuseService
+
+                MuseService(db, service).poll_pending()
             if connected != last_connected:
                 # The socket connects asynchronously after backend startup. Its
                 # available functions must appear without opening Settings.

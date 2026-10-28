@@ -47,6 +47,10 @@ def ensure_local_schema() -> None:
     inspector = inspect(engine)
     table_names = set(inspector.get_table_names())
     with engine.begin() as connection:
+        if "muse_exchanges" in table_names:
+            columns = {column["name"] for column in inspector.get_columns("muse_exchanges")}
+            if "sent_message_id" not in columns:
+                connection.execute(text("ALTER TABLE muse_exchanges ADD COLUMN sent_message_id VARCHAR(256)"))
         if "assistant_agenda" in table_names:
             columns = {column["name"] for column in inspector.get_columns("assistant_agenda")}
             for column, definition in {

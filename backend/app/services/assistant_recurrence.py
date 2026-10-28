@@ -237,7 +237,8 @@ def finish_occurrence(db, turn: ActTurn, now: datetime) -> None:
     if turn.status == "succeeded":
         occurrence.status, occurrence.completed_at, occurrence.retry_at = "succeeded", now, None
     elif turn.status in {"failed", "cancelled", "interrupted"}:
-        unmet = (turn.error_message or "").startswith("Daily interaction is incomplete:")
+        unmet = (turn.error_message or "").startswith(("Daily interaction is incomplete:",
+                                                        "Morning plan is incomplete:"))
         delay = timedelta(minutes=15) if unmet else timedelta(seconds=30)
         occurrence.status, occurrence.retry_at = "failed", now + delay
     else:

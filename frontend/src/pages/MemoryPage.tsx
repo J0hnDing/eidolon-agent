@@ -177,7 +177,7 @@ export default function MemoryPage() {
           </div>
         </>}
         {(section === "agenda" || section === "questions") && <AssistantAgenda key={section} fixedKind={section === "agenda" ? "task" : "question"}
-          items={agenda} questionAsking={runtime?.question_asking} onChange={async () => setAgenda(await api.listAssistantAgenda())} />}
+          items={agenda} questionAsking={runtime?.question_asking} dailyPlan={runtime?.daily_plan} onChange={async () => { setAgenda(await api.listAssistantAgenda()); setRuntime(await api.getAssistantRuntime()); }} />}
         {section === "summaries" && <MemorySummaries key={archiveRevision} />}
         {section === "history" && <MemoryHistory key={archiveRevision} />}
         {section === "facts" && <>

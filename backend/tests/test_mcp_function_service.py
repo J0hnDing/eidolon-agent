@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base
 from app.execution.types import InvocationOutcome
-from app.models import CodexMcpSettings, McpAuditRecord, Skill, SkillRun
+from app.models import ActSession, ActTurn, AssistantState, CodexMcpSettings, McpAuditRecord, Skill, SkillRun
 from app.services.mcp_function_service import McpFunctionError, McpFunctionService
 
 
@@ -259,3 +259,43 @@ def test_revocation_reaches_multiple_snapshotted_processes_and_stale_contracts_f
         audit.error_type in {"invalid_input", "stale_contract", "mcp_disabled"}
         for audit in db.scalars(select(McpAuditRecord))
     )
+
+
+@pytest.mark.parametrize("error_type", [None, "connection_unavailable", "invalid_input"])
+def test_authenticated_morning_reads_record_real_mcp_outcomes(db, monkeypatch, error_type):
+    from app.execution.context import InvocationContext
+    from app.execution.types import InvocationExecutionError
+
+    operation = entry("notion.todo.list", "integration", read_only=True)
+    operation["input_schema"] = {"type": "object", "properties": {"page_size": {"type": "integer"}}}
+    operation["output_schema"] = {"type": "object"}
+    monkeypatch.setattr("app.services.mcp_function_service.FunctionCatalogService.list_entries", lambda *_: [operation])
+    db.add(CodexMcpSettings(id=1, enabled=True, config_fingerprint="owned"))
+    db.add(AssistantState(id=1, enabled=True, timezone="America/Toronto",
+        agenda_schedules_migrated=True, planning_contract_migrated=True))
+    db.add(ActSession(id=1, agent_id="assistant", codex_thread_id="planning-observation", status="active"))
+    db.flush()
+    turn = ActTurn(session_id=1, status="running", user_message="Plan today", assistant_context_json={
+        "kind": "agenda", "completion_requirement": "morning_plan", "occurrence": {"id": 1}})
+    db.add(turn)
+    db.commit()
+
+    class Executor:
+        def execute(self, *_args):
+            if error_type:
+                raise InvocationExecutionError(error_type, "Source read failed")
+            return InvocationOutcome(status="succeeded", output={"todos": [], "has_more": False, "next_cursor": None})
+
+    service = McpFunctionService(db, executor=Executor())
+    context = InvocationContext(principal_kind="agent", origin="agent_mcp", agent_id="assistant",
+        agent_session_id=1, agent_turn_id=turn.id)
+    name = service.tool_name("integration", "notion.todo.list")
+    if error_type:
+        with pytest.raises(McpFunctionError):
+            service._invoke(name, {"page_size": 100}, context)
+    else:
+        service._invoke(name, {"page_size": 100}, context)
+    db.refresh(turn)
+    receipt = turn.assistant_review_json["planning_sources"]["sources"]["todos"]
+    assert receipt["status"] == ("reviewed" if error_type is None else
+                                 "unavailable" if error_type == "connection_unavailable" else "incomplete")

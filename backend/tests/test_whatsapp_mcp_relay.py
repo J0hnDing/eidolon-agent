@@ -145,6 +145,9 @@ def test_agent_token_is_not_reflected_on_transport_failure(monkeypatch):
 
 def test_background_recovery_publishes_connection_changes_without_settings(monkeypatch):
     import app.main as main
+    from app.services.muse_service import MuseService
+
+    monkeypatch.setattr(MuseService, "poll_pending", lambda self: None)
 
     connected = iter([False, False, True])
     published = []

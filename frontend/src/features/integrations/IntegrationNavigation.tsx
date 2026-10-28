@@ -16,7 +16,7 @@ export const integrations = [
   { id: "notion", title: "Notion", description: "Todos, reports, and Daily Feed", group: "Connected apps", icon: notionIcon },
   { id: "quercus", title: "Quercus", description: "Course selection and knowledge sync", group: "Connected apps", icon: null },
   { id: "telegram", title: "Telegram", description: "Notifications, approvals, and agent bots", group: "Messaging", icon: telegramIcon },
-  { id: "whatsapp", title: "WhatsApp", description: "Search messages and send text with Baileys", group: "Messaging", icon: whatsappIcon },
+  { id: "whatsapp", title: "WhatsApp", description: "Search messages and send text with Whatsmeow", group: "Messaging", icon: whatsappIcon },
   { id: "wecom", title: "WeCom", description: "Observer bot and paired users", group: "Messaging", icon: wecomIcon },
   { id: "atlas", title: "Eidolon-Atlas", description: "Local companion and vault access", group: "Local tools & data", icon: null },
   { id: "codex", title: "Codex tools", description: "Eidolon tools in Codex sessions", group: "Local tools & data", icon: null },

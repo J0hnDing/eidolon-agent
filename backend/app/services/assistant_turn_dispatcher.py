@@ -147,8 +147,14 @@ class AssistantTurnDispatcher(ActTurnDispatcher):
             activation["completion_requirement"] = item.completion_requirement
             turn.assistant_context_json = activation
             db.commit()
+        from app.services.assistant_daily_plan import has_activation_context
+
         data = {"current": service.context(turn.session_id),
-                "activation": activation}
+                "activation": activation if has_activation_context(turn) else None}
+        if (activation or {}).get("completion_requirement") == "morning_plan":
+            from app.services.assistant_planning_review import planning_review_status
+
+            data["planning_review"] = planning_review_status(db, turn, datetime.now(UTC))
         if state.thread_started_at is not None:
             from app.services.agent_memory_service import AgentMemoryService
 

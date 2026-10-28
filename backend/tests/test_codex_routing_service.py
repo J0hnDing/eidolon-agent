@@ -8,8 +8,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
-from app.models import CodexRoutingSettings
-from app.schemas.codex_routing import CodexRoutingSettingsPayload, ResolvedInvocationSettings
+from app.models import AgentPolicy, CodexRoutingSettings
+from app.schemas.agents import AgentPolicyUpdate
+from app.schemas.codex_routing import CodexRoutingSettingsPayload, InvocationChoice, ResolvedInvocationSettings
+from app.services.agent_policy_service import AgentPolicyService
 from app.services.codex_routing_service import CodexRoutingError, CodexRoutingService
 from app.services.codex_service import CodexService, RealCodexAdapter
 
@@ -43,6 +45,73 @@ CATALOG = {
 class FakeCatalogService:
     def read_model_catalog(self, *, refresh: bool = False) -> dict:
         return CATALOG
+
+
+@pytest.mark.parametrize("agent_id,route", [("act", "act"), ("observer", "observer"), ("assistant", "assessment")])
+def test_agent_model_alias_preserves_other_routes_and_permissions(db_session: Session, agent_id: str, route: str) -> None:
+    service = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
+    initial = CodexRoutingSettingsPayload.model_validate({
+        "project_build_workflow_override": "single_codex",
+        "builder": {"default": {"model": "gpt-smart", "reasoning_effort": "high"}},
+    })
+    service.update_settings(initial)
+    policy = AgentPolicy(id=agent_id, policy_json={
+        "model": "gpt-fast", "reasoning_effort": "low", "max_risk": "low",
+        "read_only": True, "allowed_functions": ["notes.read"], "banned_functions": [],
+    })
+    db_session.add(policy)
+    other_agent = "assistant" if agent_id != "assistant" else "act"
+    db_session.add(AgentPolicy(id=other_agent, policy_json={"model": "gpt-fast", "reasoning_effort": "low"}))
+    db_session.commit()
+    assert getattr(service.read_settings(), route).model == "gpt-fast"
+    choice = InvocationChoice(model="gpt-smart", reasoning_effort="xhigh")
+    result = service.update_agent_model(agent_id, choice)
+    assert getattr(result, route) == choice
+    assert getattr(service.read_settings(), route) == choice
+    assert service.resolve(role=route, action=route).effective_model == "gpt-smart"
+    assert result.builder == initial.builder
+    assert result.project_build_workflow_override == "single_codex"
+    other_route = "assessment" if other_agent == "assistant" else "act"
+    assert getattr(result, other_route) == InvocationChoice(model="gpt-fast", reasoning_effort="low")
+    assert policy.policy_json == {
+        "model": None, "reasoning_effort": None, "max_risk": "low", "read_only": True,
+        "allowed_functions": ["notes.read"], "banned_functions": [],
+    }
+
+
+def test_agent_model_alias_rejects_invalid_choice_without_changing_settings(db_session: Session) -> None:
+    service = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
+    before = service.read_settings()
+    with pytest.raises(CodexRoutingError, match="does not support"):
+        service.update_agent_model("act", InvocationChoice(model="gpt-fast", reasoning_effort="xhigh"))
+    assert service.read_settings() == before
+    with pytest.raises(CodexRoutingError, match="Unknown agent"):
+        service.update_agent_model("unknown", InvocationChoice())
+
+
+def test_global_routing_save_replaces_legacy_override_and_alias_can_clear_route(db_session: Session) -> None:
+    service = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
+    db_session.add(AgentPolicy(id="assistant", policy_json={"model": "gpt-smart", "reasoning_effort": "high"}))
+    db_session.commit()
+    assert service.read_settings().assessment.model == "gpt-smart"
+    service.update_settings(CodexRoutingSettingsPayload(assessment=InvocationChoice(model="gpt-fast")))
+    assert service.read_settings().assessment.model == "gpt-fast"
+    service.update_agent_model("assistant", InvocationChoice())
+    assert service.read_settings().assessment == InvocationChoice()
+
+
+def test_permission_save_preserves_current_model_fields_without_reintroducing_stale_overrides(db_session, monkeypatch):
+    monkeypatch.setattr("app.services.agent_policy_service.FunctionCatalogService.list_entries", lambda _self: [])
+    policy = AgentPolicy(id="act", policy_json={"model": "gpt-smart", "reasoning_effort": "high"})
+    db_session.add(policy)
+    db_session.commit()
+    permissions = AgentPolicyUpdate(max_risk="low", read_only=True)
+    service = AgentPolicyService(db_session)
+    assert service.update("act", permissions)["policy"]["model"] == "gpt-smart"
+    routing = CodexRoutingService(db_session, catalog_service=FakeCatalogService())
+    routing.update_agent_model("act", InvocationChoice(model="gpt-fast"))
+    assert service.update("act", permissions)["policy"]["model"] is None
+    assert routing.read_settings().act.model == "gpt-fast"
 
 
 @pytest.fixture

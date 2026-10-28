@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AssistantAgendaItem, AssistantProposal, AssistantRuntime, AssistantRuntimeUpdate, api } from "../api/client";
 import { AgentConfiguration } from "../components/AgentConfiguration";
+import { AgentInstructions, AgentModelSettings } from "../components/AgentSettings";
 import { AssistantControls, AssistantRuntimeSettings } from "../components/AgentControls";
 import { AssistantAgenda } from "../components/AssistantAgenda";
 import { Modal } from "../components/Modal";
@@ -80,7 +81,7 @@ export function AssistantDetailsPage() {
     {loading && <p className="muted" role="status">Loading Assistant details…</p>}
     {error && <div className="error-text" role="alert">{error} <button className="secondary compact" type="button" onClick={() => void load()}>Retry</button></div>}
     {!loading && <div className="assistant-details-content stack">
-        <div hidden={view !== "agenda"}>{(visited.has("agenda") || view === "agenda") && <AssistantAgenda items={agenda} questionAsking={runtime?.question_asking} onChange={async () => setAgenda(await api.listAssistantAgenda())} />}</div>
+        <div hidden={view !== "agenda"}>{(visited.has("agenda") || view === "agenda") && <AssistantAgenda items={agenda} questionAsking={runtime?.question_asking} dailyPlan={runtime?.daily_plan} onChange={async () => { setAgenda(await api.listAssistantAgenda()); setRuntime(await api.getAssistantRuntime()); }} />}</div>
         <section hidden={view !== "actions"} className="assistant-actions-section" aria-labelledby="assistant-actions-title">
           <div className="section-heading"><div><h2 id="assistant-actions-title">Actions</h2><p className="muted">Review proposed work and follow its progress.</p></div><Link className="button-link secondary compact" to="/activity">View all activity ↗</Link></div>
           <div className="assistant-actions-toolbar">
@@ -100,13 +101,14 @@ export function AssistantDetailsPage() {
         </section>
       <section hidden={view !== "settings"} className="assistant-settings-section" aria-labelledby="assistant-settings-title">
         <h2 id="assistant-settings-title">Assistant settings</h2>
+        {(visited.has("settings") || view === "settings") && <><AgentModelSettings agentId="assistant" /><AgentInstructions agentId="assistant" /></>}
         {runtime && (visited.has("settings") || view === "settings") && <>
           <section className="detail-panel stack"><h3>Assistant status</h3><p className="muted" role="status">Initial Atlas review: {{ pending: "Waiting to start", reading: "Reading Atlas", blocked: "Waiting to retry", complete: "Complete" }[runtime.initialization.status]}{runtime.initialization.reviewed_batches > 0 ? ` · ${runtime.initialization.reviewed_batches} batches reviewed` : ""}{runtime.initialization.remaining !== null && runtime.initialization.status !== "complete" ? ` · ${runtime.initialization.remaining} steps remaining` : ""}{runtime.initialization.status === "blocked" ? ". Progress is saved; the Assistant will retry automatically." : ""}</p><p className="muted">Proactive Assistant {runtime.enabled ? "enabled" : "paused"} · {runtime.timezone}</p></section>
           <AssistantRuntimeSettings runtime={runtime} isWorking={working} onSave={saveRuntime}
             onRefresh={async () => { if (!await mutate(async () => { const result = await api.refreshAssistantRuntime(); setRuntime({ ...result, refresh_pending: result.refresh_pending ?? result.status === "refresh_pending" }); })) throw new Error("Could not refresh the Assistant session. Try again."); }} />
         </>}
       </section>
-      <section hidden={view !== "access"} className="assistant-access-section" aria-labelledby="assistant-access-title"><h2 id="assistant-access-title">Tool access</h2><p className="muted">Manage the Assistant's permissions, model, and available functions.</p>{(visited.has("access") || view === "access") && <AgentConfiguration agentId="assistant" />}</section>
+      <section hidden={view !== "access"} className="assistant-access-section" aria-labelledby="assistant-access-title"><h2 id="assistant-access-title">Tool access</h2><p className="muted">Manage the Assistant's permissions and available functions.</p>{(visited.has("access") || view === "access") && <AgentConfiguration agentId="assistant" />}</section>
     </div>}
     {selectedProposal && approving === null && <Modal title={selectedProposal.title} className="assistant-action-detail" onClose={() => { if (!working) setSelectedProposalId(null); }}>
       {error && <p className="error-text" role="alert">{error}</p>}

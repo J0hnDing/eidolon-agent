@@ -455,7 +455,8 @@ class AgentMemoryService:
                 for turn, agent in rows:
                     if agent in _AGENTS:
                         if (turn.backend_message_kind in (None, "assistant_refresh")
-                                and turn.assistant_context_json is None):
+                                and (turn.assistant_context_json is None
+                                     or set(turn.assistant_context_json) == {"daily_plan"})):
                             self._archive_message(agent, "turn", turn.id, "user", turn.user_message,
                                                   turn.created_at, turn.session_id, turn.id, cutoff)
                         if turn.status in ("queued", "running"):
@@ -521,7 +522,8 @@ class AgentMemoryService:
                         # identify ID reuse combined with clock rollback.
                         if not self._is_reflection(turn):
                             if (turn.backend_message_kind in (None, "assistant_refresh")
-                                    and turn.assistant_context_json is None):
+                                    and (turn.assistant_context_json is None
+                                         or set(turn.assistant_context_json) == {"daily_plan"})):
                                 self._archive_message(agent, "turn", turn.id, "user", turn.user_message,
                                                       turn.created_at, turn.session_id, turn.id, cutoff)
                             self._archive_message(agent, "turn", turn.id, "assistant", turn.assistant_message or "",

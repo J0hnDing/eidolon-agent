@@ -1453,3 +1453,107 @@ Made Assistant the default home with its permanent conversation, collapsible age
 ### Limitations
 
 Existing major dependency upgrades remain tracked separately: React Router in TODO-021 and Vitest/mocker/tinypool in TODO-027. Browser checks exercised safe UI interactions and existing backend reads; no live agent turn or approval was executed as part of visual QA.
+
+## 2026-10-24 15:12 — Add WhatsApp integration through a local Baileys bridge
+
+- Category: feature
+- Area: Integrations / WhatsApp
+
+### Summary
+
+Implemented five typed WhatsApp integration functions for contact/chat discovery, cached message reading/search, and approval-gated text sends/replies. Added a supervised private-stdio Node 24 Baileys bridge with encrypted transactional authentication, 30-day cached history, identity mapping, retention/expiry/deletion handling, durable dispatch deduplication, and uncertain-send outcomes. Added Settings QR pairing, status/reconnect, confirmed cache clearing and disconnect/cleanup, plus integration documentation. Validation: 97 focused backend tests, 18 bridge tests, 228 frontend tests, Ruff, production frontend build, real bridge initialization without pairing, and desktop Settings preview passed.
+
+### Limitations
+
+Live pairing, reads and approved messaging need the user QR scan and are tracked in TODO-028. Existing backend process must restart to load new routes; existing MCP processes must restart for discovery. The broad backend suite encountered the preexisting ProductManager fake/schema mismatch tracked in TODO-026 and was stopped; focused integration checks pass.
+
+## 2026-10-25 14:09 — Agent instruction visibility and shared model selectors
+
+- Category: feature
+- Area: Agents / Settings
+
+### Summary
+
+Added read-only runtime base-instruction views for Act, Observer, and Assistant. Replaced free-text agent model overrides with shared catalog-backed model and reasoning-effort selectors that alias existing Codex routing. Added a scoped model-save endpoint, preserved unrelated routes and permission settings, and consolidated legacy model overrides on routing save. Updated agent/frontend documentation. Validation: 49 focused frontend tests, 77 routing/runtime/backend tests plus 7 Act session tests passed; changed backend Ruff and frontend production build passed. Desktop 1440x900 checks covered all agents, instruction text, and bidirectional model aliases using an isolated in-memory settings database.
+
+### Limitations
+
+The running backend still serves the old API and requires a restart to load the new endpoints. Browser model-save verification used isolated settings and did not mutate personal model preferences.
+
+## 2026-10-25 15:50 — Morning planning with daily work, personal interactions and feed
+
+- Category: feature
+- Area: assistant-planning
+
+### Summary
+
+Implemented a durable daily plan selection of at least two concrete work responsibilities, two personal interactions and one additional useful item, with backend checks for distinct scheduled agenda items and a morning briefing. Added evidence-based follow-through status, separate casual-interaction activation, unfinished-task review retries, normal conversation-history preservation, and agenda progress UI. Merged the flexible weather-and-agenda feed into live Morning planning, preserved historical review context, paused the separate Daily feed routine and restarted the backend. Validation: planning, agenda, MCP invocation, migration, question, archival and reflection regression suites passed; frontend focused tests and production build passed; changed Python Ruff and scoped diff checks passed; live API/catalog and desktop UI verified at 1440x900.
+
+### Limitations
+
+The next scheduled model turn and Telegram delivery were not triggered during verification. Backend checks establish scheduling, execution and message evidence; relevance and quality of work remain model judgment. The optional standalone Notion feed producer retains its independent settings.
+
+## 2026-10-26 14:06 — Recover missed Assistant Telegram reply and harden delivery retries
+
+- Category: bugfix
+- Area: Assistant / Telegram delivery
+
+### Summary
+
+Recovered Assistant turn 290 from canonical archived content, resent it through its unchanged paired Assistant destination and confirmed Telegram message receipt 105. Added bounded per-chunk retries for explicit rate-limit rejections and pre-transmission DNS/connection-refused failures, respecting retry_after and revalidating pairing before retry. Validated message receipts, preserved accepted chunks and uncertain-send safeguards, and added sanitized terminal-delivery logging. Updated Telegram documentation. Validation: 98 distinct focused delivery/provider/service/activation tests passed (97-test suite plus the additional wait-budget case), changed Python Ruff and scoped diff checks passed. Restarted the idle backend and verified live health, connected Assistant bot and delivered turn status.
+
+### Limitations
+
+The old handler discarded the original provider failure reason, so its exact cause cannot be reconstructed. Timeouts and other uncertain sends remain failed rather than automatically replayed.
+
+## 2026-10-26 17:58 — Refine Assistant conversation and separate morning procedure
+
+- Category: bugfix
+- Area: Assistant prompts and planning
+
+### Summary
+
+Made attentive personal-assistant judgment the shared role objective. Added guidance and examples for choosing useful conversational content, reporting real incomplete actions, avoiding unsolicited non-action explanations, selective links, and concise agenda notes. Reduced the morning procedure from 856 to 508 words by keeping role, initiative, communication and States interpretation in assistant.txt while retaining source review, reconciliation, 2/2/1 planning, briefing and retry requirements in the task. Added an exact-content upgrade for unchanged prior defaults, preserving customized notes, one-time work and schedules; updated documentation. Ruff and 207 focused backend tests passed. Compared old and revised replies across 15 isolated situations, refined residual disclaimers, and repeated the final sources case three times without the unwanted status sentence. Restarted the backend, refreshed Assistant to a new thread and verified the saved morning routine and role renderer use the current files.
+
+### Limitations
+
+Response comparisons use supplied facts with action tools disabled; they do not establish all future autonomous conversational behavior.
+
+## 2026-10-27 17:44 — Fix WhatsApp cleanup on databases with an older Muse schema
+
+- Category: bugfix
+- Area: WhatsApp / local database migration
+
+### Summary
+
+Added an idempotent startup migration for muse_exchanges.sent_message_id, preserving existing exchange identities, uncertain-send state and continuation references. The missing column caused disconnect and pairing cleanup to return HTTP 500 without CORS headers, which the browser reported as an unreachable backend. Added a regression test for legacy rows and repeated migration, documented the upgrade, applied the migration to the running local database, verified cleanup returns HTTP 200 with CORS, and restarted QR pairing. Validation: 28 focused database/WhatsApp/Muse tests, Ruff and diff checks passed.
+
+### Limitations
+
+WhatsApp pairing requires the user to scan the QR code and re-enable Assistant access to Muse. Remote logout of the old session could not be confirmed; the old linked device may need removal on the phone.
+
+## 2026-10-27 19:15 — Respond to conversations initiated by Muse
+
+- Category: feature
+- Area: Assistant / WhatsApp / Muse
+
+### Summary
+
+New live Muse messages now create ordinary due Assistant agenda conversations under the existing account-bound Muse grant. Added a durable reference-only bridge inbox, streamed-message settlement, history/duplicate/edit/phone-prompt and correlated-reply suppression, and an atomic grant-bound incoming cursor/conversation owner. Revoke, account changes and cache clear cancel outstanding incoming work. Conversation ledgers and Assistant instructions carry flexible guidance of roughly 30 total messages across both sides through delayed replies. Updated Settings disclosure and topic documentation. Validation: 103 focused backend tests, 10 WhatsApp UI tests, frontend build, full Go tests/vet, Ruff and diff checks passed. Coordinated deployment with the separate reply-tracking fix; live health, connected WhatsApp, existing enabled Muse grant, new inbox schema and retained daily 14:00 America/Toronto agenda verified.
+
+### Limitations
+
+No spontaneous live Muse initiation was observed during rollout; incoming activation and suppression were verified in automated tests. Activations require the backend and proactive Assistant to be running and honor user-work priority. Roughly 30 messages is Assistant guidance rather than a hard backend quota.
+
+## 2026-10-27 20:09 — Recover Muse replies and resume Assistant conversations
+
+- Category: bugfix
+- Area: WhatsApp Muse reply continuations
+
+### Summary
+
+Added conservative matching for live parentless Muse replies when exactly one accepted exchange is pending, preserving exact ancestry, account/grant binding, phone-prompt interference checks and no-resend protections. Persisted live observations reconcile replies arriving before send acceptance and survive restart. Shared stream readiness now accepts first/inner fragments after 10 seconds of quiet when Muse omits a terminal marker; unmarked text retains 1.5 seconds. Added cache and bridge regressions for ambiguity, privacy, stream edits, restart and early replies; full Go tests, go vet and Ruff passed. Deployed the updated bridge, recovered the already-cached original reply without resending, and confirmed Eidolon continued the same ledger with actual follow-up messages and automatic reply activations.
+
+### Limitations
+
+Stream readiness uses a trailing quiet heuristic; a later provider edit can still arrive. An intervening Codex usage limit delayed one continuation until its reset; access was available again when resumed.

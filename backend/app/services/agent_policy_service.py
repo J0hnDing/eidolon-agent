@@ -31,6 +31,7 @@ PRIVATE_TOOL_AGENTS = {
     **{tool_id: {"assistant"} for tool_id in ASSISTANT_TOOL_IDS},
 }
 RISK = {"low": 0, "medium": 1, "high": 2}
+INTEGRATION_AGENT_OWNERS = {"whatsapp.muse.converse": {"assistant"}}
 
 
 class AgentPermissionError(ValueError):
@@ -62,6 +63,11 @@ class AgentPolicyService:
 
     def update(self, agent_id: str, policy: AgentPolicyUpdate) -> dict:
         self.require_agent(agent_id)
+        current = self.policy(agent_id)
+        policy = policy.model_copy(update={
+            field: getattr(current, field)
+            for field in ("model", "reasoning_effort") if field not in policy.model_fields_set
+        })
         known = {entry["id"] for entry in FunctionCatalogService(self.db).list_entries()}
         known.update(PRIVATE_TOOL_AGENTS)
         for function_id in policy.allowed_functions + policy.banned_functions:
@@ -85,6 +91,9 @@ class AgentPolicyService:
         function_id = entry["id"]
         if function_id in policy.banned_functions:
             return False, "Explicitly banned"
+        owners = INTEGRATION_AGENT_OWNERS.get(function_id)
+        if owners is not None and agent_id not in owners:
+            return False, "Capability belongs to another agent"
         private_owner = PRIVATE_TOOL_AGENTS.get(function_id)
         if private_owner is not None:
             return (agent_id in private_owner, "Authenticated private capability")

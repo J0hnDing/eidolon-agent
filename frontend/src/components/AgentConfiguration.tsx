@@ -1,15 +1,17 @@
 import { useEffect, useState } from "react";
 import { AgentDefinition, AgentId, AgentPolicy, api } from "../api/client";
 import { AgentFunctionList, AgentPolicyEditor } from "./AgentControls";
+import { AgentInstructions, AgentModelSettings } from "./AgentSettings";
 import { Modal } from "./Modal";
 
 export function AgentConfiguration({ agentId }: { agentId: AgentId }) {
   const [agent, setAgent] = useState<AgentDefinition | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [policy, setPolicy] = useState<AgentPolicy | null>(null);
+  const [policy, setPolicy] = useState<Omit<AgentPolicy, "model" | "reasoning_effort"> | null>(null);
   const [saving, setSaving] = useState(false);
   const [revision, setRevision] = useState(0);
-  const [view, setView] = useState<"policy" | "functions">("policy");
+  const [view, setView] = useState<"policy" | "functions" | "instructions">("policy");
+  const [instructionsVisited, setInstructionsVisited] = useState(false);
   useEffect(() => {
     let cancelled = false;
     setError(null);
@@ -27,12 +29,14 @@ export function AgentConfiguration({ agentId }: { agentId: AgentId }) {
         <div><small>Web search</small><strong>{agent.permissions.web_search ? "Allowed" : "Blocked"}</strong></div>
       </div>
       <div className="page-tabs agent-configuration-nav" role="group" aria-label="Configuration sections">
-        <button type="button" aria-pressed={view === "policy"} className={view === "policy" ? "active" : ""} onClick={() => setView("policy")}>Policy &amp; model</button>
+        <button type="button" aria-pressed={view === "policy"} className={view === "policy" ? "active" : ""} onClick={() => setView("policy")}>{agentId === "assistant" ? "Permission policy" : "Policy & model"}</button>
         <button type="button" aria-pressed={view === "functions"} className={view === "functions" ? "active" : ""} onClick={() => setView("functions")}>Effective functions <span>{agent.functions.length}</span></button>
+        {agentId !== "assistant" && <button type="button" aria-pressed={view === "instructions"} className={view === "instructions" ? "active" : ""} onClick={() => { setView("instructions"); setInstructionsVisited(true); }}>Instructions</button>}
       </div>
       <div className="agent-configuration-sections">
-        <div hidden={view !== "policy"}><AgentPolicyEditor key={JSON.stringify(agent.policy)} agent={agent} isWorking={saving} onSave={setPolicy} /></div>
+        <div hidden={view !== "policy"} className="stack">{agentId !== "assistant" && <AgentModelSettings agentId={agentId} />}<AgentPolicyEditor key={JSON.stringify(agent.policy)} agent={agent} isWorking={saving} onSave={setPolicy} /></div>
         <div hidden={view !== "functions"}><AgentFunctionList agent={agent} /></div>
+        <div hidden={view !== "instructions"}>{instructionsVisited && <AgentInstructions agentId={agentId} />}</div>
       </div>
     </>}
     {policy && <Modal title={`Update ${agent?.name ?? agentId} policy?`} onClose={() => { if (!saving) setPolicy(null); }}>

@@ -31,6 +31,7 @@ class AssistantActivationService:
     def status(self) -> dict:
         from app.services.agent_memory_service import AgentMemoryService
         from app.services.assistant_changes import AssistantChangeService
+        from app.services.assistant_daily_plan import daily_plan_status
         from app.services.assistant_initialization import AssistantInitializationService
         from app.services.assistant_planning import daily_interaction_status
         from app.services.assistant_questions import AssistantQuestionService
@@ -49,6 +50,7 @@ class AssistantActivationService:
             "initialization": AssistantInitializationService(self.db).status(),
             "question_asking": AssistantQuestionService(self.db).status(state, now),
             "daily_interaction": daily_interaction_status(self.db, state.timezone, now),
+            "daily_plan": daily_plan_status(self.db, state.timezone, now),
         }
 
     def configure(self, payload: dict) -> dict:
@@ -118,6 +120,16 @@ class AssistantActivationService:
                 AssistantAgendaItem.due_at <= now,
             ).order_by(AssistantAgendaItem.due_at, AssistantAgendaItem.id))
             if not item.recurrence_json][:30]
+        if not selected and agenda:
+            from app.services.assistant_daily_plan import daily_plan_status
+
+            plan = daily_plan_status(self.db, state.timezone, now)
+            interaction_tasks = {item["id"] for item in plan["items"]["interaction"] if item["kind"] == "task"}
+            # A casual message must belong to one personal interaction, rather
+            # than make a batch of distinct planned conversations look delivered.
+            interaction = next((item for item in agenda if item.id in interaction_tasks), None)
+            if interaction is not None:
+                agenda = [interaction]
         executions = [] if selected else list(self.db.scalars(select(AgentProposal).where(
             AgentProposal.execution_status.in_(("succeeded", "failed", "cancelled", "interrupted")),
             AgentProposal.execution_state_json["assistant_outcome_turn_id"].as_integer().is_(None),
@@ -211,6 +223,40 @@ class AssistantActivationService:
                               + json.dumps(execution, ensure_ascii=False, default=str)[:10000],
                     ))
             self.db.commit()
+
+        self._continue_planned_tasks(turn, activation)
+
+    def _continue_planned_tasks(self, turn: ActTurn, activation: dict) -> None:
+        """Keep selected responsibilities awake if execution forgot to resolve them."""
+        if activation.get("occurrence") or turn.cancel_requested_at is not None:
+            return
+        from app.services.assistant_daily_plan import daily_plan_status
+
+        now = datetime.now(UTC)
+        state = self._state()
+        plan = daily_plan_status(self.db, state.timezone, now)
+        planned = {item["id"]: (category, item) for category, items in plan["items"].items() for item in items}
+        for snapshot in activation.get("agenda", []):
+            selection = planned.get(snapshot["id"])
+            if selection is None or snapshot["kind"] != "task":
+                continue
+            category, progress = selection
+            item = self.db.get(AssistantAgendaItem, snapshot["id"])
+            if (item is None or item.last_turn_id != turn.id or item.recurrence_json
+                    or item.status == "dismissed" or item.due_at is not None or progress["completed"]):
+                continue
+            if turn.status == "succeeded":
+                if item.status == "open" or category == "interaction" and item.status == "done":
+                    item.status = "open"
+                    item.due_at = now + timedelta(minutes=15)
+                    item.revision += 1
+            elif (turn.status in {"failed", "interrupted"} and item.status == "waiting"
+                  and item.revision == snapshot["revision"] + 1):
+                # The existing failure path recorded uncertainty. Wake a review
+                # of actual effects, rather than silently losing today's work.
+                item.due_at = now + timedelta(minutes=15)
+                item.revision += 1
+        self.db.commit()
 
     def _execution_context(self, proposal: AgentProposal) -> dict:
         turn = self.db.get(ActTurn, proposal.act_turn_id) if proposal.act_turn_id else None

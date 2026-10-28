@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 import queue
 import re
-import shutil
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -41,23 +41,15 @@ class WhatsAppBridge:
                 return
             self.stop()
             directory = self.root / "bridges" / "whatsapp"
-            node = shutil.which("node")
-            if not node or not (directory / "node_modules" / "@whiskeysockets" / "baileys").is_dir():
+            executable = self.root / "runtime" / "bin" / (
+                "eidolon-whatsapp-bridge.exe" if sys.platform == "win32" else "eidolon-whatsapp-bridge"
+            )
+            if not executable.is_file():
                 self.error_type = "dependencies_missing"
                 raise WhatsAppError(self.error_type)
             try:
-                version = subprocess.run(
-                    [node, "--version"], capture_output=True, timeout=5, check=True,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                ).stdout.decode("ascii").strip()
-                if int(version.lstrip("v").split(".")[0]) < 24:
-                    raise ValueError
-            except (OSError, ValueError, subprocess.SubprocessError):
-                self.error_type = "node_version_unsupported"
-                raise WhatsAppError(self.error_type) from None
-            try:
                 process = subprocess.Popen(
-                    [node, "src/index.js"], cwd=directory, stdin=subprocess.PIPE,
+                    [str(executable)], cwd=directory, stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), shell=False,
                 )

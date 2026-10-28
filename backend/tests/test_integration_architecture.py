@@ -11,7 +11,7 @@ from app.db import Base
 from app.execution.context import InvocationContext
 from app.integrations.authorization import AuthorizedIntegrationInvocation
 from app.integrations.registry import DEFAULT_INTEGRATION_REGISTRY
-from app.integrations.types import IntegrationEffect, IntegrationOperationSpec, RiskLevel
+from app.integrations.types import IntegrationEffect, IntegrationOperationSpec, InvocationApprovalMode, RiskLevel
 
 APP_ROOT = Path(__file__).resolve().parents[1] / "app"
 
@@ -195,10 +195,9 @@ def test_agent_integration_authorization_does_not_read_mcp_presentation_flags() 
     )
 
 
-def test_canonical_operation_specs_have_no_independent_approval_or_transport_fields() -> None:
+def test_canonical_operation_specs_have_only_canonical_approval_mode_and_no_transport_fields() -> None:
     field_names = {field.name.lower() for field in fields(IntegrationOperationSpec)}
     forbidden_fragments = (
-        "approval",
         "http",
         "endpoint",
         "timeout",
@@ -213,6 +212,7 @@ def test_canonical_operation_specs_have_no_independent_approval_or_transport_fie
         for field_name in field_names
         if any(fragment in field_name for fragment in forbidden_fragments)
     }
+    assert {name for name in field_names if "approval" in name} == {"invocation_approval_mode"}
     assert {
         "id",
         "title",
@@ -227,7 +227,7 @@ def test_canonical_operation_specs_have_no_independent_approval_or_transport_fie
     }.issubset(field_names)
 
 
-def test_approval_requirement_is_derived_only_from_canonical_risk() -> None:
+def test_approval_requirement_is_derived_from_canonical_risk_and_mode() -> None:
     operations = DEFAULT_INTEGRATION_REGISTRY.list()
     assert operations
     assert {operation.risk for operation in operations} == {
@@ -236,7 +236,10 @@ def test_approval_requirement_is_derived_only_from_canonical_risk() -> None:
         RiskLevel.HIGH,
     }
     for operation in operations:
-        required = operation.risk is RiskLevel.HIGH
+        required = (
+            operation.risk is RiskLevel.HIGH
+            and operation.invocation_approval_mode is not InvocationApprovalMode.STANDING_GRANT
+        )
         assert required is operation.requires_invocation_approval
         if operation.risk in {RiskLevel.LOW, RiskLevel.MEDIUM}:
             assert operation.requires_invocation_approval is False

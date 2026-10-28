@@ -52,8 +52,12 @@ from app.models.entities import (
     WeComObserverBinding,
     WeComObserverUserBinding,
 )
+from app.models.integration_standing_grant import IntegrationStandingGrant
+from app.models.muse import MuseExchange, MuseInboxState
 
 __all__ = [
+    "MuseExchange",
+    "MuseInboxState",
     "ActLiveMessage",
     "AgentCredential",
     "AgentPolicy",
@@ -77,6 +81,7 @@ __all__ = [
     "IntegrationAuditRecord",
     "IntegrationAuthorization",
     "IntegrationConnection",
+    "IntegrationStandingGrant",
     "InvocationApproval",
     "MemoryFact",
     "McpAuditRecord",

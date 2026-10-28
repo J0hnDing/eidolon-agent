@@ -55,7 +55,7 @@ See the [roadmap](docs/todo.md) for unfinished work and [working history](docs/w
 
 ## Local setup
 
-Windows development requires Python 3.12+, Node.js 20+, Codex CLI, and Docker Desktop for the default skill sandbox. Optional Atlas and WhatsApp connections require Node.js 24+; the latter also needs its [bridge dependencies](docs/integrations/whatsapp.md#setup).
+Windows development requires Python 3.12+, Node.js 20+, Codex CLI, and Docker Desktop for the default skill sandbox. Optional Atlas requires Node.js 24+; WhatsApp uses a separately built [Go/Whatsmeow bridge](docs/integrations/whatsapp.md#setup).
 
 <details>
 <summary>Development setup</summary>
